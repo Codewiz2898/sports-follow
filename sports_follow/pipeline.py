@@ -116,15 +116,16 @@ def placeholder_card(player: Player) -> dict[str, Any]:
     }
 
 
-def _canonicalize(db: Session, player: Player, report_name: str) -> Player:
+def _canonicalize(db: Session, player: Player, report_name: str) -> tuple[Player, int | None]:
     """After a build, converge on one player per athlete.
 
     If the report names an athlete another player row already holds, fold this row into it:
     move the aliases and follows over and delete this one. Otherwise take the canonical slug.
+    Returns the player the report belongs to and, after a merge, the id that was folded away.
     """
     canonical = slugify(report_name)
     if not canonical or canonical == player.slug:
-        return player
+        return player, None
     existing = db.scalar(select(Player).join(PlayerAlias, PlayerAlias.player_id == Player.id).where(PlayerAlias.alias == canonical))
     if existing and existing.id != player.id:
         for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
@@ -139,11 +140,10 @@ def _canonicalize(db: Session, player: Player, report_name: str) -> Player:
         moved_from = player.id
         db.delete(player)
         db.flush()
-        bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": existing.id})
-        return existing
+        return existing, moved_from
     player.slug = canonical
     db.execute(insert(PlayerAlias).values(alias=canonical, player_id=player.id).on_conflict_do_nothing())
-    return player
+    return player, None
 
 
 # ---------------------------------------------------------------- writing a report
@@ -228,7 +228,7 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         player.role = p.get("role")
         player.teams = p.get("teams") or []
         player.disambiguation = p.get("disambiguation")
-        player = _canonicalize(db, player, p["name"])
+        player, moved_from = _canonicalize(db, player, p["name"])
 
         for u in report["upcoming"]:
             _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
@@ -250,6 +250,10 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         card_row.built_at = now
         card_row.live_checked_at = now
         landed = player.id
+    # Only after the commit: subscribers must never hear about a merge that rolled back.
+    if moved_from is not None:
+        bus.sync_redis().delete(bus.card_key(moved_from))
+        bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": landed})
     bus.store_card(landed, card)
     return landed
 

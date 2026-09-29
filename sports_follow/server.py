@@ -107,12 +107,16 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id), db: Session
         db.add(Follow(fan_id=fan, player_id=player.id, alert_rules={}))
     card_row = db.get(PlayerCard, player.id)
     needs_build = card_row is None or card_row.status in ("building", "failed")
-    if card_row is not None and card_row.status == "failed":
+    retrying = card_row is not None and card_row.status == "failed"
+    if retrying:
         # A fan asking again is the retry for a failed build.
         card_row.status = "building"
         card_row.error = None
-        card_row.card = {**pipeline.placeholder_card(player), "player_id": player.id}
+        card_row.card = {**pipeline.placeholder_card(player), "version": card_row.version}
     db.commit()
+    if retrying:
+        # Write through to the hot copy and tell every subscriber, or they keep seeing "failed".
+        bus.store_card(player.id, card_row.card)
     if needs_build:
         await arq().enqueue_job("build_card", player.id)
     card = await read_card(db, player.id)

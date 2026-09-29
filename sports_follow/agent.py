@@ -9,6 +9,7 @@ as progress so the UI can show what the agent is doing.
 from __future__ import annotations
 
 import copy
+import logging
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -21,13 +22,19 @@ from llm_providers import Client, LlmError
 from pydantic import BaseModel, ValidationError
 
 from .schema import LiveUpdate, PlayerReport
+
+log = logging.getLogger("sports_follow.agent")
 from .tools import TOOL_DEFS, ToolError, describe, run_tool
 
-MODEL = os.environ.get("SPORTS_FOLLOW_MODEL", "openrouter:anthropic/claude-opus-5")
+# `:nitro` asks OpenRouter for its fastest hosts; the default routing picks by price and some hosts stall.
+MODEL = os.environ.get("SPORTS_FOLLOW_MODEL", "openrouter:moonshotai/kimi-k2.6:nitro")
 GATEWAY_URL = os.environ.get("LLM_GATEWAY_URL", "http://127.0.0.1:8787")
 TOKEN_VAR = "SPORTS_FOLLOW_GATEWAY_TOKEN"
 KEYS_FILE = Path(os.environ.get("LLM_PROVIDERS_KEYS_FILE", "~/.config/llm-providers/keys.env")).expanduser()
 MAX_TURNS = 16
+# The final call writes the whole report in one reply, so it gets more room than a research turn needs.
+CALL_TIMEOUT_MS = 300_000
+RETRYABLE = {"timeout", "server", "network", "rate_limit"}
 
 SYSTEM_PROMPT = """\
 You are a sports-follow agent. Given a player's name, you find out who they are and \
@@ -73,7 +80,7 @@ def _token() -> str | None:
 
 
 def gateway() -> Client:
-    return Client(GATEWAY_URL, token=_token(), timeout=200.0)
+    return Client(GATEWAY_URL, token=_token(), timeout=CALL_TIMEOUT_MS / 1000 + 20)
 
 
 def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
@@ -84,7 +91,20 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
         if isinstance(node, dict):
             if "$ref" in node:
                 return walk(copy.deepcopy(defs[node["$ref"].split("/")[-1]]))
-            return {k: walk(v) for k, v in node.items() if k not in ("$defs", "title")}
+            out: dict[str, Any] = {}
+            for key, value in node.items():
+                # Drop the "title" annotation, never a field called title (UpcomingEvent.title).
+                if key == "$defs" or (key == "title" and isinstance(value, str)):
+                    continue
+                if key == "properties" and isinstance(value, dict):
+                    out[key] = {name: walk(prop) for name, prop in value.items()}
+                else:
+                    out[key] = walk(value)
+            # Ask for every field even though validation tolerates omissions: a model told a field is
+            # optional tends to skip it (a report without stats is a worse page, not an error).
+            if isinstance(out.get("properties"), dict):
+                out["required"] = list(out["properties"])
+            return out
         if isinstance(node, list):
             return [walk(v) for v in node]
         return node
@@ -128,21 +148,27 @@ def _run(
     with ThreadPoolExecutor(max_workers=6) as pool:
         for turn in range(MAX_TURNS):
             yield _progress("Thinking…" if turn else f"Asking {MODEL.split(':', 1)[-1]}…")
-            try:
-                r = llm.complete(
-                    model=MODEL,
-                    system=SYSTEM_PROMPT,
-                    messages=messages,
-                    tools=tools,
-                    max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
-                    thinking="adaptive",
-                    effort=effort,
-                    cache_system=True,
-                    timeout_ms=180_000,
-                    label=label,
-                )
-            except LlmError as exc:
-                raise AgentError(f"Model call failed ({exc.kind}): {exc}") from exc
+            for attempt in range(2):
+                try:
+                    r = llm.complete(
+                        model=MODEL,
+                        system=SYSTEM_PROMPT,
+                        messages=messages,
+                        tools=tools,
+                        max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
+                        thinking="adaptive",
+                        effort=effort,
+                        cache_system=True,
+                        timeout_ms=CALL_TIMEOUT_MS,
+                        label=label,
+                    )
+                    break
+                except LlmError as exc:
+                    # One stalled or failed host shouldn't throw away minutes of research: retry once.
+                    if attempt == 0 and exc.kind in RETRYABLE:
+                        yield _progress("The model was slow to answer, retrying…")
+                        continue
+                    raise AgentError(f"Model call failed ({exc.kind}): {exc}") from exc
 
             if r.finish == "refusal":
                 raise AgentError("The model declined this request.")
@@ -160,6 +186,9 @@ def _run(
                 try:
                     result = result_model.model_validate(submit.args)
                 except ValidationError as exc:
+                    # Each resubmit costs a full report's worth of output, so leave a trail of why.
+                    log.warning("%s: %s rejected, %d errors, first: %s", label, submit_name, exc.error_count(), exc.errors()[0])
+                    yield _progress("Tidying the report…")
                     # Answer every call in the turn; only the submit carries the error.
                     for c in r.tool_calls:
                         content = f"Input did not match the schema, please resubmit: {exc}" if c is submit else "Skipped."

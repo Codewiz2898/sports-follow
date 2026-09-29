@@ -51,3 +51,9 @@ export function hostname(url?: string | null): string {
 export function safeHref(url?: string | null): string | undefined {
   return url && /^https?:\/\//i.test(url) ? url : undefined
 }
+
+/** Models report the sport in whatever case they like ("cricket", "CRICKET"); show it one way. */
+export function sportName(sport?: string | null): string {
+  if (!sport) return ''
+  return sport.replace(/\S+/g, (w) => (w === w.toUpperCase() && w.length <= 4 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+}

@@ -52,7 +52,8 @@ class Player(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    card: Mapped["PlayerCard | None"] = relationship(back_populates="player", uselist=False)
+    # The database cascades the delete (ON DELETE CASCADE); without this the ORM would try to null the card's key first.
+    card: Mapped["PlayerCard | None"] = relationship(back_populates="player", uselist=False, cascade="all, delete-orphan", passive_deletes=True)
 
 
 class PlayerAlias(Base):

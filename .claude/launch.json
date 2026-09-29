@@ -4,13 +4,25 @@
     {
       "name": "api",
       "runtimeExecutable": ".venv/bin/uvicorn",
-      "runtimeArgs": ["sports_follow.server:app", "--port", "8421", "--reload", "--reload-dir", "sports_follow"],
+      "runtimeArgs": [
+        "sports_follow.server:app",
+        "--port",
+        "8421",
+        "--reload",
+        "--reload-dir",
+        "sports_follow",
+        "--timeout-graceful-shutdown",
+        "3"
+      ],
       "port": 8421
     },
     {
       "name": "web",
       "runtimeExecutable": "/bin/sh",
-      "runtimeArgs": ["-c", "cd web && PATH=$HOME/.local/node/bin:$PATH npm run dev -- --port 5173 --strictPort"],
+      "runtimeArgs": [
+        "-c",
+        "cd web && PATH=$HOME/.local/node/bin:$PATH npm run dev -- --port 5173 --strictPort"
+      ],
       "port": 5173
     }
   ]

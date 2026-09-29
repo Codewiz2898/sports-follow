@@ -46,18 +46,19 @@ cd web && npm install && cd ..
 Then three processes:
 
 ```bash
-.venv/bin/uvicorn sports_follow.server:app --port 8421 --reload   # API
+.venv/bin/uvicorn sports_follow.server:app --port 8421 --reload --timeout-graceful-shutdown 3   # API
 .venv/bin/arq sports_follow.worker.WorkerSettings                  # pipeline worker
 cd web && npm run dev                                              # app on http://localhost:5173
 ```
 
-For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself.
+For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself. Always pass
+`--timeout-graceful-shutdown`: fans' live streams never close on their own, so without it a restart waits forever.
 
 | Env var | Default | |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow` | |
 | `REDIS_URL` | `redis://127.0.0.1:6380/0` | |
-| `SPORTS_FOLLOW_MODEL` | `openrouter:anthropic/claude-opus-5` | any gateway model ref |
+| `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |
 | `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a card is rebuilt |
 | `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between live checks during a game |

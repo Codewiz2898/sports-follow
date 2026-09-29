@@ -3,44 +3,48 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, subscribe, type Card } from '../api'
 import { Avatar, BuildProgress, LiveScoreboard, NewsList, ResultsList, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
-import { relative } from '../format'
+import { relative, sportName } from '../format'
 import { useFollowing } from '../following'
 
 type Tab = 'live' | 'fixtures' | 'news' | 'stats' | 'results'
 
 /**
- * One player's page. A followed player comes from the shared following stream; anyone else gets
- * their own card fetch plus a per-player stream.
+ * One player's page. Always the full card plus the player's own stream: the Following list only
+ * carries summaries (no stats, sources or results), so it can't stand in for the page.
  */
 export function PlayerPage() {
   const params = useParams()
   const playerId = Number(params.id)
   const navigate = useNavigate()
   const following = useFollowing()
-  const followed = following.byId(playerId)
-  const [own, setOwn] = useState<Card | null>(null)
-  const [ownProgress, setOwnProgress] = useState<string[]>([])
+  const isFollowing = following.isFollowing(playerId)
+  const [card, setCard] = useState<Card | null>(null)
+  const [progress, setProgress] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('live')
   const [refreshing, setRefreshing] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (followed || !Number.isFinite(playerId)) return
+    if (!Number.isFinite(playerId)) return
+    setCard(null)
+    setProgress([])
+    setError(null)
     let stop = () => {}
+    let cancelled = false
     api.card(playerId).then((c) => {
-      setOwn(c)
+      if (cancelled) return
+      setCard(c)
       stop = subscribe(`/api/players/${playerId}/stream`, (e) => {
-        if (e.type === 'card') setOwn((prev) => (!prev || e.card.version >= prev.version ? e.card : prev))
-        else if (e.type === 'progress') setOwnProgress((p) => [...p, e.message].slice(-8))
+        if (e.type === 'card') {
+          setCard((prev) => (!prev || e.card.version >= prev.version ? e.card : prev))
+          if (e.card.status !== 'building') setProgress([])
+        } else if (e.type === 'progress') setProgress((p) => [...p, e.message].slice(-8))
         else if (e.type === 'moved') navigate(`/player/${e.to}`, { replace: true })
       })
-    }).catch((e: Error) => setError(e.message))
-    return () => stop()
-  }, [playerId, followed, navigate])
-
-  const card = followed ?? own
-  const progress = followed ? following.progress[playerId] ?? [] : ownProgress
+    }).catch((e: Error) => { if (!cancelled) setError(e.message) })
+    return () => { cancelled = true; stop() }
+  }, [playerId, navigate])
 
   useEffect(() => {
     if (card?.player.status === 'retired') setTab((t) => (t === 'live' || t === 'fixtures' ? 'stats' : t))
@@ -51,7 +55,11 @@ export function PlayerPage() {
 
   const p = card.player
   const retired = p.status === 'retired'
-  const isFollowing = Boolean(followed)
+
+  const retry = async () => {
+    const fresh = await following.follow(p.name)
+    setCard(fresh)
+  }
 
   const toggleFollow = async () => {
     setBusy(true)
@@ -80,22 +88,22 @@ export function PlayerPage() {
 
   return (
     <>
-      <header className="row" style={{ alignItems: 'center' }}>
+      <header className="player-head">
         <Link to="/" className="btn icon" aria-label="Back to Following"><BackIcon /></Link>
-        <div className="row" style={{ justifyContent: 'flex-start', flex: 1, minWidth: 0 }}>
+        <div className="player-id">
           <Avatar name={p.name} size="lg" />
           <div className="stack">
             <h1 className="num" style={{ fontSize: 30 }}>{p.name}</h1>
-            <span className="small muted">{[p.sport, ...(p.teams ?? []).slice(0, 2), retired && 'Retired'].filter(Boolean).join(' · ')}</span>
+            <span className="small muted">{[sportName(p.sport), ...(p.teams ?? []).slice(0, 2), retired && 'Retired'].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
-        <button type="button" className="btn" onClick={toggleFollow} disabled={busy} aria-pressed={isFollowing}>
+        <button type="button" className="btn follow" onClick={toggleFollow} disabled={busy} aria-pressed={isFollowing}>
           {isFollowing ? <><CheckIcon width={16} height={16} />Following</> : <><PlusIcon width={16} height={16} />Follow</>}
         </button>
       </header>
 
       {card.status !== 'ready' ? (
-        <BuildProgress card={card} messages={progress} onRetry={() => following.follow(p.name)} />
+        <BuildProgress card={card} messages={progress} onRetry={retry} />
       ) : (
         <>
           {p.summary && <p className="muted" style={{ margin: 0, maxWidth: '70ch' }}>{p.summary}</p>}

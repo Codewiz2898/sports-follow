@@ -122,3 +122,12 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 
 .empty { padding: 28px 20px; text-align: center; color: var(--muted); }
 .error-box { padding: 14px 16px; border-radius: 14px; background: #2a1714; color: var(--danger); font-size: 14px; }
+
+/* Player header: back and follow on one row at phone width, the name gets the full width below. */
+.player-head { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: 'back . follow' 'id id id'; align-items: center; gap: 14px 12px; }
+.player-head > a { grid-area: back; }
+.player-head .follow { grid-area: follow; }
+.player-id { grid-area: id; display: flex; align-items: center; gap: 14px; min-width: 0; }
+@media (min-width: 640px) {
+  .player-head { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'back id follow'; }
+}

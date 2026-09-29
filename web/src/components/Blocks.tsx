@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Card, LiveStatus, NewsItem, RecentResult, Stat, UpcomingEvent } from '../api'
-import { dateTime, day, hostname, initials, relative, safeHref } from '../format'
+import { dateTime, day, hostname, initials, relative, safeHref, sportName } from '../format'
 
 export function Avatar({ name, size }: { name: string; size?: 'sm' | 'lg' }) {
   return <span className={`avatar${size ? ` ${size}` : ''}`} aria-hidden="true">{initials(name)}</span>
@@ -147,7 +147,7 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
         ? [card.live.score, card.live.player_stats?.[0] && `${card.live.player_stats[0].value} ${card.live.player_stats[0].label}`].filter(Boolean).join(' · ')
         : card.upcoming?.[0]
           ? `Next · ${card.upcoming[0].title}${card.upcoming[0].start_utc ? `, ${relative(card.upcoming[0].start_utc)}` : ''}`
-          : card.player.status === 'retired' ? 'Retired · news only' : card.player.sport
+          : card.player.status === 'retired' ? 'Retired · news only' : sportName(card.player.sport)
   return (
     <Link to={`/player/${card.player_id}`} className="row" style={{ color: 'var(--text)', padding: '10px 12px', minHeight: 44, borderRadius: 12 }}>
       <div className="row" style={{ justifyContent: 'flex-start', minWidth: 0 }}>
