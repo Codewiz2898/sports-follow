@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sports-follow",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": [
+        "sports_follow.server:app",
+        "--port",
+        "8421"
+      ],
+      "port": 8421
+    }
+  ]
+}

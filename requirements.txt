@@ -1,0 +1,7 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+ddgs>=9
+trafilatura>=2
+# Client for the local llm-providers gateway (~/repos/llm-providers)
+llm-providers @ file:///Users/bharathmourya/repos/llm-providers/python

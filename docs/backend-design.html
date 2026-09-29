@@ -1,0 +1,613 @@
+<title>Sports Follow Backend Design</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #F3F4F6; --surface: #FFFFFF; --text: #14181E; --muted: #5A6371; --line: #D7DCE3;
+    --accent: #D1481A; --accent-soft: #FBE7DF; --code: #E9ECF0; --accent-text: #B33C13;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0E1217; --surface: #171C23; --text: #E9EDF1; --muted: #A2ACB8; --line: #2B333D;
+      --accent: #FF8A5B; --accent-soft: #3A2218; --code: #1F262F; --accent-text: #FF9C75;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0E1217; --surface: #171C23; --text: #E9EDF1; --muted: #A2ACB8; --line: #2B333D;
+    --accent: #FF8A5B; --accent-soft: #3A2218; --code: #1F262F; --accent-text: #FF9C75;
+  }
+  body { background: var(--bg); color: var(--text); font: 16px/1.55 Barlow, "Helvetica Neue", Arial, sans-serif; }
+  .page { max-width: 1120px; margin: 0 auto; padding-block: 40px 96px; padding-inline: 20px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 56px; }
+  @media (max-width: 900px) { .page { grid-template-columns: minmax(0, 1fr); gap: 24px; } .toc { position: static; } }
+  .toc { position: sticky; top: 24px; align-self: start; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .toc a { color: var(--muted); text-decoration: none; padding: 4px 0; border-left: 2px solid var(--line); padding-left: 12px; }
+  .toc a:hover, .toc a:focus-visible { color: var(--text); border-color: var(--accent); outline: none; }
+  .toc .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .doc { display: flex; flex-direction: column; gap: 48px; min-width: 0; }
+  .doc > header { display: flex; flex-direction: column; gap: 12px; }
+  h1 { margin: 0; font-family: "Barlow Condensed", Barlow, sans-serif; font-size: 48px; line-height: 1; font-weight: 700; text-wrap: balance; }
+  h2 { margin: 0; font-family: "Barlow Condensed", Barlow, sans-serif; font-size: 30px; line-height: 1.1; font-weight: 700; text-wrap: balance; }
+  h3 { margin: 0; font-size: 18px; font-weight: 600; }
+  section { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 24px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-text); }
+  p, li { max-width: 70ch; }
+  p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+  .lede { font-size: 19px; color: var(--muted); max-width: 64ch; }
+  .meta { font-size: 14px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; }
+  .ideas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 720px) { .ideas { grid-template-columns: minmax(0, 1fr); } }
+  .idea { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .idea b { font-family: "Barlow Condensed", Barlow, sans-serif; font-size: 22px; font-weight: 700; line-height: 1.1; }
+  .idea span { font-size: 14px; color: var(--muted); }
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  figure svg { max-width: 100%; height: auto; display: block; color: var(--text); }
+  figcaption { font-size: 14px; color: var(--muted); max-width: none; }
+  .tbl { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-top: 1px solid var(--line); }
+  thead th { border-top: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--code); padding: 1px 5px; border-radius: 4px; }
+  pre { margin: 0; background: var(--code); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  pre code { background: none; padding: 0; }
+  .callout { background: var(--accent-soft); border-radius: 12px; padding: 14px 18px; max-width: 70ch; }
+  .callout p { max-width: none; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="Sections">
+    <div class="eyebrow">Backend design</div>
+    <a href="#summary">Summary</a>
+    <a href="#requirements">1 · Requirements</a>
+    <a href="#overview">2 · System shape</a>
+    <a href="#live">3 · Real-time per player</a>
+    <a href="#sources">4 · Finding sources</a>
+    <a href="#refresh">5 · Keeping sources fresh</a>
+    <a href="#data">6 · Data model</a>
+    <a href="#serving">7 · Serving fans</a>
+    <a href="#llm">8 · Where the LLM sits</a>
+    <a href="#reliability">9 · Scale and reliability</a>
+    <a href="#tradeoffs">10 · Trade-offs</a>
+    <a href="#build">11 · Build order</a>
+    <a href="#market">12 · Market</a>
+  </nav>
+
+  <main class="doc">
+    <header>
+      <div class="eyebrow">Sports Follow · backend</div>
+      <h1>A player-first pipeline for live sports data</h1>
+      <p class="lede">How the service finds sources for any athlete in any sport, keeps their live games, fixtures, stats and news fresh, and serves one shared record to every fan who follows them.</p>
+      <div class="meta"><span>29 Sep 2026</span><span>Draft for review</span><span>Companion to the app design canvas</span></div>
+    </header>
+
+    <section id="summary">
+      <h2>Summary</h2>
+      <p>The backend has two halves. A <strong>pipeline</strong> turns public sources into one canonical record per player: profile, live state, fixtures, results, season stats and news. A <strong>serving layer</strong> materializes that record as a player card and fans it out to everyone following the player, over a stream for live games and over a cacheable API for everything else.</p>
+      <div class="ideas">
+        <div class="idea"><b>Work is keyed by player and event, never by fan</b><span>A fan following a player adds a subscription, nothing else. Ten thousand fans of Kohli cost the same to ingest as one.</span></div>
+        <div class="idea"><b>Live polling is armed by the schedule</b><span>Nothing is polled fast unless an event involving a followed player is about to start or in progress. Fixtures decide when the fast lane switches on.</span></div>
+        <div class="idea"><b>Sources resolve themselves, then check their own health</b><span>A resolver maps a name to external ids and adapters; an LLM agent fills gaps; a health loop rediscovers sources that go stale.</span></div>
+      </div>
+    </section>
+
+    <section id="requirements">
+      <div class="eyebrow">1</div>
+      <h2>Requirements and assumptions</h2>
+      <h3>Functional</h3>
+      <ul>
+        <li>Given a player name in any sport, identify the athlete and build their record: profile, teams, live game (score, clock, the player's own line), upcoming events, recent results, season and career stats, news.</li>
+        <li>Keep the record current: live state within seconds during a game, fixtures and stats within hours, news within minutes.</li>
+        <li>Serve the record to many fans at once, with a live stream during games and push notifications for the moments fans care about (game start, goal or wicket, milestone, big news).</li>
+        <li>Later: follow teams, compare two players. The data model should not have to change for either.</li>
+      </ul>
+      <h3>Non-functional</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Concern</th><th>Target</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Live freshness</td><td class="num">≤ 10 s behind the source; ≤ 2 s where the source pushes</td><td>Fans compare against TV and other apps. Slower than a minute feels broken.</td></tr>
+          <tr><td>Fixtures, results, stats</td><td class="num">≤ 1 h</td><td>They change a few times a day at most.</td></tr>
+          <tr><td>News</td><td class="num">≤ 5 min</td><td>Feeds and news search are cheap to poll.</td></tr>
+          <tr><td>Read availability</td><td>Cards keep serving when the pipeline is down, stamped with their age</td><td>Stale but honest beats an error page.</td></tr>
+          <tr><td>Scale (planning numbers)</td><td class="num">50k followed players · 1M follows · 100k fans online at a peak</td><td>Sizing in section 9. The design stays the same an order of magnitude either way.</td></tr>
+          <tr><td>Cost</td><td>Not a constraint</td><td>What is constrained is the sources: most are free, unofficial and rate-limited, so resilience matters more than efficiency.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Constraints</h3>
+      <ul>
+        <li>Python. The research agent, the web tools and the report schema from the current app are reused as pipeline stages.</li>
+        <li>Every model call goes through the llm-providers gateway with the <code>sports-follow</code> app token, labelled per job.</li>
+        <li>Small team. Boring infrastructure by default: Postgres, Redis, a worker pool. Each choice below names what to swap in when it stops being enough.</li>
+      </ul>
+    </section>
+
+    <section id="overview">
+      <div class="eyebrow">2</div>
+      <h2>System shape</h2>
+      <p>Six workers feed a normalizer, which writes player cards to the read models. Fans never touch the pipeline; they read cards and subscribe to their changes.</p>
+      <figure>
+        <svg viewBox="0 0 960 560" role="img" aria-label="Fans talk to an API and realtime layer that reads from Redis and Postgres read models. A pipeline of workers (registry and resolver, source discovery, schedule ingest, live poller, normalizer and card builder, news ingest) pulls from Wikidata and web search, fixtures APIs, live APIs, HTML pages and RSS, and writes cards and diffs to the read models." font-family="Barlow, sans-serif" font-size="12">
+          <defs><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"></path></marker></defs>
+          <!-- fans -->
+          <rect x="20" y="190" width="120" height="70" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="80" y="220" text-anchor="middle" fill="currentColor" font-weight="600">Fans</text>
+          <text x="80" y="240" text-anchor="middle" fill="currentColor" font-size="11">phone · web</text>
+          <!-- api -->
+          <rect x="250" y="190" width="170" height="70" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="335" y="212" text-anchor="middle" fill="currentColor" font-weight="600">API + realtime</text>
+          <text x="335" y="230" text-anchor="middle" fill="currentColor" font-size="11">GET card · SSE stream</text>
+          <text x="335" y="248" text-anchor="middle" fill="currentColor" font-size="11">push notifications</text>
+          <!-- read models -->
+          <rect x="250" y="300" width="170" height="70" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="335" y="326" text-anchor="middle" fill="currentColor" font-weight="600">Read models</text>
+          <text x="335" y="346" text-anchor="middle" fill="currentColor" font-size="11">Redis (hot) · Postgres</text>
+          <!-- fans <-> api -->
+          <line x1="140" y1="205" x2="250" y2="205" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="195" y="199" text-anchor="middle" fill="currentColor" font-size="11">opens, follows</text>
+          <line x1="250" y1="245" x2="140" y2="245" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="195" y="260" text-anchor="middle" fill="currentColor" font-size="11">diffs, pushes</text>
+          <!-- read models -> api -->
+          <line x1="335" y1="300" x2="335" y2="260" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="343" y="284" text-anchor="start" fill="currentColor" font-size="11">reads, subscribes</text>
+          <!-- pipeline group -->
+          <rect x="452" y="40" width="296" height="490" rx="10" fill="none" stroke="currentColor" stroke-dasharray="6 4" opacity="0.6"></rect>
+          <text x="468" y="62" text-anchor="start" fill="currentColor" font-weight="600">Pipeline workers</text>
+          <rect x="480" y="80" width="240" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="600" y="106" text-anchor="middle" fill="currentColor">Registry &amp; resolver</text>
+          <rect x="480" y="144" width="240" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="600" y="170" text-anchor="middle" fill="currentColor">Source discovery</text>
+          <rect x="480" y="208" width="240" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="600" y="234" text-anchor="middle" fill="currentColor">Schedule ingest</text>
+          <rect x="480" y="272" width="240" height="44" rx="6" fill="none" style="stroke: var(--accent)" stroke-width="2"></rect>
+          <text x="600" y="298" text-anchor="middle" style="fill: var(--accent-text)" font-weight="600">Live poller</text>
+          <rect x="480" y="336" width="240" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="600" y="362" text-anchor="middle" fill="currentColor">Normalizer &amp; card builder</text>
+          <rect x="480" y="400" width="240" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="600" y="426" text-anchor="middle" fill="currentColor">News ingest</text>
+          <rect x="480" y="464" width="240" height="44" rx="6" fill="none" stroke="currentColor" stroke-dasharray="4 3"></rect>
+          <text x="600" y="482" text-anchor="middle" fill="currentColor">LLM gateway (llm-providers)</text>
+          <text x="600" y="498" text-anchor="middle" fill="currentColor" font-size="11">discovery · news · HTML extraction</text>
+          <!-- vertical flow -->
+          <line x1="600" y1="124" x2="600" y2="144" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="610" y="138" text-anchor="start" fill="currentColor" font-size="11">external ids</text>
+          <line x1="600" y1="188" x2="600" y2="208" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="610" y="202" text-anchor="start" fill="currentColor" font-size="11">bindings</text>
+          <line x1="600" y1="252" x2="600" y2="272" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="610" y="266" text-anchor="start" fill="currentColor" font-size="11">upcoming events arm polls</text>
+          <line x1="600" y1="316" x2="600" y2="336" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="610" y="330" text-anchor="start" fill="currentColor" font-size="11">raw snapshots</text>
+          <line x1="600" y1="400" x2="600" y2="380" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="610" y="394" text-anchor="start" fill="currentColor" font-size="11">raw items</text>
+          <!-- normalizer -> read models -->
+          <polyline points="480,358 440,358 440,335 420,335" fill="none" stroke="currentColor" marker-end="url(#ar1)"></polyline>
+          <text x="335" y="392" text-anchor="middle" fill="currentColor" font-size="11">cards + diffs</text>
+          <!-- sources -->
+          <rect x="820" y="80" width="130" height="108" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="885" y="126" text-anchor="middle" fill="currentColor">Wikidata,</text>
+          <text x="885" y="144" text-anchor="middle" fill="currentColor">web search</text>
+          <rect x="820" y="208" width="130" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="885" y="234" text-anchor="middle" fill="currentColor">Fixtures APIs</text>
+          <rect x="820" y="272" width="130" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="885" y="292" text-anchor="middle" fill="currentColor">Live APIs,</text>
+          <text x="885" y="306" text-anchor="middle" fill="currentColor" font-size="11">streams</text>
+          <rect x="820" y="336" width="130" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="885" y="362" text-anchor="middle" fill="currentColor">HTML pages</text>
+          <rect x="820" y="400" width="130" height="44" rx="6" fill="none" stroke="currentColor"></rect>
+          <text x="885" y="426" text-anchor="middle" fill="currentColor">RSS, news search</text>
+          <!-- pipeline <-> sources -->
+          <line x1="720" y1="102" x2="820" y2="102" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="770" y="96" text-anchor="middle" fill="currentColor" font-size="11">resolve</text>
+          <line x1="720" y1="166" x2="820" y2="166" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="770" y="160" text-anchor="middle" fill="currentColor" font-size="11">find, verify</text>
+          <line x1="720" y1="230" x2="820" y2="230" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="770" y="224" text-anchor="middle" fill="currentColor" font-size="11">hourly</text>
+          <line x1="720" y1="294" x2="820" y2="294" style="stroke: var(--accent)" stroke-width="2" marker-end="url(#ar1)"></line>
+          <text x="770" y="286" text-anchor="middle" style="fill: var(--accent-text)" font-size="11" font-weight="600">5–10 s</text>
+          <text x="770" y="310" text-anchor="middle" style="fill: var(--accent-text)" font-size="11">only while live</text>
+          <line x1="820" y1="358" x2="720" y2="358" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="770" y="352" text-anchor="middle" fill="currentColor" font-size="11">LLM extracts</text>
+          <line x1="720" y1="422" x2="820" y2="422" stroke="currentColor" marker-end="url(#ar1)"></line>
+          <text x="770" y="416" text-anchor="middle" fill="currentColor" font-size="11">every 5 min</text>
+        </svg>
+        <figcaption>Figure 1. Fans read and subscribe on the left; the pipeline on the right pulls from sources at a cadence set by the kind of data. Only the live poller runs at seconds, and only while an event is on.</figcaption>
+      </figure>
+      <div class="tbl"><table>
+        <thead><tr><th>Component</th><th>Job</th><th>Runs</th></tr></thead>
+        <tbody>
+          <tr><td>Registry &amp; resolver</td><td>Turns a name into one player record with external ids across source systems (section 4).</td><td>On first follow, then on demand</td></tr>
+          <tr><td>Source discovery</td><td>Turns ids into concrete, verified source bindings; asks the LLM agent when an id is missing.</td><td>On new player, on binding failure, weekly</td></tr>
+          <tr><td>Schedule ingest</td><td>Pulls upcoming and recent events for each player's teams and tournaments into canonical events.</td><td>Hourly per player; every 5 min on match day</td></tr>
+          <tr><td>Live poller</td><td>Polls or streams the live source for an armed event and stores raw snapshots.</td><td>Only while an event is armed or live</td></tr>
+          <tr><td>News ingest</td><td>Pulls feeds and news search, dedupes, classifies, summarizes.</td><td>Every 5 min per player</td></tr>
+          <tr><td>Normalizer &amp; card builder</td><td>Maps raw payloads to canonical event state and player lines, then rebuilds the affected player cards and publishes diffs.</td><td>On every new snapshot or item</td></tr>
+          <tr><td>API + realtime</td><td>Serves cards, streams diffs, sends pushes, records follows.</td><td>Always</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="live">
+      <div class="eyebrow">3</div>
+      <h2>Real-time updates per player</h2>
+      <p>Very few sports sources push. Almost all of it is polling, so the question is what to poll and when. The answer is: poll events, not players, and let the schedule decide when an event is worth polling fast.</p>
+      <figure>
+        <svg viewBox="0 0 960 210" role="img" aria-label="An event moves from Scheduled to Armed thirty minutes before start, to Live when the source reports it in progress, to Final. Polling cadence rises from hourly fixture refreshes to every 60 seconds when armed to every 5 to 10 seconds when live, then one last poll. A postponed event returns to Scheduled." font-family="Barlow, sans-serif" font-size="12">
+          <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"></path></marker></defs>
+          <rect x="20" y="60" width="150" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="95" y="93" text-anchor="middle" fill="currentColor" font-weight="600">Scheduled</text>
+          <rect x="250" y="60" width="150" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="325" y="93" text-anchor="middle" fill="currentColor" font-weight="600">Armed</text>
+          <rect x="480" y="60" width="150" height="56" rx="8" fill="none" style="stroke: var(--accent)" stroke-width="2"></rect>
+          <text x="555" y="93" text-anchor="middle" style="fill: var(--accent-text)" font-weight="700">Live</text>
+          <rect x="710" y="60" width="150" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="785" y="93" text-anchor="middle" fill="currentColor" font-weight="600">Final</text>
+          <line x1="170" y1="88" x2="250" y2="88" stroke="currentColor" marker-end="url(#ar2)"></line>
+          <text x="210" y="80" text-anchor="middle" fill="currentColor" font-size="11">T − 30 min</text>
+          <line x1="400" y1="88" x2="480" y2="88" stroke="currentColor" marker-end="url(#ar2)"></line>
+          <text x="440" y="80" text-anchor="middle" fill="currentColor" font-size="11">in progress</text>
+          <line x1="630" y1="88" x2="710" y2="88" stroke="currentColor" marker-end="url(#ar2)"></line>
+          <text x="670" y="80" text-anchor="middle" fill="currentColor" font-size="11">final</text>
+          <polyline points="325,60 325,30 95,30 95,60" fill="none" stroke="currentColor" marker-end="url(#ar2)"></polyline>
+          <text x="210" y="24" text-anchor="middle" fill="currentColor" font-size="11">postponed, abandoned</text>
+          <text x="95" y="142" text-anchor="middle" fill="currentColor" font-size="11">refresh fixtures</text>
+          <text x="95" y="158" text-anchor="middle" fill="currentColor" font-size="11">hourly</text>
+          <text x="325" y="142" text-anchor="middle" fill="currentColor" font-size="11">poll every 60 s</text>
+          <text x="325" y="158" text-anchor="middle" fill="currentColor" font-size="11">waiting for the start</text>
+          <text x="555" y="142" text-anchor="middle" style="fill: var(--accent-text)" font-size="11" font-weight="600">poll every 5–10 s</text>
+          <text x="555" y="158" text-anchor="middle" style="fill: var(--accent-text)" font-size="11">or hold a stream open</text>
+          <text x="785" y="142" text-anchor="middle" fill="currentColor" font-size="11">one last poll</text>
+          <text x="785" y="158" text-anchor="middle" fill="currentColor" font-size="11">then disarm</text>
+        </svg>
+        <figcaption>Figure 2. The event lifecycle. Schedule ingest creates events in Scheduled; a timer arms them; the source's own status moves them through Live to Final. Cadence is a property of the state, not of the player.</figcaption>
+      </figure>
+      <h3>How it works</h3>
+      <ol>
+        <li>Schedule ingest keeps an <code>event</code> row for every upcoming game of every team or tournament a followed player is in.</li>
+        <li>A scheduler arms each event 30 minutes before its start: it enqueues a poll job with the event's live binding (a URL or stream endpoint from section 4) and a 60 s cadence.</li>
+        <li>When a snapshot shows the event in progress, the cadence drops to the sport's live cadence. Each snapshot is stored raw (object storage, keyed by event and time), then normalized.</li>
+        <li>When the source reports the event final, the poller takes one more snapshot and disarms. If the start passes with no in-progress signal for two hours, the event is marked postponed and returns to Scheduled.</li>
+      </ol>
+      <div class="tbl"><table>
+        <thead><tr><th>Sport</th><th>Live source</th><th>Method</th><th>Cadence</th><th>What the player line holds</th></tr></thead>
+        <tbody>
+          <tr><td>Football, basketball</td><td>ESPN site API scoreboard + event summary; SofaScore as second binding</td><td>poll</td><td class="num">10 s</td><td>minutes, goals, assists, shots, cards; points, rebounds, assists</td></tr>
+          <tr><td>Cricket</td><td>Cricbuzz / ESPNcricinfo match pages and their JSON endpoints</td><td>poll</td><td class="num">8 s</td><td>runs, balls, fours, sixes, strike rate; overs, wickets, economy</td></tr>
+          <tr><td>Tennis</td><td>ATP / WTA live scores</td><td>poll</td><td class="num">10 s</td><td>sets, games, serving, aces, break points</td></tr>
+          <tr><td>Chess</td><td>Lichess broadcast API (ndjson stream)</td><td>stream</td><td class="num">push</td><td>result or move number, clock, evaluation, tournament score</td></tr>
+          <tr><td>F1</td><td>Timing feeds</td><td>poll</td><td class="num">5 s</td><td>position, lap, gap, last lap time</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Why one poll serves everyone</h3>
+      <figure>
+        <svg viewBox="0 0 960 150" role="img" aria-label="One poll of an event becomes one canonical event state, which is split into one player line per athlete, which rebuilds one card per player, which is published to every fan following any of them." font-family="Barlow, sans-serif" font-size="12">
+          <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"></path></marker></defs>
+          <rect x="20" y="40" width="130" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="85" y="66" text-anchor="middle" fill="currentColor" font-weight="600">1 poll</text>
+          <text x="85" y="84" text-anchor="middle" fill="currentColor" font-size="11">of event E</text>
+          <rect x="210" y="40" width="130" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="275" y="66" text-anchor="middle" fill="currentColor" font-weight="600">1 event state</text>
+          <text x="275" y="84" text-anchor="middle" fill="currentColor" font-size="11">canonical</text>
+          <rect x="400" y="40" width="130" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="465" y="66" text-anchor="middle" fill="currentColor" font-weight="600">22 player lines</text>
+          <text x="465" y="84" text-anchor="middle" fill="currentColor" font-size="11">one per athlete</text>
+          <rect x="590" y="40" width="130" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="655" y="66" text-anchor="middle" fill="currentColor" font-weight="600">22 player cards</text>
+          <text x="655" y="84" text-anchor="middle" fill="currentColor" font-size="11">only followed ones</text>
+          <rect x="780" y="40" width="130" height="64" rx="8" fill="none" style="stroke: var(--accent)" stroke-width="2"></rect>
+          <text x="845" y="66" text-anchor="middle" style="fill: var(--accent-text)" font-weight="700">every fan</text>
+          <text x="845" y="84" text-anchor="middle" style="fill: var(--accent-text)" font-size="11">following any</text>
+          <line x1="150" y1="72" x2="210" y2="72" stroke="currentColor" marker-end="url(#ar3)"></line>
+          <text x="180" y="64" text-anchor="middle" fill="currentColor" font-size="11">normalize</text>
+          <line x1="340" y1="72" x2="400" y2="72" stroke="currentColor" marker-end="url(#ar3)"></line>
+          <text x="370" y="64" text-anchor="middle" fill="currentColor" font-size="11">split</text>
+          <line x1="530" y1="72" x2="590" y2="72" stroke="currentColor" marker-end="url(#ar3)"></line>
+          <text x="560" y="64" text-anchor="middle" fill="currentColor" font-size="11">rebuild</text>
+          <line x1="720" y1="72" x2="780" y2="72" stroke="currentColor" marker-end="url(#ar3)"></line>
+          <text x="750" y="64" text-anchor="middle" fill="currentColor" font-size="11">publish</text>
+        </svg>
+        <figcaption>Figure 3. The cost of a poll is paid once per event. Players in the same game share it; fans of the same player share the card. Adding a fan adds a subscription and nothing upstream.</figcaption>
+      </figure>
+      <p>This is also why the app should show <em>the game</em>, with the followed players' lines inside it, rather than a separate feed per player. Kohli and Gill in the same ODI are one event state.</p>
+    </section>
+
+    <section id="sources">
+      <div class="eyebrow">4</div>
+      <h2>Finding sources for a player automatically</h2>
+      <p>A source is only useful once it is bound to a specific player: an ESPNcricinfo id, a Lichess username, a FIDE id, a fixtures URL for their club. The resolver produces those bindings without a human, using structured id registries first and the LLM agent only where they run out.</p>
+      <figure>
+        <svg viewBox="0 0 1000 320" role="img" aria-label="A name query becomes candidates from Wikidata and web search, is disambiguated by the LLM, yields external ids from Wikidata properties, which an adapter registry turns into bindings. Where an id or URL is missing, a discovery agent proposes a URL with evidence and a validator fetches and checks it; accepted proposals become bindings, rejected ones go back to the agent for up to three tries." font-family="Barlow, sans-serif" font-size="12">
+          <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"></path></marker></defs>
+          <rect x="20" y="40" width="140" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="90" y="62" text-anchor="middle" fill="currentColor" font-weight="600">Name query</text>
+          <text x="90" y="80" text-anchor="middle" fill="currentColor" font-size="11">“Kohli”, “Carlsen”</text>
+          <rect x="220" y="40" width="140" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="290" y="62" text-anchor="middle" fill="currentColor" font-weight="600">Candidates</text>
+          <text x="290" y="80" text-anchor="middle" fill="currentColor" font-size="11">Wikidata + web search</text>
+          <rect x="420" y="40" width="140" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="490" y="62" text-anchor="middle" fill="currentColor" font-weight="600">Disambiguate</text>
+          <text x="490" y="80" text-anchor="middle" fill="currentColor" font-size="11">LLM picks, keeps others</text>
+          <rect x="620" y="40" width="140" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="690" y="62" text-anchor="middle" fill="currentColor" font-weight="600">External ids</text>
+          <text x="690" y="80" text-anchor="middle" fill="currentColor" font-size="11">Wikidata properties</text>
+          <rect x="820" y="40" width="140" height="56" rx="8" fill="none" style="stroke: var(--accent)" stroke-width="2"></rect>
+          <text x="890" y="62" text-anchor="middle" style="fill: var(--accent-text)" font-weight="700">Bindings</text>
+          <text x="890" y="80" text-anchor="middle" style="fill: var(--accent-text)" font-size="11">id, url, adapter, confidence</text>
+          <line x1="160" y1="68" x2="220" y2="68" stroke="currentColor" marker-end="url(#ar4)"></line>
+          <text x="190" y="60" text-anchor="middle" fill="currentColor" font-size="11">search</text>
+          <line x1="360" y1="68" x2="420" y2="68" stroke="currentColor" marker-end="url(#ar4)"></line>
+          <text x="390" y="60" text-anchor="middle" fill="currentColor" font-size="11">rank</text>
+          <line x1="560" y1="68" x2="620" y2="68" stroke="currentColor" marker-end="url(#ar4)"></line>
+          <text x="590" y="60" text-anchor="middle" fill="currentColor" font-size="11">look up</text>
+          <line x1="760" y1="68" x2="820" y2="68" stroke="currentColor" marker-end="url(#ar4)"></line>
+          <text x="790" y="60" text-anchor="middle" fill="currentColor" font-size="11">adapters</text>
+          <rect x="420" y="200" width="140" height="56" rx="8" fill="none" stroke="currentColor" stroke-dasharray="4 3"></rect>
+          <text x="490" y="222" text-anchor="middle" fill="currentColor" font-weight="600">Discovery agent</text>
+          <text x="490" y="240" text-anchor="middle" fill="currentColor" font-size="11">LLM proposes a URL</text>
+          <rect x="620" y="200" width="140" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="690" y="222" text-anchor="middle" fill="currentColor" font-weight="600">Validator</text>
+          <text x="690" y="240" text-anchor="middle" fill="currentColor" font-size="11">fetches, checks name, date</text>
+          <polyline points="690,96 690,150 490,150 490,200" fill="none" stroke="currentColor" marker-end="url(#ar4)"></polyline>
+          <text x="590" y="144" text-anchor="middle" fill="currentColor" font-size="11">id or url missing</text>
+          <line x1="560" y1="228" x2="620" y2="228" stroke="currentColor" marker-end="url(#ar4)"></line>
+          <text x="590" y="220" text-anchor="middle" fill="currentColor" font-size="11">proposal</text>
+          <polyline points="760,228 890,228 890,96" fill="none" stroke="currentColor" marker-end="url(#ar4)"></polyline>
+          <text x="825" y="220" text-anchor="middle" fill="currentColor" font-size="11">accepted</text>
+          <polyline points="690,256 690,284 490,284 490,256" fill="none" stroke="currentColor" marker-end="url(#ar4)"></polyline>
+          <text x="590" y="300" text-anchor="middle" fill="currentColor" font-size="11">rejected, retry up to 3 times</text>
+        </svg>
+        <figcaption>Figure 4. The resolver. The top row is deterministic and cheap; the bottom loop is where the LLM earns its place, and every proposal is verified by fetching before it is trusted.</figcaption>
+      </figure>
+      <h3>Step by step</h3>
+      <ol>
+        <li><strong>Candidates.</strong> Query the Wikidata search API and a web search for the name. Wikidata gives a QID, occupation (sport), nationality and dates for each candidate. Most famous athletes resolve here without a model call.</li>
+        <li><strong>Disambiguate.</strong> If more than one candidate is an athlete, ask the model to pick the most likely one for a sports-follow app and to list the others. The others are stored on the player record so the app can show "did you mean".</li>
+        <li><strong>External ids.</strong> Wikidata holds ids for most source systems as properties: FIDE id (P1440), Transfermarkt id (P2446), ATP id (P536), ESPNcricinfo id (P2697), and many league and federation ids. Read every property the adapter registry knows.</li>
+        <li><strong>Adapters.</strong> Each adapter is code for one source system: how to turn an id into fixture, live, stats and news endpoints, how to parse them, and how to tell a live event from a finished one. An id plus an adapter is a binding.</li>
+        <li><strong>Gaps.</strong> When no adapter has an id (a domestic league, a new tournament, a niche sport), the discovery agent runs. It is the current research agent with a narrower job: return candidate URLs for fixtures, live scores, stats and news, each with evidence. The validator fetches every URL, confirms the page names the player and is recent, and only then writes a binding with the confidence and evidence attached.</li>
+      </ol>
+      <div class="tbl"><table>
+        <thead><tr><th>Player</th><th>Source system</th><th>Binding</th><th>Found by</th></tr></thead>
+        <tbody>
+          <tr><td>Virat Kohli</td><td>Cricbuzz</td><td><code>profile 1413</code>, series match list</td><td>Wikidata id, adapter</td></tr>
+          <tr><td>Virat Kohli</td><td>ESPNcricinfo</td><td><code>player id</code> from P2697</td><td>Wikidata id, adapter</td></tr>
+          <tr><td>Magnus Carlsen</td><td>FIDE</td><td><code>1503014</code>, ratings profile</td><td>Wikidata P1440</td></tr>
+          <tr><td>Magnus Carlsen</td><td>Lichess</td><td>username, broadcast search</td><td>Discovery agent, validated</td></tr>
+          <tr><td>Any player</td><td>Google News RSS, news search</td><td>query string built from the resolved name and team</td><td>Registry, no lookup needed</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="refresh">
+      <div class="eyebrow">5</div>
+      <h2>Keeping sources fresh and finding new ones</h2>
+      <p>Bindings rot. Pages move, ids change, a player transfers, a tournament site appears for one season. So every binding carries health, and health drives rediscovery.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Trigger</th><th>What runs</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>A fan follows a player nobody follows yet</td><td>Full resolve and discovery, then schedule, stats and news ingest, with the fan's card marked "building"</td><td>The first card should appear within a minute or two.</td></tr>
+          <tr><td>A binding fails 3 polls in a row, or returns a page that no longer names the player</td><td>Mark it stale; try the next binding for the same purpose; queue rediscovery for that purpose only</td><td>Most breakage is one endpoint, not the whole player.</td></tr>
+          <tr><td>No upcoming events are known for an active player</td><td>Schedule ingest across every binding, then discovery for a fixtures source</td><td>An empty "up next" usually means a missing source, not an idle player.</td></tr>
+          <tr><td>Weekly, per player</td><td>Re-resolve ids, refresh team membership, rerun discovery for purposes with low confidence</td><td>Transfers and squad changes show up here.</td></tr>
+          <tr><td>Season boundaries and new tournaments</td><td>A per-sport agent run that lists the season's competitions and proposes new adapters or bindings</td><td>New competitions are the main way whole source families appear.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Two kinds of "new source"</h3>
+      <ul>
+        <li><strong>A new binding for an existing adapter</strong> (a new tournament page on a known site) is found and verified automatically, as in section 4.</li>
+        <li><strong>A new source system</strong> (a site the pipeline has never parsed) needs an adapter, which is code. The weekly per-sport agent run proposes them with sample URLs and a fetched example; an engineer approves and writes the adapter, or the system falls back to LLM extraction from the page (section 8) until one exists. Fallback bindings are flagged so their higher cost and latency are visible.</li>
+      </ul>
+      <p>Health is scored per purpose (fixtures, live, stats, news), not per player, so a broken stats page never stops live scores. Every fetch keeps its raw response, which makes it possible to replay a day of snapshots through a fixed parser.</p>
+    </section>
+
+    <section id="data">
+      <div class="eyebrow">6</div>
+      <h2>Data model</h2>
+      <p>Postgres holds the registry and history. Redis holds the hot copy of each card and the channels fans subscribe to. Object storage holds raw snapshots.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Table</th><th>Key fields</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>player</code></td><td>id, name, sport, status, nationality, role, wikidata_qid, disambiguation[]</td><td>One row per athlete; the anchor for everything else.</td></tr>
+          <tr><td><code>player_identity</code></td><td>player_id, system, external_id, confidence, evidence_url</td><td>Ids across source systems, from Wikidata or discovery.</td></tr>
+          <tr><td><code>source_binding</code></td><td>player_id or team_id, purpose (fixtures, live, stats, news), adapter, locator, confidence, health {last_ok, failures, checked_at}</td><td>What to fetch for what. Several per purpose, in priority order.</td></tr>
+          <tr><td><code>team</code>, <code>membership</code></td><td>team id, sport, competition ids; player_id, team_id, from, to</td><td>Following teams later is a subscription on <code>team</code>; nothing else changes.</td></tr>
+          <tr><td><code>event</code></td><td>id, sport, competition, participants (teams or players), start_utc, venue, status (scheduled, armed, live, final, postponed), live_binding</td><td>The unit of polling. Shared by every player in it.</td></tr>
+          <tr><td><code>event_state</code></td><td>event_id, as_of, state (jsonb, sport-specific), source_url, snapshot_ref</td><td>Append-only. The latest row is the live score; older rows are the timeline.</td></tr>
+          <tr><td><code>player_line</code></td><td>event_id, player_id, as_of, stats (jsonb)</td><td>The player's own numbers in that event, split out of <code>event_state</code>.</td></tr>
+          <tr><td><code>news_item</code></td><td>id, player_ids[], headline, summary, source, url, published, kind (milestone, injury, transfer, interview, report), dedupe_hash</td><td>One item can belong to several players.</td></tr>
+          <tr><td><code>follow</code></td><td>fan_id, player_id or team_id, alert_rules</td><td>The only fan-specific data in the pipeline.</td></tr>
+          <tr><td><code>player_card</code></td><td>player_id, version, card (jsonb), built_at, freshness {live, fixtures, stats, news}</td><td>The read model. Also mirrored to Redis.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Canonical state is sport-specific inside, uniform outside</h3>
+      <p>Every event has the same envelope (status, clock label, score label, as_of, source) so the app can render a card for any sport. The <code>state</code> and <code>stats</code> payloads follow one schema per sport, owned by that sport's adapters. This is the same shape as the report schema the current agent already returns; the pipeline fills it from structured sources instead of from a model.</p>
+      <pre><code>{
+  "event": "ind-wi-2026-odi-2",
+  "status": "live",
+  "score_label": "IND 214/3 (36.4 ov) v WI",
+  "clock_label": "36.4 of 50 overs",
+  "as_of": "2026-09-30T10:41:12Z",
+  "source": "https://www.cricbuzz.com/live-cricket-scores/…",
+  "state": { "sport": "cricket", "innings": [ { "team": "IND", "runs": 214, "wickets": 3, "overs": 36.4 } ] },
+  "lines": { "kohli": { "runs": 67, "balls": 71, "fours": 6, "sixes": 1, "not_out": true } }
+}</code></pre>
+    </section>
+
+    <section id="serving">
+      <div class="eyebrow">7</div>
+      <h2>Serving many fans from one record</h2>
+      <figure>
+        <svg viewBox="0 0 960 280" role="img" aria-label="The card builder writes each player card to Postgres and publishes it to a Redis hash and a per-player pub/sub channel. API nodes subscribe to channels and hold one SSE connection per fan. Fans fetch cards through a CDN that caches GET responses for five seconds and falls through to the API on a miss." font-family="Barlow, sans-serif" font-size="12">
+          <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"></path></marker></defs>
+          <rect x="20" y="110" width="150" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="95" y="132" text-anchor="middle" fill="currentColor" font-weight="600">Card builder</text>
+          <text x="95" y="150" text-anchor="middle" fill="currentColor" font-size="11">one card per player</text>
+          <rect x="250" y="40" width="170" height="64" rx="8" fill="none" style="stroke: var(--accent)" stroke-width="2"></rect>
+          <text x="335" y="60" text-anchor="middle" style="fill: var(--accent-text)" font-weight="700">Redis</text>
+          <text x="335" y="76" text-anchor="middle" fill="currentColor" font-size="11">card hash</text>
+          <text x="335" y="92" text-anchor="middle" fill="currentColor" font-size="11">channel player:{id}</text>
+          <rect x="250" y="190" width="170" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="335" y="212" text-anchor="middle" fill="currentColor" font-weight="600">Postgres</text>
+          <text x="335" y="230" text-anchor="middle" fill="currentColor" font-size="11">cards, history, follows</text>
+          <rect x="500" y="40" width="170" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="585" y="60" text-anchor="middle" fill="currentColor" font-weight="600">API nodes × N</text>
+          <text x="585" y="76" text-anchor="middle" fill="currentColor" font-size="11">subscribe to channels</text>
+          <text x="585" y="92" text-anchor="middle" fill="currentColor" font-size="11">one SSE per fan</text>
+          <rect x="500" y="190" width="170" height="56" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="585" y="212" text-anchor="middle" fill="currentColor" font-weight="600">CDN</text>
+          <text x="585" y="230" text-anchor="middle" fill="currentColor" font-size="11">GET card, s-maxage 5 s</text>
+          <rect x="760" y="40" width="150" height="64" rx="8" fill="none" stroke="currentColor"></rect>
+          <text x="835" y="66" text-anchor="middle" fill="currentColor" font-weight="600">Fans</text>
+          <text x="835" y="84" text-anchor="middle" fill="currentColor" font-size="11">phone · web</text>
+          <polyline points="170,125 210,125 210,72 250,72" fill="none" stroke="currentColor" marker-end="url(#ar5)"></polyline>
+          <text x="232" y="62" text-anchor="middle" fill="currentColor" font-size="11">publish</text>
+          <polyline points="170,150 210,150 210,218 250,218" fill="none" stroke="currentColor" marker-end="url(#ar5)"></polyline>
+          <text x="232" y="208" text-anchor="middle" fill="currentColor" font-size="11">write</text>
+          <line x1="420" y1="72" x2="500" y2="72" stroke="currentColor" marker-end="url(#ar5)"></line>
+          <text x="460" y="64" text-anchor="middle" fill="currentColor" font-size="11">diff</text>
+          <line x1="670" y1="72" x2="760" y2="72" stroke="currentColor" marker-end="url(#ar5)"></line>
+          <text x="715" y="64" text-anchor="middle" fill="currentColor" font-size="11">SSE</text>
+          <polyline points="835,104 835,218 670,218" fill="none" stroke="currentColor" marker-end="url(#ar5)"></polyline>
+          <text x="760" y="212" text-anchor="middle" fill="currentColor" font-size="11">GET card</text>
+          <line x1="585" y1="190" x2="585" y2="104" stroke="currentColor" marker-end="url(#ar5)"></line>
+          <text x="593" y="150" text-anchor="start" fill="currentColor" font-size="11">on miss</text>
+        </svg>
+        <figcaption>Figure 5. The serving path. A card is written once and published once; the CDN absorbs cold reads and the per-player channel absorbs live fan-out. API nodes are stateless and scale sideways.</figcaption>
+      </figure>
+      <div class="tbl"><table>
+        <thead><tr><th>Endpoint</th><th>Returns</th><th>Caching</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /players/{id}/card</code></td><td>The whole card: profile, live, upcoming, news, stats, freshness stamps</td><td>ETag; CDN 5 s while live, 60 s otherwise</td></tr>
+          <tr><td><code>GET /players/{id}/stream</code></td><td>SSE of card diffs (live state, new news, fixture changes)</td><td>Never cached; one Redis subscription per player per node, shared by that node's fans</td></tr>
+          <tr><td><code>GET /me/following</code></td><td>The fan's players with each card's summary line</td><td>Private, short TTL</td></tr>
+          <tr><td><code>GET /events/{id}</code></td><td>Event state with every followed player's line, plus the timeline of past states</td><td>Same rules as the card</td></tr>
+          <tr><td><code>POST /follows</code>, <code>DELETE /follows/{id}</code></td><td>Subscribe; first follow of a player kicks off section 5's build</td><td>No</td></tr>
+          <tr><td><code>GET /players/{id}/stats?format=odi</code>, <code>/news?kind=milestone</code></td><td>Dig-in views behind the tabs</td><td>Minutes</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Notifications</h3>
+      <p>The card builder emits typed change events (<code>event.started</code>, <code>line.milestone</code>, <code>event.final</code>, <code>news.new</code> with its kind). A rules worker joins them with each follow's alert rules and hands the matches to the push provider. Teams later reuse the same events keyed by team.</p>
+    </section>
+
+    <section id="llm">
+      <div class="eyebrow">8</div>
+      <h2>Where the LLM sits</h2>
+      <p>The model is never in the live hot path for a structured source. It does four jobs, each a gateway label so cost and latency show up per job in the gateway's telemetry.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Job (gateway label)</th><th>When</th><th>Model tier</th><th>Guardrail</th></tr></thead>
+        <tbody>
+          <tr><td><code>resolve</code></td><td>Ambiguous names only</td><td>large</td><td>Output is a choice among fetched candidates, never a free-text fact.</td></tr>
+          <tr><td><code>discover</code></td><td>Missing binding, weekly sweep</td><td>large, with web tools</td><td>Every URL is fetched and checked before it becomes a binding.</td></tr>
+          <tr><td><code>extract</code></td><td>Live or stats page with no adapter</td><td>medium</td><td>Schema-constrained output; the extraction prompt is cached per page template, and a page that fails twice is flagged for an adapter.</td></tr>
+          <tr><td><code>news</code></td><td>Every new item</td><td>small</td><td>Classify kind and write a one-line summary; dedupe happens before the model, on URL and title similarity.</td></tr>
+          <tr><td><code>ask</code></td><td>A fan asks a question on a player page</td><td>large</td><td>Grounded on the card and the stored history; this is the existing agent, reading from the store instead of the web.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="reliability">
+      <div class="eyebrow">9</div>
+      <h2>Scale and reliability</h2>
+      <h3>Load, from the planning numbers</h3>
+      <ul>
+        <li>50k followed players, of whom perhaps 5% have an event on at a busy hour: 2,500 live events. Players share events, so the count is closer to 1,000. At one poll every 8 s that is about 125 fetches per second across all sources, and a few per second per source host. A handful of poller workers.</li>
+        <li>100k fans online, each holding one SSE connection: 10 to 20 API nodes, each subscribed once per distinct player its fans follow.</li>
+        <li>News at 50k players every 5 min is 170 feed fetches per second. Cheap, but it is the largest steady load, so it gets its own worker pool and per-host rate limits.</li>
+      </ul>
+      <h3>Failure modes and answers</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Failure</th><th>Answer</th></tr></thead>
+        <tbody>
+          <tr><td>A source blocks or rate-limits the pipeline</td><td>Per-host token buckets, backoff, rotating user agents, and a second binding for every live purpose. Popular events are polled through more than one source and the freshest wins.</td></tr>
+          <tr><td>A source changes its page or JSON shape</td><td>Adapters have contract tests against stored snapshots; a parse failure marks the binding stale and switches to the next one, or to LLM extraction, while the alert goes to an engineer.</td></tr>
+          <tr><td>The pipeline is down</td><td>Cards keep serving from Redis and Postgres with their freshness stamps; the app shows "as of 14:02" rather than nothing.</td></tr>
+          <tr><td>Redis is lost</td><td>Cards are rebuilt from Postgres on demand; channels are recreated by the next publish. Nothing durable lives only in Redis.</td></tr>
+          <tr><td>Duplicate or wrong news</td><td>Dedupe on canonical URL and title similarity before classification; items keep their source so a fan can judge them.</td></tr>
+          <tr><td>The resolver picks the wrong athlete</td><td>The card shows the disambiguation and a "not who you meant?" action that re-follows a listed alternative; the wrong record is not deleted, only unfollowed.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>What to watch</h3>
+      <ul>
+        <li>Freshness per card, split by purpose: age of live state during live events is the headline metric.</li>
+        <li>Binding health: stale bindings per adapter, and the share of live purposes served by LLM extraction instead of an adapter.</li>
+        <li>Poll latency and error rate per source host; fan-out lag from snapshot to SSE delivery.</li>
+        <li>Gateway telemetry per label: calls, cost, duration, warnings. The gateway already records these.</li>
+      </ul>
+    </section>
+
+    <section id="tradeoffs">
+      <div class="eyebrow">10</div>
+      <h2>Trade-offs</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Decision</th><th>Chosen</th><th>Instead of</th><th>Why, and when to revisit</th></tr></thead>
+        <tbody>
+          <tr><td>Live data</td><td>Schedule-armed polling, streams where a source offers one</td><td>Polling every followed player continuously</td><td>Ninety-plus percent of players are idle at any moment. Revisit only if fixtures prove unreliable for a sport; then arm from a "possibly live" check every few minutes.</td></tr>
+          <tr><td>Source identity</td><td>Wikidata-first resolver, LLM for gaps</td><td>LLM-first research for every player</td><td>Deterministic, free, fast for the famous majority; the agent handles the long tail. Revisit if Wikidata coverage for a sport is poor: then the agent runs first for that sport.</td></tr>
+          <tr><td>Event state</td><td>One canonical envelope with sport-specific JSON</td><td>One table per sport</td><td>The app renders every sport from one shape; adapters own the inner schema. Revisit for analytics or compare features, which may want typed columns for the sports that matter most.</td></tr>
+          <tr><td>Messaging</td><td>Redis pub/sub for fan-out, a Postgres-backed job queue for work</td><td>Kafka or NATS from day one</td><td>Two systems fewer to run. Revisit at roughly ten API nodes or when replaying diffs to late subscribers matters; Redis Streams is the first step, NATS JetStream the second.</td></tr>
+          <tr><td>Workers</td><td>A Python worker pool with a scheduler (arq or Celery beat)</td><td>Temporal or another durable-workflow engine</td><td>The jobs are short and idempotent, so retries are enough. Revisit when discovery becomes a multi-step, hours-long workflow that must survive restarts mid-way.</td></tr>
+          <tr><td>Raw snapshots</td><td>Keep every fetched response</td><td>Keep only parsed state</td><td>Replay and backfill after a parser fix are worth far more than the storage, and cost is not a constraint.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="build">
+      <div class="eyebrow">11</div>
+      <h2>Build order</h2>
+      <ol>
+        <li><strong>Registry and cards.</strong> Postgres schema, the card read model, <code>GET card</code> and follows. Fill cards with the existing agent's report so the app works end to end on day one, slowly.</li>
+        <li><strong>Adapters for two sports.</strong> Cricket (Cricbuzz, ESPNcricinfo) and football (ESPN), with schedule ingest and the event lifecycle. This replaces the agent for fixtures and live in those sports.</li>
+        <li><strong>Live fan-out.</strong> Redis card hash, per-player channels, the SSE endpoint, freshness stamps in the app.</li>
+        <li><strong>Resolver and discovery.</strong> Wikidata ids, the adapter registry, the discovery agent behind the validator, binding health.</li>
+        <li><strong>News and notifications.</strong> Feed ingest, dedupe, classification, alert rules, push.</li>
+        <li><strong>More sports, then teams.</strong> Chess (Lichess stream), tennis, F1. Team follows are subscriptions on <code>team</code> plus a team card built from the same events.</li>
+      </ol>
+      <div class="callout"><p><strong>What to revisit as it grows:</strong> the job queue and pub/sub choice (section 10), typed stats for the compare feature, and whether the per-sport weekly agent sweep should become a standing catalog of competitions maintained by hand once the adapter set stabilizes.</p></div>
+    </section>
+
+    <section id="market">
+      <div class="eyebrow">12</div>
+      <h2>Market: who already does this</h2>
+      <p>Researched 29 September 2026. The live-scores-and-favourites category is crowded and mature. Nobody in it is player-first across every sport with equal depth: each app follows players deeply in the one or two sports it has licensed data for, and follows teams everywhere else.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>App</th><th>Scope</th><th>Player following</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://www.flashscore.com/news/flashscore-celebrates-155-million-monthly-users-400-million-app-downloads/zkFjk8kA">Flashscore</a></td><td>30+ sports, 6,000+ competitions</td><td>Players only in <a href="https://www.flashscore.com/news/hockey-nba-follow-your-favourite-hockey-and-basketball-players-with-flashscore/p2yZHNRb">hockey and basketball</a> (starts, scores, assists, ratings); teams and matches elsewhere</td><td>The scale leader: 155M+ monthly users, 400M+ downloads. Goals land about 10–15 s after they happen.</td></tr>
+          <tr><td><a href="https://apps.apple.com/us/app/sofascore-live-sports-scores/id1176147574">Sofascore</a></td><td>Multi-sport, football-centric</td><td>"150,000+ players" with profiles, season stats, live match ratings and event alerts</td><td>Closest to this design's player page in depth; the <a href="https://www.sofascore.com/news/sofascore-rating">rating engine</a> is football-first. About 85M monthly web visits.</td></tr>
+          <tr><td><a href="https://play.google.com/store/apps/details?id=com.mobilefootie.wc2010&amp;hl=en_US">FotMob</a></td><td>Football only</td><td>Follow a player; alerts for goals, assists, lineups, final whistle; xG and heatmaps</td><td>Best in class for one sport.</td></tr>
+          <tr><td><a href="https://thescoresupport.zendesk.com/hc/en-us/articles/13873292715277-Favoriting-Teams-Leagues-and-Players">theScore</a></td><td>US majors and soccer</td><td>Star a player; per-player alert types; a Favourites feed</td><td>The best favourites-feed UX among the generalists.</td></tr>
+          <tr><td><a href="https://support.espn.com/hc/en-us/articles/360035075292-How-do-I-sign-up-for-Alerts">ESPN</a></td><td>US-centric</td><td>Favourite players, alerts, <a href="https://www.espn.com/espn/story/_/id/43511398/introducing-espn-reporter-breaking-news-alerts-faq-fans">reporter push alerts</a></td><td>Player following mostly serves fantasy rosters.</td></tr>
+          <tr><td><a href="https://www.apple.com/newsroom/2026/05/apple-sports-expands-to-more-than-90-new-countries-and-regions/">Apple Sports</a></td><td>Major leagues, 170+ countries</td><td>Teams only; Live Activities on the lock screen</td><td>Free and platform-level. Basic "follow my team" is becoming an OS feature.</td></tr>
+          <tr><td><a href="https://apps.apple.com/us/app/365scores-live-sports-scores/id571801488">365Scores</a>, LiveScore</td><td>10 sports / football</td><td>Follow teams and players for notifications</td><td>Generalists, depth similar to Flashscore.</td></tr>
+          <tr><td><a href="https://apps.apple.com/us/app/sports-alerts/id432450349">Sports Alerts</a> (indie)</td><td>US majors, soccer, tennis, golf</td><td>Teams, leagues, players, custom player groups, milestone alerts</td><td>4.8 stars on 85k ratings, freemium. A small team can hold a niche on alert quality alone.</td></tr>
+          <tr><td><a href="https://support.bleacherreport.com/hc/en-us/articles/32629295461907-How-to-Customize-Alerts-and-Notifications-Settings">Bleacher Report</a>, <a href="https://play.google.com/store/apps/details?id=com.yahoo.mobile.client.android.sportacular&amp;hl=en_US">Yahoo</a>, CBS</td><td>News-first</td><td>Follow players for news and rumours</td><td>Content, not live data.</td></tr>
+          <tr><td>Cricbuzz, <a href="https://apps.apple.com/us/app/espncricinfo-cricket-scores/id417408017">ESPNcricinfo</a></td><td>Cricket</td><td>Alerts for wickets, fifties, hundreds, milestones</td><td>The bar for cricket; no cross-sport.</td></tr>
+          <tr><td><a href="https://play.google.com/store/apps/details?id=com.atptour.atptour&amp;hl=en_US">ATP WTA Live</a></td><td>Tennis</td><td>Follow players; match start, results, ranking moves</td><td>Official, one sport.</td></tr>
+          <tr><td><a href="https://play.google.com/store/apps/details?id=com.chessEver.app">ChessEver</a>, <a href="https://www.chessengeria.eu/post/follow-chess-mobile-review">FollowChess</a>, <a href="https://play.google.com/store/apps/details?id=com.chess.chessevents&amp;hl=en_US">Chess.com Events</a></td><td>Chess</td><td>Favourite players tracked across tournaments, round-start and result notifications, FIDE calendar</td><td>Chess already has "follow a player across events", in isolation.</td></tr>
+          <tr><td><a href="https://support.google.com/android/answer/17117407?hl=EN">Google Search</a></td><td>Everything</td><td>Search an athlete, tap the bell; lock-screen team scores on Android</td><td>The only true any-athlete, any-sport follow, and it is news only.</td></tr>
+          <tr><td><a href="https://www.foxsports.com/about-sports-ai">Fox Sports AI</a>, <a href="https://watchers.io/ai-sports-assistant">Watchers.io</a>, <a href="https://apps.apple.com/us/app/sports-ai-ask-anything/id6449875698">Sports AI</a></td><td>Chat assistants</td><td>Q&amp;A over one publisher's data; comparisons, predictions</td><td>AI as a chat layer, not persistent following with alerts. Fox's own page warns answers may be inaccurate.</td></tr>
+          <tr><td><a href="https://startupsavant.com/startups-to-watch/sports">Fivestar</a>, <a href="https://play.google.com/store/apps/details?id=com.upstars.app&amp;hl=en_US">UPSTAR</a>, <a href="https://apps.apple.com/us/app/tracx-the-event-app/id1561354060">TRACX</a></td><td>Athlete social, amateur</td><td>Athletes post; fans follow</td><td>A creator platform, a different product despite the similar words.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Where the gaps are</h3>
+      <ol>
+        <li><strong>Cross-sport depth.</strong> A fan of Kohli, Carlsen and Alcaraz needs Cricbuzz, ChessEver and ATP WTA Live today. Generalists model players only where they hold a feed, which is why Flashscore covers 30 sports and follows players in two. The player line inside the game (section 3), applied uniformly, is the difference.</li>
+        <li><strong>The long tail.</strong> Incumbents stop where their data contracts stop: domestic leagues, niche sports, retired athletes. The resolver and discovery agent (section 4) are the only approach in the table that can cover a player nobody has a feed for.</li>
+        <li><strong>AI that follows rather than answers.</strong> The AI entrants are chat boxes over a publisher's data. Nobody combines persistent following, live state and a grounded question-answering agent on the same record; that is the <code>ask</code> job in section 8.</li>
+        <li><strong>Alert quality.</strong> The recurring complaint in reviews and industry pieces is <a href="https://www.sportsfirst.net/post/the-role-of-push-notifications-in-sports-apps-best-practices">notification noise</a>. Per-player alert rules are table stakes (theScore, FotMob, Cricbuzz all have them). Classifying news so that "big news only" means that is not, and the pipeline already does the classification step.</li>
+      </ol>
+      <h3>Risks this design has to answer</h3>
+      <div class="tbl"><table>
+        <thead><tr><th>Risk</th><th>Where it lands</th><th>Answer in this design</th></tr></thead>
+        <tbody>
+          <tr><td>Data rights. Sofascore, Flashscore and FotMob pay for licensed feeds or collect their own. Free sources can rate-limit, block or change terms.</td><td>Sections 4, 5, 9</td><td>Several bindings per purpose, health-driven rediscovery, LLM extraction as a stopgap. At scale, a licensed feed for the top two or three sports is likely unavoidable; the adapter model makes that a drop-in.</td></tr>
+          <tr><td>Latency bar. Flashscore's 10–15 s is what fans compare against.</td><td>Section 3</td><td>Event-armed polling at 5–10 s meets it. LLM extraction (seconds to tens of seconds) does not, so it stays a fallback and is flagged in binding health.</td></tr>
+          <tr><td>Platform commoditisation. Apple Sports and Google's follow keep absorbing basic "score of my team".</td><td>Positioning</td><td>The defensible layer is per-player depth across sports plus the agent, not the scoreboard.</td></tr>
+          <tr><td>Crowded stores.</td><td>Go-to-market</td><td>Lead with a wedge the generalists under-serve: cricket, chess and tennis superfans, then widen. Sports Alerts shows a niche can sustain on alert quality.</td></tr>
+        </tbody>
+      </table></div>
+      <p>Where a claim comes from an app's own marketing (Sofascore's player count, Fox's coverage), it is quoted as such. ChessEver's own site refused the fetch, so that row rests on its store listing and a <a href="https://www.chess.com/blog/gameofweek/chessever-a-mobile-app-for-following-tournaments">Chess.com review</a>. Traffic figures are from <a href="https://cw.semrush.com/website/flashscore.com/competitors">Semrush</a> and Flashscore's own announcement.</p>
+    </section>
+  </main>
+</div>
