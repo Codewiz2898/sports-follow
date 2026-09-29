@@ -95,6 +95,35 @@ full screen from the home screen, and get notifications for their players.
 **Prerequisite.** The app needs a public HTTPS home (hosting for the API, worker, Postgres and Redis),
 which nothing has yet; a PWA, Web Push and a Play Store app all need it.
 
+### 5. Live scores at scale
+
+**Today.** Work grows with the number of games on, not with players or fans: one poll job per live
+game (every 8–15 s in play) is shared by every followed player in it and every fan, fetches are
+cached by URL, and each fan's app holds one stream for all their players. But each poll job holds
+one of the worker's 24 job slots (and a thread) for up to 10 minutes, mostly sleeping, so one worker
+process follows about 20 games at once; on a busy matchday the rest wait in the queue and go stale.
+Each open app also holds its own Redis subscription in the API. Today's load: 12 followed players,
+5 fans, a live game or two.
+
+**Done when** a matchday with hundreds of live games involving followed players keeps every score on
+its normal cadence, requests to sources grow with leagues and rounds rather than games, and the tick
+logs poll lag (how late each game's poll is) and requests per minute, so we see trouble coming.
+
+**Suggested path**, most needed first:
+1. **A scheduler loop per worker** instead of one sleeping job per game: one async loop keeps each
+   live game's next due time and polls with a concurrency cap, so a process handles hundreds of games;
+   games are split across worker processes by event id (the per-event lock already prevents doubles).
+2. **League scoreboards first (ESPN):** one scoreboard request covers every game in a league (score,
+   clock, status); fetch a match's full summary only when its scoreboard entry changed. About 10×
+   fewer requests to an API that isn't official and could block us.
+3. **Lichess's live stream** for broadcast rounds (`/api/stream/broadcast/round/{id}.pgn`, checked:
+   it streams moves as PGN) instead of polling under the one-request-a-second limit.
+4. **One shared Redis subscriber per API process**, fanned out in memory, and more API processes
+   behind a load balancer. Needed only past tens of thousands of fans online at once.
+
+The chess engine (item 2) is already one budgeted lane for the whole system; more lanes can be added
+by lock index if chess traffic outgrows it.
+
 ## Found while building (not yet scheduled)
 
 - **Licensed data before a public launch.** ESPN's JSON endpoints are unofficial and could change
