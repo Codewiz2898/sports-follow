@@ -34,6 +34,7 @@ from .models import (
     Player,
     PlayerAlias,
     PlayerCard,
+    PlayerIdentity,
     PlayerLine,
     SourceBinding,
 )
@@ -302,6 +303,9 @@ def apply_live(player_id: int, update_: dict[str, Any]) -> None:
 def fan_message(raw: str) -> str:
     """What a fan sees when a build fails. The raw provider text stays in the worker log."""
     text = raw.lower()
+    if "budget_exceeded" in text:
+        # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.
+        return "Today's AI budget for this app is used up, so new pages can't be built until midnight. Scores from live sources keep updating."
     if "http 402" in text or "credits" in text:
         return "The AI service behind this app is out of credit, so the page couldn't be built. Try again once credit is added."
     if "rate" in text and "limit" in text:
@@ -328,6 +332,11 @@ def mark_failed(player_id: int, message: str) -> None:
             card["status"] = "failed"
             card["error"] = message
             card_row.card = card
+        elif card.get("pending"):
+            # Published from a source before the agent ran: scores stay, the missing part says why.
+            card.pop("pending")
+            card["pending_error"] = message
+            card_row.card = card
     bus.store_card(player_id, card)
 
 
@@ -351,6 +360,18 @@ def build_card(player_id: int) -> None:
             if card_row and card_row.status == "ready" and card_row.built_at and card_row.built_at > _now() - timedelta(seconds=CARD_MAX_AGE // 2):
                 return
             name = player.name
+            first_build = card_row is not None and card_row.status == "building" and structured.binding(db, player_id) is None
+        if first_build:
+            # A name one source recognizes gets its page from that source in seconds; the agent then adds
+            # the profile and news. Anything else waits for the agent to say who it is.
+            bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
+            found = structured.identify(name)
+            if found:
+                landed = _start_from_source(player_id, *found)
+                if landed is None or landed != player_id:
+                    return  # the athlete was already followed under another name: that page serves this fan
+                name = found[1].name
+                bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
         for event in follow_player(llm(), name):
             if event["type"] == "progress":
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
@@ -367,6 +388,50 @@ def build_card(player_id: int) -> None:
         mark_failed(player_id, f"Unexpected error: {exc}")
     finally:
         bus.release(lock)
+
+
+def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
+    """Publish a usable card from the source alone, before the agent has run.
+
+    Returns the player the name landed on: this one, or an existing player who already holds the
+    athlete (followed earlier under another spelling), into which this one is folded.
+    """
+    sport = adapter.sports[0].title()  # "Football", "Cricket", "Basketball", "Tennis", "Chess"
+    individual = ref.team_ids == [ref.athlete_id]
+    moved_from = None
+    with session() as db:
+        player = db.get(Player, player_id)
+        if player is None:
+            return None
+        holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
+        if holder and holder.player_id != player_id:
+            existing = db.get(Player, holder.player_id)
+            player, moved_from = _canonicalize(db, player, existing.name)
+            if moved_from is None:
+                return player_id  # couldn't fold it in by name; let the agent decide
+        else:
+            player.name, player.sport, player.status = ref.name, sport, "active"
+            player.teams = [] if individual else [t for t in ref.team_names if t]
+            player, moved_from = _canonicalize(db, player, ref.name)
+            card_row = db.get(PlayerCard, player.id)
+            if card_row is not None and card_row.status != "ready":
+                card = {**placeholder_card(player), "status": "ready", "version": (card_row.version or 0) + 1, "pending": ["profile", "news"]}
+                card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+        landed = player.id
+    if moved_from is not None:
+        bus.sync_redis().delete(bus.card_key(moved_from))
+        bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": landed})
+        return landed
+    if structured.bind(landed):
+        structured.refresh(landed)
+    else:
+        with session() as db:
+            # Not bindable after all: back to a plain first build.
+            card_row = db.get(PlayerCard, landed)
+            if card_row is not None and (card_row.card or {}).get("pending"):
+                card_row.status = "building"
+                card_row.card = {**card_row.card, "status": "building"}
+    return landed
 
 
 def refresh_live(player_id: int) -> None:
@@ -433,6 +498,7 @@ def due_work(now: datetime | None = None) -> Due:
         )
         bound = set(db.scalars(select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.player_id.in_(followed))))
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
+        sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
             pid = card.player_id
             # A failed card is left alone: it waits for a fan to retry, never loops.
@@ -440,13 +506,19 @@ def due_work(now: datetime | None = None) -> Due:
                 due.builds.append(pid)
             elif card.status == "ready" and card.built_at and card.built_at < now - timedelta(seconds=CARD_MAX_AGE):
                 due.builds.append(pid)
+            elif card.status == "ready" and card.built_at is None and not bus.is_locked(f"build:{pid}"):
+                due.builds.append(pid)  # published from a source; the agent's profile and news never arrived
             if card.status != "ready":
                 continue
             if pid in bound:
                 checked = _parse_time((card.freshness or {}).get("fixtures"))
                 if (not checked or checked < fixtures_stale) and not bus.is_locked(f"structured:{pid}"):
                     due.refreshes.append(pid)
-            elif card.is_live:
+                continue
+            # Followed before their sport had an adapter: the refresh binds them first.
+            if structured.for_sport(sports.get(pid)) and not bus.is_locked(f"bindtry:{pid}") and not bus.is_locked(f"structured:{pid}"):
+                due.refreshes.append(pid)
+            if card.is_live:
                 lives.add(pid)
         armed = db.execute(
             select(Event.id, Event.live_binding, EventPlayer.player_id)

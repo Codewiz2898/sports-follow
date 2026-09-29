@@ -139,3 +139,29 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 .moment-kind.goal { color: var(--live); }
 .moment-kind.yellow { color: #e5b93c; }
 .moment-kind.red { color: #ef5a5a; }
+
+/* Line scores: basketball quarters, tennis sets. */
+.linescore { border-collapse: collapse; font-size: 13px; width: 100%; }
+.linescore th, .linescore td { padding: 4px 6px; text-align: center; color: var(--muted); }
+.linescore th { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.linescore td:first-child, .linescore th:first-child { text-align: left; }
+.linescore td.total { color: var(--text); font-weight: 700; }
+.linescore.tennis td { font-size: 22px; color: var(--muted); }
+.linescore.tennis td.who { font-size: 14px; width: 100%; }
+.linescore.tennis td.set-won, .linescore.tennis tr.won .who .title { color: var(--text); }
+.linescore.tennis sup { font-size: 11px; margin-left: 1px; }
+.serve { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--live); margin-left: 8px; vertical-align: middle; }
+
+/* Chess: a board drawn from the FEN. */
+.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+.chessboard.sm { width: min(100%, 176px); }
+.chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
+.chessboard.sm .sq { font-size: min(5vw, 19px); }
+.chessboard .light { background: #d8c3a0; }
+.chessboard .dark { background: #a27d5a; }
+.chessboard .moved.light { background: #d9cf73; }
+.chessboard .moved.dark { background: #b3a24a; }
+.chessboard .piece.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
+.chessboard .piece.b { color: #1d1a17; }
+.chess-clock { font-size: 20px; padding: 2px 8px; border-radius: 8px; background: var(--bg); color: var(--muted); }
+.chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 1px var(--live); }

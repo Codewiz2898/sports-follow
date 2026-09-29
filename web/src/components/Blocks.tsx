@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import type { Card, CricketState, FootballSide, FootballState, LiveStatus, NewsItem, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
+import type { BasketballSide, BasketballState, Card, ChessSide, ChessState, CricketState, FootballSide, FootballState, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
 import { dateTime, day, hostname, initials, relative, safeHref, sportName } from '../format'
 
 export function Avatar({ name, size }: { name: string; size?: 'sm' | 'lg' }) {
@@ -37,6 +37,12 @@ export function LiveScoreboard({ live, playerName, compact }: { live: LiveStatus
         <FootballBoard state={state} clock={live.clock} compact={compact} />
       ) : state?.kind === 'cricket' ? (
         <CricketBoard state={state} clock={live.clock} compact={compact} />
+      ) : state?.kind === 'basketball' ? (
+        <BasketballBoard state={state} clock={live.clock} compact={compact} />
+      ) : state?.kind === 'tennis' ? (
+        <TennisBoard state={state} clock={live.clock} />
+      ) : state?.kind === 'chess' && state.white && state.black ? (
+        <ChessBoard state={state} clock={live.clock} flip={(live.player_stats ?? []).some((s) => s.label === 'Colour' && s.value === 'Black')} compact={compact} />
       ) : (
         <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div className="num" style={{ fontSize: compact ? 34 : 48, overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
@@ -57,7 +63,8 @@ export function LiveScoreboard({ live, playerName, compact }: { live: LiveStatus
       )}
       <div className="row tiny muted">
         <span>{live.as_of ? `Updated ${relative(live.as_of)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</span>
-        {safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>Open source</a>}
+        {/* Compact boards sit inside a link to the player's page; a link can't hold another link. */}
+        {!compact && safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>Open source</a>}
       </div>
     </section>
   )
@@ -112,15 +119,127 @@ function CricketBoard({ state, clock, compact }: { state: CricketState; clock?: 
   )
 }
 
-// Numbers a structured headline already says ("67* (71)", "2/34 (8 ov)", "1 goal, 1 assist").
-const IN_HEADLINE = new Set(['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded', 'Goals', 'Assists'])
+/** Away at home, as US leagues write it, with the quarter-by-quarter line under it. */
+function BasketballBoard({ state, clock, compact }: { state: BasketballState; clock?: string | null; compact?: boolean }) {
+  const side = (s: BasketballSide, align: 'left' | 'right') => (
+    <div className="stack" style={{ alignItems: align === 'left' ? 'flex-start' : 'flex-end', textAlign: align, minWidth: 0 }}>
+      <span className="title" style={{ overflowWrap: 'anywhere' }}>{s.name}</span>
+      <span className="tiny muted">{align === 'left' ? 'Away' : 'Home'}</span>
+    </div>
+  )
+  const periods = Math.max(state.away.periods.length, state.home.periods.length)
+  return (
+    <div className="stack" style={{ gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 12 }}>
+        {side(state.away, 'left')}
+        <div className="stack" style={{ alignItems: 'center' }}>
+          <span className="num" style={{ fontSize: compact ? 34 : 48, whiteSpace: 'nowrap' }}>{state.away.score}–{state.home.score}</span>
+          {clock && <span className="num" style={{ fontSize: compact ? 16 : 20, color: 'var(--live)' }}>{clock}</span>}
+        </div>
+        {side(state.home, 'right')}
+      </div>
+      {!compact && periods > 0 && (
+        <table className="linescore">
+          <thead><tr><th />{Array.from({ length: periods }, (_, i) => <th key={i}>{i < 4 ? `Q${i + 1}` : `OT${i > 4 ? i - 3 : ''}`}</th>)}<th>T</th></tr></thead>
+          <tbody>
+            {[state.away, state.home].map((s) => (
+              <tr key={s.id}><td>{s.abbr || s.name}</td>{Array.from({ length: periods }, (_, i) => <td key={i}>{s.periods[i] ?? ''}</td>)}<td className="total">{s.score}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+/** One row per player, one column per set; the serving player is marked. */
+function TennisBoard({ state, clock }: { state: TennisState; clock?: string | null }) {
+  const sets = Math.max(0, ...state.players.map((p) => p.sets.length))
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <table className="linescore tennis">
+        <tbody>
+          {state.players.map((p) => (
+            <tr key={p.id} className={p.winner ? 'won' : undefined}>
+              <td className="who">
+                <span className="title">{p.name}</span>
+                {p.seed ? <span className="tiny muted"> ({p.seed})</span> : null}
+                {p.serving && <span className="serve" aria-label="serving" />}
+              </td>
+              {Array.from({ length: sets }, (_, i) => {
+                const set = p.sets[i]
+                return (
+                  <td key={i} className={`num${set?.won ? ' set-won' : ''}`}>
+                    {set?.games ?? ''}{set?.tiebreak != null && <sup>{set.tiebreak}</sup>}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {clock && <span className="small" style={{ color: 'var(--live)' }}>{[state.round, clock].filter(Boolean).join(' · ')}</span>}
+    </div>
+  )
+}
+
+const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
+
+/** The board from the position's FEN, from the followed player's side, with the last move marked. */
+function ChessBoard({ state, clock, flip, compact }: { state: ChessState; clock?: string | null; flip: boolean; compact?: boolean }) {
+  const rows = (state.fen ?? '').split(' ')[0].split('/')
+  const squares: (string | null)[][] = rows.map((row) => row.split('').flatMap((c) => (/\d/.test(c) ? Array(Number(c)).fill(null) : [c])))
+  const moved = new Set(state.last_move ? [state.last_move.slice(0, 2), state.last_move.slice(2, 4)] : [])
+  const ranks = flip ? [0, 1, 2, 3, 4, 5, 6, 7].reverse() : [0, 1, 2, 3, 4, 5, 6, 7]
+  const player = (s: ChessSide, colour: 'white' | 'black') => (
+    <div className="row" style={{ gap: 12 }}>
+      <span className="stack" style={{ minWidth: 0 }}>
+        <span className="title">{s.title ? <span className="muted">{s.title} </span> : null}{s.name}</span>
+        <span className="tiny muted">{[colour === 'white' ? 'White' : 'Black', s.rating, s.fed].filter(Boolean).join(' · ')}</span>
+      </span>
+      {s.clock && <span className={`num chess-clock${state.turn === colour && !state.result ? ' running' : ''}`}>{s.clock}</span>}
+    </div>
+  )
+  const top = flip ? state.white! : state.black!
+  const bottom = flip ? state.black! : state.white!
+  return (
+    <div className="chess" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      {rows.length === 8 && (
+        <div className={`chessboard${compact ? ' sm' : ''}`} role="img" aria-label={`Position after move ${state.move ?? ''}`}>
+          {ranks.map((r) => (flip ? [...squares[r]].reverse() : squares[r]).map((piece, i) => {
+            const file = flip ? 7 - i : i
+            const name = `${'abcdefgh'[file]}${8 - r}`
+            return (
+              <span key={name} className={`sq ${(r + file) % 2 ? 'dark' : 'light'}${moved.has(name) ? ' moved' : ''}`}>
+                {piece && <span className={`piece ${piece === piece.toUpperCase() ? 'w' : 'b'}`}>{`${PIECES[piece.toLowerCase()]}\uFE0E`}</span>}
+              </span>
+            )
+          }))}
+        </div>
+      )}
+      <div className="stack" style={{ gap: 10, flex: 1, minWidth: 180 }}>
+        {player(top, flip ? 'white' : 'black')}
+        <span className="num" style={{ fontSize: compact ? 22 : 28, color: 'var(--live)' }}>
+          {state.match ? `Match ${state.match.score}` : state.result ? state.result.replace('-', '–') : clock}
+        </span>
+        {player(bottom, flip ? 'black' : 'white')}
+        {(state.result || state.match) && clock && <span className="small muted">{clock}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Numbers a structured headline already says ("67* (71)", "2/34 (8 ov)", "1 goal, 1 assist",
+// "Leads 1–0 in sets", "White vs Nakamura").
+const IN_HEADLINE = new Set(['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded', 'Goals', 'Assists', 'Sets', 'Colour', 'Opponent'])
+const NO_LINE: Record<string, string> = { cricket: "hasn't batted or bowled yet", football: "isn't in the matchday squad", basketball: "isn't on the game's roster" }
 
 /** The followed player's own numbers in the game. */
 function PlayerLine({ live, playerName }: { live: LiveStatus; playerName: string }) {
   const stats = live.player_stats ?? []
   if (!live.headline && !stats.length) {
     if (!live.state) return null
-    return <span className="small muted">{playerName} {live.state.kind === 'cricket' ? "hasn't batted or bowled yet" : "isn't in the matchday squad"}.</span>
+    return <span className="small muted">{playerName} {NO_LINE[live.state.kind] ?? 'has no numbers in this game yet'}.</span>
   }
   // Structured lines lead with a headline ("67* (71)", "1 goal"); the agent's lead with the first stat.
   const lead = live.headline ? { label: 'Now', value: live.headline } : stats[0]
