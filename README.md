@@ -87,6 +87,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   for that player wants it: key moments (the default), everything, results only, or off. Quiet hours
   are per device and make notifications arrive silently. With the app open and in front, the moment
   shows as an in-app toast instead. Devices the push service reports gone are removed.
+- **Chess swings from our own engine, on a fixed CPU budget.** Lichess broadcasts carry positions but
+  no evaluations, so Stockfish evaluates live games of followed players (`sports_follow/engine.py`) and
+  a fan hears when their player is winning, in trouble, or turns a game around (key), or is better,
+  worse or level again (everything). The work is per game, never per follower: each game has at most
+  one waiting position (the newest), positions are cached, the game that has waited longest goes next,
+  and a game is evaluated at most once every 20 s. One engine lane runs system-wide (a Redis lock) on
+  one thread at low priority, about a second per position, and rests as long as it worked: at most
+  half of one core. A band changes only when two evaluations agree, so a board glitch isn't a swing.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 
@@ -97,6 +105,7 @@ gateway running on 127.0.0.1:8787 with a `sports-follow` app token.
 
 ```bash
 docker compose up -d                                   # Postgres :5433, Redis :6380
+brew install stockfish                                 # chess swings (optional; apt install stockfish on Linux)
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/alembic upgrade head
 .venv/bin/python -m sports_follow.registry     # the player registry; ~90 min, then weekly by the worker
@@ -131,6 +140,10 @@ that build too: turn them on under Notifications in the sidebar. Always pass
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
+| `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
+| `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |
+| `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
+| `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 
 ## Android app
 
@@ -192,4 +205,4 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   levels don't carry across devices until accounts exist.
 - Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
   and there are no lock-screen live scores (Live Activities) or Android ongoing live-score
-  notifications; those need a native app. Chess has start and result only, not engine swings.
+  notifications; those need a native app.

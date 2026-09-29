@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, moments, notify, registry
+from . import bus, engine, moments, notify, registry
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, for_sport
 from .config import POLL_SESSION
 from .db import session
@@ -453,6 +453,23 @@ def poll_event(event_id: int) -> None:
         bus.release(lock)
 
 
+def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
+    """Chess: ask the engine for the game's position while it's on and a follower wants to hear
+    about swings, and put the game's latest evaluation (engine.py) into the state."""
+    state = snap.state
+    game, fen = state.get("game_id"), state.get("fen")
+    if not (game and fen and engine.enabled()):
+        return
+    if snap.status == "live" and not state.get("result"):
+        rules = db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all()
+        if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in rules):
+            engine.request(game, fen)
+    ev = engine.latest(game)
+    if ev:
+        prev = latest.state if latest is not None and latest.state else {}
+        state["eval"] = moments.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
+
+
 def poll_once(event_id: int) -> tuple[str, int, bool]:
     """One poll: fetch the snapshot, append what changed, update every followed player's card in the event.
 
@@ -489,6 +506,8 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
             return "idle", 0, False
         people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
+        if snap.state.get("kind") == "chess":
+            _evaluate(db, snap, latest, [w[0] for w in watchers])
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
         if changed:
             db.add(EventState(event_id=event_id, as_of=now, status=snap.status, score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))

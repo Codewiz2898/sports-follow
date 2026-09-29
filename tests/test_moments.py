@@ -93,6 +93,42 @@ def test_chess_game_start_and_result():
     assert (final.title, final.body) == ("Magnus Carlsen: Won with White vs Gukesh D", "1–0")
 
 
+def test_chess_bands_need_a_margin_to_change():
+    assert moments.band({"cp": 310}, current=1) == 1  # past +3.0 but not by the margin
+    assert moments.band({"cp": 335}, current=1) == 2
+    assert moments.band({"cp": 290}, current=2) == 2
+    assert moments.band({"cp": 250}, current=2) == 1
+    assert moments.band({"cp": -20, "mate": 4}) == 2 and moments.band({"mate": -2}) == -2
+
+
+def test_a_chess_swing_counts_once_two_evaluations_agree():
+    first = moments.settle(None, {"cp": 20, "fen": "8/8/8/8/8/8/8/8 w - - 0 30", "at": 1})
+    glitch = moments.settle(first, {"cp": 520, "fen": "8/8/8/8/8/8/8/8 b - - 0 31", "at": 2})
+    assert (first["band"], glitch["band"]) == (0, 0)  # one reading isn't enough
+    back = moments.settle(glitch, {"cp": 30, "fen": "8/8/8/8/8/8/8/8 w - - 0 32", "at": 3})
+    assert back["band"] == 0
+    real = moments.settle(moments.settle(back, {"cp": 480, "at": 4, "fen": "8/8/8/8/8/8/8/8 w - - 0 33"}), {"cp": 510, "at": 5, "fen": "8/8/8/8/8/8/8/8 w - - 0 34"})
+    assert real["band"] == 2 and real["move"] == 34
+    assert moments.settle(real, {"cp": 510, "at": 5}) is real  # the same evaluation again: unchanged
+
+
+def test_chess_swings_from_the_players_side():
+    def seen(band, cp, colour="Black", game="g1", status="live", move=34):
+        ev = {"band": band, "cp": cp, "mate": None, "move": move}
+        return Seen(status, state={"game_id": game, "eval": ev}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D"))
+
+    level, white_winning = seen(0, 10), seen(2, 360)
+    [f] = detect("Chess", "Magnus Carlsen", "1503014", level, white_winning)
+    assert (f.kind, f.level, f.title, f.body) == ("swing", "key", "Magnus Carlsen is in trouble", "Engine -3.6 · move 34 · vs Gukesh D")
+    [f] = detect("Chess", "Magnus Carlsen", "1503014", seen(2, 400), seen(-1, -180))  # losing -> better
+    assert (f.level, f.title) == ("key", "Turnaround: Magnus Carlsen is better")
+    [f] = detect("Chess", "Magnus Carlsen", "1503014", level, seen(1, 200, colour="White"))
+    assert (f.level, f.title) == ("minor", "Magnus Carlsen is better")
+    assert detect("Chess", "Magnus Carlsen", "1503014", seen(2, 350, colour="White"), seen(1, 250, colour="White")) == []  # drifting back
+    assert detect("Chess", "Magnus Carlsen", "1503014", seen(0, 0, game="g0"), white_winning) == []  # the next game of a match
+    assert detect("Chess", "Magnus Carlsen", "1503014", Seen("live", state={"game_id": "g1"}), white_winning) == []  # first reading
+
+
 def test_levels_decide_who_hears():
     assert moments.wanted("key", "key", "goal") and not moments.wanted("key", "minor", "on")
     assert moments.wanted("everything", "minor", "on")
