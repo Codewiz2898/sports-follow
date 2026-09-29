@@ -165,3 +165,32 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 .chessboard .piece.b { color: #1d1a17; }
 .chess-clock { font-size: 20px; padding: 2px 8px; border-radius: 8px; background: var(--bg); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 1px var(--live); }
+
+/* ---------------------------------------------------------------- search */
+.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
+.chip { height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-weight: 600; font-size: 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.chip[aria-pressed='true'] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.search-results { display: flex; flex-direction: column; gap: 18px; }
+.search-results[aria-busy='true'] .results { opacity: 0.7; }
+.result { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.list > li.result { padding: 10px 0; }
+.result-main { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; padding: 0; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+div.result-main { cursor: default; }
+.result-main .small { overflow: hidden; text-overflow: ellipsis; }
+.list > li.result.active { background: var(--raised); box-shadow: 0 0 0 1px var(--action); border-radius: 12px; margin: 0 -10px; padding: 10px; border-bottom-color: transparent; }
+.hl { color: var(--action); font-weight: 700; }
+.research-link { display: flex; flex-direction: column; gap: 2px; padding: 4px 2px; }
+.research-link .btn.link { font-size: 15px; font-weight: 600; gap: 8px; justify-content: flex-start; min-height: 44px; }
+.research-card { display: flex; flex-direction: column; gap: 12px; border-style: dashed; }
+.research-btn { height: 48px; border-color: var(--action); color: var(--action); background: transparent; font-weight: 700; }
+.research-btn:hover { border-color: var(--action-hover); color: var(--action-hover); }
+.key { font: 600 11px var(--body); padding: 2px 6px; border-radius: 6px; background: var(--raised); color: var(--muted); }
+
+/* Desktop: results drop down from the sidebar box over the page. */
+.search-panel {
+  position: fixed; left: 20px; z-index: 30; width: min(640px, calc(100vw - 40px)); max-height: calc(100vh - 120px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 18px;
+  background: #10141b; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.search-panel .card { background: transparent; border: 0; }
+.search-panel .list { padding: 0 10px; }

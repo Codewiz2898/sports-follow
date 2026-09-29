@@ -12,7 +12,7 @@ import logging
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import pipeline, structured
+from . import bus, pipeline, registry, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -40,6 +40,20 @@ async def poll_event(ctx, event_id: int) -> None:
     await asyncio.to_thread(structured.poll_event, event_id)
 
 
+def _import_registry() -> None:
+    if not bus.try_lock("registry-import", 6 * 3600):
+        return  # the last week's run (or one started by hand) is still going
+    try:
+        log.info("registry import: %s", registry.import_all())
+    finally:
+        bus.release("registry-import")
+
+
+async def import_registry(ctx) -> None:
+    """The weekly player-registry refresh from Wikidata; about an hour and a half, one query at a time."""
+    await asyncio.to_thread(_import_registry)
+
+
 async def tick(ctx) -> None:
     due = await asyncio.to_thread(pipeline.due_work)
     for player_id in due.builds:
@@ -56,7 +70,10 @@ async def tick(ctx) -> None:
 
 class WorkerSettings:
     functions = [build_card, refresh_live, refresh_structured, poll_event]
-    cron_jobs = [cron(tick, second=0, run_at_startup=True)]
+    cron_jobs = [
+        cron(tick, second=0, run_at_startup=True),
+        cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
+    ]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
     # A poll job holds its slot for up to POLL_SESSION while a game is on; builds hold one for minutes.
     max_jobs = 24

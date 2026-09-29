@@ -266,13 +266,17 @@ class EspnCricket:
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
-            if not espn.names_match(name, hit["name"]):
-                continue
-            athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/cricket/athletes/{hit['athlete_id']}", ttl=6 * 3600).get("athlete") or {}
-            team = athlete.get("team") or {}
-            team_ids = [str(team["id"])] if team.get("id") else []
-            return PlayerRef(self.system, hit["athlete_id"], athlete.get("displayName") or hit["name"], team_ids, [team.get("displayName") or ""], hit.get("url"))
+            if espn.names_match(name, hit["name"]):
+                return self.player(hit["athlete_id"])
         return None
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/cricket/athletes/{athlete_id}", ttl=6 * 3600).get("athlete") or {}
+        if not athlete.get("id"):
+            return None
+        team = athlete.get("team") or {}
+        team_ids = [str(team["id"])] if team.get("id") else []
+        return PlayerRef(self.system, str(athlete["id"]), athlete.get("displayName") or "", team_ids, [team.get("displayName") or ""], espn.profile_link(athlete), born=espn.birth_date(athlete))
 
     def _day(self, day: datetime) -> list[Fixture]:
         today = datetime.now(timezone.utc).date()

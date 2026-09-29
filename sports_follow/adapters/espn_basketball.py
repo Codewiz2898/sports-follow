@@ -179,13 +179,23 @@ class EspnBasketball:
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
             league = LEAGUES.get(hit.get("league_id") or "")
-            if league is None or not espn.names_match(name, hit["name"]):
+            if league is not None and espn.names_match(name, hit["name"]):
+                return self.player(hit["athlete_id"], league)
+        return None
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        """By id; without a league, the pro leagues are tried in turn (ids are unique across them)."""
+        for slug in [league] if league else ["nba", "wnba"]:
+            try:
+                athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/basketball/{slug}/athletes/{athlete_id}", ttl=6 * 3600).get("athlete") or {}
+            except AdapterError:
                 continue
-            athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/basketball/{league}/athletes/{hit['athlete_id']}", ttl=6 * 3600).get("athlete") or {}
+            if not athlete.get("id"):
+                continue
             team = athlete.get("team") or {}
             team_ids = [str(team["id"])] if team.get("id") else []
             team_names = [team.get("displayName") or ""] if team_ids else []
-            return PlayerRef(self.system, hit["athlete_id"], athlete.get("displayName") or hit["name"], team_ids, team_names, hit.get("url"), league=league)
+            return PlayerRef(self.system, str(athlete["id"]), athlete.get("displayName") or "", team_ids, team_names, espn.profile_link(athlete), league=slug, born=espn.birth_date(athlete))
         return None
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:

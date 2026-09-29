@@ -103,6 +103,66 @@ def resolve_or_create(db: Session, query: str) -> Player:
     return player
 
 
+def _free_slug(db: Session, name: str, sport: str, athlete_id: str) -> str:
+    """The player's slug: their name, unless a namesake has it ("nikola-jokic-football")."""
+    base = slugify(name) or f"athlete-{athlete_id}"
+    for slug in (base, f"{base}-{slugify(sport)}", f"{base}-{slugify(sport)}-{athlete_id}"):
+        if db.scalar(select(Player.id).where(Player.slug == slug)) is None:
+            return slug
+    return f"{base}-{athlete_id}"[:120]
+
+
+def start_from_registry(athlete: Any) -> tuple[int, bool]:
+    """A registry athlete no live source could confirm: a player the research agent builds, told
+    exactly who it is (registry.describe). Returns (player_id, created)."""
+    from . import registry
+
+    with session() as db:
+        holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == athlete.qid))
+        if holder is not None:
+            return holder.player_id, False
+        sport = athlete.sport.title()
+        slug = _free_slug(db, athlete.name, sport, athlete.qid.lower())
+        player = Player(slug=slug, name=athlete.name, sport=sport, status="active", teams=list(athlete.teams or []), wikidata_qid=athlete.qid)
+        db.add(player)
+        db.flush()
+        db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
+        db.add(PlayerCard(player_id=player.id, status="building", card=placeholder_card(player), version=0))
+        registry.link(db, player.id, athlete.qid)
+        return player.id, True
+
+
+def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
+    """A fan picked this exact athlete in search: their player, created and bound if new.
+
+    Returns (player_id, created). A new player's card is published at once from the source with
+    profile and news pending; the caller queues the fixtures refresh and the agent build.
+    """
+    sport = adapter.sports[0].title()
+    with session() as db:
+        holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
+        if holder is not None:
+            return holder.player_id, False
+        slug = _free_slug(db, ref.name, sport, ref.athlete_id)
+        individual = ref.team_ids == [ref.athlete_id]
+        player = Player(slug=slug, name=ref.name, sport=sport, status="active", teams=[] if individual else [t for t in ref.team_names if t])
+        db.add(player)
+        db.flush()
+        # The plain name becomes an alias only if it's free: typing it keeps finding whoever had it first.
+        db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
+        card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile", "news"]}
+        db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
+        player_id = player.id
+    if not structured.record(player_id, ref):
+        # Another request bound the same athlete a moment ago: that player is the one.
+        with session() as db:
+            db.execute(delete(Player).where(Player.id == player_id))
+            holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
+            return holder.player_id, False
+    bus.store_card(player_id, card)
+    return player_id, True
+
+
 def placeholder_card(player: Player) -> dict[str, Any]:
     return {
         "player_id": player.id,
@@ -225,16 +285,22 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         if player is None:
             raise AgentError("player was removed while the report was being built")
         p = report["player"]
-        player.name = p["name"]
-        player.sport = p["sport"]
-        player.status = p["status"]
-        player.nationality = p.get("nationality")
-        player.role = p.get("role")
-        player.teams = p.get("teams") or []
-        player.disambiguation = p.get("disambiguation")
-        player, moved_from = _canonicalize(db, player, p["name"])
         # A bound player's games come from their source; the agent's guesses would only duplicate them.
         bound = structured.binding(db, player.id) is not None
+        player.nationality = p.get("nationality")
+        player.role = p.get("role")
+        player.disambiguation = p.get("disambiguation")
+        moved_from = None
+        if bound:
+            # The source already said exactly who this is; the agent adds to that and never renames or
+            # merges them (a namesake's report must not fold the footballer Nikola Jokić into the NBA one).
+            report = {**report, "player": {**p, "name": player.name, "sport": player.sport, "teams": player.teams or p.get("teams") or []}}
+        else:
+            player.name = p["name"]
+            player.sport = p["sport"]
+            player.status = p["status"]
+            player.teams = p.get("teams") or []
+            player, moved_from = _canonicalize(db, player, p["name"])
 
         if not bound:
             for u in report["upcoming"]:
@@ -361,7 +427,10 @@ def build_card(player_id: int) -> None:
                 return
             name = player.name
             first_build = card_row is not None and card_row.status == "building" and structured.binding(db, player_id) is None
-        if first_build:
+            # A registry athlete was already looked for in the live source when followed; a name search
+            # now could only find a namesake.
+            from_registry = db.scalar(select(PlayerIdentity.id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata")) is not None
+        if first_build and not from_registry:
             # A name one source recognizes gets its page from that source in seconds; the agent then adds
             # the profile and news. Anything else waits for the agent to say who it is.
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
@@ -372,7 +441,7 @@ def build_card(player_id: int) -> None:
                     return  # the athlete was already followed under another name: that page serves this fan
                 name = found[1].name
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
-        for event in follow_player(llm(), name):
+        for event in follow_player(llm(), name, structured.describe(player_id)):
             if event["type"] == "progress":
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
             elif event["type"] == "result":
@@ -422,7 +491,7 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
         bus.sync_redis().delete(bus.card_key(moved_from))
         bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": landed})
         return landed
-    if structured.bind(landed):
+    if structured.bind(landed, ref):
         structured.refresh(landed)
     else:
         with session() as db:

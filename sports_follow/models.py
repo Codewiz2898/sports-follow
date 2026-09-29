@@ -11,6 +11,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -76,6 +77,36 @@ class PlayerIdentity(Base):
     external_id: Mapped[str] = mapped_column(String(200))
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     evidence_url: Mapped[str | None] = mapped_column(Text)
+
+
+class Athlete(Base):
+    """The player registry: every athlete in the covered sports, imported from Wikidata (registry.py).
+
+    One row per person and sport, whether or not anyone follows them. Search answers from here first;
+    `ids` holds the person's id in each source ("espn_cricket", "lichess_chess", "transfermarkt"…), so
+    following one binds the live source by id. A followed athlete's player carries a "wikidata" identity.
+    """
+
+    __tablename__ = "athlete"
+    __table_args__ = (UniqueConstraint("qid", "sport"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20), index=True)
+    sport: Mapped[str] = mapped_column(String(20))  # football | cricket | basketball | tennis | chess
+    name: Mapped[str] = mapped_column(String(200))
+    aliases: Mapped[list] = mapped_column(JSONB, default=list)
+    # " virat kohli | king kohli" folded to plain ASCII words; trigram-indexed for search as you type.
+    search_text: Mapped[str] = mapped_column(Text)
+    birth_date: Mapped[datetime | None] = mapped_column(Date)
+    country: Mapped[str | None] = mapped_column(String(120))
+    teams: Mapped[list] = mapped_column(JSONB, default=list)  # current teams, club first
+    league: Mapped[str | None] = mapped_column(String(20))  # nba | wnba | atp | wta
+    title: Mapped[str | None] = mapped_column(String(10))  # chess: GM, IM, WGM…
+    ids: Mapped[dict] = mapped_column(JSONB, default=dict)
+    image: Mapped[str | None] = mapped_column(String(300))  # Wikimedia Commons file name
+    sitelinks: Mapped[int] = mapped_column(Integer, default=0)  # Wikipedia editions: the popularity signal
+    current: Mapped[bool] = mapped_column(Boolean, default=True)  # plays now, as far as Wikidata says
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Team(Base):

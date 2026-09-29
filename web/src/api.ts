@@ -114,6 +114,60 @@ export interface Card {
   pending_error?: string
 }
 
+/** One athlete in search results: an exact source id, so following it never guesses from the name. */
+export interface SearchResult {
+  key: string
+  name: string
+  sport: string
+  detail: string
+  system?: string | null
+  athlete_id?: string | null
+  league?: string | null
+  player_id?: number | null  // already on Sports Follow
+  following: boolean
+  followers: number
+  live_scores: boolean  // false: a sport only the research agent covers
+  inactive: boolean
+  exact: boolean
+  status?: 'building' | 'ready' | 'failed' | null
+  next?: { title?: string | null; start_utc?: string | null; competition?: string | null; live?: string } | null
+  qid?: string | null  // the player registry's (Wikidata) id
+  born?: number | null
+}
+
+export interface Research { used: number; limit: number; left: number; resets_at: string }
+
+export interface SearchResponse {
+  query: string
+  sport: string | null
+  results: SearchResult[]
+  suggestions: SearchResult[]  // "did you mean", when nothing matches what was typed
+  namesakes: number  // how many athletes have exactly the typed name, when more than one
+  partial: string[]  // sources that didn't answer in time
+  research: Research
+}
+
+export interface AthletePreview {
+  system: string | null  // null: no live source has them; following builds the page with AI
+  athlete_id: string | null
+  league?: string | null
+  name: string
+  sport: string
+  teams: string[]
+  source: string
+  source_url?: string | null
+  next?: UpcomingEvent | null
+  last?: RecentResult | null
+  stats: Stat[]
+  stats_note: string
+  qid?: string | null
+  born?: string | null
+  country?: string | null
+  live?: boolean
+}
+
+export interface Pick { system: string; athlete_id: string; league?: string | null; qid?: string | null }
+
 export type StreamEvent =
   | { type: 'card'; player_id: number; card: Card }
   | { type: 'progress'; player_id: number; message: string }
@@ -133,21 +187,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
+export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
+
 export const api = {
   following: () => request<{ players: Card[] }>('/api/me/following'),
-  follow: (query: string) =>
+  follow: (target: FollowTarget) =>
     request<{ player_id: number; card: Card }>('/api/follows', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(target),
     }),
   unfollow: (playerId: number) => request<{ ok: boolean }>(`/api/follows/${playerId}`, { method: 'DELETE' }),
   card: (playerId: number) => request<Card>(`/api/players/${playerId}/card`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
-  search: (q: string) =>
-    request<{ players: { player_id: number; name: string; sport: string; status: string; teams: string[]; followers: number }[] }>(
-      `/api/search?q=${encodeURIComponent(q)}`,
-    ),
+  search: (q: string, sport?: string | null, signal?: AbortSignal) =>
+    request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
+  /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */
+  athlete: (system: string, id: string, params: Record<string, string | null | undefined>, signal?: AbortSignal) => {
+    const query = new URLSearchParams(Object.entries(params).filter((e): e is [string, string] => Boolean(e[1]))).toString()
+    return request<AthletePreview | { player_id: number }>(`/api/athletes/${encodeURIComponent(system)}/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, { signal })
+  },
+  research: () => request<Research>('/api/me/research'),
   config: () => request<{ model: string }>('/api/config'),
 }
 

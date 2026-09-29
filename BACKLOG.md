@@ -54,24 +54,47 @@ player, fans pick "everything / key moments / results only / off", plus quiet ho
 - Fans are anonymous (a cookie) today, so a subscription belongs to one browser until accounts
   exist.
 
-### 3. Player search
+### 3. Player search (built)
 
-**Today.** The Search page finds players already in our registry; following an unknown name
-creates it. A full, unambiguous name ("Caitlin Clark") is recognized from ESPN/Lichess in about a
-second; anything else waits 2–4 minutes for the research agent to decide who it is.
+**Built.** Search as you type from our own player registry: about 320,000 athletes imported weekly from
+Wikidata, ranked by how many Wikipedias write about them, with typo tolerance. Sport filters, a picker
+for athletes who share a name, "did you mean", a preview (next game, last game, stats) before following,
+and a desktop dropdown with keyboard navigation. Following binds the exact athlete by id (a footballer's
+ESPN id is found by name and confirmed by birth date). College athletes are hidden. "Research with AI"
+is offered last and capped at 3 per fan per day.
 
-**Done when**
-- Search-as-you-type queries ESPN search and Lichess's FIDE list directly and shows candidates
-  (photo, team, league, sport) before anything is followed.
-- Names shared by several athletes ("John Smith", "Nikola Jokić" also a Malaysian-league
-  footballer, "Stephen Curry" also a college footballer) show a picker instead of a guess.
-- Players in sports without an adapter still come back through the agent, marked as such.
+**Next**
+- **FIDE list** for chess ratings and the 1.9M players Wikidata doesn't have, once FIDE gives written
+  permission for commercial use; until then chess falls back to Lichess's FIDE search.
+- **Licensed roster feed** to keep current teams right between Wikidata edits (transfers, debuts).
+- **Photos**: Commons file names are imported; fetch each one's licence and author, show with credit,
+  initials as the fallback.
+- A **review queue** for registry-to-source matches the birth date can't settle.
+- **Namesakes Wikidata lacks**: a full name the registry knows well doesn't ask ESPN, so an obscure
+  namesake only ESPN has (the Malaysian-league footballer Nikola Jokić) no longer shows beside the star.
 - Browse by team or league (who plays for the Indiana Fever?).
+
+### 4. Android app
+
+**Today.** The web app works in Android's browser (the layout is built for phones, with a bottom
+nav), but it isn't installable, can't notify, and only runs on localhost.
+
+**Done when** a fan can install Sports Follow from the Play Store (or straight from the site), open it
+full screen from the home screen, and get notifications for their players.
+
+**Suggested path**, cheapest first:
+1. **Installable web app (PWA):** a manifest, icons and a service worker. Android offers "Install
+   app", and the same service worker is what Web Push (item 2) needs, so the two go together.
+2. **Play Store listing:** wrap the PWA as a Trusted Web Activity (Bubblewrap); one codebase, updates
+   ship with the website.
+3. **Native (Kotlin/Compose) only if needed** for what a web app can't do: home-screen widgets with
+   live scores, or Android's ongoing live-score notifications.
+
+**Prerequisite.** The app needs a public HTTPS home (hosting for the API, worker, Postgres and Redis),
+which nothing has yet; a PWA, Web Push and a Play Store app all need it.
 
 ## Found while building (not yet scheduled)
 
-- **Commit and review** the basketball, tennis and chess adapters, source-first recognition and
-  the fixes below (uncommitted on top of PR #2).
 - **Licensed data before a public launch.** ESPN's JSON endpoints are unofficial and could change
   or be blocked; the adapter interface takes a licensed feed as another adapter. Lichess is an
   official API, but rate-limited (reads are one a second).

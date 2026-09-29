@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus
+from . import bus, registry
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, for_sport
 from .config import POLL_SESSION
 from .db import session
@@ -132,30 +132,63 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
 # ---------------------------------------------------------------- binding
 
 
-def bind(player_id: int) -> bool:
-    """Find the player in their sport's adapter and record identity + bindings. False if no adapter knows them."""
+def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
+    """Record the player's identity and source bindings. False if no adapter knows them.
+
+    With a ref (a source already said exactly who this is: a search result the fan picked, or a name
+    only one athlete has) it is recorded as given. Without one, a player already bound or holding an
+    identity is re-read by that id, and only a player with neither is looked up by name.
+    """
     with session() as db:
         player = db.get(Player, player_id)
         if player is None:
             return False
         name, sport, teams = player.name, player.sport, list(player.teams or [])
-    adapter = for_sport(sport)
-    if adapter is None:
-        return False
-    try:
-        ref = adapter.find_player(name)
-    except AdapterError as exc:
-        log.warning("bind %s: %s lookup failed: %s", player_id, adapter.system, exc)
-        return False
+        adapter = ADAPTERS.get(ref.system) if ref else for_sport(sport)
+        if adapter is None:
+            return False
+        pinned = None
+        person = None
+        if ref is None:
+            row = db.scalar(select(SourceBinding).where(SourceBinding.player_id == player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter == adapter.system))
+            ident = db.scalar(select(PlayerIdentity).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == adapter.system))
+            qid = db.scalar(select(PlayerIdentity.external_id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata"))
+            if row and (row.locator or {}).get("athlete_id"):
+                pinned = (str(row.locator["athlete_id"]), row.locator.get("league"))
+            elif ident:
+                pinned = (ident.external_id, None)
+            elif qid:
+                athlete = registry.get(db, qid, sport.lower())
+                person = registry.Person.of(athlete) if athlete else None
     if ref is None:
-        log.info("bind %s: %s has no athlete named %r", player_id, adapter.system, name)
+        try:
+            # Re-read every build, so a transfer shows up in the team ids within hours.
+            if pinned:
+                ref = adapter.player(*pinned)
+            elif person is not None:
+                # In the registry: found by the id Wikidata has, or by name and birth date, never name alone.
+                found = registry.resolve(person)
+                ref = found[1] if found else None
+                pinned = (ref.athlete_id, ref.league) if ref else None
+            else:
+                ref = adapter.find_player(name)
+        except AdapterError as exc:
+            log.warning("bind %s: %s lookup failed: %s", player_id, adapter.system, exc)
+            return False
+    if ref is None:
+        log.info("bind %s: %s has no athlete %s", player_id, adapter.system, f"with id {pinned[0]}" if pinned else f"named {name!r}")
         return False
-    # The name matched; a team the agent also named, or (individual sports) the same full name, makes it certain.
+    # Picked by id, or the name matched and a team the agent also named (or, in individual sports, the
+    # same full name) makes it certain.
     same_name = sorted(espn.fold(ref.name).split()) == sorted(espn.fold(name).split())
-    confidence = 1.0 if _teams_overlap(ref.team_names, teams) or (not teams and same_name) else 0.8
+    confidence = 1.0 if pinned or _teams_overlap(ref.team_names, teams) or (not teams and same_name) else 0.8
     known = {espn.team_key(t) for t in ref.team_names}
     ref.other_teams = [t for t in teams if t and espn.team_key(t) not in known]
+    return record(player_id, ref, confidence)
 
+
+def record(player_id: int, ref: PlayerRef, confidence: float = 1.0) -> bool:
+    """Write a player's identity in one source and their fixtures and stats bindings to it."""
     with session() as db:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder and holder.player_id != player_id:
@@ -171,7 +204,6 @@ def bind(player_id: int) -> bool:
             if row is None:
                 row = SourceBinding(player_id=player_id, purpose=purpose, adapter=ref.system, priority=10, health={})
                 db.add(row)
-            # Re-read every build, so a transfer shows up in the team ids within hours.
             row.locator = asdict(ref)
             row.confidence = confidence
         # The agent's guesses at upcoming games give way to the source's fixtures.
@@ -179,6 +211,23 @@ def bind(player_id: int) -> bool:
         db.execute(delete(EventPlayer).where(EventPlayer.player_id == player_id, EventPlayer.event_id.in_(guessed)))
     log.info("bind %s: %s athlete %s (%s), confidence %.1f", player_id, ref.system, ref.athlete_id, ", ".join(ref.team_names), confidence)
     return True
+
+
+def describe(player_id: int) -> str | None:
+    """Who a bound player is, for the research agent: the exact athlete, so it can't research a namesake."""
+    with session() as db:
+        player = db.get(Player, player_id)
+        row = binding(db, player_id)
+        if player is None:
+            return None
+        if row is None:
+            return registry.describe(player_id)
+        loc = row.locator or {}
+        teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
+        where = f", {', '.join(teams)}" if teams else ""
+        league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
+        page = f" Their page on {SOURCE_NAMES.get(row.adapter, row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
+        return f"{loc.get('name') or player.name}, {player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
 
 # ---------------------------------------------------------------- fixtures, results, stats
@@ -255,7 +304,7 @@ def _refresh(player_id: int) -> None:
         stamp = now.isoformat()
         card = copy.deepcopy(card_row.card)
         card["upcoming"] = [_upcoming_item(f, events[f.source_id], ref) for f in ahead]
-        card["recent_results"] = [_result_item(adapter, f, snap, events[f.source_id], ref) for f, snap in reversed(recent)]
+        card["recent_results"] = [result_item(adapter, f, snap, events[f.source_id], ref) for f, snap in reversed(recent)]
         if stats:
             card["season_stats"] = stats
             card["season_stats_note"] = note
@@ -356,7 +405,7 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
     }
 
 
-def _result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event, ref: PlayerRef) -> dict[str, Any]:
+def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event | None, ref: PlayerRef) -> dict[str, Any]:
     line = snap.lines.get(ref.athlete_id) if snap else None
     contribution = line.headline if line else (NO_LINE.get(snap.state.get("kind"), "No stats") if snap and snap.lines else None)
     return {
@@ -366,7 +415,7 @@ def _result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Eve
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
         "player_contribution": contribution,
         "competition": f.competition,
-        "event_id": event.id,
+        "event_id": event.id if event else None,
         "source_url": snap.source_url if snap else None,
     }
 

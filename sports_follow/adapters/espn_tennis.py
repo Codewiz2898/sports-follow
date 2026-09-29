@@ -186,11 +186,25 @@ class EspnTennis:
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
             tour = TOURS.get(hit.get("league_id") or "")
-            if tour is None or not espn.names_match(name, hit["name"]):
-                continue
-            # Individual sport: the player is their own "team", so result labels and titles work as for teams.
-            return PlayerRef(self.system, hit["athlete_id"], hit["name"], [hit["athlete_id"]], [hit["name"]], hit.get("url"), league=tour)
+            if tour is not None and espn.names_match(name, hit["name"]):
+                # Individual sport: the player is their own "team", so result labels and titles work as for teams.
+                return PlayerRef(self.system, hit["athlete_id"], hit["name"], [hit["athlete_id"]], [hit["name"]], hit.get("url"), league=tour)
         return None
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        # ESPN serves any tennis player under either tour's path, so the tour can't be read from the
+        # record; without one, the player's own search hit says which tour they're on.
+        athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/tennis/{league or 'atp'}/athletes/{athlete_id}", ttl=6 * 3600).get("athlete") or {}
+        if not athlete.get("id"):
+            return None
+        name = athlete.get("displayName") or ""
+        tour = league if league in TOURS.values() else None
+        if tour is None:
+            hit = next((h for h in espn.search_athletes(name, SPORT_UID) if h["athlete_id"] == str(athlete["id"])), None)
+            tour = TOURS.get((hit or {}).get("league_id") or "")
+        if tour is None:
+            return None
+        return PlayerRef(self.system, str(athlete["id"]), name, [str(athlete["id"])], [name], espn.profile_link(athlete), league=tour, born=espn.birth_date(athlete))
 
     def _board(self, tour: str, day: str | None, ttl: float) -> dict[str, Any]:
         return espn.get_json(f"{espn.SITE}/tennis/{tour}/scoreboard{f'?dates={day}' if day else ''}", ttl=ttl)

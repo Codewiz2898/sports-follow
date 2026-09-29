@@ -61,9 +61,13 @@ def get_json(url: str, ttl: float) -> Any:
     return data
 
 
+# Letters Unicode doesn't decompose into a base letter plus an accent.
+_LETTERS = str.maketrans({"ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "ı": "i"})
+
+
 def fold(text: str) -> str:
-    """Case- and accent-insensitive form for comparing names ("Jokić" == "jokic")."""
-    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower().strip()
+    """Case- and accent-insensitive form for comparing names ("Jokić" == "jokic", "Øen" == "oen")."""
+    return unicodedata.normalize("NFKD", text.translate(_LETTERS)).encode("ascii", "ignore").decode().lower().strip()
 
 
 def team_key(name: str) -> str:
@@ -75,6 +79,20 @@ def names_match(wanted: str, found: str) -> bool:
     """Accept a search hit only if the surnames agree, so a bare "Ronaldo" can't bind the wrong athlete."""
     w, f = fold(wanted).split(), fold(found).split()
     return bool(w and f) and (w[-1] == f[-1] or w[-1] in f)
+
+
+def birth_date(athlete: dict[str, Any]) -> str | None:
+    """An athlete record's birth date as ISO. ESPN writes it day/month/year ("5/11/1988" is 5 November)."""
+    parts = (athlete.get("displayDOB") or "").split("/")
+    if len(parts) != 3 or not all(x.isdigit() for x in parts):
+        return None
+    day, month, year = (int(x) for x in parts)
+    return f"{year:04d}-{month:02d}-{day:02d}" if 1 <= month <= 12 and 1 <= day <= 31 else None
+
+
+def profile_link(athlete: dict[str, Any]) -> str | None:
+    """The athlete's page on espn.com / espncricinfo.com, from an athlete record's links."""
+    return next((link.get("href") for link in athlete.get("links") or [] if (link.get("href") or "").startswith("http")), None)
 
 
 def search_athletes(name: str, sport_uid: str) -> list[dict[str, Any]]:

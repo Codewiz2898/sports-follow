@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,14 +21,15 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import bus, pipeline, structured
+from . import bus, pipeline, registry, search as player_search, structured
+from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import FAN_COOKIE, REDIS_URL
-from .db import get_db
-from .models import Follow, Player, PlayerAlias, PlayerCard
+from .db import get_db, session
+from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 
 log = logging.getLogger("sports_follow")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -96,12 +98,139 @@ async def following(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -
     return {"players": [_summary(c) for c in cards]}
 
 
+# ---------------------------------------------------------------- AI research allowance
+
+
+async def research_used(fan: str) -> int:
+    return int(await state["redis"].get(player_search.research_key(fan)) or 0)
+
+
+async def take_research(fan: str) -> bool:
+    """Count one AI research against the fan's day; False (and nothing counted) when none are left."""
+    key = player_search.research_key(fan)
+    used = await state["redis"].incr(key)
+    await state["redis"].expire(key, 2 * 24 * 3600)
+    if used > player_search.RESEARCH_PER_DAY:
+        await state["redis"].decr(key)
+        return False
+    return True
+
+
+async def give_back_research(fan: str) -> None:
+    await state["redis"].decr(player_search.research_key(fan))
+
+
+@app.get("/api/me/research")
+async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    return player_search.research_status(await research_used(fan))
+
+
+# ---------------------------------------------------------------- following
+
+
+def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
+    qid = str(body.get("qid") or "")
+    if not re.fullmatch(r"Q\d{1,12}", qid):
+        return None
+    athlete = registry.get(db, qid, str(body.get("sport") or "").lower() or None)
+    return registry.Person.of(athlete) if athlete else None
+
+
+async def _resolve(person: registry.Person) -> tuple[Any, Any] | None:
+    try:
+        return await asyncio.to_thread(registry.resolve, person)
+    except AdapterError as exc:
+        log.warning("resolve %s: %s", person.qid, exc)
+        raise HTTPException(502, "Couldn't reach the live source to find this athlete. Try again in a moment.")
+
+
+async def _follow_athlete(body: dict, fan: str, db: Session) -> int:
+    """Follow the exact athlete a fan picked in search, by registry id or source id; never by name.
+
+    A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
+    matching birth date; one no source confirms is built by the research agent, which counts as an
+    AI research.
+    """
+    person = _registry_athlete(db, body) if body.get("qid") else None
+    if body.get("qid") and person is None:
+        raise HTTPException(404, "That athlete isn't in the player registry.")
+    if person and not body.get("system"):
+        holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == person.qid))
+        if holder is not None:
+            player_id, created, ref = holder, False, None
+        else:
+            found = await _resolve(person)
+            if found is None:
+                if not await take_research(fan):
+                    raise HTTPException(429, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
+                player_id, created = await asyncio.to_thread(pipeline.start_from_registry, person)
+                if not created:
+                    await give_back_research(fan)
+                ref = None
+            else:
+                adapter, ref = found
+                player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
+    else:
+        system = str(body.get("system") or "")
+        athlete_id = str(body.get("athlete_id") or "").strip()
+        league = body.get("league") if isinstance(body.get("league"), str) else None
+        adapter = ADAPTERS.get(system)
+        if adapter is None or not athlete_id or len(athlete_id) > 40:
+            raise HTTPException(400, "Pick an athlete from the search results.")
+        try:
+            ref = await asyncio.to_thread(adapter.player, athlete_id, league)
+        except AdapterError as exc:
+            log.warning("follow %s:%s: %s", system, athlete_id, exc)
+            raise HTTPException(502, "Couldn't reach the live source to confirm this athlete. Try again in a moment.")
+        if ref is None:
+            raise HTTPException(404, "That athlete isn't in the source any more.")
+        player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
+    if person and (ref is None or person.ids.get(ref.system) in (None, ref.athlete_id)):
+        registry.link(db, player_id, person.qid)
+    if not db.scalar(select(Follow).where(Follow.fan_id == fan, Follow.player_id == player_id)):
+        db.add(Follow(fan_id=fan, player_id=player_id, alert_rules={}))
+    db.commit()
+    if created:
+        # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
+        # of minutes. Without one: the agent builds the whole page.
+        if ref is not None:
+            await arq().enqueue_job("refresh_structured", player_id)
+        await arq().enqueue_job("build_card", player_id)
+    return player_id
+
+
 @app.post("/api/follows")
 async def follow(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    query = str(body.get("query") or "").strip()
-    if not 2 <= len(query) <= 80:
-        raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
-    player = pipeline.resolve_or_create(db, query)
+    if body.get("system") or body.get("qid"):
+        player_id = await _follow_athlete(body, fan, db)
+        return {"player_id": player_id, "card": await read_card(db, player_id)}
+    if body.get("player_id") is not None:
+        # A player already here, by id: a name could belong to their namesake ("nikola-jokic-football").
+        try:
+            player = db.get(Player, int(body["player_id"]))
+        except (TypeError, ValueError):
+            player = None
+        if player is None:
+            raise HTTPException(404, "No such player.")
+        known = db.get(PlayerCard, player.id)
+        query = None
+    else:
+        query = str(body.get("query") or "").strip()
+        if not 2 <= len(query) <= 80:
+            raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
+        known = db.scalar(select(PlayerCard).join(PlayerAlias, PlayerAlias.player_id == PlayerCard.player_id).where(PlayerAlias.alias == pipeline.slugify(query)))
+    # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
+    # the part with a daily allowance. Following a player already here costs nothing.
+    counted = known is None or known.status == "failed"
+    if counted and not await take_research(fan):
+        raise HTTPException(429, "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.")
+    if query is not None:
+        try:
+            player = pipeline.resolve_or_create(db, query)
+        except ValueError:
+            if counted:
+                await give_back_research(fan)
+            raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
     exists = db.scalar(select(Follow).where(Follow.fan_id == fan, Follow.player_id == player.id))
     if not exists:
         db.add(Follow(fan_id=fan, player_id=player.id, alert_rules={}))
@@ -162,22 +291,69 @@ async def refresh(player_id: int, db: Session = Depends(get_db)) -> dict[str, An
     return {"queued": True}
 
 
+# ---------------------------------------------------------------- search
+
+
+def _search(q: str, sport: str | None, fan: str) -> dict[str, Any]:
+    with session() as db:
+        return player_search.run(db, q, sport, fan)
+
+
 @app.get("/api/search")
-def search(q: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Players already in the registry whose name or aliases match. New names are followed by POST /api/follows."""
-    needle = pipeline.slugify(q)
-    if len(needle) < 2:
-        return {"players": []}
-    rows = db.execute(
-        select(Player.id, Player.name, Player.sport, Player.status, Player.teams, func.count(Follow.id))
-        .join(PlayerAlias, PlayerAlias.player_id == Player.id)
-        .outerjoin(Follow, Follow.player_id == Player.id)
-        .where(PlayerAlias.alias.contains(needle))
-        .group_by(Player.id)
-        .order_by(func.count(Follow.id).desc())
-        .limit(8)
-    ).all()
-    return {"players": [{"player_id": r[0], "name": r[1], "sport": r[2], "status": r[3], "teams": r[4], "followers": r[5]} for r in rows]}
+async def search(q: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Athletes matching a name, from players on Sports Follow and the live sources (search.py)."""
+    result = await asyncio.to_thread(_search, q[:80], (sport or "").lower() or None, fan)
+    return {**result, "research": player_search.research_status(await research_used(fan))}
+
+
+@app.get("/api/athletes/wikidata/{qid}")
+async def registry_preview(qid: str, sport: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A registry athlete before following: their live-source preview once the source is found, or
+    what the registry knows when no source has them (following then builds the page with AI)."""
+    person = _registry_athlete(db, {"qid": qid, "sport": sport})
+    if person is None:
+        raise HTTPException(404, "No such athlete.")
+    holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == person.qid))
+    if holder is not None:
+        return {"player_id": holder}
+    found = await _resolve(person)
+    base = {"qid": person.qid, "born": person.birth_date.isoformat() if person.birth_date else None}
+    if found is None:
+        athlete = registry.get(db, person.qid, person.sport)
+        return {
+            **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": person.sport.title(),
+            "teams": person.teams, "source": "Wikidata", "source_url": f"https://www.wikidata.org/wiki/{person.qid}",
+            "next": None, "last": None, "stats": [], "stats_note": "", "live": False, "country": athlete.country if athlete else None,
+        }
+    adapter, ref = found
+    holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
+    if holder is not None:
+        return {"player_id": holder}
+    try:
+        shown = await asyncio.to_thread(player_search.preview, ref.system, ref.athlete_id, ref.league)
+    except AdapterError as exc:
+        log.warning("preview %s: %s", person.qid, exc)
+        raise HTTPException(502, "The live source didn't answer. Try again in a moment.")
+    return {**(shown or {}), **base, "live": True}
+
+
+@app.get("/api/athletes/{system}/{athlete_id}")
+async def athlete_preview(system: str, athlete_id: str, league: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What following a search result would show, before following. An athlete already on Sports
+    Follow answers with their player id; the app opens their page instead."""
+    if system not in ADAPTERS or not athlete_id or len(athlete_id) > 40:
+        raise HTTPException(404, "No such athlete.")
+    holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id == athlete_id))
+    if holder is not None:
+        return {"player_id": holder}
+    try:
+        found = await asyncio.to_thread(player_search.preview, system, athlete_id, league)
+    except AdapterError as exc:
+        log.warning("preview %s:%s: %s", system, athlete_id, exc)
+        raise HTTPException(502, "The live source didn't answer. Try again in a moment.")
+    if found is None:
+        raise HTTPException(404, "No such athlete.")
+    return found
 
 
 # ---------------------------------------------------------------- realtime
