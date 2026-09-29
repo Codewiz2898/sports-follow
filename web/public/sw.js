@@ -5,6 +5,9 @@
 // route). Built assets: cache first (their names change with their content). Fonts and other files:
 // served from cache while refreshed. /api/me/following and player cards: network first, the last
 // answer offline. Every other /api call and every live stream passes straight through.
+//
+// Push: a moment (a goal, a fifty, a result; see sports_follow/moments.py) arrives as a notification,
+// silent during the device's quiet hours; tapping it opens the player's page.
 
 const VERSION = 'v1'
 const SHELL = `shell-${VERSION}`
@@ -81,3 +84,59 @@ async function staleWhileRevalidate(req, cacheName) {
   }).catch(() => hit)
   return hit || fresh
 }
+
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = { body: event.data ? event.data.text() : '' }
+  }
+  event.waitUntil(show(data))
+})
+
+async function show(data) {
+  // With the app open and in front, the moment shows as a toast in the page instead.
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  if (data.kind !== 'test' && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
+  return self.registration.showNotification(data.title || 'Sports Follow', {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/badge-96.png',
+    tag: data.id ? `moment-${data.id}` : undefined,
+    data: { url: data.url || '/' },
+    silent: Boolean(data.quiet),
+    timestamp: Date.now(),
+  })
+}
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const win of windows) {
+      if (new URL(win.url).origin !== self.location.origin) continue
+      await win.focus()
+      return win.navigate ? win.navigate(url) : undefined
+    }
+    return self.clients.openWindow(url)
+  })())
+})
+
+// Browsers occasionally replace a subscription; hand the new one to the server so pushes keep coming.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    const info = await fetch('/api/push', { credentials: 'same-origin' }).then((r) => r.json())
+    if (!info.public_key) return
+    const key = Uint8Array.from(atob(info.public_key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (info.public_key.length % 4)) % 4)), (c) => c.charCodeAt(0))
+    const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
+    await fetch('/api/push/subscriptions', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      // The old endpoint lets the server carry this device's quiet hours over.
+      body: JSON.stringify({ subscription: sub.toJSON(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, previous_endpoint: event.oldSubscription && event.oldSubscription.endpoint }),
+    })
+  })())
+})

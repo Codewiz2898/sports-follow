@@ -23,36 +23,37 @@ broadcasts today); cricket reads 30 days of day feeds and would need more (cache
 day is over). Finished games are already stored as events with a final state and player line, so
 this is a paged read over `event` + `player_line`, not new scraping.
 
-### 2. Push notifications for interesting moments
+### 2. Push notifications for interesting moments (built)
 
-**Today.** Nothing is pushed. Live changes reach an open page over SSE within about 10 s, and
-`follow.alert_rules` exists in the schema but is unused.
-
-**Done when** a fan gets a notification, even with the app closed, for moments like:
+**Built.** Each live poll compares the player's line with the previous one and stores typed moments
+once (`sports_follow/moments.py`); `sports_follow/notify.py` sends them by Web Push to every device of
+every follower whose level wants them, and the app shows them as toasts when it's open. Verified end
+to end on an Android emulator and a phone (Chrome, through FCM), including tap-through to the player.
 
 | Sport | Moments |
 |---|---|
-| All | Game about to start (player in the lineup/squad), final result |
-| Football | Player scores or assists, red card, comes on |
-| Cricket | Player reaches 50 / 100, takes 3+ wickets, is out (with score) |
-| Basketball | 20/30/40 points, double-double, triple-double, game-winner in the last minute |
-| Tennis | Wins/loses a set, match point won, upset (beats a higher seed) |
-| Chess | Game starts, clear advantage (engine eval past about ±2), win/draw/loss, tournament won |
-| News | Transfer, injury, retirement (from the research agent's news) |
+| All | Game starts with the player in it; final result, unless the line-ups show they weren't in the squad |
+| Football | Goal, assist, red card (key); yellow card, comes on (everything) |
+| Cricket | 50 / 100 / 150 / 200, 3+ wickets, out with the score (key) |
+| Basketball | 30 / 40 / 50 / 60 points, triple-double (key); 20 points, double-double (everything) |
+| Tennis | Upset of a higher seed (key); each set won or lost (everything) |
+| Chess | Game starts, result |
+| News | Injury, transfer, retirement (key); milestone (everything), from a rebuild's news |
 
-**Design sketch.** Detection runs in `structured.poll_once`: compare the previous and new snapshot
-(score, the player's line, moments) and emit typed moments with a stable id, so each is sent once.
-A moment is stored, then fanned out to every follower whose rules want it. Delivery by Web Push
-(VAPID keys, a service worker, `pywebpush`); SSE shows the same moment as an in-app toast. Per
-player, fans pick "everything / key moments / results only / off", plus quiet hours.
+Per player: key moments (default), everything, results only, off. Per device: quiet hours (silent,
+not dropped). A first look at a game already under way is a baseline, so nobody gets "reaches 50" an
+hour late. Live moments expire after 15 minutes if the phone is offline; results and news after 12 hours.
 
-**Open questions**
-- Channel: Web Push works on desktop and Android browsers, and on iPhone only once the app is added
-  to the Home Screen (iOS 16.4+). Is that enough, or is email/Telegram/WhatsApp wanted too?
-- Chess advantage needs an evaluation: Lichess's cloud eval (`/api/cloud-eval`) covers popular
-  positions for free; anything else needs a Stockfish process in the worker.
-- Fans are anonymous (a cookie) today, so a subscription belongs to one browser until accounts
-  exist.
+**Next**
+- **iPhone and lock-screen live scores.** Web Push reaches iPhone only from a Home Screen install, and
+  Live Activities (lock-screen scores) need a native app. If iPhone matters at launch, a React Native
+  (Expo) app reuses the web app's TypeScript and sends through the same `notify.deliver` step (FCM/APNs
+  beside Web Push).
+- **Chess advantage** (engine eval past about ±2): Lichess's cloud eval covers popular positions; the
+  rest needs Stockfish in the worker.
+- Game-winner in the last minute (basketball), match point (tennis), tournament won (chess).
+- A digest instead of a burst when several moments land in one poll.
+- Accounts, so a fan's levels follow them across devices.
 
 ### 3. Player search (built)
 
@@ -78,14 +79,14 @@ is offered last and capped at 3 per fan per day.
 
 **Today.** The web app is installable (manifest, icons, service worker): Chrome offers "Install app",
 it opens full screen, starts offline with the last update, and offers new versions with a Reload
-button. `/.well-known/assetlinks.json` is ready for the Play Store wrapper. It still only runs on
-localhost, and can't notify yet.
+button. `/.well-known/assetlinks.json` is ready for the Play Store wrapper. Notifications for
+moments (item 2) work in the app and the Android wrapper. It still only runs on localhost.
 
 **Done when** a fan can install Sports Follow from the Play Store (or straight from the site), open it
 full screen from the home screen, and get notifications for their players.
 
 **Suggested path**, cheapest first:
-1. **Installable web app (PWA): built.** The same service worker is what Web Push (item 2) needs.
+1. **Installable web app (PWA): built.** Its service worker also delivers the notifications (item 2).
 2. **Play Store app:** the PWA wrapped as a Trusted Web Activity (`android/`, built with Bubblewrap's
    library); a test APK runs on a phone over USB. Next: hosting (HTTPS + assetlinks for full screen),
    an upload key, a Play developer account, and a closed-testing release.

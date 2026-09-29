@@ -202,3 +202,10 @@ div.result-main { cursor: default; }
 /* Installed on a phone: no browser bar above, so the page starts below the status bar. */
 @media (display-mode: standalone) { .main { padding-top: calc(16px + env(safe-area-inset-top, 0px)); } }
 
+/* ---------------------------------------------------------------- notifications */
+.select { height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: 600 13px var(--body); }
+.levels { margin: 4px 0 0; display: grid; gap: 6px; }
+.levels dt { font-size: 13px; font-weight: 600; }
+.levels dd { margin: 0; }
+.toasts { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 40; width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 8px; }
+.toast { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 14px; background: var(--raised); border: 1px solid var(--live); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); }

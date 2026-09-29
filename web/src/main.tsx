@@ -2,11 +2,13 @@ import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEven
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { PlayerRow } from './components/Blocks'
-import { ListIcon, SearchIcon } from './components/Icons'
+import { BellIcon, ListIcon, SearchIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { FollowingProvider, useFollowing } from './following'
 import { AthletePage } from './pages/AthletePage'
 import { FollowingPage } from './pages/FollowingPage'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { MomentToasts } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
@@ -96,6 +98,7 @@ function Sidebar() {
       <NavLink to="/" className="brand">Sports Follow</NavLink>
       <SidebarSearch />
       <InstallButton compact />
+      <NavLink to="/notifications" className="row small" style={{ justifyContent: 'flex-start', gap: 8, color: 'var(--muted)', minHeight: 32 }}><BellIcon width={18} height={18} />Notifications</NavLink>
       <span className="eyebrow">Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
@@ -106,9 +109,15 @@ function Sidebar() {
   )
 }
 
+function Toasts() {
+  const { moments, dismissMoment } = useFollowing()
+  return <MomentToasts moments={moments} dismiss={dismissMoment} />
+}
+
 function App() {
   return (
     <div className="shell">
+      <Toasts />
       <Sidebar />
       <main className="main">
         <PwaNotices />
@@ -117,6 +126,7 @@ function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/player/:id" element={<PlayerPage />} />
           <Route path="/athlete/:system/:id" element={<AthletePage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
         </Routes>
       </main>
       <nav className="bottom-nav" aria-label="Main">

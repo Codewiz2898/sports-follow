@@ -64,6 +64,11 @@ class NewsItem(_Lenient):
     source: str
     url: str
     published: str | None = None  # ISO 8601 date or datetime when known
+    # What the story is about, so fans can be told of the big ones (an injury, a transfer) at once.
+    # Free text, normalized by moments.news_kind: a strict enum would reject a report over "Injury".
+    kind: str | None = Field(
+        default=None, description="injury, transfer (or loan/contract), retirement, milestone (record, award, career landmark), or other"
+    )
 
 
 class UpcomingEvent(_Lenient):

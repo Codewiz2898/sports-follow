@@ -21,15 +21,16 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, pipeline, registry, search as player_search, structured
+from . import bus, moments, notify, pipeline, registry, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
 from .db import get_db, session
-from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
+from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 log = logging.getLogger("sports_follow")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -93,9 +94,13 @@ def config() -> dict[str, Any]:
 
 @app.get("/api/me/following")
 async def following(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    ids = db.scalars(select(Follow.player_id).where(Follow.fan_id == fan).order_by(Follow.created_at)).all()
-    cards = [c for c in [await read_card(db, pid) for pid in ids] if c]
-    return {"players": [_summary(c) for c in cards]}
+    rows = db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all()
+    out = []
+    for player_id, rules in rows:
+        card = await read_card(db, player_id)
+        if card:
+            out.append({**_summary(card), "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL)})
+    return {"players": out}
 
 
 # ---------------------------------------------------------------- AI research allowance
@@ -252,6 +257,83 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id), db: Session
     return {"player_id": player.id, "card": card}
 
 
+@app.put("/api/follows/{player_id}/alerts")
+def set_alerts(player_id: int, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Which of this player's moments the fan is told about: everything, key, results or off."""
+    level = body.get("level")
+    if level not in moments.LEVELS:
+        raise HTTPException(400, f"level must be one of {', '.join(moments.LEVELS)}")
+    row = db.scalar(select(Follow).where(Follow.fan_id == fan, Follow.player_id == player_id))
+    if row is None:
+        raise HTTPException(404, "Follow the player first.")
+    row.alert_rules = {**(row.alert_rules or {}), "level": level}
+    return {"player_id": player_id, "alerts": level}
+
+
+# ---------------------------------------------------------------- push notifications
+
+# Browsers hand us the address their push service delivers to. Only real push services are accepted,
+# so a crafted subscription can't make this server post to an arbitrary host.
+PUSH_HOSTS = ("fcm.googleapis.com", "android.googleapis.com", "updates.push.services.mozilla.com", ".push.apple.com", ".notify.windows.com")
+TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _push_host_ok(endpoint: str) -> bool:
+    from urllib.parse import urlparse
+
+    url = urlparse(endpoint)
+    host = url.hostname or ""
+    return url.scheme == "https" and any(host == h or (h.startswith(".") and host.endswith(h)) for h in PUSH_HOSTS)
+
+
+@app.get("/api/push")
+def push_info() -> dict[str, Any]:
+    key = notify.public_key()
+    return {"enabled": key is not None, "public_key": key}
+
+
+@app.post("/api/push/subscriptions")
+def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Turn notifications on for this device (or update its quiet hours)."""
+    sub = body.get("subscription") or {}
+    endpoint, keys = str(sub.get("endpoint") or ""), sub.get("keys") or {}
+    p256dh, auth = str(keys.get("p256dh") or ""), str(keys.get("auth") or "")
+    if not (endpoint and len(endpoint) < 1000 and _push_host_ok(endpoint) and 0 < len(p256dh) < 200 and 0 < len(auth) < 100):
+        raise HTTPException(400, "That isn't a push subscription this server can deliver to.")
+    tz = str(body.get("timezone") or "UTC")[:64]
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(tz)
+    except Exception:
+        tz = "UTC"
+    start, end = body.get("quiet_start"), body.get("quiet_end")
+    start = start if isinstance(start, str) and TIME.match(start) else None
+    end = end if isinstance(end, str) and TIME.match(end) else None
+    if "quiet_start" not in body and body.get("previous_endpoint"):
+        # The browser replaced this device's subscription: keep its quiet hours.
+        old = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == str(body["previous_endpoint"])))
+        if old is not None:
+            start, end = old.quiet_start, old.quiet_end
+            db.delete(old)
+    stmt = insert(PushSubscription).values(fan_id=fan, endpoint=endpoint, p256dh=p256dh, auth=auth, timezone=tz, quiet_start=start, quiet_end=end)
+    db.execute(stmt.on_conflict_do_update(index_elements=["endpoint"], set_={"fan_id": fan, "p256dh": p256dh, "auth": auth, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0}))
+    return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
+
+
+@app.delete("/api/push/subscriptions")
+def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == str(body.get("endpoint") or "")))
+    return {"ok": True}
+
+
+@app.post("/api/push/test")
+async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
+    if notify.public_key() is None:
+        raise HTTPException(503, "Notifications aren't set up on this server yet.")
+    return {"sent": await asyncio.to_thread(notify.send_test, fan)}
+
+
 @app.delete("/api/follows/{player_id}")
 def unfollow(player_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
@@ -268,8 +350,9 @@ async def card(player_id: int, request: Request, response: Response, fan: str = 
         return Response(status_code=304)
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "public, max-age=5" if (card.get("live") or {}).get("is_live") else "public, max-age=60"
-    following = bool(db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)))
-    return {**card, "following": following}
+    rules = db.scalar(select(Follow.alert_rules).where(Follow.fan_id == fan, Follow.player_id == player_id))
+    following = rules is not None
+    return {**card, "following": following, "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL) if following else None}
 
 
 @app.post("/api/players/{player_id}/refresh")

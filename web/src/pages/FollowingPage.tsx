@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom'
 import type { Card, NewsItem, UpcomingEvent } from '../api'
 import { LiveScoreboard, NewsList, PlayerRow, UpcomingList } from '../components/Blocks'
-import { SearchIcon } from '../components/Icons'
+import { BellIcon, SearchIcon } from '../components/Icons'
 import { parseDate } from '../format'
 import { useFollowing } from '../following'
+import { InstallButton } from '../pwa'
 
 /** Group live cards by the game they're in, so two followed players in one match show as one game. */
 function liveGames(cards: Card[]) {
@@ -65,6 +66,7 @@ export function FollowingPage() {
           <p className="muted small" style={{ margin: 0 }}>Any athlete in any sport: live score and their own numbers while they play, fixtures, news and stats.</p>
           <Link to="/search" className="btn primary" style={{ alignSelf: 'flex-start' }}><SearchIcon width={18} height={18} />Find a player</Link>
         </div>
+        <div className="mobile-only"><InstallButton compact /></div>
       </>
     )
   }
@@ -80,7 +82,11 @@ export function FollowingPage() {
           <span className="eyebrow">{today}</span>
           <h1 className="page-title">Following</h1>
         </div>
-        <Link to="/search" className="btn icon" aria-label="Search players"><SearchIcon /></Link>
+        <div className="row mobile-only" style={{ gap: 8 }}>
+          <InstallButton compact />
+          <Link to="/notifications" className="btn icon" aria-label="Notifications"><BellIcon /></Link>
+          <Link to="/search" className="btn icon" aria-label="Search players"><SearchIcon /></Link>
+        </div>
       </header>
 
       {games.length > 0 && (

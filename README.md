@@ -80,6 +80,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
   package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
   are set.
+- **Push notifications for moments.** Each poll compares the player's line with the last one
+  (`sports_follow/moments.py`): a goal, a fifty, 30 points, a set, the start and the result; news
+  from a rebuild adds injuries, transfers and retirements. A moment is stored once (a stable key), then
+  sent by Web Push (`sports_follow/notify.py`, VAPID) to every device of every follower whose level
+  for that player wants it: key moments (the default), everything, results only, or off. Quiet hours
+  are per device and make notifications arrive silently. With the app open and in front, the moment
+  shows as an in-app toast instead. Devices the push service reports gone are removed.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 
@@ -93,6 +100,7 @@ docker compose up -d                                   # Postgres :5433, Redis :
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/alembic upgrade head
 .venv/bin/python -m sports_follow.registry     # the player registry; ~90 min, then weekly by the worker
+.venv/bin/python -m sports_follow.notify keys  # push keys, once (kept in ~/.config/sports-follow)
 cd web && npm install && cd ..
 ```
 
@@ -105,7 +113,8 @@ cd web && npm run dev                                              # app on http
 ```
 
 For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself (with the
-service worker, manifest and icons; try installing it from http://localhost:8421). Always pass
+service worker, manifest and icons; try installing it from http://localhost:8421). Notifications need
+that build too: turn them on under Notifications in the sidebar. Always pass
 `--timeout-graceful-shutdown`: fans' live streams never close on their own, so without it a restart waits forever.
 
 | Env var | Default | |
@@ -120,6 +129,8 @@ service worker, manifest and icons; try installing it from http://localhost:8421
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job runs before handing over |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
+| `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
+| `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
 
 ## Android app
 
@@ -167,8 +178,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
 - Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's
   scorecards in the last 30 days. Domestic matches often have no scorecard, so no player line.
 - Football: national-team games show up for every player of that nationality's team; a player who
-  isn't called up sees "Not in the matchday squad" rather than the game being hidden. Women's players
-  follow their club only: ESPN's search can't tell a women's national team from the men's.
+  isn't called up sees "Not in the matchday squad" rather than the game being hidden, and gets no
+  notification for its result. Women's players follow their club only: ESPN's search can't tell a
+  women's national team from the men's.
 - Tennis: ESPN has no player schedule or match summary, so matches are read from tour scoreboards;
   a player's next match appears only once the draw is made (a day or two ahead). Singles only.
 - Chess: Lichess relays most elite and many open events, but not every tournament. A player's events
@@ -176,4 +188,8 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   one request a second and a rate limit fails the refresh instead of dropping results.
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
-- Fans are anonymous (a cookie). Accounts, push notifications and alert rules come later.
+- Fans are anonymous (a cookie), so each browser or phone is its own fan: following and notification
+  levels don't carry across devices until accounts exist.
+- Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
+  and there are no lock-screen live scores (Live Activities) or Android ongoing live-score
+  notifications; those need a native app. Chess has start and result only, not engine swings.
