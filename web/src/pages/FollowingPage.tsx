@@ -9,7 +9,8 @@ import { useFollowing } from '../following'
 function liveGames(cards: Card[]) {
   const games = new Map<string, Card[]>()
   for (const c of cards.filter((c) => c.status === 'ready' && c.live.is_live)) {
-    const key = (c.live.event || c.live.score || String(c.player_id)).toLowerCase()
+    // A structured source names the event; the agent's text only matches when it's written the same way.
+    const key = c.live.event_id != null ? `event:${c.live.event_id}` : (c.live.event || c.live.score || String(c.player_id)).toLowerCase()
     games.set(key, [...(games.get(key) ?? []), c])
   }
   return [...games.values()]
@@ -22,7 +23,7 @@ function upNext(cards: Card[]) {
     for (const u of c.upcoming ?? []) {
       const start = parseDate(u.start_utc)
       if (start && start.getTime() < now) continue
-      const key = `${u.title.toLowerCase()}|${start?.toDateString() ?? ''}`
+      const key = u.event_id != null ? `event:${u.event_id}` : `${u.title.toLowerCase()}|${start?.toDateString() ?? ''}`
       const found = merged.get(key)
       if (found) found.players.push(c.player.name)
       else merged.set(key, { ...u, players: [c.player.name] })

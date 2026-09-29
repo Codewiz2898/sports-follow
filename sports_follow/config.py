@@ -16,4 +16,9 @@ LIVE_CHECK_INTERVAL = int(os.environ.get("SPORTS_FOLLOW_LIVE_INTERVAL", 60))
 # An event is "armed" this long before its start (seconds).
 ARM_BEFORE_START = int(os.environ.get("SPORTS_FOLLOW_ARM_BEFORE", 30 * 60))
 
+# How often a bound player's fixtures and stats are re-read from their structured source (seconds).
+FIXTURES_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_FIXTURES_MAX_AGE", 30 * 60))
+# How long one live-poll job keeps polling before handing over to the next tick's job (seconds).
+POLL_SESSION = int(os.environ.get("SPORTS_FOLLOW_POLL_SESSION", 10 * 60))
+
 FAN_COOKIE = "sf_fan"

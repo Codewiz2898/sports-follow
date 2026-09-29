@@ -1,4 +1,4 @@
-// Types mirror sports_follow/schema.py and the card built in sports_follow/pipeline.py.
+// Types mirror sports_follow/schema.py and the card built in sports_follow/pipeline.py and structured.py.
 
 export interface Stat { label: string; value: string }
 
@@ -13,6 +13,21 @@ export interface PlayerProfile {
   disambiguation?: string | null
 }
 
+export interface FootballSide { id: string; name: string; abbr?: string | null; score: string; scorers: string[] }
+export interface FootballState { kind: 'football'; home: FootballSide; away: FootballSide; detail?: string | null }
+
+export interface CricketInnings { team: string; abbr?: string | null; period?: number | null; runs: number; wickets: number; overs?: number | string | null; batting: boolean; target?: number | null }
+export interface CricketState {
+  kind: 'cricket'
+  teams: { id: string; name: string; abbr?: string | null; score: string; winner?: boolean | null }[]
+  innings: CricketInnings[]
+  summary?: string
+  format?: string | null
+  player_of_match?: string | null
+}
+
+export interface Moment { clock: string; kind: string; text: string; athlete_ids: string[] }
+
 export interface LiveStatus {
   is_live: boolean
   event?: string | null
@@ -21,7 +36,16 @@ export interface LiveStatus {
   player_stats: Stat[]
   source_url?: string | null
   as_of?: string | null
+  // Set when the score comes from a structured source rather than the research agent.
+  event_id?: number
+  competition?: string | null
+  headline?: string | null
+  state?: FootballState | CricketState
+  moments?: Moment[]
+  source?: string
 }
+
+export interface Provenance { source: string; url?: string | null; at: string }
 
 export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null }
 
@@ -32,9 +56,18 @@ export interface UpcomingEvent {
   start_utc?: string | null
   venue?: string | null
   notes?: string | null
+  status?: 'scheduled' | 'armed' | 'live' | 'postponed' | 'final'
+  event_id?: number
 }
 
-export interface RecentResult { title: string; result: string; date?: string | null; player_contribution?: string | null }
+export interface RecentResult {
+  title: string
+  result: string
+  date?: string | null
+  player_contribution?: string | null
+  competition?: string | null
+  source_url?: string | null
+}
 
 export interface Card {
   player_id: number
@@ -49,6 +82,8 @@ export interface Card {
   upcoming: UpcomingEvent[]
   recent_results?: RecentResult[]
   season_stats?: Stat[]
+  season_stats_note?: string
+  provenance?: Partial<Record<'upcoming' | 'recent_results' | 'season_stats', Provenance>>
   sources?: string[]
   freshness?: Partial<Record<'live' | 'fixtures' | 'stats' | 'news', string>>
   following?: boolean

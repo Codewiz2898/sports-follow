@@ -131,3 +131,11 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 @media (min-width: 640px) {
   .player-head { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'back id follow'; }
 }
+
+/* Key moments under a structured live score (goals, cards). */
+.moments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.moments li { display: flex; align-items: baseline; gap: 10px; }
+.moment-kind { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 6px; background: var(--bg); color: var(--muted); flex-shrink: 0; }
+.moment-kind.goal { color: var(--live); }
+.moment-kind.yellow { color: #e5b93c; }
+.moment-kind.red { color: #ef5a5a; }

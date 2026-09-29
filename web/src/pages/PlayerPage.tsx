@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, subscribe, type Card } from '../api'
-import { Avatar, BuildProgress, LiveScoreboard, NewsList, ResultsList, StatGrid, UpcomingList } from '../components/Blocks'
+import { Avatar, BuildProgress, LiveScoreboard, NewsList, ResultsList, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { relative, sportName } from '../format'
 import { useFollowing } from '../following'
@@ -75,7 +75,7 @@ export function PlayerPage() {
     setRefreshing('Checking…')
     try {
       const r = await api.refresh(playerId)
-      setRefreshing(r.queued ? 'Checking the live score…' : r.reason ?? null)
+      setRefreshing(r.queued ? (card?.provenance ? 'Re-reading fixtures and stats…' : 'Checking the live score…') : r.reason ?? null)
     } catch (e) {
       setRefreshing((e as Error).message)
     }
@@ -128,17 +128,32 @@ export function PlayerPage() {
                 </div>
               )}
               <div className="row">
-                <span className="tiny muted">{refreshing ?? 'Live games refresh on their own about every minute.'}</span>
+                <span className="tiny muted">{refreshing ?? (card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while a game is on.` : 'Live games refresh on their own about every minute.')}</span>
                 <button type="button" className="btn" onClick={refresh} disabled={Boolean(refreshing)}><RefreshIcon width={16} height={16} />Refresh</button>
               </div>
               <span className="eyebrow" style={{ marginTop: 8 }}>Up next</span>
               <UpcomingList items={(card.upcoming ?? []).slice(0, 2)} empty="No upcoming games found." />
             </div>
           )}
-          {tab === 'fixtures' && <UpcomingList items={card.upcoming ?? []} empty="No upcoming games found." />}
+          {tab === 'fixtures' && (
+            <div className="section">
+              <UpcomingList items={card.upcoming ?? []} empty="No upcoming games found." />
+              <SourceNote provenance={card.provenance?.upcoming} />
+            </div>
+          )}
           {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
-          {tab === 'stats' && <StatGrid stats={card.season_stats} />}
-          {tab === 'results' && <ResultsList items={card.recent_results} />}
+          {tab === 'stats' && (
+            <div className="section">
+              <StatGrid stats={card.season_stats} />
+              <SourceNote provenance={card.provenance?.season_stats} note={card.season_stats_note} />
+            </div>
+          )}
+          {tab === 'results' && (
+            <div className="section">
+              <ResultsList items={card.recent_results} />
+              <SourceNote provenance={card.provenance?.recent_results} />
+            </div>
+          )}
 
           <p className="tiny muted" style={{ margin: 0 }}>
             Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. Live data can lag the game by a minute or two.

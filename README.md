@@ -6,30 +6,39 @@ Following screen puts all of your players together, live games first.
 
 ## How it's built
 
-This is milestone 1 of the [backend design](docs/backend-design.html): the persistent core.
+This is milestones 1 and 2 of the [backend design](docs/backend-design.html): the persistent core,
+plus structured adapters for cricket and football.
 
 ```
 React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶ Postgres (registry, cards, history)
       ▲                         │  enqueue jobs                   Redis (hot cards, per-player channels)
       └──── SSE: card updates ──┘         ▼
                               arq worker (sports_follow/worker.py)
-                                ├─ build_card: research agent → report → registry rows → card
-                                ├─ refresh_live: quick live check → card
-                                └─ tick, every minute: arm events, rebuild stale cards, queue live checks
-                                         │
-                              llm-providers gateway ──▶ Claude (web_search / fetch_url tools run locally)
+                                ├─ build_card: research agent → profile + news → card, then bind to an adapter
+                                ├─ refresh_structured: adapter → fixtures, results, stats → card
+                                ├─ poll_event: one job per live game, shared by every player in it
+                                ├─ refresh_live: agent live check, for sports with no adapter
+                                └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
+                                         │                                  │
+                              llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (cricket, football)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
   triggers the build; every later fan gets the shared card at once.
 - **Names converge.** "Kohli" and "Virat Kohli" end up on the same player: every typed name becomes an
   alias, and when a build discovers the athlete already exists, the rows are merged.
-- **Live checks are armed by the schedule.** Upcoming games are stored as events; 30 minutes before
-  one starts, every followed player in it gets a live check each minute until it ends.
+- **Structured sources where they exist, the agent everywhere else.** After the agent says who a
+  player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
+  records the identity and bindings. From then on the source owns the fixtures, results, stats and live
+  score; the agent keeps the profile and news. Cricket and football come from ESPN's public JSON
+  endpoints (ESPNcricinfo ids for cricket); other sports still get everything from the agent.
+- **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
+  30 minutes before one starts it is armed; one `poll_event` job then polls it (every minute before
+  kick-off, every 8–10 s in play), appends event states and player lines, and pushes every followed
+  player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players.
-- The research agent (`agent.py`, `tools.py`) is still the only data source. Its reports are written
-  into the design's tables (events, event states, player lines, news) so the real adapters from the
-  design can fill the same rows without the API or app changing.
+- Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
+  `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 
 ## Run it
 
@@ -61,7 +70,9 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
 | `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |
 | `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a card is rebuilt |
-| `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between live checks during a game |
+| `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between agent live checks during a game (sports without an adapter) |
+| `SPORTS_FOLLOW_FIXTURES_MAX_AGE` | `1800` | seconds before a bound player's fixtures and stats are re-read |
+| `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job runs before handing over |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 
@@ -70,12 +81,17 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
 - **App design** (Claude Design canvas): https://claude.ai/artifact/6qWRYFCmugDe292LKwowAB
 - **Backend design**: [docs/backend-design.html](docs/backend-design.html), also at https://claude.ai/artifact/Quj8eSYYNmQPsPEbCpCNTe
 
-## Limitations of this milestone
+## Limitations
 
-- Every card comes from the research agent, so a first build takes 1–3 minutes and a live check about
-  30 seconds. Structured adapters (design section 4) replace it for live data, sport by sport.
-- The live scoreboard is one generic layout, because the agent reports the score as text.
-  Sport-specific boards need the structured state adapters provide.
-- Events are deduplicated by sport, title and date, so two players in one game only share an event
-  when the agent names the game the same way for both.
+- **ESPN's endpoints are unofficial.** They are the JSON behind espn.com and espncricinfo.com: no key,
+  no contract, and they can change or be blocked without notice. Fine for development and personal
+  use; a public launch should use a licensed feed, which fits in as another adapter.
+- A first build still waits for the research agent (1–4 minutes) before the adapter is bound, because
+  the agent is what says which sport a name belongs to.
+- Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's
+  scorecards in the last 30 days. Domestic matches often have no scorecard, so no player line.
+- Football: national-team games show up for every player of that nationality's team; a player who
+  isn't called up sees "Not in the matchday squad" rather than the game being hidden.
+- Tennis, chess, basketball and every other sport still come from the agent alone, with its generic
+  scoreboard and events deduplicated by sport, title and date.
 - Fans are anonymous (a cookie). Accounts, push notifications and alert rules come later.

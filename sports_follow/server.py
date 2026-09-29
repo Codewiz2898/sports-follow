@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import bus, pipeline
+from . import bus, pipeline, structured
 from .agent import MODEL
 from .config import FAN_COOKIE, REDIS_URL
 from .db import get_db
@@ -150,6 +150,12 @@ async def refresh(player_id: int, db: Session = Depends(get_db)) -> dict[str, An
         raise HTTPException(404, "No such player.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
+    if structured.binding(db, player_id) is not None:
+        # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
+        if bus.is_locked(f"structured:{player_id}"):
+            return {"queued": False, "reason": "A refresh is already running."}
+        await arq().enqueue_job("refresh_structured", player_id)
+        return {"queued": True}
     if bus.is_locked(f"live:{player_id}"):
         return {"queued": False, "reason": "A live check is already running."}
     await arq().enqueue_job("refresh_live", player_id)
