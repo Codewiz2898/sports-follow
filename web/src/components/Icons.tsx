@@ -20,3 +20,9 @@ export const ListIcon = (p: SVGProps<SVGSVGElement>) => (
 export const RefreshIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" /></svg>
 )
+export const SparkIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" /></svg>
+)
+export const ChevronIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="m9 6 6 6-6 6" /></svg>
+)

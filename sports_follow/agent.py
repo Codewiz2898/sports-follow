@@ -216,11 +216,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
 
 
-def follow_player(llm: Client, player: str) -> Iterator[dict[str, Any]]:
-    """Full report: profile, live game, news, upcoming fixtures, recent results, stats."""
+def follow_player(llm: Client, player: str, known: str | None = None) -> Iterator[dict[str, Any]]:
+    """Full report: profile, live game, news, upcoming fixtures, recent results, stats.
+
+    known pins the exact athlete when a live source already identified them ("Nikola Jokić,
+    football, FK Jedinstvo Ub. Their page on ESPN: …"), so a famous namesake can't take over.
+    """
     prompt = (
         f"Current time: {_now()}.\n\n"
-        f"Player: {player}\n\n"
+        f"Player: {player}\n"
+        + (f"Exactly this athlete: {known}\n" if known else "")
+        + "\n"
         "Build the full report: who they are, whether they are playing right now (live score "
         "and their live stats), the latest news (up to 6 items from the last few weeks), "
         "upcoming matches/events for every team or tournament they're in (up to 6), recent "

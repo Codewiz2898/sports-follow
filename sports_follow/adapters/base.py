@@ -28,6 +28,8 @@ class PlayerRef:
     other_teams: list[str] = field(default_factory=list)
     # The competition family the id lives in, where the source needs it: "nba", "wnba", "atp", "wta".
     league: str | None = None
+    # Birth date as the source gives it, ISO ("1988-11-05"); how the registry confirms a name match.
+    born: str | None = None
 
 
 @dataclass
@@ -74,6 +76,10 @@ class Adapter(Protocol):
     live_cadence: int  # seconds between polls while an event is live
 
     def find_player(self, name: str) -> PlayerRef | None: ...
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        """The athlete with this id in the source (a search result a fan picked), or None."""
+        ...
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]: ...
 

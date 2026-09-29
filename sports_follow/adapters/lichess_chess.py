@@ -72,6 +72,12 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         return data
 
 
+def peek(url: str, ttl: float) -> Any:
+    """A cached response younger than ttl seconds, or None, without waiting for the request line."""
+    hit = _cache.get(url)
+    return hit[1] if hit and time.time() - hit[0] < ttl else None
+
+
 def _dt(ms: Any) -> datetime | None:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if isinstance(ms, (int, float)) else None
 
@@ -138,6 +144,14 @@ def pick_player(results: list[dict[str, Any]], name: str) -> dict[str, Any] | No
     if not candidates:
         return None
     return sorted(candidates, key=lambda r: (bool(r.get("inactive")), -(r.get("standard") or 0)))[0]
+
+
+def ref_for(record: dict[str, Any]) -> PlayerRef:
+    """A FIDE record (search hit or /fide/player/{id}) as a PlayerRef; the player is their own "team"."""
+    fide_id = str(record["id"])
+    full = display_name(record["name"])
+    slug = record["name"].replace(", ", "_").replace(" ", "_")
+    return PlayerRef("lichess_chess", fide_id, full, [fide_id], [full], f"https://lichess.org/fide/{fide_id}/{quote(slug)}")
 
 
 def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
@@ -346,12 +360,11 @@ class LichessChess:
             if pick_player(list(results.values()), name):
                 break
         best = pick_player(list(results.values()), name)
-        if best is None:
-            return None
-        fide_id = str(best["id"])
-        full = display_name(best["name"])
-        slug = best["name"].replace(", ", "_").replace(" ", "_")
-        return PlayerRef(self.system, fide_id, full, [fide_id], [full], f"https://lichess.org/fide/{fide_id}/{quote(slug)}")
+        return ref_for(best) if best else None
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        record = get_json(f"{API}/fide/player/{quote(athlete_id)}", ttl=12 * 3600)
+        return ref_for(record) if isinstance(record, dict) and record.get("id") else None
 
     def _tours(self, ref: PlayerRef, now: datetime) -> list[dict[str, Any]]:
         """Broadcast tournaments the player is likely in: the "Recent tournaments" on their Lichess

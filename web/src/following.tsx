@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, subscribe, type Card, type StreamEvent } from './api'
+import { api, subscribe, type Card, type FollowTarget, type StreamEvent } from './api'
 
 interface FollowingState {
   cards: Card[]
   loaded: boolean
   progress: Record<number, string[]>
-  follow: (query: string) => Promise<Card>
+  follow: (target: FollowTarget) => Promise<Card>
   unfollow: (playerId: number) => Promise<void>
   isFollowing: (playerId: number) => boolean
   byId: (playerId: number) => Card | undefined
@@ -50,8 +50,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     return subscribe('/api/me/stream', apply)
   }, [idsKey, apply])
 
-  const follow = useCallback(async (query: string) => {
-    const { card } = await api.follow(query)
+  const follow = useCallback(async (target: FollowTarget) => {
+    const { card } = await api.follow(target)
     setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
     return card
   }, [])

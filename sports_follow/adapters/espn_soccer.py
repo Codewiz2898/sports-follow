@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -223,21 +224,28 @@ class EspnSoccer:
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
-            if not espn.names_match(name, hit["name"]):
-                continue
-            athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/soccer/athletes/{hit['athlete_id']}", ttl=6 * 3600).get("athlete") or {}
-            team_ids, team_names = [], []
-            club = athlete.get("team") or {}
-            if club.get("id"):
-                team_ids.append(str(club["id"]))
-                team_names.append(club.get("displayName") or "")
-            country = athlete.get("citizenshipCountry") or {}
-            national = self._national_team(country.get("abbreviation"), athlete.get("citizenship"))
-            if national and national[0] not in team_ids:
-                team_ids.append(national[0])
-                team_names.append(national[1])
-            return PlayerRef(self.system, hit["athlete_id"], athlete.get("displayName") or hit["name"], team_ids, team_names, hit.get("url"))
+            if espn.names_match(name, hit["name"]):
+                return self.player(hit["athlete_id"])
         return None
+
+    def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
+        athlete = espn.get_json(f"{espn.WEB}/common/v3/sports/soccer/athletes/{athlete_id}", ttl=6 * 3600).get("athlete") or {}
+        if not athlete.get("id"):
+            return None
+        team_ids, team_names = [], []
+        club = athlete.get("team") or {}
+        if club.get("id"):
+            team_ids.append(str(club["id"]))
+            team_names.append(club.get("displayName") or "")
+        country = athlete.get("citizenshipCountry") or {}
+        # Search finds national teams by country name, and "Australia" is the men's side; a women's
+        # player would be handed the Socceroos' fixtures, so she keeps her club only.
+        female = (athlete.get("gender") or "").upper() == "FEMALE"
+        national = None if female else self._national_team(country.get("abbreviation"), athlete.get("citizenship"))
+        if national and national[0] not in team_ids:
+            team_ids.append(national[0])
+            team_names.append(national[1])
+        return PlayerRef(self.system, str(athlete["id"]), athlete.get("displayName") or "", team_ids, team_names, espn.profile_link(athlete), born=espn.birth_date(athlete))
 
     def _national_team(self, abbreviation: str | None, country: str | None) -> tuple[str, str] | None:
         """Find a men's national team by country name via search; None when it isn't unambiguous."""
@@ -254,14 +262,18 @@ class EspnSoccer:
         return None
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
+        def schedule(url: str) -> list[Fixture]:
+            try:
+                return parse_schedule(espn.get_json(url, ttl=1800))
+            except AdapterError:
+                return []
+
+        # Upcoming and past schedules for club and country, read in parallel.
+        urls = [f"{espn.SITE}/soccer/all/teams/{team_id}/schedule{suffix}" for team_id in ref.team_ids for suffix in ("?fixture=true", "")]
         seen: dict[str, Fixture] = {}
-        for team_id in ref.team_ids:
-            for suffix, ttl in (("?fixture=true", 1800), ("", 1800)):
-                try:
-                    data = espn.get_json(f"{espn.SITE}/soccer/all/teams/{team_id}/schedule{suffix}", ttl=ttl)
-                except AdapterError:
-                    continue
-                for f in parse_schedule(data):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for found in pool.map(schedule, urls):
+                for f in found:
                     seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 

@@ -57,7 +57,7 @@ export function PlayerPage() {
   const retired = p.status === 'retired'
 
   const retry = async () => {
-    const fresh = await following.follow(p.name)
+    const fresh = await following.follow({ player_id: playerId })
     setCard(fresh)
   }
 
@@ -65,7 +65,7 @@ export function PlayerPage() {
     setBusy(true)
     try {
       if (isFollowing) await following.unfollow(playerId)
-      else await following.follow(p.name)
+      else await following.follow({ player_id: playerId })
     } finally {
       setBusy(false)
     }
