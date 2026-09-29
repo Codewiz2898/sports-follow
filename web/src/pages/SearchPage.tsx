@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { Avatar } from '../components/Blocks'
 import { CheckIcon, PlusIcon, SearchIcon } from '../components/Icons'
+import { sportName } from '../format'
 import { useFollowing } from '../following'
 
 const SUGGESTIONS = ['Virat Kohli', 'Magnus Carlsen', 'Cristiano Ronaldo', 'Carlos Alcaraz', 'Nikola Jokić', 'Max Verstappen']
@@ -68,7 +69,7 @@ export function SearchPage() {
                     <Avatar name={m.name} />
                     <span className="stack">
                       <span className="title">{m.name}</span>
-                      <span className="small muted">{[m.sport, ...(m.teams ?? []).slice(0, 2), m.status === 'retired' && 'retired'].filter(Boolean).join(' · ')}{m.followers ? ` · ${m.followers} following` : ''}</span>
+                      <span className="small muted">{[sportName(m.sport), ...(m.teams ?? []).slice(0, 2), m.status === 'retired' && 'retired'].filter(Boolean).join(' · ')}{m.followers ? ` · ${m.followers} following` : ''}</span>
                     </span>
                   </button>
                   {on ? (

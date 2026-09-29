@@ -49,3 +49,8 @@ def release(name: str) -> None:
 
 def is_locked(name: str) -> bool:
     return bool(sync_redis().exists(f"lock:{name}"))
+
+
+def extend(name: str, seconds: int) -> None:
+    """Keep a lock held by a long-running job (the live poller renews it every poll)."""
+    sync_redis().expire(f"lock:{name}", seconds)

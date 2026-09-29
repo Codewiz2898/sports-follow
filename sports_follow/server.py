@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import bus, pipeline
+from . import bus, pipeline, structured
 from .agent import MODEL
 from .config import FAN_COOKIE, REDIS_URL
 from .db import get_db
@@ -107,12 +107,16 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id), db: Session
         db.add(Follow(fan_id=fan, player_id=player.id, alert_rules={}))
     card_row = db.get(PlayerCard, player.id)
     needs_build = card_row is None or card_row.status in ("building", "failed")
-    if card_row is not None and card_row.status == "failed":
+    retrying = card_row is not None and card_row.status == "failed"
+    if retrying:
         # A fan asking again is the retry for a failed build.
         card_row.status = "building"
         card_row.error = None
-        card_row.card = {**pipeline.placeholder_card(player), "player_id": player.id}
+        card_row.card = {**pipeline.placeholder_card(player), "version": card_row.version}
     db.commit()
+    if retrying:
+        # Write through to the hot copy and tell every subscriber, or they keep seeing "failed".
+        bus.store_card(player.id, card_row.card)
     if needs_build:
         await arq().enqueue_job("build_card", player.id)
     card = await read_card(db, player.id)
@@ -146,6 +150,12 @@ async def refresh(player_id: int, db: Session = Depends(get_db)) -> dict[str, An
         raise HTTPException(404, "No such player.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
+    if structured.binding(db, player_id) is not None:
+        # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
+        if bus.is_locked(f"structured:{player_id}"):
+            return {"queued": False, "reason": "A refresh is already running."}
+        await arq().enqueue_job("refresh_structured", player_id)
+        return {"queued": True}
     if bus.is_locked(f"live:{player_id}"):
         return {"queued": False, "reason": "A live check is already running."}
     await arq().enqueue_job("refresh_live", player_id)

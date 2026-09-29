@@ -1,15 +1,17 @@
 """From an agent report to the registry and a player card.
 
-Milestone 1: the research agent is the only source, so every card is built from its report. The
-report is still written into the design's tables (player, event, event_state, player_line,
-news_item) so that when real adapters arrive they fill the same rows and the card builder and API
-do not change.
+The research agent says who a player is and writes the profile and news. For sports with a
+structured adapter (structured.py), the player is then bound to that source, which owns the
+fixtures, results, stats and live score from then on; for every other sport the agent's report
+fills those sections too. Both write the same tables (player, event, event_state, player_line,
+news_item), so the card and the API don't care where a section came from.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass, field
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -19,7 +21,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus
+from . import bus, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .db import session
 from .models import (
@@ -33,6 +35,7 @@ from .models import (
     PlayerAlias,
     PlayerCard,
     PlayerLine,
+    SourceBinding,
 )
 
 log = logging.getLogger("sports_follow.pipeline")
@@ -116,15 +119,16 @@ def placeholder_card(player: Player) -> dict[str, Any]:
     }
 
 
-def _canonicalize(db: Session, player: Player, report_name: str) -> Player:
+def _canonicalize(db: Session, player: Player, report_name: str) -> tuple[Player, int | None]:
     """After a build, converge on one player per athlete.
 
     If the report names an athlete another player row already holds, fold this row into it:
     move the aliases and follows over and delete this one. Otherwise take the canonical slug.
+    Returns the player the report belongs to and, after a merge, the id that was folded away.
     """
     canonical = slugify(report_name)
     if not canonical or canonical == player.slug:
-        return player
+        return player, None
     existing = db.scalar(select(Player).join(PlayerAlias, PlayerAlias.player_id == Player.id).where(PlayerAlias.alias == canonical))
     if existing and existing.id != player.id:
         for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
@@ -139,11 +143,10 @@ def _canonicalize(db: Session, player: Player, report_name: str) -> Player:
         moved_from = player.id
         db.delete(player)
         db.flush()
-        bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": existing.id})
-        return existing
+        return existing, moved_from
     player.slug = canonical
     db.execute(insert(PlayerAlias).values(alias=canonical, player_id=player.id).on_conflict_do_nothing())
-    return player
+    return player, None
 
 
 # ---------------------------------------------------------------- writing a report
@@ -228,11 +231,14 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         player.role = p.get("role")
         player.teams = p.get("teams") or []
         player.disambiguation = p.get("disambiguation")
-        player = _canonicalize(db, player, p["name"])
+        player, moved_from = _canonicalize(db, player, p["name"])
+        # A bound player's games come from their source; the agent's guesses would only duplicate them.
+        bound = structured.binding(db, player.id) is not None
 
-        for u in report["upcoming"]:
-            _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
-        _write_live(db, player, report["live"], now)
+        if not bound:
+            for u in report["upcoming"]:
+                _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
+            _write_live(db, player, report["live"], now)
         _write_news(db, player, report["news"])
 
         card_row = db.get(PlayerCard, player.id)
@@ -241,15 +247,27 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
             db.add(card_row)
         version = (card_row.version or 0) + 1
         card = _card_from_report(player, report, version, now)
+        if bound and card_row.status == "ready":
+            previous = card_row.card or {}
+            for section in structured.OWNED:
+                if section in previous:
+                    card[section] = previous[section]
+            card["freshness"] = {**card["freshness"], **{k: v for k, v in (previous.get("freshness") or {}).items() if k in ("live", "fixtures", "stats")}}
+            source_urls = [v.get("url") for v in (previous.get("provenance") or {}).values() if v.get("url")]
+            card["sources"] = list(dict.fromkeys([*source_urls, *card["sources"]]))
         card_row.version = version
         card_row.status = "ready"
         card_row.error = None
         card_row.card = card
         card_row.freshness = card["freshness"]
-        card_row.is_live = bool(report["live"].get("is_live"))
+        card_row.is_live = bool(card["live"].get("is_live"))
         card_row.built_at = now
         card_row.live_checked_at = now
         landed = player.id
+    # Only after the commit: subscribers must never hear about a merge that rolled back.
+    if moved_from is not None:
+        bus.sync_redis().delete(bus.card_key(moved_from))
+        bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": landed})
     bus.store_card(landed, card)
     return landed
 
@@ -337,7 +355,10 @@ def build_card(player_id: int) -> None:
             if event["type"] == "progress":
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
             elif event["type"] == "result":
-                apply_report(player_id, event["data"])
+                landed = apply_report(player_id, event["data"])
+                bus.publish(landed, {"type": "progress", "player_id": landed, "message": "Linking live scores and fixtures…"})
+                if structured.bind(landed):
+                    structured.refresh(landed)
     except AgentError as exc:
         log.warning("build %s failed: %s", player_id, exc)
         mark_failed(player_id, str(exc))
@@ -372,17 +393,26 @@ def refresh_live(player_id: int) -> None:
 # ---------------------------------------------------------------- scheduling (design section 3)
 
 
-def due_work(now: datetime | None = None) -> tuple[list[int], list[int]]:
-    """What the scheduler should enqueue now: (players needing a full build, players needing a live check).
+@dataclass
+class Due:
+    builds: list[int] = field(default_factory=list)  # players whose card needs the research agent
+    lives: list[int] = field(default_factory=list)  # unbound players who need an agent live check
+    refreshes: list[int] = field(default_factory=list)  # bound players whose fixtures and stats are stale
+    polls: list[int] = field(default_factory=list)  # events with a live binding that are armed or live
 
-    Only followed players get work. Events move scheduled -> armed at T-30 min; armed and live
-    events put every followed player in them on the live-check list; a game that has not
-    reported for 12 hours is closed.
+
+def due_work(now: datetime | None = None) -> Due:
+    """What the scheduler should enqueue now. Only followed players get work.
+
+    Events move scheduled -> armed at T-30 min. An armed or live event with a live binding gets one
+    poll job, shared by every player in it; players without a binding get agent live checks.
+    Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
+    (a Test match runs five).
     """
-    from .config import ARM_BEFORE_START, CARD_MAX_AGE, LIVE_CHECK_INTERVAL
+    from .config import ARM_BEFORE_START, CARD_MAX_AGE, FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
 
     now = now or _now()
-    builds: list[int] = []
+    due = Due()
     lives: set[int] = set()
     with session() as db:
         followed = select(Follow.player_id).distinct()
@@ -393,31 +423,49 @@ def due_work(now: datetime | None = None) -> tuple[list[int], list[int]]:
         )
         db.execute(
             update(Event)
-            .where(Event.status.in_(("armed", "live")), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))
             .values(status="final")
         )
-        cards = db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed)))
-        for card in cards:
-            # A failed card is left alone: it waits for a fan to retry, never loops.
-            if card.status == "building" and not bus.is_locked(f"build:{card.player_id}"):
-                builds.append(card.player_id)
-            elif card.status == "ready" and card.built_at and card.built_at < now - timedelta(seconds=CARD_MAX_AGE):
-                builds.append(card.player_id)
-            elif card.status == "ready" and card.is_live:
-                lives.add(card.player_id)
-        armed_players = db.scalars(
-            select(EventPlayer.player_id)
-            .join(Event, Event.id == EventPlayer.event_id)
-            .where(Event.status.in_(("armed", "live")), EventPlayer.player_id.in_(followed))
+        db.execute(
+            update(Event)
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(days=6))
+            .values(status="final")
         )
-        lives.update(armed_players)
+        bound = set(db.scalars(select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.player_id.in_(followed))))
+        fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
+        for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
+            pid = card.player_id
+            # A failed card is left alone: it waits for a fan to retry, never loops.
+            if card.status == "building" and not bus.is_locked(f"build:{pid}"):
+                due.builds.append(pid)
+            elif card.status == "ready" and card.built_at and card.built_at < now - timedelta(seconds=CARD_MAX_AGE):
+                due.builds.append(pid)
+            if card.status != "ready":
+                continue
+            if pid in bound:
+                checked = _parse_time((card.freshness or {}).get("fixtures"))
+                if (not checked or checked < fixtures_stale) and not bus.is_locked(f"structured:{pid}"):
+                    due.refreshes.append(pid)
+            elif card.is_live:
+                lives.add(pid)
+        armed = db.execute(
+            select(Event.id, Event.live_binding, EventPlayer.player_id)
+            .join(EventPlayer, EventPlayer.event_id == Event.id)
+            .where(Event.status.in_(("armed", "live")), EventPlayer.player_id.in_(followed))
+        ).all()
+        polls: set[int] = set()
+        for event_id, live_binding, pid in armed:
+            if live_binding:
+                polls.add(event_id)
+            elif pid not in bound:
+                lives.add(pid)
+        due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         stale_before = now - timedelta(seconds=LIVE_CHECK_INTERVAL)
-        due_lives = []
         for pid in lives:
             card = db.get(PlayerCard, pid)
             if card and card.status == "ready" and (card.live_checked_at is None or card.live_checked_at < stale_before) and not bus.is_locked(f"live:{pid}"):
-                due_lives.append(pid)
-    return builds, due_lives
+                due.lives.append(pid)
+    return due
 
 
 def unfollow(db: Session, fan_id: str, player_id: int) -> None:
