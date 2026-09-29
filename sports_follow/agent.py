@@ -134,7 +134,7 @@ def _run(
                     system=SYSTEM_PROMPT,
                     messages=messages,
                     tools=tools,
-                    max_tokens=32000,
+                    max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
                     thinking="adaptive",
                     effort=effort,
                     cache_system=True,

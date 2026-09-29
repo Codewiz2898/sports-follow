@@ -2,14 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "sports-follow",
+      "name": "api",
       "runtimeExecutable": ".venv/bin/uvicorn",
-      "runtimeArgs": [
-        "sports_follow.server:app",
-        "--port",
-        "8421"
-      ],
+      "runtimeArgs": ["sports_follow.server:app", "--port", "8421", "--reload", "--reload-dir", "sports_follow"],
       "port": 8421
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "cd web && PATH=$HOME/.local/node/bin:$PATH npm run dev -- --port 5173 --strictPort"],
+      "port": 5173
     }
   ]
 }
