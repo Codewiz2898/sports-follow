@@ -3,5 +3,5 @@ uvicorn[standard]>=0.30
 python-dotenv>=1.0
 ddgs>=9
 trafilatura>=2
-# Client for the local llm-providers gateway (~/repos/llm-providers)
-llm-providers @ file:///Users/bharathmourya/repos/llm-providers/python
+# Client for the local llm-providers gateway. From a checkout: pip install -e ~/repos/llm-providers/python
+llm-providers @ git+https://github.com/Codewiz2898/llm-providers.git#subdirectory=python
