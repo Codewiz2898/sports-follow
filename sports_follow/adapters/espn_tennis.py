@@ -10,7 +10,7 @@ day or two ahead, so a player's "upcoming" is their next match in a draw already
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import espn
@@ -19,6 +19,7 @@ from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 SPORT_UID = "s:850~"
 TOURS = {"851": "atp", "900": "wta"}
 WEEKS_BACK = 6  # how far back to look for results
+HISTORY_WEEKS = 52  # how far back history.py reads, once, four weeks at a time
 
 _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
 
@@ -227,6 +228,27 @@ class EspnTennis:
                     if ref.athlete_id in f.team_ids:
                         seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        weeks = list(range(WEEKS_BACK + 1, HISTORY_WEEKS + 1))
+        return [{"days": [(anchor - timedelta(weeks=w)).strftime("%Y%m%d") for w in weeks[i:i + 4]], "cost": len(weeks[i:i + 4])} for i in range(0, len(weeks), 4)]
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        tour = ref.league or "atp"
+
+        def read(day: str) -> list[Fixture]:
+            try:
+                return parse_scoreboard(self._board(tour, day, 24 * 3600), tour, day)
+            except AdapterError:
+                return []
+
+        seen: dict[str, Fixture] = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for fixtures in pool.map(read, page["days"]):
+                for f in fixtures:
+                    if ref.athlete_id in f.team_ids and f.status == "final":
+                        seen.setdefault(f.source_id, f)
+        return list(seen.values())
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         tour, match_id = locator["tour"], locator["match"]

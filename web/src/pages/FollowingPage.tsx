@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import type { Card, NewsItem, UpcomingEvent } from '../api'
 import { LiveScoreboard, NewsList, PlayerRow, UpcomingList } from '../components/Blocks'
 import { BellIcon, SearchIcon } from '../components/Icons'
+import { LatestResults } from '../components/Results'
 import { parseDate } from '../format'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
@@ -72,6 +73,8 @@ export function FollowingPage() {
   }
 
   const games = liveGames(cards)
+  // Refetch the latest results when a player's newest result changes, not on every live update.
+  const newest = cards.map((c) => `${c.player_id}:${c.recent_results?.[0]?.event_id ?? ''}`).join(',')
   const nextUp = upNext(cards)
   const news = latest(cards)
 
@@ -109,6 +112,11 @@ export function FollowingPage() {
         <div className="card" style={{ padding: 6 }}>
           {cards.map((c) => <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />)}
         </div>
+      </section>
+
+      <section className="section" aria-label="Latest results">
+        <span className="eyebrow">Latest results</span>
+        <LatestResults watch={newest} />
       </section>
 
       <section className="section" aria-label="Up next">

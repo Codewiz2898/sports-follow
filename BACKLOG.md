@@ -5,23 +5,33 @@ looks like, and the open questions.
 
 ## Requested
 
-### 1. Previous results: a player's full history
+### 1. Previous results: a player's full history (built)
 
-**Today.** The Results tab shows the player's last 5 finished games from their structured source
-(ESPN or Lichess), with the result from their side and their own line ("139* (88)", "38 PTS · 16
-REB", "Won the match 6–2"). Sports without an adapter show the agent's list.
+**Built.** Every finished game a source returns is kept as a result from the player's side
+(`event_player.result`) and never fetched again. The Results tab pages through the whole history,
+newest first ("Show more"), and each game opens to its final score, the player's full line and the
+source. The Following page has "Latest results" across every followed player, and the Stats tab
+switches between the source's numbers and form over the last 10 or 5 results (per sport: record,
+apps, goals and assists; points, rebounds, assists and shooting; runs, average and wickets; sets;
+chess score).
 
-**Done when**
-- The Results tab lists the whole current season (and the last one) with "load more", newest first,
-  each row opening the game: final score, the player's full line, and a link to the source.
-- The Following page has a "Latest results" section across every followed player.
-- Stats can be filtered by the results shown (last 5 / last 10 / season).
+Older results come from a rate-limited history lane (`sports_follow/history.py`): at most 20 source
+requests a minute system-wide. It fills in missing scorecards newest first, then reads, once, what
+the refresh window doesn't reach:
 
-**Notes.** The data is mostly already fetched: football and basketball team schedules carry the
-whole season; tennis and chess need the look-back widened (6 weeks of draws, 60 days of
-broadcasts today); cricket reads 30 days of day feeds and would need more (cached for good once a
-day is over). Finished games are already stored as events with a final state and player line, so
-this is a paged read over `event` + `player_line`, not new scraping.
+| Sport | History |
+|---|---|
+| Football, basketball | This season and last (team schedules for club and country) |
+| Tennis | A year of weekly draws |
+| Cricket | Six months of daily feeds |
+| Chess | Two months of broadcasts (Lichess's one request a second makes more slow) |
+
+History also grows by itself: a game stays stored after it drops out of the source's window.
+
+**Next**
+- Older chess history, a few Lichess requests a minute.
+- Filters on the Results tab (competition, home/away, wins only).
+- Season-by-season totals once there's more than a season stored.
 
 ### 2. Push notifications for interesting moments (built)
 

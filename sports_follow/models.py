@@ -140,6 +140,7 @@ class SourceBinding(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     priority: Mapped[int] = mapped_column(Integer, default=0)
     health: Mapped[dict] = mapped_column(JSONB, default=dict)  # last_ok, failures, checked_at
+    history: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # older results read so far (history.py)
     created_at: Mapped[datetime] = _now()
 
 
@@ -174,6 +175,9 @@ class EventPlayer(Base):
 
     event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"), primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True, index=True)
+    # Once the event is over: the result from this player's side ({title, result, date,
+    # player_contribution, competition, source_url, scorecard}), kept for their results history.
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class EventState(Base):

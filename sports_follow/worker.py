@@ -12,7 +12,7 @@ import logging
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import bus, engine, pipeline, registry, structured
+from . import bus, engine, history, pipeline, registry, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -45,6 +45,11 @@ async def engine_lane(ctx) -> None:
     await asyncio.to_thread(engine.run_lane)
 
 
+async def history_lane(ctx) -> None:
+    """Older results and missing scorecards, a few source requests a minute (history.py)."""
+    await asyncio.to_thread(history.run)
+
+
 def _import_registry() -> None:
     if not bus.try_lock("registry-import", 6 * 3600):
         return  # the last week's run (or one started by hand) is still going
@@ -71,12 +76,14 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("refresh_live", player_id)
     if await asyncio.to_thread(engine.needs_lane):
         await ctx["redis"].enqueue_job("engine_lane", _job_id="engine-lane")
+    if await asyncio.to_thread(history.has_work):
+        await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
     if due.builds or due.refreshes or due.polls or due.lives:
         log.info("tick: %d builds, %d refreshes, %d polls, %d agent live checks", len(due.builds), len(due.refreshes), len(due.polls), len(due.lives))
 
 
 class WorkerSettings:
-    functions = [build_card, refresh_live, refresh_structured, poll_event, engine_lane]
+    functions = [build_card, refresh_live, refresh_structured, poll_event, engine_lane, history_lane]
     cron_jobs = [
         cron(tick, second=0, run_at_startup=True),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),

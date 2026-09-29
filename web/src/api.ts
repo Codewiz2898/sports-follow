@@ -89,7 +89,32 @@ export interface RecentResult {
   player_contribution?: string | null
   competition?: string | null
   source_url?: string | null
+  event_id?: number | null
+  scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
 }
+
+/** A page of a player's results history, newest first (sports_follow/results.py). */
+export interface ResultsPage {
+  results: RecentResult[]
+  next: string | null
+  total: number
+  filling: boolean  // older results or scorecards are still being read
+  pages_left: number | null
+  since: string | null
+}
+
+/** One finished game in full, from the player's side. */
+export interface GameDetail extends RecentResult {
+  venue?: string | null
+  start_utc?: string | null
+  score?: string | null
+  clock?: string | null
+  line?: { headline: string; stats: Stat[] } | null
+}
+
+export interface LatestResult extends RecentResult { player_id: number; player_name: string }
+
+export interface Form { stats: Stat[]; note: string; count: number }
 
 export interface Card {
   player_id: number
@@ -209,6 +234,11 @@ export const api = {
     }),
   unfollow: (playerId: number) => request<{ ok: boolean }>(`/api/follows/${playerId}`, { method: 'DELETE' }),
   card: (playerId: number) => request<Card>(`/api/players/${playerId}/card`),
+  results: (playerId: number, before?: string | null) =>
+    request<ResultsPage>(`/api/players/${playerId}/results${before ? `?before=${encodeURIComponent(before)}` : ''}`),
+  result: (playerId: number, eventId: number) => request<GameDetail>(`/api/players/${playerId}/results/${eventId}`),
+  form: (playerId: number, last: number) => request<Form>(`/api/players/${playerId}/form?last=${last}`),
+  latestResults: (limit = 6) => request<{ results: LatestResult[] }>(`/api/me/results?limit=${limit}`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
