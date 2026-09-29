@@ -30,10 +30,11 @@ log = logging.getLogger("sports_follow.structured")
 
 # Card sections a bound player's source owns; an agent rebuild keeps them as they are.
 OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_note", "provenance")
+BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo"}
-NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess"}
+NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
 def _now() -> datetime:
@@ -60,6 +61,74 @@ def _teams_overlap(found: list[str], known: list[str]) -> bool:
     return any(x in y or y in x for x in a for y in b)
 
 
+# ---------------------------------------------------------------- recognizing a name without the agent
+
+# FIDE's list holds about a million players, most of them amateurs; a typed name is only taken to
+# mean a chess player straight away if they're titled or rated 2200+.
+CHESS_TITLES = {"GM", "IM", "WGM", "WIM", "FM", "WFM"}
+
+
+def _name_key(name: str) -> list[str]:
+    return sorted(espn.fold(name).replace("-", " ").replace(".", " ").split())
+
+
+def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
+    """The one athlete a typed name means, found in the structured sources alone, or None.
+
+    Only a full name that exactly one source claims counts: "Caitlin Clark" yes; "Clark", a typo,
+    or a name two sports share go to the research agent, which decides as before.
+    """
+    wanted = _name_key(query)
+    if len(wanted) < 2:
+        return None
+    # Two athletes anywhere on ESPN with this exact name (any sport, supported or not) is a question
+    # for the agent: "John Smith" is dozens of people, and the first one found is rarely the one meant.
+    try:
+        search = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit=10", ttl=3600)
+    except AdapterError:
+        return None
+    namesakes = [item for group in search.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if _name_key(item.get("displayName", "")) == wanted]
+    if len(namesakes) > 1:
+        # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
+        # star). One professional among college namesakes is the one a fan means.
+        pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
+        if len(pros) != 1:
+            log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
+            return None
+        namesakes = pros
+    found = []
+    for adapter in ADAPTERS.values():
+        if adapter.system == "lichess_chess":
+            continue
+        try:
+            ref = adapter.find_player(query)
+        except AdapterError:
+            continue
+        # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
+        # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
+        # the adapter's own lookup happened to reach.
+        if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
+            found.append((adapter, ref))
+    if len(found) == 1:
+        return found[0]
+    if found or namesakes:
+        # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
+        log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
+        return None
+    chess = ADAPTERS.get("lichess_chess")
+    try:
+        ref = chess.find_player(query) if chess else None
+        if ref:
+            from .adapters import lichess_chess
+
+            record = lichess_chess.get_json(f"{lichess_chess.API}/fide/player/{ref.athlete_id}", ttl=12 * 3600)
+            if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
+                return chess, ref
+    except AdapterError:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------- binding
 
 
@@ -81,8 +150,9 @@ def bind(player_id: int) -> bool:
     if ref is None:
         log.info("bind %s: %s has no athlete named %r", player_id, adapter.system, name)
         return False
-    # The name matched; a team the agent also named makes it certain.
-    confidence = 1.0 if _teams_overlap(ref.team_names, teams) else 0.8
+    # The name matched; a team the agent also named, or (individual sports) the same full name, makes it certain.
+    same_name = sorted(espn.fold(ref.name).split()) == sorted(espn.fold(name).split())
+    confidence = 1.0 if _teams_overlap(ref.team_names, teams) or (not teams and same_name) else 0.8
     known = {espn.team_key(t) for t in ref.team_names}
     ref.other_teams = [t for t in teams if t and espn.team_key(t) not in known]
 
@@ -115,11 +185,20 @@ def bind(player_id: int) -> bool:
 
 
 def refresh(player_id: int) -> None:
-    """Re-read a bound player's fixtures, recent results and stats from the source and publish the card."""
+    """Re-read a bound player's fixtures, recent results and stats from the source and publish the card.
+
+    A player followed before their sport had an adapter is bound here first; a lookup that finds
+    nobody isn't retried for BIND_RETRY seconds.
+    """
     lock = f"structured:{player_id}"
     if not bus.try_lock(lock, 300):
         return
     try:
+        with session() as db:
+            bound = binding(db, player_id) is not None
+        if not bound:
+            if not bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) or not bind(player_id):
+                return
         _refresh(player_id)
     except AdapterError as exc:
         log.warning("refresh %s failed: %s", player_id, exc)
@@ -142,6 +221,12 @@ def _refresh(player_id: int) -> None:
 
     now = _now()
     fixtures = adapter.fixtures(ref)
+    # A schedule can lag the match by its cache age; a game our poller saw finish is finished.
+    with session() as db:
+        seen_final = set(db.scalars(select(Event.key).where(Event.key.in_([f"{adapter.system}:{f.source_id}" for f in fixtures]), Event.status == "final")))
+    for f in fixtures:
+        if f"{adapter.system}:{f.source_id}" in seen_final:
+            f.status = "final"
     finals = [f for f in fixtures if f.status == "final"][-RECENT_LIMIT:]
     # A "scheduled" game long past its start is one the source never updated: leave it out.
     ahead = [f for f in fixtures if f.status != "final" and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))][:UPCOMING_LIMIT]
@@ -193,6 +278,18 @@ def _refresh(player_id: int) -> None:
     bus.store_card(player_id, card)
 
 
+_ORDER = {"scheduled": 0, "postponed": 0, "armed": 1, "live": 2, "final": 3}
+
+
+def next_status(current: str | None, from_schedule: str) -> str:
+    """An event's status after a schedule read. Schedules can be minutes old, so a read never moves a
+    game backwards: it doesn't un-arm one or reopen one the poller saw finish. A postponed game can
+    come back as scheduled."""
+    if current is None or current == "postponed" or _ORDER.get(from_schedule, 0) >= _ORDER.get(current, 0):
+        return from_schedule
+    return current
+
+
 def _upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> Event:
     key = f"{adapter.system}:{f.source_id}"
     event = db.scalar(select(Event).where(Event.key == key))
@@ -206,9 +303,7 @@ def _upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> 
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    # A schedule read may be minutes old: it never un-arms a game or overrides the poller mid-match.
-    if f.status != "scheduled" or event.status not in ("armed", "live"):
-        event.status = f.status
+    event.status = next_status(event.status, f.status)
     db.flush()
     db.execute(insert(EventPlayer).values(event_id=event.id, player_id=player.id).on_conflict_do_nothing())
     return event
@@ -266,7 +361,8 @@ def _result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Eve
     contribution = line.headline if line else (NO_LINE.get(snap.state.get("kind"), "No stats") if snap and snap.lines else None)
     return {
         "title": f"{f.title} · {f.detail}" if f.detail else f.title,
-        "result": adapter.result_label(f, ref.team_ids),
+        # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
+        "result": adapter.result_label(f, ref.team_ids) or (snap and (snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label)) or "",
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
         "player_contribution": contribution,
         "competition": f.competition,

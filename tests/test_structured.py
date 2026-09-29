@@ -65,3 +65,14 @@ def test_unused_sub_in_a_final_football_match():
     first = c["recent_results"][0]
     assert first["result"] == "Norway 1 – 2 Portugal"
     assert first["player_contribution"] == "On the bench"
+
+
+def test_a_schedule_read_never_moves_a_game_backwards():
+    # Egypt v South Sudan: the poller saw full time, then a 30-minute-old schedule still said "live".
+    assert structured.next_status("final", "live") == "final"
+    assert structured.next_status("live", "scheduled") == "live"
+    assert structured.next_status("armed", "scheduled") == "armed"
+    assert structured.next_status("scheduled", "live") == "live"
+    assert structured.next_status("live", "final") == "final"
+    assert structured.next_status("postponed", "scheduled") == "scheduled"  # rescheduled
+    assert structured.next_status(None, "scheduled") == "scheduled"

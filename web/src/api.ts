@@ -26,6 +26,28 @@ export interface CricketState {
   player_of_match?: string | null
 }
 
+export interface BasketballSide { id: string; name: string; abbr?: string | null; score: string; periods: string[]; winner?: boolean | null }
+export interface BasketballState { kind: 'basketball'; home: BasketballSide; away: BasketballSide; period?: number | null; clock?: string | null; detail?: string | null; note?: string | null }
+
+export interface TennisSet { games: number; tiebreak?: number | null; won?: boolean | null }
+export interface TennisPlayer { id: string; name: string; short: string; country?: string | null; seed?: number | null; serving: boolean; winner?: boolean | null; sets: TennisSet[] }
+export interface TennisState { kind: 'tennis'; players: TennisPlayer[]; set?: number | null; round?: string | null; tournament?: string | null }
+
+export interface ChessSide { id: string; name: string; title?: string | null; rating?: number | null; fed?: string | null; clock?: string | null }
+export interface ChessState {
+  kind: 'chess'
+  round?: string | null
+  tournament?: string | null
+  white?: ChessSide
+  black?: ChessSide
+  fen?: string
+  last_move?: string | null
+  turn?: 'white' | 'black'
+  move?: number | null
+  result?: string | null
+  match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
+}
+
 export interface Moment { clock: string; kind: string; text: string; athlete_ids: string[] }
 
 export interface LiveStatus {
@@ -40,7 +62,7 @@ export interface LiveStatus {
   event_id?: number
   competition?: string | null
   headline?: string | null
-  state?: FootballState | CricketState
+  state?: FootballState | CricketState | BasketballState | TennisState | ChessState
   moments?: Moment[]
   source?: string
 }
@@ -87,6 +109,9 @@ export interface Card {
   sources?: string[]
   freshness?: Partial<Record<'live' | 'fixtures' | 'stats' | 'news', string>>
   following?: boolean
+  // Published from a live source before the research agent finished: what's still coming, or why it didn't.
+  pending?: string[]
+  pending_error?: string
 }
 
 export type StreamEvent =

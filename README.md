@@ -20,7 +20,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
-                              llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (cricket, football)
+                              llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
+                                                                              └─▶ Lichess API (chess)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
@@ -30,11 +31,21 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Structured sources where they exist, the agent everywhere else.** After the agent says who a
   player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
-  score; the agent keeps the profile and news. Cricket and football come from ESPN's public JSON
-  endpoints (ESPNcricinfo ids for cricket); other sports still get everything from the agent.
+  score; the agent keeps the profile and news. A player followed before their sport had an adapter is
+  bound by the next scheduled refresh.
+
+  | Sport | Source | Fixtures | Live | Stats |
+  |---|---|---|---|---|
+  | Football | ESPN | club + national team schedules | score, scorers, cards, player line | season totals |
+  | Cricket | ESPN (ESPNcricinfo ids) | day-by-day calendar, filtered by squad | innings, player's batting/bowling | recent form from scorecards |
+  | Basketball | ESPN (NBA, WNBA, NCAA) | team schedule, every phase | score, quarters, box-score line | season averages |
+  | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
+  | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
+
+  Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
   30 minutes before one starts it is armed; one `poll_event` job then polls it (every minute before
-  kick-off, every 8–10 s in play), appends event states and player lines, and pushes every followed
+  kick-off, every 8–15 s in play), appends event states and player lines, and pushes every followed
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
@@ -92,6 +103,11 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
   scorecards in the last 30 days. Domestic matches often have no scorecard, so no player line.
 - Football: national-team games show up for every player of that nationality's team; a player who
   isn't called up sees "Not in the matchday squad" rather than the game being hidden.
-- Tennis, chess, basketball and every other sport still come from the agent alone, with its generic
-  scoreboard and events deduplicated by sport, title and date.
+- Tennis: ESPN has no player schedule or match summary, so matches are read from tour scoreboards;
+  a player's next match appears only once the draw is made (a day or two ahead). Singles only.
+- Chess: Lichess relays most elite and many open events, but not every tournament. A player's events
+  are found from their Lichess FIDE page and broadcast search; Lichess rate-limits hard, so reads are
+  one request a second and a rate limit fails the refresh instead of dropping results.
+- Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
+  by sport, title and date.
 - Fans are anonymous (a cookie). Accounts, push notifications and alert rules come later.

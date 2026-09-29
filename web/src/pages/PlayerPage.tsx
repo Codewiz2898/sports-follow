@@ -107,6 +107,12 @@ export function PlayerPage() {
       ) : (
         <>
           {p.summary && <p className="muted" style={{ margin: 0, maxWidth: '70ch' }}>{p.summary}</p>}
+          {card.pending && (
+            <p className="small muted" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="spinner" />Scores and fixtures are live. Still gathering news and background, about two minutes.
+            </p>
+          )}
+          {card.pending_error && <p className="small muted" style={{ margin: 0 }}>News and background couldn't be gathered: {card.pending_error}</p>}
           {p.disambiguation && <p className="tiny muted" style={{ margin: 0 }}>{p.disambiguation}</p>}
 
           <div className="tabs" role="tablist" aria-label="Player sections">
