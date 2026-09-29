@@ -109,6 +109,7 @@ export interface Card {
   sources?: string[]
   freshness?: Partial<Record<'live' | 'fixtures' | 'stats' | 'news', string>>
   following?: boolean
+  alerts?: AlertLevel | null  // the fan's notification level for this player, when following
   // Published from a live source before the research agent finished: what's still coming, or why it didn't.
   pending?: string[]
   pending_error?: string
@@ -168,8 +169,16 @@ export interface AthletePreview {
 
 export interface Pick { system: string; athlete_id: string; league?: string | null; qid?: string | null }
 
+export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
+
+/** Something worth telling a player's fans (sports_follow/moments.py). */
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number; kind: string; level: 'key' | 'minor' }
+
+export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
+
 export type StreamEvent =
   | { type: 'card'; player_id: number; card: Card }
+  | { type: 'moment'; player_id: number; moment: PlayerMoment }
   | { type: 'progress'; player_id: number; message: string }
   | { type: 'moved'; from: number; to: number }
   | { type: 'live_error'; player_id: number; message: string }
@@ -209,6 +218,18 @@ export const api = {
     return request<AthletePreview | { player_id: number }>(`/api/athletes/${encodeURIComponent(system)}/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, { signal })
   },
   research: () => request<Research>('/api/me/research'),
+  setAlerts: (playerId: number, level: AlertLevel) =>
+    request<{ player_id: number; alerts: AlertLevel }>(`/api/follows/${playerId}/alerts`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ level }) }),
+  pushInfo: () => request<{ enabled: boolean; public_key: string | null }>('/api/push'),
+  pushSubscribe: (subscription: PushSubscriptionJSON, quiet: { start: string | null; end: string | null }) =>
+    request<PushSettings>('/api/push/subscriptions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ subscription, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, quiet_start: quiet.start, quiet_end: quiet.end }),
+    }),
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ ok: boolean }>('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) }),
+  pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
   config: () => request<{ model: string }>('/api/config'),
 }
 

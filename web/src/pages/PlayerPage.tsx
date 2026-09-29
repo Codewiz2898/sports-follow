@@ -5,6 +5,7 @@ import { Avatar, BuildProgress, LiveScoreboard, NewsList, ResultsList, SourceNot
 import { BackIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { relative, sportName } from '../format'
 import { useFollowing } from '../following'
+import { AlertSelect } from '../notifications'
 
 type Tab = 'live' | 'fixtures' | 'news' | 'stats' | 'results'
 
@@ -101,6 +102,13 @@ export function PlayerPage() {
           {isFollowing ? <><CheckIcon width={16} height={16} />Following</> : <><PlusIcon width={16} height={16} />Follow</>}
         </button>
       </header>
+      {isFollowing && (
+        <div className="row" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+          <label className="small muted" htmlFor="player-alerts">Notify me about</label>
+          <AlertSelect id="player-alerts" value={following.byId(playerId)?.alerts ?? card.alerts ?? 'key'} onChange={(level) => following.setAlerts(playerId, level)} />
+          <Link to="/notifications" className="small">Notification settings</Link>
+        </div>
+      )}
 
       {card.status !== 'ready' ? (
         <BuildProgress card={card} messages={progress} onRetry={retry} />

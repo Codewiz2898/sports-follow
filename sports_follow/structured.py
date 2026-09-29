@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, registry
+from . import bus, moments, notify, registry
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, for_sport
 from .config import POLL_SESSION
 from .db import session
@@ -482,10 +482,12 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
 
     now = _now()
     published: list[tuple[int, dict[str, Any]]] = []
+    new_moments: list[int] = []
     with session() as db:
         event = db.get(Event, event_id)
         if event is None:
             return "idle", 0, False
+        people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
         if changed:
@@ -497,11 +499,20 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
             line = snap.lines.get(athlete_id)
             line_json = {"headline": line.headline, "stats": line.stats} if line else None
             line_changed = False
+            last = db.scalar(select(PlayerLine).where(PlayerLine.event_id == event_id, PlayerLine.player_id == player_id).order_by(PlayerLine.as_of.desc()).limit(1))
             if line_json is not None:
-                last = db.scalar(select(PlayerLine).where(PlayerLine.event_id == event_id, PlayerLine.player_id == player_id).order_by(PlayerLine.as_of.desc()).limit(1))
                 line_changed = last is None or last.stats != line_json
                 if line_changed:
                     db.add(PlayerLine(event_id=event_id, player_id=player_id, as_of=now, stats=line_json))
+            # What happened to this player since the last poll. A first look at a game already under
+            # way (no earlier state, or no earlier line for them while it was live) is the baseline.
+            if changed or line_changed:
+                before = None
+                if latest is not None and not (last is None and latest.status == "live"):
+                    before = moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
+                name, sport = people.get(player_id, ("", ""))
+                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines))
+                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue
@@ -518,6 +529,7 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
             published.append((player_id, card))
     for player_id, card in published:
         bus.store_card(player_id, card)
+    notify.dispatch(new_moments)
     if published:
         log.info("poll %s: %s | %s -> %d card(s)", event_id, snap.score_label, snap.clock_label, len(published))
     wait = int(live_binding.get("cadence") or 10) if snap.status == "live" else 60

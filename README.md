@@ -72,6 +72,21 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kick-off, every 8–15 s in play), appends event states and player lines, and pushes every followed
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players.
+- **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
+  service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
+  "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
+  shows the last update of your players; live scores and streams always go to the network. A new
+  version waits for the fan to tap Reload, so a game in progress isn't cut off. For the Play Store the
+  same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
+  package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
+  are set.
+- **Push notifications for moments.** Each poll compares the player's line with the last one
+  (`sports_follow/moments.py`): a goal, a fifty, 30 points, a set, the start and the result; news
+  from a rebuild adds injuries, transfers and retirements. A moment is stored once (a stable key), then
+  sent by Web Push (`sports_follow/notify.py`, VAPID) to every device of every follower whose level
+  for that player wants it: key moments (the default), everything, results only, or off. Quiet hours
+  are per device and make notifications arrive silently. With the app open and in front, the moment
+  shows as an in-app toast instead. Devices the push service reports gone are removed.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 
@@ -85,6 +100,7 @@ docker compose up -d                                   # Postgres :5433, Redis :
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/alembic upgrade head
 .venv/bin/python -m sports_follow.registry     # the player registry; ~90 min, then weekly by the worker
+.venv/bin/python -m sports_follow.notify keys  # push keys, once (kept in ~/.config/sports-follow)
 cd web && npm install && cd ..
 ```
 
@@ -96,7 +112,9 @@ Then three processes:
 cd web && npm run dev                                              # app on http://localhost:5173
 ```
 
-For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself. Always pass
+For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself (with the
+service worker, manifest and icons; try installing it from http://localhost:8421). Notifications need
+that build too: turn them on under Notifications in the sidebar. Always pass
 `--timeout-graceful-shutdown`: fans' live streams never close on their own, so without it a restart waits forever.
 
 | Env var | Default | |
@@ -111,6 +129,32 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job runs before handing over |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
+| `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
+| `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
+
+## Android app
+
+`android/` holds the Android app: a Trusted Web Activity, Google's standard way to ship a web app on
+the Play Store. It opens the site full screen with Chrome's engine, so the app updates with the site
+and gets web push notifications as Android notifications. `android/twa-manifest.json` is the source
+(package `io.github.codewiz2898.sportsfollow`, colors, icons, version); `android/generate.mjs` builds
+the Gradle project from it with Bubblewrap's library. The generated project isn't committed.
+
+Needs JDK 17 and the Android SDK (platform 36, build tools 36.1.0):
+
+```bash
+cd android && npm install
+SITE=http://localhost:8421 node generate.mjs            # icons from the local build; omit once hosted
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+./gradlew assembleDebug -PlaunchUrl=http://localhost:8421/
+adb reverse tcp:8421 tcp:8421                           # the phone reaches this Mac's server over USB
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Until the site is hosted on HTTPS with `/.well-known/assetlinks.json`, Android can't verify the app
+owns the site, so it shows a thin address bar at the top; hosted and verified, it's full screen. The
+Play Store build (`./gradlew bundleRelease`, signed with an upload key kept outside the repo) waits
+for hosting and a Google Play developer account, and ships to closed testing first.
 
 ## Design
 
@@ -134,8 +178,9 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
 - Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's
   scorecards in the last 30 days. Domestic matches often have no scorecard, so no player line.
 - Football: national-team games show up for every player of that nationality's team; a player who
-  isn't called up sees "Not in the matchday squad" rather than the game being hidden. Women's players
-  follow their club only: ESPN's search can't tell a women's national team from the men's.
+  isn't called up sees "Not in the matchday squad" rather than the game being hidden, and gets no
+  notification for its result. Women's players follow their club only: ESPN's search can't tell a
+  women's national team from the men's.
 - Tennis: ESPN has no player schedule or match summary, so matches are read from tour scoreboards;
   a player's next match appears only once the draw is made (a day or two ahead). Singles only.
 - Chess: Lichess relays most elite and many open events, but not every tournament. A player's events
@@ -143,4 +188,8 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
   one request a second and a rate limit fails the refresh instead of dropping results.
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
-- Fans are anonymous (a cookie). Accounts, push notifications and alert rules come later.
+- Fans are anonymous (a cookie), so each browser or phone is its own fan: following and notification
+  levels don't carry across devices until accounts exist.
+- Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
+  and there are no lock-screen live scores (Live Activities) or Android ongoing live-score
+  notifications; those need a native app. Chess has start and result only, not engine swings.

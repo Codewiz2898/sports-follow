@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, subscribe, type Card, type FollowTarget, type StreamEvent } from './api'
+import { api, subscribe, type AlertLevel, type Card, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
+import { wanted } from './notifications'
 
 interface FollowingState {
   cards: Card[]
@@ -9,10 +10,14 @@ interface FollowingState {
   unfollow: (playerId: number) => Promise<void>
   isFollowing: (playerId: number) => boolean
   byId: (playerId: number) => Card | undefined
+  setAlerts: (playerId: number, level: AlertLevel) => Promise<void>
+  moments: PlayerMoment[]  // moments to show as toasts while the app is open
+  dismissMoment: (id: number) => void
 }
 
 const Ctx = createContext<FollowingState | null>(null)
 const MAX_PROGRESS = 8
+const TOAST_MS = 8000
 
 /**
  * The fan's followed players, kept live over ONE stream (/api/me/stream) for all of them.
@@ -22,6 +27,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([])
   const [loaded, setLoaded] = useState(false)
   const [progress, setProgress] = useState<Record<number, string[]>>({})
+  const [moments, setMoments] = useState<PlayerMoment[]>([])
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const cardsRef = useRef(cards)
   cardsRef.current = cards
@@ -34,6 +40,13 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
+    } else if (e.type === 'moment') {
+      // With the app in front the service worker skips the system notification, so the toast
+      // follows the same per-player level the push does.
+      const level = cardsRef.current.find((c) => c.player_id === e.moment.player_id)?.alerts ?? 'key'
+      if (!wanted(level, e.moment)) return
+      setMoments((m) => (m.some((x) => x.id === e.moment.id) ? m : [...m, e.moment].slice(-3)))
+      window.setTimeout(() => setMoments((m) => m.filter((x) => x.id !== e.moment.id)), TOAST_MS)
     } else if (e.type === 'progress') {
       setProgress((p) => ({ ...p, [e.player_id]: [...(p[e.player_id] ?? []), e.message].slice(-MAX_PROGRESS) }))
     } else if (e.type === 'moved') {
@@ -61,6 +74,13 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     setCards((prev) => prev.filter((c) => c.player_id !== playerId))
   }, [])
 
+  const setAlerts = useCallback(async (playerId: number, level: AlertLevel) => {
+    await api.setAlerts(playerId, level)
+    setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: level } : c)))
+  }, [])
+
+  const dismissMoment = useCallback((id: number) => setMoments((m) => m.filter((x) => x.id !== id)), [])
+
   const value = useMemo<FollowingState>(() => ({
     cards,
     loaded,
@@ -69,7 +89,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     unfollow,
     isFollowing: (id) => cardsRef.current.some((c) => c.player_id === id),
     byId: (id) => cardsRef.current.find((c) => c.player_id === id),
-  }), [cards, loaded, progress, follow, unfollow])
+    setAlerts,
+    moments,
+    dismissMoment,
+  }), [cards, loaded, progress, follow, unfollow, setAlerts, moments, dismissMoment])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

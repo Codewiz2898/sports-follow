@@ -258,3 +258,40 @@ class PlayerCard(Base):
     live_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     player: Mapped[Player] = relationship(back_populates="card")
+
+
+class Moment(Base):
+    """Something worth telling a player's fans (moments.py): a goal, a fifty, a set, a result, an
+    injury. The key makes each one happen once, however many polls see it."""
+
+    __tablename__ = "moment"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(String(30))  # start | final | goal | assist | red | on | fifty | hundred | ...
+    level: Mapped[str] = mapped_column(String(10))  # key | minor
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(String(300), default="/")
+    created_at: Mapped[datetime] = _now()
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PushSubscription(Base):
+    """One device a fan turned notifications on for (Web Push), with its quiet hours."""
+
+    __tablename__ = "push_subscription"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    quiet_start: Mapped[str | None] = mapped_column(String(5))  # "22:00", in the device's timezone
+    quiet_end: Mapped[str | None] = mapped_column(String(5))  # "07:00"
+    created_at: Mapped[datetime] = _now()
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failures: Mapped[int] = mapped_column(Integer, default=0)

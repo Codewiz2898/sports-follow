@@ -3,3 +3,18 @@ __pycache__/
 .env
 web/node_modules/
 web/dist/
+
+# Android (the project is generated from android/twa-manifest.json by android/generate.mjs)
+android/node_modules/
+android/app/
+android/gradle*
+android/build.gradle
+android/settings.gradle
+android/gradle.properties
+android/.gradle/
+android/build/
+android/local.properties
+android/store_icon.png
+android/manifest-checksum.txt
+*.keystore
+*.jks

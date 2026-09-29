@@ -22,10 +22,19 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Indexes created by hand in migrations (trigram and JSONB GIN indexes) aren't in the models;
+# autogenerate must not offer to drop them.
+MANUAL_INDEXES = {"ix_player_alias_trgm", "ix_athlete_search_trgm", "ix_athlete_ids"}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    return not (type_ == "index" and name in MANUAL_INDEXES)
+
+
 def run_migrations_online() -> None:
     connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(connection=connection, target_metadata=target_metadata, include_object=include_object)
         with context.begin_transaction():
             context.run_migrations()
 

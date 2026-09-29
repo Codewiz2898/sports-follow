@@ -21,7 +21,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, structured
+from . import bus, moments, notify, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .db import session
 from .models import (
@@ -243,19 +243,34 @@ def _write_live(db: Session, player: Player, live: dict[str, Any], as_of: dateti
     db.add(PlayerLine(event_id=event.id, player_id=player.id, as_of=as_of, stats={s["label"]: s["value"] for s in live.get("player_stats", [])}))
 
 
-def _write_news(db: Session, player: Player, items: list[dict[str, Any]]) -> None:
+def _write_news(db: Session, player: Player, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Store the report's news; returns the items new to this player."""
+    fresh = []
     for item in items:
         url = item.get("url") or ""
         digest = hashlib.sha256((url or item.get("headline", "")).strip().lower().encode()).hexdigest()
         stmt = (
             insert(NewsItem)
-            .values(dedupe_hash=digest, headline=item.get("headline", ""), summary=item.get("summary", ""), source=item.get("source", ""), url=url, published=_parse_time(item.get("published")))
+            .values(dedupe_hash=digest, headline=item.get("headline", ""), summary=item.get("summary", ""), source=item.get("source", ""), url=url, published=_parse_time(item.get("published")), kind=moments.news_kind(item.get("kind")))
             .on_conflict_do_nothing()
             .returning(NewsItem.id)
         )
         news_id = db.scalar(stmt) or db.scalar(select(NewsItem.id).where(NewsItem.dedupe_hash == digest))
-        if news_id:
-            db.execute(insert(NewsPlayer).values(news_id=news_id, player_id=player.id).on_conflict_do_nothing())
+        if news_id and db.scalar(insert(NewsPlayer).values(news_id=news_id, player_id=player.id).on_conflict_do_nothing().returning(NewsPlayer.news_id)):
+            fresh.append({**item, "news_id": news_id})
+    return fresh
+
+
+def news_moments(name: str, items: list[dict[str, Any]], now: datetime) -> list[moments.Found]:
+    """Injuries, transfers and retirements in a rebuild's new stories, published in the last three days."""
+    found = []
+    for item in items:
+        kind = moments.news_kind(item.get("kind"))
+        published = _parse_time(item.get("published"))
+        if kind in moments.NEWS_KINDS and published and now - published <= timedelta(days=3):
+            title = {"injury": f"Injury news: {name}", "transfer": f"Transfer news: {name}", "retirement": f"{name} retires", "milestone": f"{name}: a milestone"}[kind]
+            found.append(moments.Found("news", moments.NEWS_KINDS[kind], title, item.get("headline", ""), f"n{item['news_id']}"))
+    return found
 
 
 def _card_from_report(player: Player, report: dict[str, Any], version: int, built_at: datetime) -> dict[str, Any]:
@@ -306,12 +321,14 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
             for u in report["upcoming"]:
                 _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
             _write_live(db, player, report["live"], now)
-        _write_news(db, player, report["news"])
+        fresh = _write_news(db, player, report["news"])
 
         card_row = db.get(PlayerCard, player.id)
         if card_row is None:
             card_row = PlayerCard(player_id=player.id, version=0)
             db.add(card_row)
+        # A first build's news is all "new"; only a rebuild's new stories are worth a notification.
+        new_moments = notify.record(db, player.id, None, news_moments(player.name, fresh, now)) if card_row.built_at else []
         version = (card_row.version or 0) + 1
         card = _card_from_report(player, report, version, now)
         if bound and card_row.status == "ready":
@@ -336,6 +353,7 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         bus.sync_redis().delete(bus.card_key(moved_from))
         bus.publish(moved_from, {"type": "moved", "from": moved_from, "to": landed})
     bus.store_card(landed, card)
+    notify.dispatch(new_moments)
     return landed
 
 
