@@ -72,6 +72,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kick-off, every 8–15 s in play), appends event states and player lines, and pushes every followed
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players.
+- **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
+  service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
+  "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
+  shows the last update of your players; live scores and streams always go to the network. A new
+  version waits for the fan to tap Reload, so a game in progress isn't cut off. For the Play Store the
+  same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
+  package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
+  are set.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 
@@ -96,7 +104,8 @@ Then three processes:
 cd web && npm run dev                                              # app on http://localhost:5173
 ```
 
-For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself. Always pass
+For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself (with the
+service worker, manifest and icons; try installing it from http://localhost:8421). Always pass
 `--timeout-graceful-shutdown`: fans' live streams never close on their own, so without it a restart waits forever.
 
 | Env var | Default | |
@@ -111,6 +120,30 @@ For a single-process deploy, `npm run build` in `web/` and the API serves the bu
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job runs before handing over |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
+
+## Android app
+
+`android/` holds the Android app: a Trusted Web Activity, Google's standard way to ship a web app on
+the Play Store. It opens the site full screen with Chrome's engine, so the app updates with the site
+and gets web push notifications as Android notifications. `android/twa-manifest.json` is the source
+(package `io.github.codewiz2898.sportsfollow`, colors, icons, version); `android/generate.mjs` builds
+the Gradle project from it with Bubblewrap's library. The generated project isn't committed.
+
+Needs JDK 17 and the Android SDK (platform 36, build tools 36.1.0):
+
+```bash
+cd android && npm install
+SITE=http://localhost:8421 node generate.mjs            # icons from the local build; omit once hosted
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+./gradlew assembleDebug -PlaunchUrl=http://localhost:8421/
+adb reverse tcp:8421 tcp:8421                           # the phone reaches this Mac's server over USB
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Until the site is hosted on HTTPS with `/.well-known/assetlinks.json`, Android can't verify the app
+owns the site, so it shows a thin address bar at the top; hosted and verified, it's full screen. The
+Play Store build (`./gradlew bundleRelease`, signed with an upload key kept outside the repo) waits
+for hosting and a Google Play developer account, and ships to closed testing first.
 
 ## Design
 

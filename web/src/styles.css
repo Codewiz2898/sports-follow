@@ -194,3 +194,11 @@ div.result-main { cursor: default; }
 }
 .search-panel .card { background: transparent; border: 0; }
 .search-panel .list { padding: 0 10px; }
+
+/* ---------------------------------------------------------------- installed app */
+.notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 12px; background: var(--raised); color: var(--muted); font-size: 13px; }
+.notice.action { color: var(--text); box-shadow: inset 0 0 0 1px var(--action); }
+@media (min-width: 1024px) { .mobile-only { display: none !important; } }
+/* Installed on a phone: no browser bar above, so the page starts below the status bar. */
+@media (display-mode: standalone) { .main { padding-top: calc(16px + env(safe-area-inset-top, 0px)); } }
+

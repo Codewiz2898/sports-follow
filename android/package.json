@@ -1,0 +1,11 @@
+{
+  "name": "sports-follow-android",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "devDependencies": {
+    "@bubblewrap/core": "1.25.0"
+  }
+}

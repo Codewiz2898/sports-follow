@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from . import bus, pipeline, registry, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
-from .config import FAN_COOKIE, REDIS_URL
+from .config import ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
 from .db import get_db, session
 from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 
@@ -401,11 +401,38 @@ async def my_stream(request: Request, fan: str = Depends(fan_id), db: Session = 
     return _sse(_stream([bus.channel(i) for i in ids], [], request))
 
 
+# ---------------------------------------------------------------- the Android app
+
+
+@app.get("/.well-known/assetlinks.json")
+def assetlinks() -> list[dict[str, Any]]:
+    """Digital Asset Links: proves this site belongs to the Android app (a Trusted Web Activity), so
+    Android opens it full screen with no browser bar. Empty until the app's package and signing
+    certificate are configured."""
+    if not ANDROID_PACKAGE or not ANDROID_CERT_SHA256:
+        return []
+    return [{
+        "relation": ["delegate_permission/common.handle_all_urls"],
+        "target": {"namespace": "android_app", "package_name": ANDROID_PACKAGE, "sha256_cert_fingerprints": ANDROID_CERT_SHA256},
+    }]
+
+
 # ---------------------------------------------------------------- the built frontend (production)
+
+# Served fresh every time, so a new build reaches installed apps: the page, the service worker that
+# caches everything else, and the manifest.
+NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest"}
+MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png"}
 
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
     @app.get("/{path:path}")
     def spa(path: str) -> FileResponse:
-        return FileResponse(WEB_DIST / "index.html")
+        """Files the build puts at the root (service worker, manifest, icons); every other path is the app."""
+        root = WEB_DIST.resolve()
+        file = (root / path).resolve()
+        if not (path and file.is_file() and root in file.parents):
+            file = root / "index.html"
+        cache = "no-cache" if file.name in NO_CACHE else "public, max-age=86400"
+        return FileResponse(file, media_type=MEDIA.get(file.suffix), headers={"Cache-Control": cache})

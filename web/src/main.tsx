@@ -8,6 +8,7 @@ import { FollowingProvider, useFollowing } from './following'
 import { AthletePage } from './pages/AthletePage'
 import { FollowingPage } from './pages/FollowingPage'
 import { PlayerPage } from './pages/PlayerPage'
+import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
 import './styles.css'
 
@@ -94,6 +95,7 @@ function Sidebar() {
     <aside className="sidebar" aria-label="Followed players">
       <NavLink to="/" className="brand">Sports Follow</NavLink>
       <SidebarSearch />
+      <InstallButton compact />
       <span className="eyebrow">Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
@@ -109,6 +111,7 @@ function App() {
     <div className="shell">
       <Sidebar />
       <main className="main">
+        <PwaNotices />
         <Routes>
           <Route path="/" element={<FollowingPage />} />
           <Route path="/search" element={<SearchPage />} />
@@ -127,9 +130,11 @@ function App() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <FollowingProvider>
-        <App />
-      </FollowingProvider>
+      <PwaProvider>
+        <FollowingProvider>
+          <App />
+        </FollowingProvider>
+      </PwaProvider>
     </BrowserRouter>
   </StrictMode>,
 )

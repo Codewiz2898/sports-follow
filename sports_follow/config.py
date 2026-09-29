@@ -22,3 +22,8 @@ FIXTURES_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_FIXTURES_MAX_AGE", 30 * 60)
 POLL_SESSION = int(os.environ.get("SPORTS_FOLLOW_POLL_SESSION", 10 * 60))
 
 FAN_COOKIE = "sf_fan"
+
+# The Android app (a Trusted Web Activity wrapping the web app): its package name and the SHA-256
+# fingerprints of its signing certificates (comma separated), published at /.well-known/assetlinks.json.
+ANDROID_PACKAGE = os.environ.get("SPORTS_FOLLOW_ANDROID_PACKAGE", "")
+ANDROID_CERT_SHA256 = [x.strip() for x in os.environ.get("SPORTS_FOLLOW_ANDROID_CERT_SHA256", "").split(",") if x.strip()]

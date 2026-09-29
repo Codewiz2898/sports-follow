@@ -74,19 +74,21 @@ is offered last and capped at 3 per fan per day.
   namesake only ESPN has (the Malaysian-league footballer Nikola Jokić) no longer shows beside the star.
 - Browse by team or league (who plays for the Indiana Fever?).
 
-### 4. Android app
+### 4. Android app (steps 1 and 2 under way)
 
-**Today.** The web app works in Android's browser (the layout is built for phones, with a bottom
-nav), but it isn't installable, can't notify, and only runs on localhost.
+**Today.** The web app is installable (manifest, icons, service worker): Chrome offers "Install app",
+it opens full screen, starts offline with the last update, and offers new versions with a Reload
+button. `/.well-known/assetlinks.json` is ready for the Play Store wrapper. It still only runs on
+localhost, and can't notify yet.
 
 **Done when** a fan can install Sports Follow from the Play Store (or straight from the site), open it
 full screen from the home screen, and get notifications for their players.
 
 **Suggested path**, cheapest first:
-1. **Installable web app (PWA):** a manifest, icons and a service worker. Android offers "Install
-   app", and the same service worker is what Web Push (item 2) needs, so the two go together.
-2. **Play Store listing:** wrap the PWA as a Trusted Web Activity (Bubblewrap); one codebase, updates
-   ship with the website.
+1. **Installable web app (PWA): built.** The same service worker is what Web Push (item 2) needs.
+2. **Play Store app:** the PWA wrapped as a Trusted Web Activity (`android/`, built with Bubblewrap's
+   library); a test APK runs on a phone over USB. Next: hosting (HTTPS + assetlinks for full screen),
+   an upload key, a Play developer account, and a closed-testing release.
 3. **Native (Kotlin/Compose) only if needed** for what a web app can't do: home-screen widgets with
    live scores, or Android's ongoing live-score notifications.
 
