@@ -288,6 +288,7 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
             "kind": "chess",
             "round": rnd.get("name"),
             "tournament": tour.get("name"),
+            "game_id": game.get("id"),
             "white": white,
             "black": black,
             "fen": fen,

@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom'
 import { api, type AlertLevel, type PlayerMoment } from './api'
 
 export const LEVELS: { value: AlertLevel; label: string; hint: string }[] = [
-  { value: 'key', label: 'Key moments', hint: 'Goals, fifties and hundreds, big points games, wickets, starts, results, injuries and transfers' },
-  { value: 'everything', label: 'Everything', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set and milestones' },
+  { value: 'key', label: 'Key moments', hint: 'Goals, fifties and hundreds, big points games, wickets, a chess game turning, starts, results, injuries and transfers' },
+  { value: 'everything', label: 'Everything', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set, a chess edge, and milestones' },
   { value: 'results', label: 'Results only', hint: 'Just the final result' },
   { value: 'off', label: 'Off', hint: 'No notifications for this player' },
 ]

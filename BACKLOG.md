@@ -37,7 +37,7 @@ to end on an Android emulator and a phone (Chrome, through FCM), including tap-t
 | Cricket | 50 / 100 / 150 / 200, 3+ wickets, out with the score (key) |
 | Basketball | 30 / 40 / 50 / 60 points, triple-double (key); 20 points, double-double (everything) |
 | Tennis | Upset of a higher seed (key); each set won or lost (everything) |
-| Chess | Game starts, result |
+| Chess | Winning, in trouble, a turnaround (key); better, worse, level again (everything); from Stockfish |
 | News | Injury, transfer, retirement (key); milestone (everything), from a rebuild's news |
 
 Per player: key moments (default), everything, results only, off. Per device: quiet hours (silent,
@@ -49,8 +49,7 @@ hour late. Live moments expire after 15 minutes if the phone is offline; results
   Live Activities (lock-screen scores) need a native app. If iPhone matters at launch, a React Native
   (Expo) app reuses the web app's TypeScript and sends through the same `notify.deliver` step (FCM/APNs
   beside Web Push).
-- **Chess advantage** (engine eval past about ±2): Lichess's cloud eval covers popular positions; the
-  rest needs Stockfish in the worker.
+- An evaluation bar on the live chess board: the evaluation is already in the event state.
 - Game-winner in the last minute (basketball), match point (tennis), tournament won (chess).
 - A digest instead of a burst when several moments land in one poll.
 - Accounts, so a fan's levels follow them across devices.
