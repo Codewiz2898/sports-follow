@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, subscribe, type Card } from '../api'
-import { Avatar, BuildProgress, LiveScoreboard, NewsList, ResultsList, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
+import { Avatar, BuildProgress, LiveScoreboard, NewsList, SourceNote, UpcomingList } from '../components/Blocks'
 import { BackIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
+import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { relative, sportName } from '../format'
 import { useFollowing } from '../following'
 import { AlertSelect } from '../notifications'
@@ -158,14 +159,12 @@ export function PlayerPage() {
           {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
           {tab === 'stats' && (
             <div className="section">
-              <StatGrid stats={card.season_stats} />
-              <SourceNote provenance={card.provenance?.season_stats} note={card.season_stats_note} />
+              <StatsWithForm card={card} />
             </div>
           )}
           {tab === 'results' && (
             <div className="section">
-              <ResultsList items={card.recent_results} />
-              <SourceNote provenance={card.provenance?.recent_results} />
+              <ResultsHistory card={card} />
             </div>
           )}
 

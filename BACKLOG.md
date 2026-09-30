@@ -5,23 +5,33 @@ looks like, and the open questions.
 
 ## Requested
 
-### 1. Previous results: a player's full history
+### 1. Previous results: a player's full history (built)
 
-**Today.** The Results tab shows the player's last 5 finished games from their structured source
-(ESPN or Lichess), with the result from their side and their own line ("139* (88)", "38 PTS · 16
-REB", "Won the match 6–2"). Sports without an adapter show the agent's list.
+**Built.** Every finished game a source returns is kept as a result from the player's side
+(`event_player.result`) and never fetched again. The Results tab pages through the whole history,
+newest first ("Show more"), and each game opens to its final score, the player's full line and the
+source. The Following page has "Latest results" across every followed player, and the Stats tab
+switches between the source's numbers and form over the last 10 or 5 results (per sport: record,
+apps, goals and assists; points, rebounds, assists and shooting; runs, average and wickets; sets;
+chess score).
 
-**Done when**
-- The Results tab lists the whole current season (and the last one) with "load more", newest first,
-  each row opening the game: final score, the player's full line, and a link to the source.
-- The Following page has a "Latest results" section across every followed player.
-- Stats can be filtered by the results shown (last 5 / last 10 / season).
+Older results come from a rate-limited history lane (`sports_follow/history.py`): at most 20 source
+requests a minute system-wide. It fills in missing scorecards newest first, then reads, once, what
+the refresh window doesn't reach:
 
-**Notes.** The data is mostly already fetched: football and basketball team schedules carry the
-whole season; tennis and chess need the look-back widened (6 weeks of draws, 60 days of
-broadcasts today); cricket reads 30 days of day feeds and would need more (cached for good once a
-day is over). Finished games are already stored as events with a final state and player line, so
-this is a paged read over `event` + `player_line`, not new scraping.
+| Sport | History |
+|---|---|
+| Football, basketball | This season and last (team schedules for club and country) |
+| Tennis | A year of weekly draws |
+| Cricket | Six months of daily feeds |
+| Chess | Two months of broadcasts (Lichess's one request a second makes more slow) |
+
+History also grows by itself: a game stays stored after it drops out of the source's window.
+
+**Next**
+- Older chess history, a few Lichess requests a minute.
+- Filters on the Results tab (competition, home/away, wins only).
+- Season-by-season totals once there's more than a season stored.
 
 ### 2. Push notifications for interesting moments (built)
 
@@ -94,6 +104,35 @@ full screen from the home screen, and get notifications for their players.
 
 **Prerequisite.** The app needs a public HTTPS home (hosting for the API, worker, Postgres and Redis),
 which nothing has yet; a PWA, Web Push and a Play Store app all need it.
+
+### 5. Live scores at scale
+
+**Today.** Work grows with the number of games on, not with players or fans: one poll job per live
+game (every 8–15 s in play) is shared by every followed player in it and every fan, fetches are
+cached by URL, and each fan's app holds one stream for all their players. But each poll job holds
+one of the worker's 24 job slots (and a thread) for up to 10 minutes, mostly sleeping, so one worker
+process follows about 20 games at once; on a busy matchday the rest wait in the queue and go stale.
+Each open app also holds its own Redis subscription in the API. Today's load: 12 followed players,
+5 fans, a live game or two.
+
+**Done when** a matchday with hundreds of live games involving followed players keeps every score on
+its normal cadence, requests to sources grow with leagues and rounds rather than games, and the tick
+logs poll lag (how late each game's poll is) and requests per minute, so we see trouble coming.
+
+**Suggested path**, most needed first:
+1. **A scheduler loop per worker** instead of one sleeping job per game: one async loop keeps each
+   live game's next due time and polls with a concurrency cap, so a process handles hundreds of games;
+   games are split across worker processes by event id (the per-event lock already prevents doubles).
+2. **League scoreboards first (ESPN):** one scoreboard request covers every game in a league (score,
+   clock, status); fetch a match's full summary only when its scoreboard entry changed. About 10×
+   fewer requests to an API that isn't official and could block us.
+3. **Lichess's live stream** for broadcast rounds (`/api/stream/broadcast/round/{id}.pgn`, checked:
+   it streams moves as PGN) instead of polling under the one-request-a-second limit.
+4. **One shared Redis subscriber per API process**, fanned out in memory, and more API processes
+   behind a load balancer. Needed only past tens of thousands of fans online at once.
+
+The chess engine (item 2) is already one budgeted lane for the whole system; more lanes can be added
+by lock index if chess traffic outgrows it.
 
 ## Found while building (not yet scheduled)
 

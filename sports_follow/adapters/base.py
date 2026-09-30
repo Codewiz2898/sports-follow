@@ -8,7 +8,7 @@ tested against recorded responses without the network.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Protocol
 
 
@@ -93,6 +93,15 @@ class Adapter(Protocol):
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         """Season or recent-form stats, plus a short note on where they come from."""
+        ...
+
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        """Stretches of the player's past older than fixtures() reaches (last season's schedule, a
+        month of draws), each read once by history.py. A page's "cost" is its requests (default 1)."""
+        ...
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        """The finished fixtures in one page from history_pages()."""
         ...
 
 

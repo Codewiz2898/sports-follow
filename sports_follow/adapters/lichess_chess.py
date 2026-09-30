@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -453,6 +453,12 @@ class LichessChess:
             if games or listed:
                 out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        return []  # 60 days of broadcasts already cost a minute or two at Lichess's one request a second
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        return []
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}/broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)

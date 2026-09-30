@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from . import espn
@@ -276,6 +276,22 @@ class EspnSoccer:
                 for f in found:
                     seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        """Last season's schedule for each of the player's teams (the schedule names its season)."""
+        pages = []
+        for team_id in ref.team_ids:
+            try:
+                year = (espn.get_json(f"{espn.SITE}/soccer/all/teams/{team_id}/schedule", ttl=1800).get("season") or {}).get("year")
+            except AdapterError:
+                continue
+            if year:
+                pages.append({"team": team_id, "season": int(year) - 1})
+        return pages
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        data = espn.get_json(f"{espn.SITE}/soccer/all/teams/{page['team']}/schedule?season={page['season']}", ttl=24 * 3600)
+        return [f for f in parse_schedule(data) if f.status == "final"]
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         league, event = locator.get("league") or "all", locator["event"]

@@ -9,7 +9,7 @@ recent completed scorecards, which is exact for the matches it covers.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import espn
@@ -18,6 +18,7 @@ from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 SPORT_UID = "s:200~"
 DAYS_AHEAD = 14
 DAYS_BACK = 30  # enough completed matches for recent form
+HISTORY_DAYS = 180  # how far back history.py reads, once, ten days at a time
 
 _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
 
@@ -206,20 +207,29 @@ def match_format(fixture: Fixture) -> str | None:
 
 def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: str | None = None) -> tuple[list[dict[str, str]], str]:
     """Batting and bowling numbers over the player's recent completed matches, from their scorecards."""
-    runs = balls = outs = innings = hundreds = fifties = 0
-    best = None
-    wickets = conceded = 0
-    balls_bowled = 0
-    matches = 0
-    formats: list[str] = []
+    lines, formats = [], []
     for fixture, snap in recent:
         line = snap.lines.get(athlete_id)
         if line is None:
             continue
-        matches += 1
+        lines.append(line.stats)
         if (f := match_format(fixture)) and f not in formats:
             formats.append(f)
-        values = {s["label"]: s["value"] for s in line.stats}
+    if not lines:
+        return [], ""
+    kinds = fmt or " & ".join(formats)
+    note = f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from ESPNcricinfo scorecards"
+    return batting_bowling(lines), note
+
+
+def batting_bowling(lines: list[list[dict[str, str]]]) -> list[dict[str, str]]:
+    """Runs, average, strike rate, highest, 100s/50s, wickets and economy over some matches' lines."""
+    runs = balls = outs = innings = hundreds = fifties = 0
+    best = None
+    wickets = conceded = 0
+    balls_bowled = 0
+    for stats in lines:
+        values = {s["label"]: s["value"] for s in stats}
         if "Runs" in values:
             r = _int(values["Runs"].rstrip("*"))
             innings += 1
@@ -235,8 +245,6 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
             conceded += _int(values.get("Runs conceded"))
             whole, _, part = str(values.get("Overs", "0")).partition(".")
             balls_bowled += _int(whole) * 6 + _int(part or 0)
-    if not matches:
-        return [], ""
     stats = []
     if innings:
         stats += [
@@ -251,9 +259,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
             {"label": "Wickets", "value": str(wickets)},
             {"label": "Economy", "value": f"{conceded * 6 / balls_bowled:.2f}"},
         ]
-    kinds = fmt or " & ".join(formats)
-    note = f"Last {matches} match{'es' if matches != 1 else ''}{f' ({kinds})' if kinds else ''}, from ESPNcricinfo scorecards"
-    return stats, note
+    return stats
 
 
 # ---------------------------------------------------------------- the adapter
@@ -297,16 +303,28 @@ class EspnCricket:
         candidate is kept only if its squad or XI includes the player, or no squad is out yet.
         """
         now = datetime.now(timezone.utc)
+        return self._matches(ref, [now + timedelta(days=offset) for offset in range(-DAYS_BACK, DAYS_AHEAD + 1)])
 
-        def day(offset: int) -> list[Fixture]:
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        offsets = list(range(DAYS_BACK + 1, HISTORY_DAYS + 1))
+        return [{"days": [(anchor - timedelta(days=d)).strftime("%Y%m%d") for d in offsets[i:i + 10]], "cost": len(offsets[i:i + 10])} for i in range(0, len(offsets), 10)]
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        days = [datetime.strptime(d, "%Y%m%d").replace(tzinfo=timezone.utc) for d in page["days"]]
+        return [f for f in self._matches(ref, days) if f.status == "final"]
+
+    def _matches(self, ref: PlayerRef, days: list[datetime]) -> list[Fixture]:
+        """The player's matches on these days: their teams' matches, minus squads that leave them out."""
+
+        def day(when: datetime) -> list[Fixture]:
             try:
-                return self._day(now + timedelta(days=offset))
+                return self._day(when)
             except AdapterError:
                 return []
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             candidates: dict[str, Fixture] = {}
-            for fixtures in pool.map(day, range(-DAYS_BACK, DAYS_AHEAD + 1)):
+            for fixtures in pool.map(day, days):
                 for f in fixtures:
                     if involves_team(f, ref):
                         candidates.setdefault(f.source_id, f)

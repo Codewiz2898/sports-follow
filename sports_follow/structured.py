@@ -276,7 +276,8 @@ def _refresh(player_id: int) -> None:
     for f in fixtures:
         if f"{adapter.system}:{f.source_id}" in seen_final:
             f.status = "final"
-    finals = [f for f in fixtures if f.status == "final"][-RECENT_LIMIT:]
+    finals_all = [f for f in fixtures if f.status == "final"]
+    finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
     # A "scheduled" game long past its start is one the source never updated: leave it out.
     ahead = [f for f in fixtures if f.status != "final" and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))][:UPCOMING_LIMIT]
     recent: list[tuple[Fixture, Snapshot | None]] = []
@@ -293,10 +294,15 @@ def _refresh(player_id: int) -> None:
         card_row = db.get(PlayerCard, player_id)
         if player is None or card_row is None:
             return
-        events = {f.source_id: _upsert_event(db, adapter, player, f) for f in [*finals, *ahead]}
+        events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
         for f, snap in recent:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
+        # Every finished game the source returns joins the player's results history, kept for good.
+        snaps = {f.source_id: snap for f, snap in recent if snap}
+        for f in finals_all:
+            snap = snaps.get(f.source_id)
+            keep_result(db, events[f.source_id].id, player_id, result_item(adapter, f, snap, events[f.source_id], ref), scorecard=snap is not None)
         _record_health(player_id, ok=True, db=db)
         if card_row.status != "ready":
             return  # nothing to show yet; the build that follows reads the same events
@@ -339,7 +345,7 @@ def next_status(current: str | None, from_schedule: str) -> str:
     return current
 
 
-def _upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> Event:
+def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> Event:
     key = f"{adapter.system}:{f.source_id}"
     event = db.scalar(select(Event).where(Event.key == key))
     if event is None:
@@ -406,18 +412,57 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
 
 
 def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event | None, ref: PlayerRef) -> dict[str, Any]:
-    line = snap.lines.get(ref.athlete_id) if snap else None
-    contribution = line.headline if line else (NO_LINE.get(snap.state.get("kind"), "No stats") if snap and snap.lines else None)
     return {
         "title": f"{f.title} · {f.detail}" if f.detail else f.title,
         # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
-        "result": adapter.result_label(f, ref.team_ids) or (snap and (snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label)) or "",
+        "result": adapter.result_label(f, ref.team_ids) or snap_result(snap),
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
-        "player_contribution": contribution,
+        "player_contribution": contribution(snap, ref.athlete_id),
         "competition": f.competition,
         "event_id": event.id if event else None,
         "source_url": snap.source_url if snap else None,
     }
+
+
+def contribution(snap: Snapshot | None, athlete_id: str) -> str | None:
+    """The player's line in a game, in a few words ("2 goals", "Not in the matchday squad")."""
+    line = snap.lines.get(athlete_id) if snap else None
+    return line.headline if line else (NO_LINE.get(snap.state.get("kind"), "No stats") if snap and snap.lines else None)
+
+
+def snap_result(snap: Snapshot | None) -> str:
+    return (snap and (snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label)) or ""
+
+
+def merged_result(old: dict[str, Any] | None, item: dict[str, Any], scorecard: bool) -> dict[str, Any]:
+    """A result read again: a read without the scorecard keeps what an earlier scorecard added."""
+    old = old or {}
+    new = {**item, "scorecard": True if scorecard else old.get("scorecard", False)}
+    if not scorecard:
+        for key in ("player_contribution", "source_url", "result"):
+            if old.get(key) and not new.get(key):
+                new[key] = old[key]
+    return new
+
+
+def keep_result(db: Session, event_id: int, player_id: int, item: dict[str, Any], scorecard: bool) -> None:
+    """Store a finished event's result in the player's history (event_player.result)."""
+    row = db.get(EventPlayer, (event_id, player_id))
+    if row is None:
+        return
+    new = merged_result(row.result, item, scorecard)
+    if new != row.result:
+        row.result = new
+
+
+def add_scorecard(db: Session, event: Event, player_id: int, athlete_id: str, snap: Snapshot) -> None:
+    """A finished event's scorecard, read later (history.py): the final state, the player's line, and
+    their contribution in the stored result."""
+    _record_final(db, event, player_id, snap, snap.lines.get(athlete_id))
+    row = db.get(EventPlayer, (event.id, player_id))
+    if row is None or row.result is None:
+        return
+    row.result = {**row.result, "player_contribution": contribution(snap, athlete_id), "source_url": snap.source_url, "result": row.result.get("result") or snap_result(snap), "scorecard": True}
 
 
 # ---------------------------------------------------------------- live polling

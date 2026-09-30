@@ -25,7 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, moments, notify, pipeline, registry, search as player_search, structured
+from . import bus, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
@@ -338,6 +338,32 @@ async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
 def unfollow(player_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
     return {"ok": True}
+
+
+@app.get("/api/players/{player_id}/results")
+def player_results(player_id: int, before: str | None = None, limit: int = 20, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The player's results history, newest first; pass `next` back as `before` for older ones."""
+    return results.page(db, player_id, before, limit)
+
+
+@app.get("/api/players/{player_id}/results/{event_id}")
+def player_result(player_id: int, event_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    found = results.detail(db, player_id, event_id)
+    if found is None:
+        raise HTTPException(404, "No finished game with that id for this player.")
+    return found
+
+
+@app.get("/api/players/{player_id}/form")
+def player_form(player_id: int, last: int = 10, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Form over the last few results (5 or 10 in the app), from the stored lines."""
+    return results.player_form(db, player_id, last)
+
+
+@app.get("/api/me/results")
+def my_results(limit: int = 8, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The newest results across every player the fan follows."""
+    return {"results": results.latest_for_fan(db, fan, limit)}
 
 
 @app.get("/api/players/{player_id}/card")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from . import espn
@@ -211,6 +211,24 @@ class EspnBasketball:
                 for f in parse_schedule(data, league):
                     seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
+        """Last season's regular season and playoffs for each of the player's teams."""
+        league = ref.league or "nba"
+        pages = []
+        for team_id in ref.team_ids:
+            try:
+                year = (espn.get_json(f"{espn.SITE}/basketball/{league}/teams/{team_id}/schedule", ttl=1800).get("season") or {}).get("year")
+            except AdapterError:
+                continue
+            if year:
+                pages += [{"team": team_id, "season": int(year) - 1, "type": kind} for kind in (2, 3)]
+        return pages
+
+    def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
+        league = ref.league or "nba"
+        data = espn.get_json(f"{espn.SITE}/basketball/{league}/teams/{page['team']}/schedule?season={page['season']}&seasontype={page['type']}", ttl=24 * 3600)
+        return [f for f in parse_schedule(data, league) if f.status == "final"]
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = espn.get_json(f"{espn.SITE}/basketball/{locator['league']}/summary?event={locator['event']}", ttl=24 * 3600 if final else 5)
