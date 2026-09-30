@@ -153,8 +153,8 @@ that build too: turn them on under Notifications in the sidebar. Always pass
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
-| `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token; with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh |
-| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks requests an hour (per entity) kept for live matches; the history lane pauses below it |
+| `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
+| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
 
 ## Android app
 

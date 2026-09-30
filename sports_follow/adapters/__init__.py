@@ -10,11 +10,23 @@ from .espn_soccer import EspnSoccer
 from .espn_tennis import EspnTennis
 from .lichess_chess import LichessChess
 from . import sportmonks
+from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
 
-# Licensed sources come first, so for_sport() picks them over ESPN; they run only with a token.
-LICENSED: tuple[Adapter, ...] = (SportmonksFootball(),) if sportmonks.token() else ()
-ALL: tuple[Adapter, ...] = (*LICENSED, EspnSoccer(), EspnCricket(), EspnBasketball(), EspnTennis(), LichessChess())
+# Licensed sources run only with a token. for_sport() picks the first adapter for a sport, so where
+# both run (a development build) football comes from Sportmonks, while cricket stays on ESPN until the
+# Sportmonks plan covers ODIs, Tests and the IPL (the free plan has three T20 competitions). A public
+# build lists only licensed sources and gets Sportmonks for both.
+_TOKEN = bool(sportmonks.token())
+ALL: tuple[Adapter, ...] = (
+    *((SportmonksFootball(),) if _TOKEN else ()),
+    EspnSoccer(),
+    EspnCricket(),
+    *((SportmonksCricket(),) if _TOKEN else ()),
+    EspnBasketball(),
+    EspnTennis(),
+    LichessChess(),
+)
 
 
 def pick(adapters: tuple[Adapter, ...], sources: set[str]) -> dict[str, Adapter]:

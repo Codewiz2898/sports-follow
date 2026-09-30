@@ -22,9 +22,16 @@ for cricket, football and chess first; about $150–350 a month.
   fixtures. The trial ends 2026-10-14; check whether it converts to paid.
 - [ ] Live polling at scale: one request per live match every 15 s is 240 an hour; past about six
   matches at once, poll `livescores/inplay` (or `fixtures/multi`) once for all of them.
-- [ ] Sportmonks Cricket adapter (World, €75), built during its 14-day trial.
+- [x] Sportmonks Cricket adapter: team fixtures kept only where the player is in the XI (or the
+  season's squad before it's out), live scorecards with every player's line and dismissal, the chase
+  ("need 42 from 28 balls"), fifty, hundred, out and wicket alerts, form from scorecards, a year of
+  history. Built on the free plan (T20 internationals, Big Bash, CSA T20 Challenge).
+- [ ] Start the Sportmonks Cricket World trial (€75/month after 14 days): ODIs, Tests, IPL and the
+  rest. Then move cricket ahead of ESPN in `adapters/__init__.py` so a development build uses it too.
+  Until then Kohli and Rohit (no T20Is since 2024) have no sides on Sportmonks.
 - [x] Player ids for football: registry athletes resolve by Sportmonks search, name and birth date.
-- [ ] Player ids for cricket (Cricsheet's register).
+- [x] Player ids for cricket: Sportmonks search by surname, then birth date (its 1 January
+  placeholder dates count as unknown).
 - [ ] Credits page (Lichess CC BY-SA 4.0, photo credits when item 6 lands).
 - [ ] Hosting (HTTPS) and a public build; FIDE's written permission for the rating list.
 - [ ] Measure 30-day retention, push opt-in, follows per user and share of users outside India before
