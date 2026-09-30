@@ -132,7 +132,12 @@ export function PlayerPage() {
 
           {tab === 'live' && (
             <div className="section">
-              {card.live.is_live ? (
+              {card.live.available === false ? (
+                <div className="card card-pad stack">
+                  <span className="title">No live scores for {sportName(p.sport) || 'this sport'} yet</span>
+                  <span className="small muted">News, results and upcoming games on this page update a few times a day.</span>
+                </div>
+              ) : card.live.is_live ? (
                 <LiveScoreboard live={card.live} playerName={p.name.split(' ').at(-1) ?? p.name} />
               ) : (
                 <div className="card card-pad row">
@@ -142,10 +147,12 @@ export function PlayerPage() {
                   </div>
                 </div>
               )}
-              <div className="row">
-                <span className="tiny muted">{refreshing ?? (card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while a game is on.` : 'Live games refresh on their own about every minute.')}</span>
-                <button type="button" className="btn" onClick={refresh} disabled={Boolean(refreshing)}><RefreshIcon width={16} height={16} />Refresh</button>
-              </div>
+              {card.live.available !== false && (
+                <div className="row">
+                  <span className="tiny muted">{refreshing ?? (card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while a game is on.` : 'Live games refresh on their own about every minute.')}</span>
+                  <button type="button" className="btn" onClick={refresh} disabled={Boolean(refreshing)}><RefreshIcon width={16} height={16} />Refresh</button>
+                </div>
+              )}
               <span className="eyebrow" style={{ marginTop: 8 }}>Up next</span>
               <UpcomingList items={(card.upcoming ?? []).slice(0, 2)} empty="No upcoming games found." />
             </div>

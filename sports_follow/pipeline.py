@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import bus, moments, notify, structured
 from .agent import AgentError, follow_player, gateway, live_update
+from .config import AGENT_LIVE
 from .db import session
 from .models import (
     Event,
@@ -320,7 +321,8 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         if not bound:
             for u in report["upcoming"]:
                 _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
-            _write_live(db, player, report["live"], now)
+            if AGENT_LIVE:
+                _write_live(db, player, report["live"], now)
         fresh = _write_news(db, player, report["news"])
 
         card_row = db.get(PlayerCard, player.id)
@@ -331,6 +333,10 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         new_moments = notify.record(db, player.id, None, news_moments(player.name, fresh, now)) if card_row.built_at else []
         version = (card_row.version or 0) + 1
         card = _card_from_report(player, report, version, now)
+        if not bound and not AGENT_LIVE:
+            # No source covers this sport and the agent doesn't watch games: say so rather than show a
+            # score from the moment the page was built.
+            card["live"] = {"is_live": False, "player_stats": [], "available": False}
         if bound and card_row.status == "ready":
             previous = card_row.card or {}
             for section in structured.OWNED:
@@ -583,7 +589,7 @@ def due_work(now: datetime | None = None) -> Due:
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(days=6))
             .values(status="final")
         )
-        bound = set(db.scalars(select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.player_id.in_(followed))))
+        bound = set(db.scalars(select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(structured.ADAPTERS)), SourceBinding.player_id.in_(followed))))
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
         sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
@@ -620,7 +626,7 @@ def due_work(now: datetime | None = None) -> Due:
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         stale_before = now - timedelta(seconds=LIVE_CHECK_INTERVAL)
-        for pid in lives:
+        for pid in lives if AGENT_LIVE else ():  # off by default: no model calls spent watching games
             card = db.get(PlayerCard, pid)
             if card and card.status == "ready" and (card.live_checked_at is None or card.live_checked_at < stale_before) and not bus.is_locked(f"live:{pid}"):
                 due.lives.append(pid)

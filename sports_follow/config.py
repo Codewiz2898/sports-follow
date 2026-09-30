@@ -23,6 +23,14 @@ POLL_SESSION = int(os.environ.get("SPORTS_FOLLOW_POLL_SESSION", 10 * 60))
 
 FAN_COOKIE = "sf_fan"
 
+# Which data sources run, by adapter name. Empty means every source (development). A public build lists
+# only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters
+# read unofficial endpoints whose terms forbid automated and commercial use.
+SOURCES = {s.strip() for s in os.environ.get("SPORTS_FOLLOW_SOURCES", "").split(",") if s.strip()}
+# Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
+# pages come from the agent without live scores or alerts, and no model calls go to watching games.
+AGENT_LIVE = os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
+
 # The Android app (a Trusted Web Activity wrapping the web app): its package name and the SHA-256
 # fingerprints of its signing certificates (comma separated), published at /.well-known/assetlinks.json.
 ANDROID_PACKAGE = os.environ.get("SPORTS_FOLLOW_ANDROID_PACKAGE", "")

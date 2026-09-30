@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from . import bus, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
-from .config import ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
 from .db import get_db, session
 from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -394,6 +394,8 @@ async def refresh(player_id: int, db: Session = Depends(get_db)) -> dict[str, An
             return {"queued": False, "reason": "A refresh is already running."}
         await arq().enqueue_job("refresh_structured", player_id)
         return {"queued": True}
+    if not AGENT_LIVE:
+        return {"queued": False, "reason": "Live scores aren't available for this sport yet."}
     if bus.is_locked(f"live:{player_id}"):
         return {"queued": False, "reason": "A live check is already running."}
     await arq().enqueue_job("refresh_live", player_id)

@@ -26,7 +26,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from . import registry, structured
-from .adapters import ADAPTERS, AdapterError, espn, lichess_chess
+from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -191,6 +191,8 @@ def parse_fide(records: list[dict[str, Any]], query: str, limit: int) -> list[Re
 
 
 def _espn(query: str, limit: int = 20) -> list[Result]:
+    if not espn_enabled():
+        return []
     data = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit={limit}", ttl=3600)
     return parse_espn(data, query)
 
@@ -201,6 +203,8 @@ _fide_lock = threading.Lock()
 def _fide(query: str, limit: int) -> list[Result]:
     # Lichess asks for one request at a time; a burst of keystrokes shouldn't queue up behind each
     # other, so a search that can't get the line within a second gives up on chess this time.
+    if "lichess_chess" not in ADAPTERS:
+        return []
     url = f"{lichess_chess.API}/fide/player?q={espn.quote(query)}"
     records = lichess_chess.peek(url, ttl=24 * 3600)
     if records is None:
@@ -277,8 +281,8 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
 def from_athlete(a: Athlete, query: str) -> Result:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
-    system = registry.LIVE[a.sport]
-    live_id = (a.ids or {}).get(system)
+    system = registry.live_system(a.sport)
+    live_id = (a.ids or {}).get(system) if system else None
     teams = list(a.teams or [])
     if a.sport == "chess":
         parts = [a.title or "", a.country or ""]
@@ -296,7 +300,7 @@ def from_athlete(a: Athlete, query: str) -> Result:
         system=system if live_id else None,
         athlete_id=live_id,
         league=a.league,
-        live_scores=True,  # every registry sport has a live source; an athlete it can't find goes to the agent
+        live_scores=system is not None,  # a running source; an athlete it can't find goes to the agent
         inactive=not a.current,
         exact=_key(a.name) == _key(query) or any(_key(x) == _key(query) for x in a.aliases or []),
         qid=a.qid,

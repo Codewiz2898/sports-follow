@@ -11,10 +11,13 @@ so requests here are serialized and a 429 pauses this adapter.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -33,6 +36,26 @@ _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()  # one request at a time, as Lichess asks
 _state = {"last": 0.0, "paused_until": 0.0}
 SPACING = 1.0  # seconds between requests; bursts of ~25 at 0.3 s drew a 429
+
+
+# This server's Lichess API token (scope study:read). Lichess now wants broadcast reads authenticated:
+# 120 a minute with a token, 10 without, "soon to be zero". Kept outside the repo.
+TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_LICHESS_TOKEN_FILE", Path.home() / ".config" / "sports-follow" / "lichess-token"))
+
+
+@lru_cache(maxsize=1)
+def token() -> str | None:
+    value = os.environ.get("SPORTS_FOLLOW_LICHESS_TOKEN", "").strip()
+    if not value and TOKEN_FILE.is_file():
+        value = TOKEN_FILE.read_text().strip()
+    return value or None
+
+
+def _headers(url: str, text: bool) -> dict[str, str]:
+    headers = {"accept": "*/*"} if text else {}
+    if url.startswith("https://lichess.org/") and token():
+        headers["authorization"] = f"Bearer {token()}"  # only ever sent to Lichess
+    return headers
 
 
 class RateLimited(AdapterError):
@@ -54,7 +77,7 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
             raise RateLimited("Lichess asked us to slow down; paused for a minute")
         time.sleep(max(0.0, _state["last"] + SPACING - time.time()))
         try:
-            res = _client.get(url, headers={"accept": "*/*"} if text else None)
+            res = _client.get(url, headers=_headers(url, text))
         except httpx.HTTPError as exc:
             raise AdapterError(f"Lichess unreachable: {exc}") from exc
         finally:
@@ -62,6 +85,8 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         if res.status_code == 429:
             _state["paused_until"] = time.time() + 60
             raise RateLimited("Lichess rate limit (429); paused for a minute")
+        if res.status_code == 401 and token():
+            raise AdapterError("Lichess rejected the API token (HTTP 401); check ~/.config/sports-follow/lichess-token")
         if res.status_code != 200:
             raise AdapterError(f"Lichess returned HTTP {res.status_code} for {url}")
         data = res.text if text else res.json()

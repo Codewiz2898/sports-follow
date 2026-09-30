@@ -150,6 +150,11 @@ that build too: turn them on under Notifications in the sidebar. Always pass
 | `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
 | `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
+| `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
+| `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
+| `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
+| `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token; with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh |
+| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks requests an hour (per entity) kept for live matches; the history lane pauses below it |
 
 ## Android app
 

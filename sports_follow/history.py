@@ -12,6 +12,7 @@ last five (structured._refresh). This lane fills in the rest, gently:
 Each page and scorecard is read once, then kept. One lane for the whole system (a lock), at most
 READS source requests a run, one run a minute from the scheduler tick. A scorecard the source
 doesn't have is marked missing rather than retried; a rate limit ends the run and is retried next time.
+A source with an hourly allowance (Sportmonks) is skipped while it's down to the share kept for live games.
 """
 
 from __future__ import annotations
@@ -37,6 +38,12 @@ LOCK = "history-lane"
 
 def _rate_limited(exc: Exception) -> bool:
     return type(exc).__name__ == "RateLimited"
+
+
+def _spare(adapter: Any) -> bool:
+    """A source with an hourly allowance (Sportmonks) says when it's down to what live games need."""
+    check = getattr(adapter, "spare", None)
+    return check() if check else True
 
 
 def _followed_bindings(db: Session) -> list[SourceBinding]:
@@ -99,7 +106,7 @@ def _scorecards(budget: int, done: dict[str, int]) -> int:
             event = db.get(Event, event_id)
             binding = event.live_binding if event else None
             adapter = ADAPTERS.get((binding or {}).get("adapter", ""))
-            if event is None or adapter is None:
+            if event is None or adapter is None or not _spare(adapter):
                 continue
             budget -= 1
             try:
@@ -126,7 +133,7 @@ def _pages(budget: int, done: dict[str, int]) -> int:
         with session() as db:
             binding, player = db.get(SourceBinding, binding_id), db.get(Player, player_id)
             adapter = ADAPTERS.get(binding.adapter) if binding else None
-            if binding is None or player is None or adapter is None:
+            if binding is None or player is None or adapter is None or not _spare(adapter):
                 continue
             ref = PlayerRef(**binding.locator)
             state: dict[str, Any] = dict(binding.history or {})

@@ -53,7 +53,8 @@ SPORTS: dict[str, dict[str, str]] = {
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     "football": {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"},
 }
-LIVE = {"chess": "lichess_chess", "basketball": "espn_basketball", "tennis": "espn_tennis", "cricket": "espn_cricket", "football": "espn_soccer"}
+# ESPN's search keeps each sport's athletes under one uid prefix.
+ESPN_UIDS = {"espn_soccer": "s:600", "espn_cricket": "s:200", "espn_basketball": "s:40", "espn_tennis": "s:850"}
 TEAM_SPORTS = ("basketball", "cricket", "football")
 CHESS_TITLES = {
     "Grandmaster": "GM", "International Master": "IM", "FIDE Master": "FM", "Candidate Master": "CM",
@@ -404,30 +405,58 @@ def same_person(person: Person, ref: PlayerRef) -> bool:
     return True
 
 
+def live_system(sport: str | None) -> str | None:
+    """The source this build reads a sport's live data from ("sportmonks_football", "espn_cricket"),
+    or None when the sport has none running."""
+    adapter = for_sport(sport)
+    return adapter.system if adapter else None
+
+
+def sport_of(system: str) -> str | None:
+    """The registry sport an adapter serves ("football" for both football sources)."""
+    adapter = ADAPTERS.get(system)
+    return next((s for s in SPORTS if adapter and s in adapter.sports), None)
+
+
+def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]) -> Iterable[PlayerRef]:
+    """Source athletes a name could mean, surname first: the source's own search where it has one
+    (Sportmonks), else ESPN's search read back through the adapter."""
+    search = getattr(adapter, "search", None)
+    if search is not None:
+        for ref in search(name)[:6]:
+            if ref.athlete_id not in tried and espn.names_match(name, ref.name):
+                tried.add(ref.athlete_id)
+                yield ref
+        return
+    uid = ESPN_UIDS.get(adapter.system)
+    if uid is None:
+        return  # Lichess is found by the FIDE id Wikidata has
+    for hit in espn.search_athletes(name, uid)[:6]:
+        if hit["athlete_id"] in tried or not espn.names_match(name, hit["name"]):
+            continue
+        tried.add(hit["athlete_id"])
+        try:
+            ref = adapter.player(hit["athlete_id"], league)
+        except AdapterError:
+            continue
+        if ref:
+            yield ref
+
+
 def resolve(person: Person) -> tuple[Adapter, PlayerRef] | None:
     """The person in their sport's live source: by the id Wikidata has, or by name and birth date.
     A found id is written back to the registry, so the next lookup is by id."""
     adapter = for_sport(person.sport)
-    live = LIVE.get(person.sport)
-    if adapter is None or live is None:
+    if adapter is None:
         return None
+    live = adapter.system
     if person.ids.get(live):
         ref = adapter.player(person.ids[live], person.league)
         return (adapter, ref) if ref else None
-    if not live.startswith("espn_"):
-        return None
-    uid = {"espn_soccer": "s:600", "espn_cricket": "s:200", "espn_basketball": "s:40", "espn_tennis": "s:850"}[live]
     tried: set[str] = set()
     for name in [person.name, *person.aliases[:2]]:
-        for hit in espn.search_athletes(name, uid)[:6]:
-            if hit["athlete_id"] in tried or not espn.names_match(name, hit["name"]):
-                continue
-            tried.add(hit["athlete_id"])
-            try:
-                ref = adapter.player(hit["athlete_id"], person.league)
-            except AdapterError:
-                continue
-            if ref and same_person(person, ref):
+        for ref in _candidates(adapter, name, person.league, tried):
+            if same_person(person, ref):
                 learn(person.qid, person.sport, live, ref.athlete_id)
                 return adapter, ref
     return None
@@ -453,7 +482,7 @@ def link_players(sport: str | None = None) -> int:
     """Tie players already followed to their registry athlete by a source id both know, or, for a
     bound player the registry has no id for, by name and a matching birth date from the source."""
     linked = 0
-    systems = [LIVE[sport]] if sport else list(ADAPTERS)
+    systems = [s for s in ([live_system(sport)] if sport else list(ADAPTERS)) if s]
     with session() as db:
         bound = db.execute(
             select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id)
@@ -461,7 +490,9 @@ def link_players(sport: str | None = None) -> int:
             .where(~PlayerIdentity.player_id.in_(select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata")))
         ).all()
     for player_id, system, external_id in bound:
-        sport = next(s for s, live in LIVE.items() if live == system)
+        sport = sport_of(system)
+        if sport is None:
+            continue
         with session() as db:
             athlete = db.scalars(select(Athlete).where(Athlete.sport == sport, Athlete.ids.contains({system: external_id})).limit(1)).first()
             if athlete is None:
