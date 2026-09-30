@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "openrouter": { "type": "openrouter", "appName": "Sports Follow" }
+  },
+  "apps": {
+    "sports-follow": {
+      "tokenEnv": "SPORTS_FOLLOW_GATEWAY_TOKEN",
+      "title": "Sports Follow",
+      "budgetUsdDaily": 5
+    }
+  }
+}

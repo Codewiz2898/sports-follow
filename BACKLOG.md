@@ -37,7 +37,14 @@ for cricket, football and chess first; about $150–350 a month.
   that writes profiles and news, news publishers, "not official records" and "not affiliated"
   notices, and the software with its licences (checked against the installed packages by a test).
   Photo credits join it when item 6 lands.
-- [ ] Hosting (HTTPS) and a public build; FIDE's written permission for the rating list.
+- [x] Hosting setup (`deploy/`): one server runs the whole app with Docker Compose (Caddy for HTTPS,
+  the API serving the web app, the worker with Stockfish, Postgres, Redis, the llm-providers gateway,
+  daily database dumps), licensed sources only. Scripts set up the server, send the secrets without
+  printing them and copy the registry. Rehearsed end to end on the Mac.
+- [ ] Run it: this Mac or a spare laptop behind a Cloudflare Tunnel with a domain while testing, then a
+  server (DigitalOcean Bangalore or Lightsail Mumbai, 2 vCPU / 4 GB, $24/month) before public launch.
+- [ ] Off-site backups (object storage) and an uptime check on `/api/health`.
+- [ ] FIDE's written permission for the rating list.
 - [ ] Measure 30-day retention, push opt-in, follows per user and share of users outside India before
   adding basketball or tennis live data.
 
