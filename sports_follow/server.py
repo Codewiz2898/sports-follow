@@ -62,8 +62,31 @@ def fan_id(request: Request, response: Response) -> str:
     fan = request.cookies.get(FAN_COOKIE)
     if not fan or len(fan) > 64:
         fan = secrets.token_urlsafe(18)
-        response.set_cookie(FAN_COOKIE, fan, max_age=5 * 365 * 24 * 3600, httponly=True, samesite="lax")
+        # Secure once served over HTTPS (behind the proxy, uvicorn --proxy-headers sets the scheme).
+        response.set_cookie(FAN_COOKIE, fan, max_age=5 * 365 * 24 * 3600, httponly=True, samesite="lax", secure=request.url.scheme == "https")
     return fan
+
+
+# ---------------------------------------------------------------- health
+
+
+@app.get("/api/health")
+async def health(response: Response) -> dict[str, Any]:
+    """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't."""
+    checks = {"db": False, "redis": False}
+    try:
+        with session() as db:
+            checks["db"] = db.execute(select(1)).scalar() == 1
+    except Exception:  # noqa: BLE001 — any failure is "down"
+        pass
+    try:
+        checks["redis"] = bool(await state["redis"].ping())
+    except Exception:  # noqa: BLE001
+        pass
+    ok = all(checks.values())
+    if not ok:
+        response.status_code = 503
+    return {"ok": ok, **checks}
 
 
 # ---------------------------------------------------------------- cards
