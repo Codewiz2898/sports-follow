@@ -3,6 +3,33 @@
 What's next for Sports Follow, most wanted first. Each item says what exists today, what "done"
 looks like, and the open questions.
 
+## Now: lean India-first launch
+
+Chosen 2026-09-30 (research: https://claude.ai/artifact/AKZ9gdcQ1xCGnVr7b16z8G). Licensed live data
+for cricket, football and chess first; about $150–350 a month.
+
+- [x] Source switch: `SPORTS_FOLLOW_SOURCES` lists the licensed sources a public build runs; ESPN stays
+  development-only.
+- [x] Sports without a licensed source get AI-built pages with no live scores or alerts; AI live checks
+  are off (`SPORTS_FOLLOW_AGENT_LIVE`).
+- [x] Lichess token support; token saved.
+- [x] Sportmonks Football adapter: fixtures, live matches with every player's line, goal and card
+  moments, season stats, a year of history. Runs whenever a token is saved and comes before ESPN;
+  followed footballers move over on their next refresh (ESPN games unlinked, so nothing is polled or
+  listed twice). The history lane keeps 1,000 of the 2,500 hourly fixture requests for live games.
+- [ ] Sportmonks dashboard: pick the Growth plan's leagues. National teams (Egypt, India…), the
+  Champions League, ISL, Saudi Pro League and MLS aren't on it yet, so a player's country has no
+  fixtures. The trial ends 2026-10-14; check whether it converts to paid.
+- [ ] Live polling at scale: one request per live match every 15 s is 240 an hour; past about six
+  matches at once, poll `livescores/inplay` (or `fixtures/multi`) once for all of them.
+- [ ] Sportmonks Cricket adapter (World, €75), built during its 14-day trial.
+- [x] Player ids for football: registry athletes resolve by Sportmonks search, name and birth date.
+- [ ] Player ids for cricket (Cricsheet's register).
+- [ ] Credits page (Lichess CC BY-SA 4.0, photo credits when item 6 lands).
+- [ ] Hosting (HTTPS) and a public build; FIDE's written permission for the rating list.
+- [ ] Measure 30-day retention, push opt-in, follows per user and share of users outside India before
+  adding basketball or tennis live data.
+
 ## Requested
 
 ### 1. Previous results: a player's full history (built)
@@ -77,8 +104,7 @@ is offered last and capped at 3 per fan per day.
 - **FIDE list** for chess ratings and the 1.9M players Wikidata doesn't have, once FIDE gives written
   permission for commercial use; until then chess falls back to Lichess's FIDE search.
 - **Licensed roster feed** to keep current teams right between Wikidata edits (transfers, debuts).
-- **Photos**: Commons file names are imported; fetch each one's licence and author, show with credit,
-  initials as the fallback.
+- **Photos**: see item 6.
 - A **review queue** for registry-to-source matches the birth date can't settle.
 - **Namesakes Wikidata lacks**: a full name the registry knows well doesn't ask ESPN, so an obscure
   namesake only ESPN has (the Malaysian-league footballer Nikola Jokić) no longer shows beside the star.
@@ -133,6 +159,35 @@ logs poll lag (how late each game's poll is) and requests per minute, so we see 
 
 The chess engine (item 2) is already one budgeted lane for the whole system; more lanes can be added
 by lock index if chess traffic outgrows it.
+
+### 6. Player headshots
+
+**Today.** Players show initials. The registry already stores each athlete's Wikimedia Commons photo
+(Wikidata P18) as a file name: 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known
+ones (75%, those with 20+ Wikipedia editions). Nothing is displayed yet.
+
+**Done when** a player's page, search results and the Following list show a photo with its credit
+where a properly licensed one exists, and initials otherwise.
+
+**Wikidata / Commons (recommended).**
+- Fetch each file's licence, author and attribution text from the Commons API (`extmetadata`) and
+  keep only free licences (public domain, CC0, CC BY, CC BY-SA). Show the credit ("Photo: Author,
+  CC BY-SA 4.0") on or beside the image, with a credits page listing all of them.
+- Serve Commons thumbnails (a sized URL) through our own cache, not hot-linked full files.
+- Commons licenses the photograph, not the person: no implied endorsement, no use in ads or
+  merchandise. Some files carry a "personality rights" warning; skip or treat those carefully.
+- Many are action or event photos rather than headshots, and some are years old. Crop to a face
+  square and prefer recent files where a player has several.
+
+**AI-generated headshots: not recommended.** A realistic AI image of a real athlete imitates their
+likeness without consent. Indian courts have granted personality-rights injunctions against AI
+imitations of celebrities (for example Anil Kapoor, Delhi HC 2023; Arijit Singh, Bombay HC 2024), app
+stores restrict deceptive depictions of real people, and a wrong-looking face undermines trust. A
+safe alternative is a styled avatar that doesn't depict the person: initials in team colours, a
+sport icon, a shirt number.
+
+**Paid options later:** licensed agency headshots (Getty Images, AP, Imago, PA) or a data provider's
+image feed (Sportradar and Stats Perform sell them) once revenue justifies it.
 
 ## Found while building (not yet scheduled)
 

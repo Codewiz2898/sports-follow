@@ -58,6 +58,7 @@ export interface LiveStatus {
   player_stats: Stat[]
   source_url?: string | null
   as_of?: string | null
+  available?: boolean  // false: no source covers this sport yet, so there are no live scores
   // Set when the score comes from a structured source rather than the research agent.
   event_id?: number
   competition?: string | null

@@ -21,7 +21,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, moments, notify, registry
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, for_sport
+from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport
 from .config import POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -33,7 +33,7 @@ OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_not
 BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
@@ -46,10 +46,11 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:
-    """The player's fixtures binding, if an adapter knows them."""
+    """The player's fixtures binding, if a running adapter knows them (a licensed-only build ignores
+    bindings to sources it has turned off, so those players fall back to the agent)."""
     return db.scalar(
         select(SourceBinding)
-        .where(SourceBinding.player_id == player_id, SourceBinding.purpose == "fixtures")
+        .where(SourceBinding.player_id == player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)))
         .order_by(SourceBinding.priority.desc(), SourceBinding.id.desc())
         .limit(1)
     )
@@ -83,38 +84,41 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
         return None
     # Two athletes anywhere on ESPN with this exact name (any sport, supported or not) is a question
     # for the agent: "John Smith" is dozens of people, and the first one found is rarely the one meant.
-    try:
-        search = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit=10", ttl=3600)
-    except AdapterError:
-        return None
-    namesakes = [item for group in search.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if _name_key(item.get("displayName", "")) == wanted]
-    if len(namesakes) > 1:
-        # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
-        # star). One professional among college namesakes is the one a fan means.
-        pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
-        if len(pros) != 1:
-            log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
-            return None
-        namesakes = pros
-    found = []
-    for adapter in ADAPTERS.values():
-        if adapter.system == "lichess_chess":
-            continue
+    # Without ESPN (a licensed-only build), namesakes can't be ruled out across sports, so only chess
+    # is recognised here and every other name goes to the agent.
+    if espn_enabled():
         try:
-            ref = adapter.find_player(query)
+            search = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit=10", ttl=3600)
         except AdapterError:
-            continue
-        # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
-        # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
-        # the adapter's own lookup happened to reach.
-        if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
-            found.append((adapter, ref))
-    if len(found) == 1:
-        return found[0]
-    if found or namesakes:
-        # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
-        log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
-        return None
+            return None
+        namesakes = [item for group in search.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if _name_key(item.get("displayName", "")) == wanted]
+        if len(namesakes) > 1:
+            # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
+            # star). One professional among college namesakes is the one a fan means.
+            pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
+            if len(pros) != 1:
+                log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
+                return None
+            namesakes = pros
+        found = []
+        for adapter in ADAPTERS.values():
+            if adapter.system == "lichess_chess":
+                continue
+            try:
+                ref = adapter.find_player(query)
+            except AdapterError:
+                continue
+            # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
+            # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
+            # the adapter's own lookup happened to reach.
+            if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
+                found.append((adapter, ref))
+        if len(found) == 1:
+            return found[0]
+        if found or namesakes:
+            # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
+            log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
+            return None
     chess = ADAPTERS.get("lichess_chess")
     try:
         ref = chess.find_player(query) if chess else None
@@ -209,6 +213,16 @@ def record(player_id: int, ref: PlayerRef, confidence: float = 1.0) -> bool:
         # The agent's guesses at upcoming games give way to the source's fixtures.
         guessed = select(Event.id).where(Event.live_binding.is_(None), Event.status.in_(("scheduled", "armed", "live")))
         db.execute(delete(EventPlayer).where(EventPlayer.player_id == player_id, EventPlayer.event_id.in_(guessed)))
+        # A player moving to another source for their sport leaves the old one behind: its bindings, and
+        # its games, played or not, so one match isn't polled, alerted or listed twice. The new source's
+        # refresh and history lane read the results back.
+        old = db.scalars(select(SourceBinding.adapter).where(SourceBinding.player_id == player_id, SourceBinding.adapter != ref.system).distinct()).all()
+        for system in old:
+            theirs = select(Event.id).where(Event.key.like(f"{system}:%"))
+            db.execute(delete(EventPlayer).where(EventPlayer.player_id == player_id, EventPlayer.event_id.in_(theirs)))
+        if old:
+            db.execute(delete(SourceBinding).where(SourceBinding.player_id == player_id, SourceBinding.adapter.in_(old)))
+            log.info("bind %s: moved from %s to %s", player_id, ", ".join(old), ref.system)
     log.info("bind %s: %s athlete %s (%s), confidence %.1f", player_id, ref.system, ref.athlete_id, ", ".join(ref.team_names), confidence)
     return True
 
@@ -236,17 +250,21 @@ def describe(player_id: int) -> str | None:
 def refresh(player_id: int) -> None:
     """Re-read a bound player's fixtures, recent results and stats from the source and publish the card.
 
-    A player followed before their sport had an adapter is bound here first; a lookup that finds
-    nobody isn't retried for BIND_RETRY seconds.
+    A player followed before their sport had an adapter is bound here first, and one bound to a source
+    their sport has since moved off (ESPN football once Sportmonks runs) is bound again; a lookup that
+    finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
     """
     lock = f"structured:{player_id}"
     if not bus.try_lock(lock, 300):
         return
     try:
         with session() as db:
-            bound = binding(db, player_id) is not None
-        if not bound:
-            if not bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) or not bind(player_id):
+            row = binding(db, player_id)
+            preferred = for_sport(db.scalar(select(Player.sport).where(Player.id == player_id)))
+            current = row.adapter if row else None
+        if current is None or (preferred and preferred.system != current):
+            rebound = bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) and bind(player_id)
+            if not rebound and current is None:
                 return
         _refresh(player_id)
     except AdapterError as exc:
