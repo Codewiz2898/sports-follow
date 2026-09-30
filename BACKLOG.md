@@ -32,7 +32,11 @@ for cricket, football and chess first; about $150–350 a month.
 - [x] Player ids for football: registry athletes resolve by Sportmonks search, name and birth date.
 - [x] Player ids for cricket: Sportmonks search by surname, then birth date (its 1 January
   placeholder dates count as unknown).
-- [ ] Credits page (Lichess CC BY-SA 4.0, photo credits when item 6 lands).
+- [x] Credits page (`/credits`, from the sidebar, Notifications and each player page): the sources this
+  build runs (Lichess with its CC BY-SA 4.0 licence), Wikidata, FIDE ratings, Stockfish, the AI model
+  that writes profiles and news, news publishers, "not official records" and "not affiliated"
+  notices, and the software with its licences (checked against the installed packages by a test).
+  Photo credits join it when item 6 lands.
 - [ ] Hosting (HTTPS) and a public build; FIDE's written permission for the rating list.
 - [ ] Measure 30-day retention, push opt-in, follows per user and share of users outside India before
   adding basketball or tennis live data.
@@ -55,9 +59,10 @@ the refresh window doesn't reach:
 
 | Sport | History |
 |---|---|
-| Football, basketball | This season and last (team schedules for club and country) |
+| Football | A year before the refresh window, 90 days a page (Sportmonks); this season and last from ESPN in development |
+| Basketball | This season and last (team schedules) |
 | Tennis | A year of weekly draws |
-| Cricket | Six months of daily feeds |
+| Cricket | A year before the refresh window, 90 days a page (Sportmonks); six months of daily feeds from ESPN in development |
 | Chess | Two months of broadcasts (Lichess's one request a second makes more slow) |
 
 History also grows by itself: a game stays stored after it drops out of the source's window.
@@ -198,9 +203,9 @@ image feed (Sportradar and Stats Perform sell them) once revenue justifies it.
 
 ## Found while building (not yet scheduled)
 
-- **Licensed data before a public launch.** ESPN's JSON endpoints are unofficial and could change
-  or be blocked; the adapter interface takes a licensed feed as another adapter. Lichess is an
-  official API, but rate-limited (reads are one a second).
+- **Licensed basketball and tennis.** Football and cricket now come from Sportmonks and chess from
+  Lichess; basketball and tennis still use ESPN's unofficial endpoints, so a public build shows them
+  as AI pages without live scores until a licensed feed (BALLDONTLIE, API-Tennis) is added.
 - **Tests for `structured.identify`** against recorded search responses (checked by hand today:
   full names, surnames, typos, namesakes, college records, legal names).
 - **Graceful worker restarts.** Killing the worker mid-build leaves the card "building" until its

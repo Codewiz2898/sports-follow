@@ -176,7 +176,7 @@ export function PlayerPage() {
           )}
 
           <p className="tiny muted" style={{ margin: 0 }}>
-            Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. Live data can lag the game by a minute or two.
+            Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. Live data can lag the game by a minute or two. <Link to="/credits">Credits</Link>
           </p>
         </>
       )}
