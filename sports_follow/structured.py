@@ -33,7 +33,7 @@ OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_not
 BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
