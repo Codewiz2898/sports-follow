@@ -77,6 +77,8 @@ export function NotificationsPage() {
           ))}
         </dl>
       </section>
+
+      <Link to="/credits" className="tiny muted">Credits and sources</Link>
     </>
   )
 }

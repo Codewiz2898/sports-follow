@@ -8,6 +8,7 @@ import { FollowingProvider, useFollowing } from './following'
 import { AthletePage } from './pages/AthletePage'
 import { FollowingPage } from './pages/FollowingPage'
 import { NotificationsPage } from './pages/NotificationsPage'
+import { CreditsPage } from './pages/CreditsPage'
 import { MomentToasts } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
@@ -105,6 +106,7 @@ function Sidebar() {
           <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
         ))}
       </nav>
+      <NavLink to="/credits" className="tiny muted" style={{ marginTop: 'auto' }}>Credits and sources</NavLink>
     </aside>
   )
 }
@@ -127,6 +129,7 @@ function App() {
           <Route path="/player/:id" element={<PlayerPage />} />
           <Route path="/athlete/:system/:id" element={<AthletePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
+          <Route path="/credits" element={<CreditsPage />} />
         </Routes>
       </main>
       <nav className="bottom-nav" aria-label="Main">

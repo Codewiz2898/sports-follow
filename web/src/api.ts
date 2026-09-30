@@ -209,6 +209,10 @@ export type StreamEvent =
   | { type: 'moved'; from: number; to: number }
   | { type: 'live_error'; player_id: number; message: string }
 
+/** One credit on the Credits page (sports_follow/credits.py). */
+export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }
+export interface Credits { data: Credit[]; also: Credit[]; software: Credit[]; notices: string[] }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
@@ -262,6 +266,7 @@ export const api = {
     request<{ ok: boolean }>('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) }),
   pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
   config: () => request<{ model: string }>('/api/config'),
+  credits: () => request<Credits>('/api/credits'),
 }
 
 /** Subscribe to a server-sent event stream; returns an unsubscribe function. EventSource reconnects on its own. */

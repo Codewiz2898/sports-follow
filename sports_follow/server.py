@@ -25,7 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, moments, notify, pipeline, registry, results, search as player_search, structured
+from . import bus, credits as credits_page, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
@@ -90,6 +90,12 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config() -> dict[str, Any]:
     return {"model": MODEL}
+
+
+@app.get("/api/credits")
+def credits() -> dict[str, Any]:
+    """Where this build's scores, ratings, evaluations, words and code come from."""
+    return credits_page.credits()
 
 
 @app.get("/api/me/following")
