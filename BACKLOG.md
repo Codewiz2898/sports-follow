@@ -213,6 +213,49 @@ sport icon, a shirt number.
 **Paid options later:** licensed agency headshots (Getty Images, AP, Imago, PA) or a data provider's
 image feed (Sportradar and Stats Perform sell them) once revenue justifies it.
 
+### 7. Data in a fresh environment
+
+**Today.** A new copy of the app starts empty, and the only fast way to fill it is from the Mac. The
+player registry is a 90-minute Wikidata import (`python -m sports_follow.registry`, football most of
+it; naming sports imports only those). `deploy/seed-registry.sh` copies it in seconds, but only from
+the Mac's running stack to a server. Nobody is followed, so there are no pages until someone searches
+and follows; older results then fill in over hours through the history lane. A Claude Code cloud
+session is the emptiest case. It has no Docker daemon, its network policy blocks ESPN, Lichess,
+Wikidata, Sportmonks and OpenRouter, and it has none of the tokens. On 12 Oct 2026 the app ran there
+(Postgres and Redis started by hand from the image's binaries), but search found nobody and no page
+could be built.
+
+**Done when** one command fills any fresh copy (a new laptop, the server, a cloud session, CI) with the
+registry and a handful of real players, in minutes and without the Mac. Where sources can't be
+reached, the app says so plainly rather than looking broken.
+
+**Suggested path**, most useful first:
+1. **A registry snapshot anyone can load.** Publish the `athlete` table as a dump (about 15 MB) after
+   each weekly import, and add `python -m sports_follow.registry --load <file or URL>` to load it in
+   seconds. The weekly import keeps it current from there. `seed-registry.sh` becomes a wrapper around it.
+2. **Starter players.** Add `python -m sports_follow.seed`, which follows a fixed list through the
+   normal follow path as a marked demo fan: two or three players a sport, India first (Kohli, Bumrah,
+   Salah, Jokić, Alcaraz, Gukesh, Carlsen). Pages come from the real sources this build runs, so a
+   licensed-only build seeds only football, cricket and chess. Without a gateway, pages are built from
+   the sources, with no profile or news.
+3. **Cloud sessions.** Add a SessionStart hook (Claude Code's startup hook) that starts Postgres and
+   Redis, runs the migrations, installs the Python and web packages, and loads the snapshot. Document
+   the hosts to allow under the environment's Network access: `site.api.espn.com`,
+   `site.web.api.espn.com`, `lichess.org`, and `query.wikidata.org` for a full import. Tokens stay off
+   cloud sessions, so they run ESPN, Lichess and no AI.
+4. **Recorded mode** for when no source is reachable (CI, screenshots, a demo offline): replay the
+   recorded responses in `tests/fixtures`, labelled "Recorded data" on every page so it's never taken
+   for live. Only if steps 1 to 3 leave a real need: the recordings cover a few calls, and stale scores
+   that look live are worse than an empty page.
+
+**Open questions**
+- Where the snapshot lives: a release on this (private) repo, or the object storage the off-site
+  backups will use.
+- Wikidata is CC0, but the snapshot also holds ids found in ESPN and Sportmonks. Sportmonks' terms
+  allow storing their data for our own app, not passing it on, so keep the snapshot private or strip
+  those ids.
+- The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
+
 ## Found while building (not yet scheduled)
 
 - **Licensed basketball and tennis.** Football and cricket now come from Sportmonks and chess from
