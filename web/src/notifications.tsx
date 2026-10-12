@@ -6,7 +6,7 @@ import { CloseIcon } from './components/Icons'
 
 export const LEVELS: { value: AlertLevel; label: string; short: string; brief: string; hint: string }[] = [
   { value: 'key', label: 'Key moments', short: 'Key', brief: 'Line-ups, big moments and results', hint: 'Line-ups, goals, fifties and hundreds, big points games, wickets, a chess game turning, starts, results, injuries and transfers' },
-  { value: 'everything', label: 'Everything', short: 'All', brief: 'Plus every set and card, without sound', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set, a chess edge and milestones. Those arrive without sound' },
+  { value: 'everything', label: 'Everything', short: 'All', brief: 'Plus every set, map and card, without sound', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set or esports map, a chess edge and milestones. Those arrive without sound' },
   { value: 'results', label: 'Results only', short: 'Results', brief: 'Just the final result', hint: 'Just the final result' },
   { value: 'off', label: 'Off', short: 'Off', brief: 'Nothing for this player', hint: 'No notifications for this player' },
 ]

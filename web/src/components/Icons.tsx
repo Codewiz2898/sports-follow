@@ -41,10 +41,11 @@ export function SportMark({ sport, className }: { sport: string; className?: str
     football: 'M50 30l18 13-7 21H39l-7-21zM50 4v26M68 43l26-8M61 64l15 22M39 64 24 86M32 43 6 35',
     cricket: 'M30 10c10 26 10 54 0 80M38 12l-6 3M40 26l-7 2M41 40h-7M41 54l-7-1M40 68l-7-2M38 82l-6-3',
     chess: 'M38 30h24M44 30c0 22-8 38-14 50h40c-6-12-14-28-14-50',
+    esports: 'M30 34h40c11 0 17 9 19 22l3 16c1 9-7 13-13 7l-10-10H31L21 79c-6 6-14 2-13-7l3-16c2-13 8-22 19-22zM31 48v14M24 55h14M66 52h.01M75 60h.01',
   }
   return (
     <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth={3.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
-      {sport !== 'chess' && <circle cx="50" cy="50" r="46" />}
+      {sport !== 'chess' && sport !== 'esports' && <circle cx="50" cy="50" r="46" />}
       {sport === 'chess' && <circle cx="50" cy="20" r="10" />}
       {paths[sport] && <path d={paths[sport]} />}
     </svg>

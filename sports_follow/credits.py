@@ -35,6 +35,13 @@ PROVIDERS: list[dict[str, Any]] = [
         "note": "The games are shown unchanged; the evaluations beside them are ours.",
     },
     {
+        "name": "PandaScore",
+        "url": "https://pandascore.co",
+        "systems": {"pandascore_esports": "Esports"},
+        "what": "series schedules and results, map by map, teams, and the pro players search finds.",
+        "note": "Collected by PandaScore; not official tournament records. Results are the team's: player stats aren't included.",
+    },
+    {
         "name": "ESPN",
         "url": "https://www.espn.com",
         "systems": {"espn_soccer": "Football", "espn_cricket": "Cricket (ESPNcricinfo)", "espn_basketball": "Basketball", "espn_tennis": "Tennis"},

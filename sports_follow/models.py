@@ -92,8 +92,9 @@ class Athlete(Base):
     __table_args__ = (UniqueConstraint("qid", "sport"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # The Wikidata id; "pandascore:<id>" for an esports pro, imported from PandaScore instead.
     qid: Mapped[str] = mapped_column(String(20), index=True)
-    sport: Mapped[str] = mapped_column(String(20))  # football | cricket | basketball | tennis | chess
+    sport: Mapped[str] = mapped_column(String(20))  # football | cricket | basketball | tennis | chess | esports
     name: Mapped[str] = mapped_column(String(200))
     aliases: Mapped[list] = mapped_column(JSONB, default=list)
     # " virat kohli | king kohli" folded to plain ASCII words; trigram-indexed for search as you type.
@@ -101,7 +102,7 @@ class Athlete(Base):
     birth_date: Mapped[datetime | None] = mapped_column(Date)
     country: Mapped[str | None] = mapped_column(String(120))
     teams: Mapped[list] = mapped_column(JSONB, default=list)  # current teams, club first
-    league: Mapped[str | None] = mapped_column(String(20))  # nba | wnba | atp | wta
+    league: Mapped[str | None] = mapped_column(String(20))  # nba | wnba | atp | wta; an esports pro's game (valorant)
     title: Mapped[str | None] = mapped_column(String(10))  # chess: GM, IM, WGM…
     ids: Mapped[dict] = mapped_column(JSONB, default=dict)
     image: Mapped[str | None] = mapped_column(String(300))  # Wikimedia Commons file name

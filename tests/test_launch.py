@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sports_follow.adapters import ALL, lichess_chess, pick, sportmonks
+from sports_follow.adapters import ALL, lichess_chess, pandascore, pick, sportmonks
 from sports_follow.adapters.espn_cricket import EspnCricket
 from sports_follow.adapters.espn_soccer import EspnSoccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
@@ -19,8 +19,9 @@ def test_every_source_runs_unless_the_build_lists_its_licensed_ones():
 
 def test_licensed_sources_run_only_with_their_token():
     systems = [a.system for a in ALL]
-    assert [s for s in systems if not s.startswith("sportmonks_")] == ["espn_soccer", "espn_cricket", "espn_basketball", "espn_tennis", "lichess_chess"]
+    assert [s for s in systems if not s.startswith(("sportmonks_", "pandascore_"))] == ["espn_soccer", "espn_cricket", "espn_basketball", "espn_tennis", "lichess_chess"]
     assert ({"sportmonks_football", "sportmonks_cricket"} <= set(systems)) == bool(sportmonks.token())
+    assert ("pandascore_esports" in systems) == bool(pandascore.token())
 
 
 def test_football_prefers_sportmonks_and_cricket_keeps_espn_until_the_plan_covers_it():

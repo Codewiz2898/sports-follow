@@ -12,9 +12,14 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
     .venv/bin/python -m sports_follow.registry --new      # only people not imported yet
+    .venv/bin/python -m sports_follow.registry esports    # esports pros, from PandaScore
 
 The query service allows a client about a minute of query time a minute, so batches run one at a
 time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour.
+
+Esports comes from PandaScore instead (import_esports): Wikidata has a Liquipedia id for only 2,844
+people. Its rows are keyed "pandascore:<id>" where the others hold a Wikidata id, and carry the
+PandaScore id, so following one binds the live source by id like any other.
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, pandascore, pandascore_esports
 from .db import session
 from .models import Athlete, PlayerIdentity
 
@@ -53,6 +58,8 @@ SPORTS: dict[str, dict[str, str]] = {
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     "football": {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"},
 }
+# Imported from PandaScore rather than Wikidata (import_esports).
+ESPORTS = "esports"
 # ESPN's search keeps each sport's athletes under one uid prefix.
 ESPN_UIDS = {"espn_soccer": "s:600", "espn_cricket": "s:200", "espn_basketball": "s:40", "espn_tennis": "s:850"}
 TEAM_SPORTS = ("basketball", "cricket", "football")
@@ -312,8 +319,93 @@ def import_sport(sport: str, new_only: bool = False) -> int:
     return total
 
 
-def import_all(sports: Iterable[str] = SPORTS, new_only: bool = False) -> dict[str, int]:
-    return {sport: import_sport(sport, new_only) for sport in sports}
+def import_all(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int]:
+    return {sport: import_esports() if sport == ESPORTS else import_sport(sport, new_only) for sport in sports}
+
+
+# ---------------------------------------------------------------- esports, from PandaScore
+
+ESPORTS_PACE = 9.0  # seconds between pages: at most 400 requests an hour of PandaScore's 1,000
+ESPORTS_WAIT = 3600  # how long a run waits, in all, for live series to leave it some of the hour
+
+
+def esports_rows(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Athlete rows from PandaScore players (pure). The handle is the name ("TenZ") and the full name
+    an alias, so either finds them. PandaScore has no popularity signal, so sitelinks stay 0; a pro on a
+    team today counts as current."""
+    rows = []
+    for p in players:
+        if not p.get("id") or not words(p.get("name") or ""):
+            continue
+        ref = pandascore_esports.parse_player(p)
+        if ref.league not in pandascore_esports.GAMES:
+            continue  # a 1v1 or battle-royale title
+        full = pandascore_esports.full_name(p)
+        aliases = [full] if full and words(full) != words(ref.name) else []
+        rows.append({
+            "qid": f"pandascore:{ref.athlete_id}",
+            "sport": ESPORTS,
+            "name": ref.name[:200],
+            "aliases": aliases,
+            "search_text": search_text(ref.name, aliases),
+            "birth_date": _date(p.get("birthday")),
+            "country": pandascore_esports.country(p.get("nationality")),
+            "teams": ref.team_names,
+            "league": ref.league,
+            "title": None,
+            "ids": {"pandascore_esports": ref.athlete_id},
+            "image": None,
+            "sitelinks": 0,
+            "current": bool(p.get("active")) and bool(ref.team_ids),
+        })
+    return rows
+
+
+def import_esports() -> int:
+    """Import the active pros of pandascore_esports.IMPORT_GAMES, a page of 100 every ESPORTS_PACE
+    seconds and only while live series keep their share of the hour (pandascore.spare). A complete run
+    drops the rows it didn't see again (retired, or moved to a title not imported)."""
+    if "pandascore_esports" not in ADAPTERS:
+        log.info("registry esports: PandaScore isn't running (no token); skipped")
+        return 0
+    started = datetime.now(timezone.utc)
+    games = ",".join(str(pandascore_esports.GAME_IDS[g]) for g in pandascore_esports.IMPORT_GAMES)
+    params = {"filter[videogame_id]": games, "filter[active]": "true", "sort": "id", "page[size]": pandascore.PAGE}
+    total, page, waited, complete = 0, 1, 0, True
+    while True:
+        if not pandascore.spare() and waited < ESPORTS_WAIT:
+            time.sleep(60)
+            waited += 60
+            continue
+        try:
+            players = pandascore.get_json("/players", ttl=0, **params, **{"page[number]": page})
+        except pandascore.RateLimited:
+            if waited >= ESPORTS_WAIT:
+                complete = False
+                break
+            time.sleep(60)
+            waited += 60
+            continue
+        except AdapterError as exc:
+            log.warning("registry esports: page %d failed: %s", page, exc)
+            complete = False
+            break
+        players = players if isinstance(players, list) else []
+        rows = esports_rows(players)
+        with session() as db:
+            upsert(db, rows)
+        total += len(rows)
+        log.info("registry esports: %d pages read, %d pros kept", page, total)
+        if len(players) < pandascore.PAGE:
+            break
+        page += 1
+        time.sleep(ESPORTS_PACE)
+    if complete:
+        with session() as db:
+            gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.updated_at < started)).rowcount
+        if gone:
+            log.info("registry esports: %d pros no longer active removed", gone)
+    return total
 
 
 # ---------------------------------------------------------------- search
@@ -327,7 +419,8 @@ def score():
 
 def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> list[Athlete]:
     """Athletes whose name or an alias has a word starting with every typed word: whole-name matches
-    first, then the rest by popularity (score)."""
+    first, then the rest by popularity (score), players of today first where that ties (esports rows
+    have no popularity: a pro on a team comes before a teamless one with the same handle)."""
     typed = words(query)
     if not typed or len(" ".join(typed)) < 2:
         return []
@@ -335,8 +428,8 @@ def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> 
     base = select(Athlete).where(*starts)
     if sport:
         base = base.where(Athlete.sport == sport)
-    exact = db.scalars(base.where(Athlete.search_text.like(f"% {' '.join(typed)} |%")).order_by(Athlete.sitelinks.desc()).limit(10)).all()
-    popular = db.scalars(base.order_by(score().desc()).limit(limit)).all()
+    exact = db.scalars(base.where(Athlete.search_text.like(f"% {' '.join(typed)} |%")).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(10)).all()
+    popular = db.scalars(base.order_by(score().desc(), Athlete.current.desc()).limit(limit)).all()
     return list({a.id: a for a in [*exact, *popular]}.values())
 
 
@@ -534,8 +627,8 @@ def describe(player_id: int) -> str | None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     new_only = "--new" in sys.argv
-    wanted = [a for a in sys.argv[1:] if a != "--new"] or list(SPORTS)
-    unknown = [s for s in wanted if s not in SPORTS]
+    wanted = [a for a in sys.argv[1:] if a != "--new"] or [*SPORTS, ESPORTS]
+    unknown = [s for s in wanted if s not in (*SPORTS, ESPORTS)]
     if unknown:
-        sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join(SPORTS)}")
+        sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join((*SPORTS, ESPORTS))}")
     print(import_all(wanted, new_only))

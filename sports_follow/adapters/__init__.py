@@ -9,14 +9,15 @@ from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
 from .espn_tennis import EspnTennis
 from .lichess_chess import LichessChess
-from . import sportmonks
+from . import pandascore, sportmonks
+from .pandascore_esports import PandascoreEsports
 from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
 
 # Licensed sources run only with a token. for_sport() picks the first adapter for a sport, so where
 # both run (a development build) football comes from Sportmonks, while cricket stays on ESPN until the
 # Sportmonks plan covers ODIs, Tests and the IPL (the free plan has three T20 competitions). A public
-# build lists only licensed sources and gets Sportmonks for both.
+# build lists only licensed sources and gets Sportmonks for both. Esports comes from PandaScore alone.
 _TOKEN = bool(sportmonks.token())
 ALL: tuple[Adapter, ...] = (
     *((SportmonksFootball(),) if _TOKEN else ()),
@@ -26,6 +27,7 @@ ALL: tuple[Adapter, ...] = (
     EspnBasketball(),
     EspnTennis(),
     LichessChess(),
+    *((PandascoreEsports(),) if pandascore.token() else ()),
 )
 
 

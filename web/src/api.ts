@@ -48,6 +48,10 @@ export interface ChessState {
   match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
 }
 
+export interface EsportsTeam { id: string; name: string; abbr?: string | null; score: number; winner?: boolean | null }
+export interface EsportsMap { n: number; status: string; winner?: string | null }  // status: finished | running | not_started
+export interface EsportsState { kind: 'esports'; game?: string | null; teams: EsportsTeam[]; maps: EsportsMap[]; format?: string | null; stage?: string | null; forfeit?: boolean }
+
 export interface Moment { clock: string; kind: string; text: string; athlete_ids: string[] }
 
 export interface LiveStatus {
@@ -63,7 +67,7 @@ export interface LiveStatus {
   event_id?: number
   competition?: string | null
   headline?: string | null
-  state?: FootballState | CricketState | BasketballState | TennisState | ChessState
+  state?: FootballState | CricketState | BasketballState | TennisState | ChessState | EsportsState
   moments?: Moment[]
   source?: string
 }

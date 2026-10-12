@@ -293,11 +293,39 @@ reached, the app says so plainly rather than looking broken.
   those ids.
 - The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
 
-### 8. Esports
+### 8. Esports (step 1 built)
 
-**Today.** No esports source. A pro gamer typed into "Research with AI" gets an AI-built page with no
-scores or alerts, as in any sport without a source. Search barely finds them: only 2,844 people on
-Wikidata have a Liquipedia id (P10918), 3 of them Indian. Every adapter assumes head-to-head events.
+**Built (step 1).** `adapters/pandascore_esports.py` follows a pro's
+team in PandaScore's team titles (Valorant, CS2, LoL, Dota 2, Mobile Legends, Rainbow Six, Overwatch,
+Rocket League, Call of Duty, Wild Rift, King of Glory): upcoming series with stage and format ("Upper
+bracket final · Bo3"), results from the team's side ("Won 2–1", "Lost by forfeit"), a year of history
+through the history lane, and the team's series and maps won on the Stats tab. Running series are
+polled once a minute, all in one request (`poll_lane`), so map results arrive as each map ends; the
+app shows a series board with one chip a map. Moments: the series starting and the result (key),
+each map won or lost (everything), all told from the player's team's side. The registry imports the
+active pros of `SPORTS_FOLLOW_ESPORTS_GAMES` (Valorant, CS2, LoL and Dota 2 by default) from PandaScore
+weekly, by handle and full name, so search finds them under an Esports filter: 33,370 "active"
+players for those four titles, 334 requests and about 50 minutes, paced. PandaScore's `active` flag
+includes long-retired players (most have no team), so a pro on a team ranks first. Credits name
+PandaScore. Background reads keep 300 of the 1,000 requests an hour for live series.
+
+Checked against real responses on 13 Oct 2026 (free plan): series scores (`results`), the winner and
+each map's winner come with every match, and a running series shows which map is on and who won the
+earlier ones, so map moments work without a paid plan. The remaining count is `x-rate-limit-remaining`.
+`/matches` rejects `filter[videogame_id]` (it's `filter[videogame]` there). Birthdays are null.
+Real ESL Pro League and VCT results read correctly ("Grand Final · Bo5", "Won 3–0"). The tests use
+made-up responses in PandaScore's shapes, as for Sportmonks, rather than committing theirs.
+An armed series the schedule moves hours later is now disarmed (any sport), so it isn't polled all
+that time or closed unplayed after six days.
+
+**To finish step 1**
+- Follow a pro whose team plays soon and watch one series through: the start, map and result alerts.
+- Add `pandascore_esports` to `SPORTS_FOLLOW_SOURCES` in `deploy/settings.env` once PandaScore
+  confirms the free plan allows a commercial app; until then a public build leaves it off.
+
+**Before step 1.** No esports source. A pro gamer typed into "Research with AI" got an AI-built page
+with no scores or alerts, as in any sport without a source. Search barely found them: only 2,844 people
+on Wikidata have a Liquipedia id (P10918), 3 of them Indian. Every adapter assumed head-to-head events.
 
 **What fans in India watch** (researched 12 Oct 2026). BGMI by far: KRAFTON India reports 930M+ esports
 views in 2025, and the BMPS 2026 final peaked at about 729,000 concurrent viewers. Free Fire is coming
@@ -320,10 +348,8 @@ Sources: [PandaScore pricing](https://pandascore.co/pricing), [GRID Open Access]
 results ("Won 2–1"), and hear when a series ends, from a licensed source named on the Credits page.
 
 **Suggested path**, cheapest first:
-1. **Team esports from PandaScore's free plan (about a week).** An adapter (player, then team, then
-   matches, with series and map scores), a registry import of pro players from PandaScore since
-   Wikidata is too thin, "series won or lost" and "map won" moments, an Esports filter in search, and
-   credits. Fixtures and results only, no live scores.
+1. **Team esports from PandaScore's free plan: built** (above). Player numbers need the €400 stats
+   plan; until then results are the team's.
 2. **Live scores** once the launch metrics show demand: €1,000 a game a month for LoL or CS (Valorant
    isn't on the live tier), three to six times the launch's whole data budget.
 3. **BGMI and Free Fire (1–2 weeks of code, plus a data deal).** Battle royale doesn't fit the
@@ -334,8 +360,8 @@ results ("Won 2–1"), and hear when a series ends, from a licensed source named
 
 **Open questions**
 - Which games first: Valorant and CS2 have the cleanest data, BGMI has the audience.
-- PandaScore's free plan: confirm in writing that a commercial, non-betting app may use it, which
-  titles it covers, and whether its results include series and map scores.
+- PandaScore's free plan: confirm in writing that a commercial, non-betting app may use it. (Its
+  results do include series scores and map winners, for every team title: checked 13 Oct 2026.)
 - Liquipedia's plans and commercial terms (its API page sits behind a bot check).
 
 ## Found while building (not yet scheduled)

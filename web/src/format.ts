@@ -89,11 +89,14 @@ export function shortWhen(value?: string | null, now = Date.now()): string {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
-export type SportKey = 'football' | 'cricket' | 'basketball' | 'tennis' | 'chess' | 'other'
+export type SportKey = 'football' | 'cricket' | 'basketball' | 'tennis' | 'chess' | 'esports' | 'other'
+
+const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|league of legends|dota|mobile legends|overwatch|rainbow six|rocket league|call of duty|bgmi|pubg|free fire/
 
 /** Which colour a sport wears (styles.css, [data-sport]). Other codes of football, table tennis and padel wear none. */
 export function sportKey(sport?: string | null): SportKey {
   const s = (sport ?? '').toLowerCase()
+  if (ESPORTS.test(s)) return 'esports'  // the agent may name the game ("Valorant") rather than the sport
   if (/american|australian|gaelic|canadian|rugby|rules/.test(s)) return 'other'
   if (s.includes('soccer') || s.includes('football')) return 'football'
   if (/table tennis|padel|beach tennis/.test(s)) return 'other'

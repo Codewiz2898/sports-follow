@@ -70,7 +70,8 @@ def _import_registry() -> None:
 
 
 async def import_registry(ctx) -> None:
-    """The weekly player-registry refresh from Wikidata; about an hour and a half, one query at a time."""
+    """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
+    PandaScore; about two hours."""
     await asyncio.to_thread(_import_registry)
 
 
