@@ -161,3 +161,58 @@ def test_only_real_push_services_are_accepted():
     assert not _push_host_ok("http://fcm.googleapis.com/fcm/send/abc")
     assert not _push_host_ok("https://127.0.0.1:8421/api")
     assert not _push_host_ok("https://evil.example/fcm.googleapis.com")
+
+
+FOOTBALL = {"kind": "football", "home": {"id": "1", "name": "Egypt", "score": "1"}, "away": {"id": "2", "name": "South Africa", "score": "1"}}
+
+
+def test_the_line_up_before_the_start():
+    starts = detect("Football", "Mohamed Salah", "173896", None, Seen("scheduled", state=FOOTBALL, role="starting"))
+    assert [(f.kind, f.detail, f.title, f.body, f.priority) for f in starts] == [("lineup", "starting", "Mohamed Salah starts", "Egypt v South Africa · line-ups are out", 50)]
+    [bench] = detect("Football", "Mohamed Salah", "173896", Seen("scheduled"), Seen("scheduled", state=FOOTBALL, role="bench"))
+    assert (bench.title, bench.level, bench.priority) == ("Mohamed Salah is on the bench", "key", 45)
+    cricket = {"kind": "cricket", "teams": [{"name": "India"}, {"name": "Australia"}]}
+    [xi] = detect("Cricket", "Virat Kohli", "253802", None, Seen("scheduled", state=cricket, role="starting"))
+    assert (xi.title, xi.body) == ("Virat Kohli is in the XI", "India v Australia · line-ups are out")
+    # Once the game is on, the start says it; and no team sheet, or not on it, says nothing.
+    assert detect("Football", "Mohamed Salah", "173896", None, Seen("live", state=FOOTBALL, role="starting")) == []
+    assert detect("Football", "Mohamed Salah", "173896", None, Seen("scheduled", state=FOOTBALL)) == []
+
+
+def goal(minute: str, athlete: str = "173896", team: str = "1", **extra) -> dict:
+    return {"kind": "GOAL", "clock": minute, "athlete_ids": [athlete], "team_id": team, **extra}
+
+
+def scored(home: int, away: int, events: list[dict], goals: int = 1, clock: str = "90'") -> Seen:
+    state = {**FOOTBALL, "home": {**FOOTBALL["home"], "score": str(home)}, "away": {**FOOTBALL["away"], "score": str(away)}}
+    return Seen("live", state=state, line=line(f"{goals} goal", Goals=str(goals)), score=f"Egypt {home} – {away} South Africa", clock=clock, events=events)
+
+
+def test_a_goal_says_what_it_did():
+    before = Seen("live", line=line("Started"))
+    late_equaliser = scored(1, 1, [goal("88'", assist="Trezeguet"), goal("20'", athlete="9", team="2")])
+    [f] = detect("Football", "Mohamed Salah", "173896", before, late_equaliser)
+    assert (f.title, f.body, f.priority) == ("Late equaliser: Mohamed Salah", "Egypt 1 – 1 South Africa · 88' · assist Trezeguet", 95)
+    [f] = detect("Football", "Mohamed Salah", "173896", before, scored(2, 1, [goal("30'"), goal("20'", athlete="9", team="2"), goal("5'", athlete="7")], clock="31'"))
+    assert (f.title, f.priority) == ("Goal: Mohamed Salah puts Egypt ahead", 90)
+    [f] = detect("Football", "Mohamed Salah", "173896", before, scored(3, 0, [goal("70'"), goal("20'", athlete="7"), goal("5'", athlete="7")]))
+    assert (f.title, f.body, f.priority) == ("Goal: Mohamed Salah", "Egypt 3 – 0 South Africa · 70'", 85)
+    # Scored since: what his goal did can't be read off the score, so it's just a goal at its minute.
+    [f] = detect("Football", "Mohamed Salah", "173896", before, scored(1, 1, [goal("89'", athlete="9", team="2"), goal("85'")]))
+    assert (f.title, f.body) == ("Goal: Mohamed Salah", "Egypt 1 – 1 South Africa · 85'")
+    # His own goal isn't one of his goals.
+    hat_trick = scored(4, 1, [goal("80'"), goal("60'"), goal("50'", own_goal=True), goal("10'")], goals=3)
+    found = detect("Football", "Mohamed Salah", "173896", Seen("live", line=line("1 goal", Goals="1")), hat_trick)
+    assert [(f.title, f.body.split(" · ")[1]) for f in found] == [("Goal: Mohamed Salah (2)", "60'"), ("Hat-trick: Mohamed Salah", "80'")]
+
+
+def test_priorities_rank_moments():
+    def ranked(sport, before, now):
+        return [(f.kind, f.priority) for f in detect(sport, "X", "1", before, now)]
+
+    assert ranked("Cricket", Seen("live", line=line("90*", Runs="90*")), Seen("live", line=line("151*", Runs="151*"))) == [("hundred", 90), ("hundred", 95)]
+    assert ranked("Cricket", Seen("live", line=line("0*", Runs="0*")), Seen("live", line=line("0", Runs="0", Out="b Starc"))) == [("out", 65)]
+    assert ranked("Cricket", Seen("live", line=line("4/30", Wickets="4")), Seen("live", line=line("5/31", Wickets="5"))) == [("wickets", 90)]
+    assert ranked("Basketball", Seen("live", line=line("38 PTS")), Seen("live", line=line("41 PTS"))) == [("points", 85)]
+    assert ranked("Football", Seen("live", line=line("Started")), Seen("live", line=line("Started", Red="1", Yellow="1"))) == [("red", 80), ("yellow", 20)]
+    assert ranked("Football", Seen("live"), Seen("final", score="Egypt 2–0 South Africa")) == [("final", 80)]

@@ -85,13 +85,21 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
   package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
   are set.
-- **Push notifications for moments.** Each poll compares the player's line with the last one
-  (`sports_follow/moments.py`): a goal, a fifty, 30 points, a set, the start and the result; news
-  from a rebuild adds injuries, transfers and retirements. A moment is stored once (a stable key), then
-  sent by Web Push (`sports_follow/notify.py`, VAPID) to every device of every follower whose level
-  for that player wants it: key moments (the default), everything, results only, or off. Quiet hours
-  are per device and make notifications arrive silently. With the app open and in front, the moment
-  shows as an in-app toast instead. Devices the push service reports gone are removed.
+- **Push notifications for moments, without the noise.** Each poll compares the player's line with the
+  last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
+  points, a set, the start and the result; news from a rebuild adds injuries, transfers and
+  retirements. Each moment is stored once (a stable key) with a priority: a hundred over a fifty, a
+  late equaliser over a fourth goal. The noise rules (`sports_follow/alerts.py`) then plan each fan's
+  pushes: their level for the player (key moments, the default; everything; results only; off) says
+  what reaches the phone, and only key moments make a sound. Each game is one notification on the
+  phone, replaced as moments come with the story so far underneath, whichever followed players are
+  in it; "Mute this game" stops it. Sound is rationed (once every 3 minutes a game, 6 times an hour a
+  phone) except for the biggest moments. `sports_follow/notify.py` claims each batch once, logs every
+  push (`notification`), sends it by Web Push (VAPID) to each device at once, and the tick sweeps up
+  any batch a restart dropped. Quiet hours are per device and make notifications arrive silently.
+  With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
+  list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
+  `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.
 - **Results history, read once and kept.** Every finished game a source returns is stored as the
   player's result (`event_player.result`), so the Matches tab's results page through a whole history and each
   game opens to its final score and the player's full line. A history lane (`sports_follow/history.py`)

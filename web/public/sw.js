@@ -6,8 +6,12 @@
 // served from cache while refreshed. /api/me/following and player cards: network first, the last
 // answer offline. Every other /api call and every live stream passes straight through.
 //
-// Push: a moment (a goal, a fifty, a result; see sports_follow/moments.py) arrives as a notification,
-// silent during the device's quiet hours; tapping it opens the player's page.
+// Push: moments (a goal, a fifty, a result; see sports_follow/moments.py) arrive as notifications,
+// planned by sports_follow/alerts.py. Each game is one notification (its tag): a new moment replaces
+// it, with the story so far underneath, and only makes a sound when the server says it's worth one
+// (never during the device's quiet hours). "Mute this game" stops that game's notifications; tapping
+// opens the player's page and tells the server it was opened. The app icon's badge counts what's
+// in the tray, where the platform has badges.
 
 const VERSION = 'v2'  // v2: the Matchday look; new icons and fonts, so the v1 caches go
 const SHELL = `shell-${VERSION}`
@@ -99,30 +103,61 @@ async function show(data) {
   // With the app open and in front, the moment shows as a toast in the page instead.
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
   if (data.kind !== 'test' && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
-  return self.registration.showNotification(data.title || 'Sports Follow', {
+  await self.registration.showNotification(data.title || 'Sports Follow', options(data))
+  return badge()
+}
+
+// The notification for one push: replaces the one with the same tag (the game's), and makes a sound
+// only for a loud push outside quiet hours. A push from before the tags (a moment id only) still shows.
+function options(data) {
+  const loud = data.loud !== false && !data.quiet
+  const tag = data.tag || (data.id ? `moment-${data.id}` : undefined)
+  return {
     body: data.body || '',
     icon: '/icons/icon-192.png',
     badge: '/icons/badge-96.png',
-    tag: data.id ? `moment-${data.id}` : undefined,
-    data: { url: data.url || '/' },
-    silent: Boolean(data.quiet),
+    tag,
+    renotify: Boolean(tag) && loud,
+    silent: !loud,
+    data: { url: data.url || '/', id: data.id || null, event_id: data.event_id || null },
+    actions: data.event_id ? [{ action: 'mute', title: 'Mute this game' }] : [],
     timestamp: Date.now(),
-  })
+  }
+}
+
+// The app icon's count: what's in the tray (installed apps on desktop and iPhone; Android shows a dot itself).
+async function badge() {
+  if (!self.navigator.setAppBadge) return
+  const shown = await self.registration.getNotifications()
+  return (shown.length ? self.navigator.setAppBadge(shown.length) : self.navigator.clearAppBadge()).catch(() => {})
+}
+
+function post(path) {
+  return fetch(path, { method: 'POST', credentials: 'same-origin', keepalive: true }).catch(() => {})
 }
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href
-  event.waitUntil((async () => {
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    for (const win of windows) {
-      if (new URL(win.url).origin !== self.location.origin) continue
-      await win.focus()
-      return win.navigate ? win.navigate(url) : undefined
-    }
-    return self.clients.openWindow(url)
-  })())
+  const data = event.notification.data || {}
+  if (event.action === 'mute') {
+    event.waitUntil(Promise.all([fetch(`/api/me/mutes/${data.event_id}`, { method: 'PUT', credentials: 'same-origin' }).catch(() => {}), badge()]))
+    return
+  }
+  event.waitUntil(Promise.all([open(data.url || '/'), data.id && post(`/api/notifications/${data.id}/opened`), badge()]))
 })
+
+async function open(path) {
+  const url = new URL(path, self.location.origin).href
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  for (const win of windows) {
+    if (new URL(win.url).origin !== self.location.origin) continue
+    await win.focus()
+    return win.navigate ? win.navigate(url) : undefined
+  }
+  return self.clients.openWindow(url)
+}
+
+self.addEventListener('notificationclose', (event) => event.waitUntil(badge()))
 
 // Browsers occasionally replace a subscription; hand the new one to the server so pushes keep coming.
 self.addEventListener('pushsubscriptionchange', (event) => {

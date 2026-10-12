@@ -85,33 +85,70 @@ History also grows by itself: a game stays stored after it drops out of the sour
 ### 2. Push notifications for interesting moments (built)
 
 **Built.** Each live poll compares the player's line with the previous one and stores typed moments
-once (`sports_follow/moments.py`); `sports_follow/notify.py` sends them by Web Push to every device of
-every follower whose level wants them, and the app shows them as toasts when it's open. Verified end
-to end on an Android emulator and a phone (Chrome, through FCM), including tap-through to the player.
+once (`sports_follow/moments.py`); the noise rules (`sports_follow/alerts.py`) plan each fan's pushes
+and `sports_follow/notify.py` sends them by Web Push to every device, and the app shows them as toasts
+when it's open. Verified end to end on an Android emulator and a phone (Chrome, through FCM),
+including tap-through to the player.
 
 | Sport | Moments |
 |---|---|
 | All | Game starts with the player in it; final result, unless the line-ups show they weren't in the squad |
-| Football | Goal, assist, red card (key); yellow card, comes on (everything) |
-| Cricket | 50 / 100 / 150 / 200, 3+ wickets, out with the score (key) |
+| Football | Line-up: starts or on the bench; goal (an equaliser, a goal that puts their side ahead, "late" from 80', a hat-trick; with minute and assist), assist, red card (key); yellow card, comes on (everything) |
+| Cricket | In the XI or named a substitute; 50 / 100 / 150 / 200, 3+ wickets, out with the score (key) |
 | Basketball | 30 / 40 / 50 / 60 points, triple-double (key); 20 points, double-double (everything) |
 | Tennis | Upset of a higher seed (key); each set won or lost (everything) |
 | Chess | Winning, in trouble, a turnaround (key); better, worse, level again (everything); from Stockfish |
 | News | Injury, transfer, retirement (key); milestone (everything), from a rebuild's news |
 
-Per player: key moments (default), everything, results only, off. Per device: quiet hours (silent,
-not dropped). A first look at a game already under way is a baseline, so nobody gets "reaches 50" an
-hour late. Live moments expire after 15 minutes if the phone is offline; results and news after 12 hours.
+Line-ups come from the team sheet the source publishes before the start (Sportmonks football and
+cricket, ESPN football), seen by the armed poll from 30 minutes before. Every moment has a priority
+(0–100): a hundred 90, a fifty 70, a late equaliser 95, a goal 85, a duck 65, a yellow card 20.
+
+**The noise rules** (`alerts.py`, built 2026-10-12), app first: a notification is something on the
+phone, so the rules are about the tray and the sound.
+
+- Per player: key moments (default) make a sound; everything adds the minor ones silently; results
+  only; off. Per device: quiet hours (silent, not dropped).
+- One notification per game per fan (tag `e{event}`, and the same Web Push `Topic`, so a phone that was
+  offline gets the latest rather than a burst). A new moment replaces it with the story so far
+  underneath, across every followed player in the game ("Kohli reaches 100" over "Rohit out for 45").
+  Moments from one poll are one push, led by the highest priority. News is one notification per player.
+- "Mute this game" on the notification (`PUT /api/me/mutes/{event}`).
+- Sound is rationed: a game at most once every 3 minutes, a phone at most 6 times an hour; past
+  either the push arrives silently. Priority 90+ always makes a sound. A game's start is silent if the
+  fan already heard its line-up.
+- A first look at a game already under way is a baseline, so nobody gets "reaches 50" an hour late.
+  Live moments aren't sent after 15 minutes (line-ups after an hour); results and news after 12 hours.
+
+**Delivery.** A batch is claimed in the database before sending, so it goes once; every push is a
+`notification` row (lead kind, lines, loud, devices, delivered, opened). Pushes to devices go out at
+once (16 at a time), not one after another. The tick sends any batch a worker restart left unclaimed.
+Tapping a notification records the open (`notify stats` shows pushes, loud and open rate by kind); the
+installed app's icon badge counts the tray where the platform has badges.
+
+**In the app.** The Alerts tab opens on Latest: every moment of the fan's players since they followed
+them (`GET /api/me/activity`), pushed or not, by day, with what's new since they last looked marked and
+counted on the Alerts tab. Settings holds the device switch, quiet hours and each player's level (the
+hints say minor moments arrive without sound). A followed player's alerts panel has "Mute this game"
+while they're live, and the live score says when its alerts are muted; muted games show no toasts.
 
 **Next**
+- **Tune from the open rate.** `notify stats` after a few weeks of real use: a kind fans rarely open
+  should get quieter, or its priority lower.
+- **Personal context from the stored results:** "a first hundred since March", "a career-high 41",
+  "10th goal of the season" (`event_player.result` and `form.py` already hold the history).
+- **Corrections:** a goal ruled out by VAR lowers the count, but the goal's notification stands and a
+  later real goal reuses its key (`goal1`), so it isn't sent. Track ruled-out goals and update the
+  game's notification instead.
+- **Line-ups an hour ahead:** arm Sportmonks football at 60 minutes instead of 30 (one lane request a
+  round covers every match, so it costs little).
 - **iPhone and lock-screen live scores.** Web Push reaches iPhone only from a Home Screen install, and
-  Live Activities (lock-screen scores) need a native app. If iPhone matters at launch, a React Native
-  (Expo) app reuses the web app's TypeScript and sends through the same `notify.deliver` step (FCM/APNs
-  beside Web Push).
+  Live Activities (lock-screen scores) and Android's ongoing live-score notification need a native
+  app. If that matters, a React Native (Expo) app reuses the web app's API client and gets an FCM/APNs
+  transport beside `notify.push`; the planning and the log stay as they are.
 - An evaluation bar on the live chess board: the evaluation is already in the event state.
 - Game-winner in the last minute (basketball), match point (tennis), tournament won (chess).
-- A digest instead of a burst when several moments land in one poll.
-- Accounts, so a fan's levels follow them across devices.
+- Accounts, so a fan's levels and mutes follow them across devices.
 
 ### 3. Player search (built)
 

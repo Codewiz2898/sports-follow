@@ -188,3 +188,14 @@ def test_an_uncached_read_is_not_kept(monkeypatch):
     assert sportmonks._cache == {}
     sportmonks.get_json("/football/fixtures/1", ttl=5)
     assert len(sportmonks._cache) == 1
+
+
+def test_the_team_sheet_before_kick_off_and_goal_details():
+    snap = sm.parse_match(_match("NS", 0, 0, lineups=LINEUPS))
+    assert snap.lines == {}  # a team sheet isn't a line
+    assert snap.squad == {str(STAR): "starting", str(SUB): "bench", str(UNUSED): "bench", str(KEEPER): "starting"}
+    live = sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=LINEUPS, events=EVENTS))
+    penalty, own_goal, opener = [m for m in live.moments if m["kind"] == "GOAL"]
+    assert (opener["team_id"], opener["assist"], opener["own_goal"]) == (str(HOME), "Ozan Tufan", False)
+    assert (own_goal["own_goal"], own_goal["assist"]) == (True, None)
+    assert penalty["clock"] == "45+2'" and penalty["athlete_ids"] == [str(STAR)]

@@ -88,6 +88,8 @@ p { margin: 0; }
 .side-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 700; color: var(--muted); }
 .side-nav a:hover { color: var(--text); }
 .side-nav a.active { background: var(--surface); color: var(--text); }
+.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: var(--live); color: #fff; font-size: 11px; font-weight: 800; }
+.tabbar .nav-count { margin-left: -2px; }
 
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .page-title { font-size: 54px; }
@@ -207,7 +209,13 @@ p { margin: 0; }
 /* An offline or new-version notice sits above the band, so the band can't reach the top edge. */
 .notice ~ .player-band { margin-top: 0; border-radius: 28px; }
 
+.alert-row { display: flex; align-items: flex-start; gap: 12px; }
+.alert-row.minor .title { font-weight: 600; }
+.fresh-dot { width: 8px; height: 8px; margin-top: 8px; border-radius: 50%; background: var(--live); flex-shrink: 0; }
 .alert-panel { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 18px; background: var(--surface); }
+/* The panel sits in the player band, but its buttons are ink on white like the rest of the page. */
+.alert-panel .btn { border-color: var(--text); color: var(--text); background: transparent; }
+.alert-panel .btn[aria-pressed='true'] { background: var(--text); color: var(--bg); }
 
 /* The next game on a player's page. */
 .next-card { display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: var(--radius-card); background: var(--text); color: var(--bg); }

@@ -128,9 +128,12 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
     }
 
     lines: dict[str, Line] = {}
+    squad: dict[str, str] = {}
     for roster in data.get("rosters") or []:
         for entry in roster.get("roster") or []:
             athlete = entry.get("athlete") or {}
+            if athlete.get("id"):
+                squad[str(athlete["id"])] = "starting" if entry.get("starter") else "bench"
             stats = {s.get("name"): s.get("displayValue") for s in entry.get("stats") or []}
             if not stats:
                 continue
@@ -154,11 +157,15 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
         kind_e = (e.get("type") or {}).get("type") or ""
         if kind_e not in ("goal", "yellow-card", "red-card", "own-goal", "penalty---scored"):
             continue
+        people = [(p.get("athlete") or {}) for p in e.get("participants") or []]
         moments.append({
             "clock": (e.get("clock") or {}).get("displayValue", ""),
             "kind": "GOAL" if e.get("scoringPlay") else ("RED" if "red" in kind_e else "YELLOW"),
             "text": e.get("text") or e.get("shortText") or "",
-            "athlete_ids": [str(((p.get("athlete") or {}).get("id"))) for p in e.get("participants") or []],
+            "athlete_ids": [str(a.get("id")) for a in people],
+            "team_id": str((e.get("team") or {}).get("id")),
+            "assist": people[1].get("displayName") if len(people) > 1 and e.get("scoringPlay") and kind_e != "own-goal" else None,
+            "own_goal": kind_e == "own-goal",
         })
 
     return Snapshot(
@@ -169,6 +176,7 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
         lines=lines,
         moments=moments[:12],
         source_url=f"https://www.espn.com/soccer/match/_/gameId/{header.get('id')}",
+        squad=squad,
     )
 
 

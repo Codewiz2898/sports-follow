@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -269,18 +270,53 @@ class Moment(Base):
     injury. The key makes each one happen once, however many polls see it."""
 
     __tablename__ = "moment"
+    __table_args__ = (Index("ix_moment_unsent", "created_at", postgresql_where=text("sent_at IS NULL")),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(200), unique=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
     event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
-    kind: Mapped[str] = mapped_column(String(30))  # start | final | goal | assist | red | on | fifty | hundred | ...
+    kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | ...
     level: Mapped[str] = mapped_column(String(10))  # key | minor
+    priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")  # 0-100, moments.PRIORITY
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text, default="")
     url: Mapped[str] = mapped_column(String(300), default="/")
     created_at: Mapped[datetime] = _now()
+    # When a sender claimed it (notify.send). Unclaimed moments are swept up by the tick.
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Notification(Base):
+    """One push to one fan (alerts.py plans it, notify.py sends it to each of their devices): one or
+    more moments of one game, or one player's news. The log the noise rules read (how often this fan's
+    phone buzzed, the game's story so far) and the open rate is measured from."""
+
+    __tablename__ = "notification"
+    __table_args__ = (Index("ix_notification_fan_created", "fan_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64))
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"), index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))  # the lead moment's
+    moment_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    kind: Mapped[str] = mapped_column(String(30))  # the lead moment's
+    lines: Mapped[list] = mapped_column(JSONB, default=list)  # every moment's title, lead first
+    loud: Mapped[bool] = mapped_column(Boolean)  # with sound (before each device's quiet hours)
+    devices: Mapped[int] = mapped_column(Integer, default=0)
+    delivered: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = _now()
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationMute(Base):
+    """A game a fan muted from a notification ("Mute this game"): nothing more is pushed from it."""
+
+    __tablename__ = "notification_mute"
+
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = _now()
 
 
 class PushSubscription(Base):

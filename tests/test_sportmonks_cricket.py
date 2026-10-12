@@ -158,3 +158,9 @@ def test_cricket_reserve_is_per_minute(monkeypatch):
     assert not sc.SportmonksCricket().spare()
     sportmonks.remaining["Cricket"] = (sportmonks.CRICKET_RESERVE + 1, 1e12)
     assert sc.SportmonksCricket().spare()
+
+
+def test_the_xi_is_the_team_sheet_before_the_start():
+    snap = sc.parse_match(_match("NS", [], lineup=[{"id": OPENER, "lineup": {"substitution": False}}, {"id": KEEPER, "lineup": {"substitution": True}}]))
+    assert snap.lines == {} and snap.squad == {str(OPENER): "starting", str(KEEPER): "bench"}
+    assert sc.parse_match(_match("NS", [])).squad == {}

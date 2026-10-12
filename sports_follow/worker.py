@@ -1,5 +1,5 @@
 """The pipeline worker: arq jobs for card builds, source refreshes, live polls and agent live
-checks, plus the one-minute scheduler tick.
+checks, plus the one-minute scheduler tick (which also sends moments no sender claimed).
 
 Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 """
@@ -12,7 +12,7 @@ import logging
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import bus, engine, history, pipeline, registry, structured
+from . import bus, engine, history, notify, pipeline, registry, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -43,6 +43,11 @@ async def poll_event(ctx, event_id: int) -> None:
 async def poll_lane(ctx, system: str) -> None:
     """Every armed and live event of one source, one request a round (structured.poll_lane)."""
     await asyncio.to_thread(structured.poll_lane, system)
+
+
+async def send_moments(ctx, moment_ids: list[int]) -> None:
+    """Moments a poll or a rebuild found but no sender claimed: the worker restarted in between."""
+    await asyncio.to_thread(notify.send, moment_ids)
 
 
 async def engine_lane(ctx) -> None:
@@ -83,6 +88,10 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("refresh_live", player_id)
     if await asyncio.to_thread(engine.needs_lane):
         await ctx["redis"].enqueue_job("engine_lane", _job_id="engine-lane")
+    unsent = await asyncio.to_thread(notify.pending)
+    if unsent:
+        log.info("tick: sending %d moment(s) no sender claimed", len(unsent))
+        await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
     if await asyncio.to_thread(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
     if due.builds or due.refreshes or due.polls or due.lanes or due.lives:
@@ -90,7 +99,7 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, engine_lane, history_lane]
+    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane]
     cron_jobs = [
         cron(tick, second=0, run_at_startup=True),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
