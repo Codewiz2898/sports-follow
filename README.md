@@ -17,6 +17,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ build_card: research agent → profile + news → card, then bind to an adapter
                                 ├─ refresh_structured: adapter → fixtures, results, stats → card
                                 ├─ poll_event: one job per live game, shared by every player in it
+                                ├─ poll_lane: every live Sportmonks football match, one request a round
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
@@ -71,6 +72,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   30 minutes before one starts it is armed; one `poll_event` job then polls it (every minute before
   kick-off, every 8–15 s in play), appends event states and player lines, and pushes every followed
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
+  Sportmonks football matches share one `poll_lane` job instead: each round fetches every armed and
+  live match in one request (`fixtures/multi`, 50 matches a request), so a busy matchday costs 240
+  requests an hour, not 240 per match, and one worker thread, not one per match.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
@@ -140,7 +144,7 @@ that build too: turn them on under Notifications in the sidebar. Always pass
 | `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a card is rebuilt |
 | `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between agent live checks during a game (sports without an adapter) |
 | `SPORTS_FOLLOW_FIXTURES_MAX_AGE` | `1800` | seconds before a bound player's fixtures and stats are re-read |
-| `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job runs before handing over |
+| `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job or lane runs before handing over |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |

@@ -4,6 +4,7 @@ don't allow republishing real ones, so none are committed)."""
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 from sports_follow.adapters import sportmonks, sportmonks_football as sm
 
@@ -152,3 +153,38 @@ def test_background_reads_stop_at_the_live_reserve(monkeypatch):
     assert not sportmonks.spare("Fixture")
     sportmonks.remaining["Fixture"] = (sportmonks.LIVE_RESERVE, 0.0)  # the hour has reset since
     assert sportmonks.spare("Fixture")
+
+
+def test_live_matches_come_fifty_to_a_request(monkeypatch):
+    calls = []
+
+    def get_json(path, ttl, **params):
+        calls.append((path, ttl, params))
+        ids = path.rsplit("/", 1)[1].split(",")
+        return {"data": [{**_match("INPLAY_2ND_HALF", 1, 0), "id": int(i)} for i in ids if i != "999"]}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    locators = {event: {"fixture": str(1000 + event)} for event in range(60)}
+    locators[60] = {"fixture": "1000"}  # two events, one match: asked for once
+    locators[61] = {"fixture": "999"}  # a match Sportmonks doesn't return
+    snaps = sm.SportmonksFootball().snapshots(locators)
+    assert [len(path.rsplit("/", 1)[1].split(",")) for path, _, _ in calls] == [50, 11]
+    assert all(path.startswith("/football/fixtures/multi/") and ttl == 0 and params == {"include": sm.MATCH_INCLUDE} for path, ttl, params in calls)
+    assert set(snaps) == set(range(61))
+    assert snaps[0].score_label == "Trabzonspor 1 – 0 Galatasaray" and snaps[60] is snaps[0]
+
+
+def test_one_live_match_may_come_back_as_an_object(monkeypatch):
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": _match("HT", 1, 1)})
+    assert sm.SportmonksFootball().snapshots({"e": {"fixture": "555"}})["e"].clock_label == "Half-time"
+
+
+def test_an_uncached_read_is_not_kept(monkeypatch):
+    response = SimpleNamespace(status_code=200, headers={}, json=lambda: {"data": []})
+    monkeypatch.setattr(sportmonks, "token", lambda: "example")
+    monkeypatch.setattr(sportmonks, "_cache", {})
+    monkeypatch.setattr(sportmonks._client, "get", lambda *args, **kwargs: response)
+    sportmonks.get_json("/football/fixtures/multi/1,2", ttl=0)
+    assert sportmonks._cache == {}
+    sportmonks.get_json("/football/fixtures/1", ttl=5)
+    assert len(sportmonks._cache) == 1

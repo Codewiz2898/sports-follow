@@ -56,8 +56,8 @@ def token() -> str | None:
 
 
 def get_json(path: str, ttl: float, **params: Any) -> Any:
-    """GET a Sportmonks document, cached for ttl seconds: a football path after /v3
-    ("/football/fixtures/1") or a full cricket URL (f"{CRICKET}/fixtures/1")."""
+    """GET a Sportmonks document, cached for ttl seconds (0: fetched every time and never kept): a
+    football path after /v3 ("/football/fixtures/1") or a full cricket URL (f"{CRICKET}/fixtures/1")."""
     key = f"{path}?{urlencode(sorted(params.items()))}"
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < ttl:
@@ -88,6 +88,8 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         remaining[limit["requested_entity"]] = (int(limit.get("remaining") or 0), time.time() + int(limit.get("resets_in_seconds") or 3600))
     elif res.headers.get("x-ratelimit-remaining", "").isdigit():
         remaining["Cricket"] = (int(res.headers["x-ratelimit-remaining"]), time.time() + 60)
+    if ttl <= 0:
+        return data
     with _lock:
         _cache[key] = (time.time(), data)
         if len(_cache) > 2000:

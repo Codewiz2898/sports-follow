@@ -20,8 +20,11 @@ for cricket, football and chess first; about $150–350 a month.
 - [ ] Sportmonks dashboard: pick the Growth plan's leagues. National teams (Egypt, India…), the
   Champions League, ISL, Saudi Pro League and MLS aren't on it yet, so a player's country has no
   fixtures. The trial ends 2026-10-14; check whether it converts to paid.
-- [ ] Live polling at scale: one request per live match every 15 s is 240 an hour; past about six
-  matches at once, poll `livescores/inplay` (or `fixtures/multi`) once for all of them.
+- [x] Live polling at scale (football): every armed and live Sportmonks football match is polled by
+  one lane (`structured.poll_lane`), one `fixtures/multi` request a round for up to 50 matches. A busy
+  matchday costs 240 requests an hour instead of 240 per match, and one worker thread instead of one
+  per match. Cricket keeps a poll job per match (6 requests a minute each, of 180); its `livescores`
+  endpoint could batch it the same way once checked against a real response.
 - [x] Sportmonks Cricket adapter: team fixtures kept only where the player is in the XI (or the
   season's squad before it's out), live scorecards with every player's line and dismissal, the chase
   ("need 42 from 28 balls"), fifty, hundred, out and wicket alerts, form from scorecards, a year of
@@ -154,9 +157,11 @@ which nothing has yet; a PWA, Web Push and a Play Store app all need it.
 
 **Today.** Work grows with the number of games on, not with players or fans: one poll job per live
 game (every 8–15 s in play) is shared by every followed player in it and every fan, fetches are
-cached by URL, and each fan's app holds one stream for all their players. But each poll job holds
-one of the worker's 24 job slots (and a thread) for up to 10 minutes, mostly sleeping, so one worker
-process follows about 20 games at once; on a busy matchday the rest wait in the queue and go stale.
+cached by URL, and each fan's app holds one stream for all their players. Sportmonks football is
+already one lane for all its matches: one request, one job and one thread a round. But every other
+source's poll job holds one of the worker's 24 job slots (and a thread) for up to 10 minutes, mostly
+sleeping, so one worker process follows about 20 games at once; on a busy matchday the rest wait in
+the queue and go stale.
 Each open app also holds its own Redis subscription in the API. Today's load: 12 followed players,
 5 fans, a live game or two.
 

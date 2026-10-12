@@ -40,6 +40,11 @@ async def poll_event(ctx, event_id: int) -> None:
     await asyncio.to_thread(structured.poll_event, event_id)
 
 
+async def poll_lane(ctx, system: str) -> None:
+    """Every armed and live event of one source, one request a round (structured.poll_lane)."""
+    await asyncio.to_thread(structured.poll_lane, system)
+
+
 async def engine_lane(ctx) -> None:
     """Chess engine evaluations for live games, within its CPU budget (engine.py)."""
     await asyncio.to_thread(engine.run_lane)
@@ -72,24 +77,26 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("refresh_structured", player_id)
     for event_id in due.polls:
         await ctx["redis"].enqueue_job("poll_event", event_id)
+    for system in due.lanes:
+        await ctx["redis"].enqueue_job("poll_lane", system, _job_id=f"poll-lane:{system}")
     for player_id in due.lives:
         await ctx["redis"].enqueue_job("refresh_live", player_id)
     if await asyncio.to_thread(engine.needs_lane):
         await ctx["redis"].enqueue_job("engine_lane", _job_id="engine-lane")
     if await asyncio.to_thread(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
-    if due.builds or due.refreshes or due.polls or due.lives:
-        log.info("tick: %d builds, %d refreshes, %d polls, %d agent live checks", len(due.builds), len(due.refreshes), len(due.polls), len(due.lives))
+    if due.builds or due.refreshes or due.polls or due.lanes or due.lives:
+        log.info("tick: %d builds, %d refreshes, %d polls, %d poll lanes, %d agent live checks", len(due.builds), len(due.refreshes), len(due.polls), len(due.lanes), len(due.lives))
 
 
 class WorkerSettings:
-    functions = [build_card, refresh_live, refresh_structured, poll_event, engine_lane, history_lane]
+    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, engine_lane, history_lane]
     cron_jobs = [
         cron(tick, second=0, run_at_startup=True),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
     ]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
-    # A poll job holds its slot for up to POLL_SESSION while a game is on; builds hold one for minutes.
+    # A poll job or lane holds its slot for up to POLL_SESSION while games are on; builds hold one for minutes.
     max_jobs = 24
     job_timeout = 900
     keep_result = 0

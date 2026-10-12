@@ -3,8 +3,9 @@
 Once the research agent has said who a player is and what they play, bind() looks the player up
 in that sport's adapter and records the identity and source bindings. From then on the player's
 fixtures, results and stats come from the source (refresh), and every event with a live binding
-is polled by one job shared by every player in it (poll_event). The agent keeps the profile and
-the news, and stays the only source for sports without an adapter.
+is polled by one job shared by every player in it (poll_event), or, where the source can fetch many
+events in one request, together with all of that source's other events (poll_lane). The agent keeps
+the profile and the news, and stays the only source for sports without an adapter.
 """
 
 from __future__ import annotations
@@ -516,6 +517,84 @@ def poll_event(event_id: int) -> None:
         bus.release(lock)
 
 
+def batched(system: str | None) -> bool:
+    """Whether a source's events are polled together by one lane: its adapter fetches many events in
+    one request (snapshots). The rest get one poll_event job per event."""
+    return hasattr(ADAPTERS.get(system or ""), "snapshots")
+
+
+def lane_events(system: str) -> list[int]:
+    """The armed and live events with a followed player in them that this source polls."""
+    with session() as db:
+        return list(db.scalars(
+            select(Event.id).distinct()
+            .join(EventPlayer, EventPlayer.event_id == Event.id)
+            .where(Event.status.in_(("armed", "live")), Event.live_binding["adapter"].astext == system, EventPlayer.player_id.in_(select(Follow.player_id)))
+            .order_by(Event.id)
+        ))
+
+
+def poll_lane(system: str) -> None:
+    """Poll every armed and live event of one source together, for a source that fetches many events
+    in one request: one request a round however many games are on, and one job and one thread for all
+    of them instead of one each per game. A round comes every live_cadence seconds while a game is in
+    play and changing, otherwise once a minute. Hands over after POLL_SESSION, as poll_event does.
+    """
+    adapter = ADAPTERS.get(system)
+    lock = f"lane:{system}"
+    if adapter is None or not bus.try_lock(lock, 120):
+        return
+    try:
+        deadline = time.monotonic() + POLL_SESSION
+        moved: dict[int, float] = {}
+        missing: set[int] = set()
+        while True:
+            wait = lane_round(adapter, moved, missing)
+            if wait is None or time.monotonic() + wait > deadline:
+                return
+            bus.extend(lock, wait + 120)
+            time.sleep(wait)
+    except Exception:
+        log.exception("poll lane %s crashed", system)
+    finally:
+        bus.release(lock)
+
+
+def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> int | None:
+    """One round of a lane: fetch all its events at once, then apply each. Returns how long to wait
+    before the next round, or None when no followed player is in any of them any more.
+
+    moved holds when each event last changed (a game quiet for a minute stops setting the pace);
+    missing, the events the source didn't return, so each is logged once a session.
+    """
+    targets = {event_id: w for event_id in lane_events(adapter.system) if (w := _watching(event_id))}
+    if not targets:
+        return None
+    try:
+        snaps = adapter.snapshots({event_id: live_binding["locator"] for event_id, (live_binding, _, _) in targets.items()})
+    except AdapterError as exc:
+        log.warning("poll lane %s: %s", adapter.system, exc)
+        return 30
+    now = time.monotonic()
+    busy = False
+    for event_id, (live_binding, _, watchers) in targets.items():
+        snap = snaps.get(event_id)
+        if snap is None:
+            if event_id not in missing:
+                missing.add(event_id)
+                log.warning("poll lane %s: no data for event %s (%s)", adapter.system, event_id, live_binding["locator"])
+            continue
+        try:
+            status, _, changed = apply_poll(event_id, live_binding, adapter, watchers, snap)
+        except Exception:
+            log.exception("poll %s crashed", event_id)
+            continue
+        if changed or event_id not in moved:
+            moved[event_id] = now
+        busy = busy or (status == "live" and now - moved[event_id] <= 60)
+    return adapter.live_cadence if busy else 60
+
+
 def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
     """Chess: ask the engine for the game's position while it's on and a follower wants to hear
     about swings, and put the game's latest evaluation (engine.py) into the state."""
@@ -533,33 +612,46 @@ def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids
         state["eval"] = moments.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
 
 
-def poll_once(event_id: int) -> tuple[str, int, bool]:
-    """One poll: fetch the snapshot, append what changed, update every followed player's card in the event.
-
-    Returns the event's status, how long to wait before the next poll, and whether anything changed.
-    """
+def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, str]]] | None:
+    """An event's live binding, its adapter and the followed players in it (player id, their id in the
+    source); None when no followed player is in it or its source doesn't run."""
     with session() as db:
         event = db.get(Event, event_id)
         if event is None or not event.live_binding:
-            return "idle", 0, False
+            return None
         live_binding = dict(event.live_binding)
         adapter = ADAPTERS.get(live_binding.get("adapter", ""))
         if adapter is None:
-            return "idle", 0, False
+            return None
         followed = select(Follow.player_id)
         watchers = db.execute(
             select(PlayerIdentity.player_id, PlayerIdentity.external_id)
             .join(EventPlayer, EventPlayer.player_id == PlayerIdentity.player_id)
             .where(EventPlayer.event_id == event_id, PlayerIdentity.system == adapter.system, PlayerIdentity.player_id.in_(followed))
         ).all()
-    if not watchers:
+    return (live_binding, adapter, [(pid, xid) for pid, xid in watchers]) if watchers else None
+
+
+def poll_once(event_id: int) -> tuple[str, int, bool]:
+    """One poll: fetch the snapshot, append what changed, update every followed player's card in the event.
+
+    Returns the event's status, how long to wait before the next poll, and whether anything changed.
+    """
+    watching = _watching(event_id)
+    if watching is None:
         return "idle", 0, False
+    live_binding, adapter, watchers = watching
     try:
         snap = adapter.snapshot(live_binding["locator"])
     except AdapterError as exc:
         log.warning("poll %s: %s", event_id, exc)
         return "error", 30, False
+    return apply_poll(event_id, live_binding, adapter, watchers, snap)
 
+
+def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, watchers: list[tuple[int, str]], snap: Snapshot) -> tuple[str, int, bool]:
+    """Append what changed in a fetched snapshot and update every followed player's card in the event
+    (poll_once's second half, shared with the lanes). Returns as poll_once does."""
     now = _now()
     published: list[tuple[int, dict[str, Any]]] = []
     new_moments: list[int] = []

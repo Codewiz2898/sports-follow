@@ -87,6 +87,11 @@ class Adapter(Protocol):
         """The event now. final=True may serve a cached copy: a finished match doesn't change."""
         ...
 
+    # Optional, for a source that fetches many events in one request (Sportmonks football):
+    #   def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]
+    # keyed as given, leaving out events the source didn't return. An adapter with it has all its
+    # armed and live events polled together, one request a round (structured.poll_lane).
+
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""
         ...
