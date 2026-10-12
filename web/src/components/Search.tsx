@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type Research, type SearchResponse, type SearchResult } from '../api'
-import { relative } from '../format'
+import { relative, sportKey } from '../format'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
@@ -133,11 +133,11 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
   const busy = actions.pending === r.key
   const body = (
     <>
-      <Avatar name={r.name} />
+      <Avatar name={r.name} sport={r.sport} />
       <span className="stack">
         <span className="title"><Highlight name={r.name} query={query} /></span>
         <span className="small muted">{[r.sport, r.detail, r.followers ? `${r.followers} following` : ''].filter(Boolean).join(' · ')}</span>
-        {next && <span className="tiny" style={{ color: next.live ? 'var(--live)' : 'var(--action)', fontWeight: 600 }}>{next.text}</span>}
+        {next && <span className="tiny" style={{ color: next.live ? 'var(--live-text)' : 'var(--text)', fontWeight: 800 }}>{next.text}</span>}
         {!r.live_scores && !r.player_id && <span className="tiny muted">AI research · no live scores yet</span>}
       </span>
     </>
@@ -184,12 +184,12 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
   return (
     <div className="card card-pad research-card">
       <div className="row" style={{ justifyContent: 'flex-start', gap: 10 }}>
-        <SparkIcon width={22} height={22} style={{ color: 'var(--action)' }} />
-        <span style={{ fontFamily: 'var(--display)', fontSize: 22, fontWeight: 700 }}>Research it with AI</span>
+        <SparkIcon width={22} height={22} />
+        <span className="dsp" style={{ fontSize: 26 }}>Research it with AI</span>
       </div>
       <p className="small muted" style={{ margin: 0 }}>Our research agent searches the web for “{q}”, works out who it is and builds the page. It takes 1 to 3 minutes and works for any sport.</p>
       <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources. Other sports get news and results from the agent.</p>
-      <button type="button" className="btn research-btn" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
+      <button type="button" className="btn primary" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
         {busy && <span className="spinner" />}Research “{q}”
       </button>
       {allowance && <span className="tiny muted" style={{ textAlign: 'center' }}>{allowance}</span>}
@@ -213,7 +213,7 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
     <div className="search-results" aria-busy={loading || undefined}>
       {data.namesakes > 1 && (
         <div className="stack" style={{ gap: 6 }}>
-          <h2 style={{ fontFamily: 'var(--display)', fontSize: 24, lineHeight: 1.1 }}>{data.namesakes === 2 ? 'Two' : data.namesakes} athletes are called {exactName}</h2>
+          <h2 className="dsp" style={{ fontSize: 32 }}>{data.namesakes === 2 ? 'Two' : data.namesakes} athletes are called {exactName}</h2>
           <p className="small muted" style={{ margin: 0 }}>Pick the one you mean. We follow exactly that player, so their scores are never mixed up with another's.</p>
         </div>
       )}
@@ -243,7 +243,9 @@ export function SportChips({ sport, onChange }: { sport: string; onChange: (s: s
   return (
     <div className="chips" role="group" aria-label="Sport">
       {SPORTS.map(([value, label]) => (
-        <button key={value || 'all'} type="button" className="chip" aria-pressed={sport === value} onClick={() => onChange(value)}>{label}</button>
+        <button key={value || 'all'} type="button" className="chip" data-sport={sportKey(value)} aria-pressed={sport === value} onClick={() => onChange(value)}>
+          {value && <span className="dot" />}{label}
+        </button>
       ))}
     </div>
   )

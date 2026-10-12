@@ -243,7 +243,6 @@ export const api = {
     request<ResultsPage>(`/api/players/${playerId}/results${before ? `?before=${encodeURIComponent(before)}` : ''}`),
   result: (playerId: number, eventId: number) => request<GameDetail>(`/api/players/${playerId}/results/${eventId}`),
   form: (playerId: number, last: number) => request<Form>(`/api/players/${playerId}/form?last=${last}`),
-  latestResults: (limit = 6) => request<{ results: LatestResult[] }>(`/api/me/results?limit=${limit}`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),

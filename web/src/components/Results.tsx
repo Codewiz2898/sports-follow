@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { api, type Card, type Form, type GameDetail, type LatestResult, type RecentResult, type ResultsPage } from '../api'
-import { day, hostname, safeHref } from '../format'
+import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
+import { day, hostname, outcome, safeHref } from '../format'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
 
-type Row = RecentResult & { player_id?: number; player_name?: string }
-
 /** One finished game; tapping it opens the final score, the player's whole line and the source. */
-function GameRow({ r, playerId, who }: { r: Row; playerId: number; who?: boolean }) {
+function GameRow({ r, playerId, teams }: { r: RecentResult; playerId: number; teams?: string[] }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<GameDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canOpen = r.event_id != null
+  const wl = outcome(r.result, teams)
+  // The badge says won or lost, so the score stands alone ("Won 133–128" → "133–128").
+  const score = wl ? r.result.replace(/^(Won|Lost|Drew)\s+/, '') : r.result
 
   const toggle = () => {
     setOpen((o) => !o)
@@ -22,23 +22,23 @@ function GameRow({ r, playerId, who }: { r: Row; playerId: number; who?: boolean
   return (
     <li className="game-row">
       <button type="button" className="game-head" onClick={toggle} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}>
-        <span className="stack" style={{ minWidth: 0 }}>
-          {who && r.player_name && <span className="small" style={{ fontWeight: 700 }}>{r.player_name}</span>}
+        <span className={`wl ${wl ?? 'D'}`} role={wl ? 'img' : undefined} aria-label={wl ? { W: 'Won', D: 'Drew', L: 'Lost' }[wl] : undefined} style={wl ? undefined : { visibility: 'hidden' }}>{wl}</span>
+        <span className="stack" style={{ minWidth: 0, flex: 1 }}>
           <span className="title">{r.title}</span>
           <span className="small muted">{[r.date && day(r.date), r.competition].filter(Boolean).join(' · ')}</span>
-          {r.player_contribution && <span className="small" style={{ fontWeight: 600 }}>{r.player_contribution}</span>}
+          {r.player_contribution && <span className="small" style={{ fontWeight: 800 }}>{r.player_contribution}</span>}
         </span>
-        <span className={r.result.length > 14 ? 'game-result long' : 'game-result'}>
-          {r.result}
+        <span className={score.length > 14 ? 'game-result long' : 'game-result'}>
+          {score}
           {canOpen && <ChevronIcon className={open ? 'chev open' : 'chev'} width={16} height={16} aria-hidden />}
         </span>
       </button>
-      {open && <GameView detail={detail} error={error} playerLink={who ? { id: playerId, name: r.player_name } : undefined} />}
+      {open && <GameView detail={detail} error={error} />}
     </li>
   )
 }
 
-function GameView({ detail, error, playerLink }: { detail: GameDetail | null; error: string | null; playerLink?: { id: number; name?: string } }) {
+function GameView({ detail, error }: { detail: GameDetail | null; error: string | null }) {
   if (error) return <div className="game-body small muted">{error}</div>
   if (!detail) return <div className="game-body"><span className="spinner" /></div>
   const lineNote = detail.scorecard === 'missing' ? 'The source has no scorecard for this game.'
@@ -53,19 +53,16 @@ function GameView({ detail, error, playerLink }: { detail: GameDetail | null; er
       )}
       {detail.line ? (
         <>
-          <span className="small" style={{ fontWeight: 600 }}>{detail.line.headline}</span>
+          <span className="small" style={{ fontWeight: 800 }}>{detail.line.headline}</span>
           {detail.line.stats.length > 0 && <StatGrid stats={detail.line.stats} />}
         </>
       ) : <span className="small muted">{lineNote}</span>}
-      <span className="row small" style={{ justifyContent: 'flex-start', gap: 14, flexWrap: 'wrap' }}>
-        {safeHref(detail.source_url) && <a href={safeHref(detail.source_url)} target="_blank" rel="noreferrer">Open on {hostname(detail.source_url)}</a>}
-        {playerLink && <Link to={`/player/${playerLink.id}`}>{playerLink.name ? `${playerLink.name}'s page` : 'Player page'}</Link>}
-      </span>
+      {safeHref(detail.source_url) && <a href={safeHref(detail.source_url)} target="_blank" rel="noreferrer" className="link small" style={{ alignSelf: 'flex-start' }}>Open on {hostname(detail.source_url)}</a>}
     </div>
   )
 }
 
-/** The Results tab: the player's whole results history, newest first, a page at a time. */
+/** The player's whole results history, newest first, a page at a time. */
 export function ResultsHistory({ card }: { card: Card }) {
   const [items, setItems] = useState<RecentResult[]>(card.recent_results ?? [])
   const [page, setPage] = useState<ResultsPage | null>(null)
@@ -98,15 +95,15 @@ export function ResultsHistory({ card }: { card: Card }) {
   return (
     <>
       <ul className="card list">
-        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} />)}
+        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} teams={card.player.teams} />)}
       </ul>
       {page?.next && (
         <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} onClick={more} disabled={loading}>
           {loading && <span className="spinner" />}Show more
         </button>
       )}
-      {error && <p className="small" style={{ margin: 0 }}>{error}</p>}
-      <p className="tiny muted" style={{ margin: 0 }}>
+      {error && <p className="small">{error}</p>}
+      <p className="tiny muted">
         {page && page.total > 0 && `${Math.min(items.length, page.total)} of ${page.total} results`}
         {page?.filling && ' · older results are still being filled in'}
       </p>
@@ -148,24 +145,9 @@ export function StatsWithForm({ card }: { card: Card }) {
       ) : shown ? (
         <>
           <StatGrid stats={shown.stats} empty="Not enough results yet." />
-          {shown.note && <p className="tiny muted" style={{ margin: 0 }}>{shown.note}, from the results history</p>}
+          {shown.note && <p className="tiny muted">{shown.note}, from the results history</p>}
         </>
       ) : <span className="spinner" />}
     </>
-  )
-}
-
-/** The Following page's newest results across every followed player. */
-export function LatestResults({ watch }: { watch: string }) {
-  const [items, setItems] = useState<LatestResult[] | null>(null)
-  useEffect(() => {
-    api.latestResults(6).then((r) => setItems(r.results)).catch(() => setItems([]))
-  }, [watch])
-  if (items === null) return null
-  if (!items.length) return <div className="card empty small">No results yet for your players.</div>
-  return (
-    <ul className="card list">
-      {items.map((r) => <GameRow key={`${r.player_id}-${r.event_id}`} r={r} playerId={r.player_id} who />)}
-    </ul>
   )
 }

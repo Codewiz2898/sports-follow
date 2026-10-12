@@ -2,7 +2,8 @@
 
 Follow any athlete in any sport. Each followed player gets one shared page: live score and the
 player's own numbers while they play, upcoming games, news, recent results and season stats. The
-Following screen puts all of your players together, live games first.
+Today screen puts all of your players together: live games first, then the day's big result, the next
+game, and a tile for each player in their sport's colour.
 
 ## How it's built
 
@@ -92,7 +93,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   are per device and make notifications arrive silently. With the app open and in front, the moment
   shows as an in-app toast instead. Devices the push service reports gone are removed.
 - **Results history, read once and kept.** Every finished game a source returns is stored as the
-  player's result (`event_player.result`), so the Results tab pages through a whole history and each
+  player's result (`event_player.result`), so the Matches tab's results page through a whole history and each
   game opens to its final score and the player's full line. A history lane (`sports_follow/history.py`)
   fills in missing scorecards and older seasons at most 20 source requests a minute system-wide, and
   the Stats tab shows form over the last 10 or 5 results from the stored lines (`sports_follow/form.py`).
@@ -132,7 +133,7 @@ cd web && npm run dev                                              # app on http
 
 For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself (with the
 service worker, manifest and icons; try installing it from http://localhost:8421). Notifications need
-that build too: turn them on under Notifications in the sidebar. Always pass
+that build too: turn them on under Alerts. Always pass
 `--timeout-graceful-shutdown`: fans' live streams never close on their own, so without it a restart waits forever.
 
 | Env var | Default | |

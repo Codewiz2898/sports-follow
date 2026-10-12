@@ -92,7 +92,7 @@ export function InstallButton({ compact }: { compact?: boolean }) {
   const { canInstall, install } = usePwa()
   if (!canInstall) return null
   return (
-    <button type="button" className={compact ? 'btn' : 'btn primary'} onClick={install} style={compact ? { height: 36 } : undefined}>
+    <button type="button" className={compact ? 'btn small' : 'btn primary'} onClick={install}>
       <PlusIcon width={16} height={16} />Install app
     </button>
   )

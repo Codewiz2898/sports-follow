@@ -1,18 +1,18 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { PlayerRow } from './components/Blocks'
-import { BellIcon, ListIcon, SearchIcon } from './components/Icons'
+import { BellIcon, HomeIcon, SearchIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { FollowingProvider, useFollowing } from './following'
 import { AthletePage } from './pages/AthletePage'
-import { FollowingPage } from './pages/FollowingPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
 import { MomentToasts } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
+import { TodayPage } from './pages/TodayPage'
 import './styles.css'
 
 /** Desktop search: results drop down under the sidebar box. ↑ ↓ move, Enter opens, Shift+Enter follows, Esc closes, / focuses. */
@@ -71,8 +71,8 @@ function SidebarSearch() {
   const showing = open && query.trim().length >= 2
   return (
     <>
-      <form ref={box} onSubmit={(e) => e.preventDefault()} className="search" role="search" style={{ height: 44 }}>
-        <SearchIcon width={18} height={18} style={{ color: 'var(--muted)', flexShrink: 0 }} />
+      <form ref={box} onSubmit={(e) => e.preventDefault()} className="search" role="search" style={{ height: 46 }}>
+        <SearchIcon width={18} height={18} style={{ flexShrink: 0 }} />
         <label htmlFor="side-query" className="sr-only">Search players</label>
         <input
           ref={input} id="side-query" type="search" autoComplete="off" spellCheck={false} placeholder="Search players" value={query}
@@ -98,33 +98,44 @@ function Sidebar() {
     <aside className="sidebar" aria-label="Followed players">
       <NavLink to="/" className="brand">Sports Follow</NavLink>
       <SidebarSearch />
+      <nav className="side-nav" aria-label="Main">
+        <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
+        <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts</NavLink>
+      </nav>
       <InstallButton compact />
-      <NavLink to="/notifications" className="row small" style={{ justifyContent: 'flex-start', gap: 8, color: 'var(--muted)', minHeight: 32 }}><BellIcon width={18} height={18} />Notifications</NavLink>
-      <span className="eyebrow">Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span className="eyebrow" style={{ marginTop: 8 }}>Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
+      <nav aria-label="Your players" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
         {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
           <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
         ))}
       </nav>
-      <NavLink to="/credits" className="tiny muted" style={{ marginTop: 'auto' }}>Credits and sources</NavLink>
+      <NavLink to="/credits" className="tiny muted link" style={{ marginTop: 'auto' }}>Credits and sources</NavLink>
     </aside>
   )
 }
 
+/** A new page opens at its top, not wherever the last one was scrolled to. */
+function ScrollToTop() {
+  const { pathname } = useLocation()
+  useEffect(() => { window.scrollTo(0, 0) }, [pathname])
+  return null
+}
+
 function Toasts() {
-  const { moments, dismissMoment } = useFollowing()
-  return <MomentToasts moments={moments} dismiss={dismissMoment} />
+  const { moments, dismissMoment, byId } = useFollowing()
+  return <MomentToasts moments={moments} dismiss={dismissMoment} playerOf={byId} />
 }
 
 function App() {
   return (
     <div className="shell">
+      <ScrollToTop />
       <Toasts />
       <Sidebar />
       <main className="main">
         <PwaNotices />
         <Routes>
-          <Route path="/" element={<FollowingPage />} />
+          <Route path="/" element={<TodayPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/player/:id" element={<PlayerPage />} />
           <Route path="/athlete/:system/:id" element={<AthletePage />} />
@@ -132,9 +143,10 @@ function App() {
           <Route path="/credits" element={<CreditsPage />} />
         </Routes>
       </main>
-      <nav className="bottom-nav" aria-label="Main">
-        <NavLink to="/" end><ListIcon />Following</NavLink>
-        <NavLink to="/search"><SearchIcon />Search</NavLink>
+      <nav className="tabbar" aria-label="Main">
+        <NavLink to="/" end><HomeIcon width={20} height={20} />Today</NavLink>
+        <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
+        <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts</NavLink>
       </nav>
     </div>
   )

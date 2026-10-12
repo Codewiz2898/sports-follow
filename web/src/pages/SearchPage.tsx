@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
 
@@ -29,9 +30,9 @@ export function SearchPage() {
 
   return (
     <>
-      <h1 className="page-title">Follow a player</h1>
+      <h1 className="dsp page-title">Search</h1>
       <form onSubmit={submit} className="search" role="search">
-        <SearchIcon width={20} height={20} style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        <SearchIcon width={22} height={22} style={{ flexShrink: 0 }} />
         <label htmlFor="player-query" className="sr-only">Player name</label>
         <input id="player-query" type="search" autoFocus autoComplete="off" spellCheck={false} placeholder="Any athlete, any sport" value={query} onChange={(e) => setQuery(e.target.value)} />
         {loading && <span className="spinner" aria-label="Searching" />}
@@ -43,13 +44,13 @@ export function SearchPage() {
         <SearchResults data={data} query={query} loading={loading} actions={actions} />
       ) : (
         <section className="section" aria-label="Try">
-          <span className="eyebrow">Try</span>
+          <SectionHead title="Try" />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {SUGGESTIONS.map((name) => (
-              <button key={name} type="button" className="btn" onClick={() => setQuery(name)}>{name}</button>
+              <button key={name} type="button" className="btn small" onClick={() => setQuery(name)}>{name}</button>
             ))}
           </div>
-          <p className="tiny muted" style={{ margin: 0 }}>Pick an athlete and their live scores start at once; the research agent adds news and background in a couple of minutes. Names no source knows can be researched with AI, a few a day.</p>
+          <p className="small muted" style={{ marginTop: 4 }}>Pick an athlete and their live scores start at once; the research agent adds news and background in a couple of minutes. Names no source knows can be researched with AI, a few a day.</p>
         </section>
       )}
     </>

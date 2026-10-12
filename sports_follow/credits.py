@@ -67,7 +67,8 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "React", "url": "https://react.dev", "licence": "MIT"},
     {"name": "React Router", "url": "https://reactrouter.com", "licence": "MIT"},
     {"name": "Vite", "url": "https://vite.dev", "licence": "MIT"},
-    {"name": "Barlow fonts by Jeremy Tribby", "url": "https://fonts.google.com/specimen/Barlow", "licence": "OFL-1.1"},
+    {"name": "Anton font by Vernon Adams", "url": "https://fonts.google.com/specimen/Anton", "licence": "OFL-1.1"},
+    {"name": "Manrope font by Mikhail Sharanda", "url": "https://fonts.google.com/specimen/Manrope", "licence": "OFL-1.1"},
 ]
 
 NOTICES = [
