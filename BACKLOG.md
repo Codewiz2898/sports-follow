@@ -256,6 +256,51 @@ reached, the app says so plainly rather than looking broken.
   those ids.
 - The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
 
+### 8. Esports
+
+**Today.** No esports source. A pro gamer typed into "Research with AI" gets an AI-built page with no
+scores or alerts, as in any sport without a source. Search barely finds them: only 2,844 people on
+Wikidata have a Liquipedia id (P10918), 3 of them Indian. Every adapter assumes head-to-head events.
+
+**What fans in India watch** (researched 12 Oct 2026). BGMI by far: KRAFTON India reports 930M+ esports
+views in 2025, and the BMPS 2026 final peaked at about 729,000 concurrent viewers. Free Fire is coming
+back after its ban; Valorant is the biggest PC title but losing viewers. Globally: LoL, CS2, Dota 2,
+Valorant.
+
+| Source | What | Cost | Notes |
+|---|---|---|---|
+| PandaScore | Schedules, results, teams, players for 13+ titles (LoL, CS2, Dota 2, Valorant, Mobile Legends, R6, Rocket League, CoD…) | Free plan, 1,000 requests an hour; player stats from €400 a game a month; live from €1,000 a game a month (LoL and CS only) | Licensed; stats plans are for non-betting use. No BGMI. |
+| GRID | Official CS2 and Dota 2 data from the game servers | Free Open Access is historical only, for pre-revenue projects; live is a commercial deal | Most authoritative, two games |
+| Liquipedia API | 70+ titles, including PUBG Mobile (where BGMI events are kept) | Reported $49 or $199 per data type per game a month (unconfirmed) | Community-edited, results after the fact, no live; CC BY-SA credit on every page |
+| Betting-odds feeds, HLTV/VLR scrapers | Live scores | Varies | Unlicensed or betting-oriented: the ESPN problem again |
+
+Sources: [PandaScore pricing](https://pandascore.co/pricing), [GRID Open Access](https://grid.gg/open-access/),
+[Liquipedia API](https://liquipedia.net/api) and [its terms](https://liquipedia.net/api-terms-of-use),
+[BMPS 2026 viewership](https://www.tribuneindia.com/news/business/godlike-esports-rises-from-last-place-to-claim-bmps-2026-title-as-jaipur-bmps-finals-reach-729k-peak-viewers-and-12000-attendance/),
+[BGMI 930M views](https://respawn.outlookindia.com/gaming/gaming-news/bgmi-esports-crosses-930m-views-amid-indian-esports-market-growth).
+
+**Done when** a fan can find and follow a Valorant or CS2 pro, see their team's upcoming series and
+results ("Won 2–1"), and hear when a series ends, from a licensed source named on the Credits page.
+
+**Suggested path**, cheapest first:
+1. **Team esports from PandaScore's free plan (about a week).** An adapter (player, then team, then
+   matches, with series and map scores), a registry import of pro players from PandaScore since
+   Wikidata is too thin, "series won or lost" and "map won" moments, an Esports filter in search, and
+   credits. Fixtures and results only, no live scores.
+2. **Live scores** once the launch metrics show demand: €1,000 a game a month for LoL or CS (Valorant
+   isn't on the live tier), three to six times the launch's whole data budget.
+3. **BGMI and Free Fire (1–2 weeks of code, plus a data deal).** Battle royale doesn't fit the
+   head-to-head model: a match is a 16-team lobby scored by placement and finishes, and a day is a
+   standings table. That needs a new event shape, a standings view and its own moments (chicken
+   dinner, finishes). No licensed live feed found: Liquipedia has results once editors add them, and
+   live data would mean a deal with KRAFTON India or the tournament organisers.
+
+**Open questions**
+- Which games first: Valorant and CS2 have the cleanest data, BGMI has the audience.
+- PandaScore's free plan: confirm in writing that a commercial, non-betting app may use it, which
+  titles it covers, and whether its results include series and map scores.
+- Liquipedia's plans and commercial terms (its API page sits behind a bot check).
+
 ## Found while building (not yet scheduled)
 
 - **Licensed basketball and tennis.** Football and cricket now come from Sportmonks and chess from
