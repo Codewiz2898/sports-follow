@@ -26,7 +26,7 @@ from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, credits as credits_page, moments, notify, pipeline, registry, results, search as player_search, structured
+from . import bus, credits as credits_page, games, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
@@ -212,7 +212,7 @@ async def _follow_athlete(body: dict, fan: str, db: Session) -> int:
         athlete_id = str(body.get("athlete_id") or "").strip()
         league = body.get("league") if isinstance(body.get("league"), str) else None
         adapter = ADAPTERS.get(system)
-        if adapter is None or not athlete_id or len(athlete_id) > 40:
+        if adapter is None or not athlete_id or len(athlete_id) > 120:
             raise HTTPException(400, "Pick an athlete from the search results.")
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
@@ -522,7 +522,7 @@ async def registry_preview(qid: str, sport: str | None = None, db: Session = Dep
     if found is None:
         athlete = registry.get(db, person.qid, person.sport)
         return {
-            **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": person.sport.title(),
+            **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": games.label(person.sport),
             "teams": person.teams, "source": "Wikidata", "source_url": f"https://www.wikidata.org/wiki/{person.qid}",
             "next": None, "last": None, "stats": [], "stats_note": "", "live": False, "country": athlete.country if athlete else None,
         }
@@ -542,7 +542,7 @@ async def registry_preview(qid: str, sport: str | None = None, db: Session = Dep
 async def athlete_preview(system: str, athlete_id: str, league: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
     """What following a search result would show, before following. An athlete already on Sports
     Follow answers with their player id; the app opens their page instead."""
-    if system not in ADAPTERS or not athlete_id or len(athlete_id) > 40:
+    if system not in ADAPTERS or not athlete_id or len(athlete_id) > 120:
         raise HTTPException(404, "No such athlete.")
     holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id == athlete_id))
     if holder is not None:

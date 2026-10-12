@@ -15,6 +15,7 @@ from .adapters import ADAPTERS
 from .agent import MODEL
 
 CC_BY_SA = "https://creativecommons.org/licenses/by-sa/4.0/"
+CC_BY_SA_3 = "https://creativecommons.org/licenses/by-sa/3.0/"
 
 # One entry per provider; "systems" are the adapters that read from it, "sports" what each covers.
 PROVIDERS: list[dict[str, Any]] = [
@@ -37,9 +38,18 @@ PROVIDERS: list[dict[str, Any]] = [
     {
         "name": "PandaScore",
         "url": "https://pandascore.co",
-        "systems": {"pandascore_esports": "Esports"},
+        "systems": {"pandascore_esports": "Valorant, CS2, League of Legends, Dota 2 and other team games"},
         "what": "series schedules and results, map by map, teams, and the pro players search finds.",
         "note": "Collected by PandaScore; not official tournament records. Results are the team's: player stats aren't included.",
+    },
+    {
+        "name": "Liquipedia",
+        "url": "https://liquipedia.net",
+        "systems": {"liquipedia_esports": "BGMI, PUBG Mobile and Free Fire"},
+        "what": "battle royale standings, each game's placings and finishes, and the pro players search finds.",
+        "licence": "CC BY-SA 3.0",
+        "licence_url": CC_BY_SA_3,
+        "note": "Recorded by Liquipedia's editors during and after play; not official tournament records.",
     },
     {
         "name": "ESPN",

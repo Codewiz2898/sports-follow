@@ -1,0 +1,282 @@
+"""Battle royale esports from Liquipedia: lobby parsers, standings, alerts, form, the registry's rows,
+search, credits, the shared hourly budget and the lane's pace. Against small made-up records in the
+shape LiquipediaDB stores matches (Liquipedia/Lua-Modules: Match.lua, MatchGroup/Input/Util.lua), as
+for the other sources: none of theirs are committed."""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime, timezone
+
+import httpx
+import pytest
+
+from sports_follow import credits, form, moments, registry, search, structured
+from sports_follow.adapters import liquipedia, liquipedia_esports as lp
+from sports_follow.adapters.base import Snapshot
+from sports_follow.models import Athlete
+
+from .test_structured import FakeSource, lane
+
+WIKI = "pubgmobile"
+NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
+TEAMS = ["GodLike_Esports", "Team_SouL", "Revenant_XSpark", "Orangutan"]
+# Placement and finishes for each team in each game (team order as above).
+GAMES = [[(1, 12), (3, 5), (2, 7), (4, 1)], [(4, 2), (1, 9), (2, 6), (3, 3)], [(1, 8), (4, 0), (2, 11), (3, 4)]]
+# Totals after each game: GodLike 22, 28, 46; Team SouL 10, 29, 33; Revenant 13, 25, 42; Orangutan 5, 13, 22.
+POINTS = {1: 10, 2: 6, 3: 5, 4: 4}  # placement points; a finish is a point
+
+
+def _game(results: list[tuple[int, int]] | None) -> dict:
+    if results is None:
+        return {"map": "Erangel", "status": "", "winner": "", "opponents": []}
+    winner = next(i + 1 for i, (place, _) in enumerate(results) if place == 1)
+    return {
+        "map": "Erangel", "status": "", "winner": str(winner),
+        "opponents": [{"placement": place, "score": POINTS[place] + kills, "scoreBreakdown": {"kills": kills, "placePoints": POINTS[place], "killPoints": kills}} for place, kills in results],
+    }
+
+
+def _lobby(played: int, finished: bool = False, **extra) -> dict:
+    games = [_game(GAMES[i] if i < played else None) for i in range(3)]
+    totals = [sum(POINTS[GAMES[g][t][0]] + GAMES[g][t][1] for g in range(played)) for t in range(4)]
+    order = sorted(range(4), key=lambda t: -totals[t])
+    return {
+        "match2id": "aBcDeFgHiJ_0003", "date": "2026-10-12 13:30:00", "dateexact": 1, "finished": 1 if finished else 0,
+        "status": "", "bestof": 3, "tickername": "BMPS 2026", "tournament": "Battlegrounds Mobile India Pro Series/2026",
+        "section": "Semi Finals", "game": "bgmi", "match2bracketdata": {"header": "Day 3"},
+        "match2opponents": [{
+            "name": name, "template": name.split("_")[0][:4].upper(), "type": "team", "score": totals[t] if played else -1,
+            "placement": (order.index(t) + 1) if finished else None,
+            "match2players": [{"name": "Jonathan" if t == 0 else f"{name}_p1", "displayname": "Jonathan" if t == 0 else "p1"}],
+        } for t, name in enumerate(TEAMS)],
+        "match2games": games,
+        **extra,
+    }
+
+
+def test_standings_total_each_team_and_rank_by_points_until_liquipedia_places_them():
+    table = lp.standings(_lobby(3, finished=True))
+    assert [(r["name"], r["place"], r["points"], r["kills"], r["wins"]) for r in table] == [
+        ("GodLike Esports", 1, 46.0, 22, 2), ("Revenant XSpark", 2, 42.0, 24, 0), ("Team SouL", 3, 33.0, 14, 1), ("Orangutan", 4, 22.0, 8, 0)]
+    assert table[0]["games"][0] == {"n": 1, "place": 1, "kills": 12, "points": 22.0}
+    live = lp.standings(_lobby(1))  # no placements yet: ranked by points
+    assert [(r["name"], r["place"]) for r in live][:2] == [("GodLike Esports", 1), ("Revenant XSpark", 2)]
+
+
+def test_a_finished_lobby_is_a_fixture_with_final_standings():
+    [f] = lp.parse_fixtures([_lobby(3, finished=True)], WIKI, NOW)
+    assert (f.source_id, f.title, f.competition, f.detail, f.status) == ("pubgm:aBcDeFgHiJ_0003", "BMPS 2026", "Battlegrounds Mobile India Pro Series/2026", "Semi Finals · Day 3", "final")
+    assert f.locator == {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"} and f.team_ids == TEAMS
+    assert f.start_utc == datetime(2026, 10, 12, 13, 30, tzinfo=timezone.utc)
+    assert lp.result_label(f, ["Team_SouL"]) == "3rd of 4 · 33 pts"
+    assert lp.result_label(f, ["Someone_Else"]) == ""
+    assert len(f"liquipedia_esports:{f.source_id}") <= 64  # the event key
+
+
+def test_a_running_lobby_shows_the_leader_and_the_matches_played():
+    snap = lp.parse_match(_lobby(1), WIKI, NOW)
+    assert (snap.status, snap.score_label, snap.clock_label) == ("live", "GodLike Esports lead · 22 pts", "After match 1 of 3")
+    assert snap.state["kind"] == "battle_royale" and snap.state["game"] == "BGMI" and snap.state["win_word"] == "Chicken dinner"
+    assert [g["winner"] for g in snap.state["games"]] == ["GodLike_Esports", None, None]
+    # The four who played get their team's standing as their line.
+    line = snap.lines["pubgmobile:Jonathan"]
+    assert line.headline == "1st · 22 pts" and {"label": "Finishes", "value": "12"} in line.stats
+    upcoming = lp.parse_match(_lobby(0, date="2026-10-12 18:00:00"), WIKI, NOW)
+    assert (upcoming.status, upcoming.score_label, upcoming.clock_label, upcoming.lines) == ("scheduled", "4 teams", "3 matches", {})
+    over = lp.parse_match(_lobby(3, finished=True), WIKI, NOW)
+    assert (over.status, over.score_label, over.clock_label) == ("final", "GodLike Esports win · 46 pts", "Final standings")
+    # Never marked finished, half a day after it began: over.
+    assert lp.parse_match(_lobby(2, date="2026-10-11 13:30:00"), WIKI, NOW).status == "final"
+    assert lp.parse_match(_lobby(0, status="notplayed"), WIKI, NOW).status == "postponed"
+
+
+def test_players_are_keyed_by_wiki_and_page():
+    ref = lp.parse_player({"pagename": "Jonathan", "id": "JONATHAN", "teampagename": "GodLike Esports", "team": "GodLike Esports", "birthdate": "1970-01-01"}, WIKI)
+    assert (ref.system, ref.athlete_id, ref.name, ref.team_ids, ref.team_names, ref.league, ref.born) == (
+        "liquipedia_esports", "pubgmobile:Jonathan", "JONATHAN", ["GodLike_Esports"], ["GodLike Esports"], WIKI, None)
+    assert ref.profile_url == "https://liquipedia.net/pubgmobile/Jonathan"
+    assert lp.ordinal(11) == "11th" and lp.ordinal(21) == "21st" and lp.ordinal(2) == "2nd"
+
+
+def test_team_form_over_the_lobbies():
+    fixtures = lp.parse_fixtures([_lobby(3, finished=True), {**_lobby(3, finished=True), "match2id": "x_0004"}], WIKI, NOW)
+    stats, note = lp.team_form(fixtures, ["Team_SouL"], "Team SouL")
+    assert stats == [{"label": "Lobbies", "value": "2"}, {"label": "Avg place", "value": "3.0"}, {"label": "Top 3", "value": "2"}, {"label": "Games won", "value": "2"}, {"label": "Finishes", "value": "28"}]
+    assert note == "Team SouL, last 2 lobbies"
+
+
+def test_the_lane_reads_every_running_lobby_in_one_request(monkeypatch):
+    calls = []
+
+    def fake(datatype, ttl, **params):
+        calls.append((datatype, params))
+        return [_lobby(1), {**_lobby(2), "match2id": "other_0001"}]
+
+    monkeypatch.setattr(liquipedia, "get", fake)
+    adapter = lp.LiquipediaEsports()
+    snaps = adapter.snapshots({1: {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, 2: {"wiki": WIKI, "match": "other_0001"}, 3: {"wiki": WIKI, "match": "gone"}})
+    assert calls == [("match", {"wiki": WIKI, "conditions": "[[match2id::aBcDeFgHiJ_0003]] OR [[match2id::gone]] OR [[match2id::other_0001]]", "limit": 50})]
+    assert snaps[1].clock_label.startswith("After match 1") and snaps[2].clock_label.startswith("After match 2") and 3 not in snaps
+
+
+# ---------------------------------------------------------------- moments
+
+
+def _seen(x: dict, teams: list[str] | None = None, athlete: str = "pubgmobile:Jonathan") -> moments.Seen:
+    """The lobby as one player's poll sees it: their line, if the line-ups name them (as apply_poll)."""
+    snap = lp.parse_match(x, WIKI, NOW)
+    line = snap.lines.get(athlete)
+    line = {"headline": line.headline, "stats": line.stats} if line else None
+    return moments.Seen(snap.status, snap.state, line, snap.score_label, snap.clock_label, lineups=bool(snap.lines), teams=["GodLike_Esports"] if teams is None else teams)
+
+
+def test_a_chicken_dinner_each_placement_and_going_top():
+    before = _seen(_lobby(0, date="2026-10-12 18:00:00"))  # not started yet
+    started = _seen(_lobby(0))
+    [start] = moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", before, started)
+    assert (start.kind, start.level, start.title, start.body) == ("start", "key", "Jonathan is playing", "Semi Finals · Day 3 · 3 matches · BGMI")
+    one = _seen(_lobby(1))
+    [dinner] = moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", started, one)
+    assert (dinner.kind, dinner.level, dinner.title, dinner.detail, dinner.priority) == ("dinner", "key", "Chicken dinner: GodLike Esports", "g1", 90)
+    assert dinner.body == "Jonathan · Match 1 · 12 finishes · 1st overall, 22 pts"
+    [fourth] = moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", one, _seen(_lobby(2)))
+    assert (fourth.kind, fourth.level, fourth.title) == ("game", "minor", "Jonathan: GodLike Esports 4th in match 2")
+    # Team SouL win match 2 and go top: their chicken dinner, then the lead.
+    soul = moments.detect("Esports", "Owais", "pubgmobile:Team_SouL_p1", _seen(_lobby(1), ["Team_SouL"], "pubgmobile:Team_SouL_p1"), _seen(_lobby(2), ["Team_SouL"], "pubgmobile:Team_SouL_p1"))
+    assert [(f.kind, f.level, f.title) for f in soul] == [("dinner", "key", "Chicken dinner: Team SouL"), ("lead", "key", "Owais: Team SouL go top")]
+    assert soul[1].body == "29 pts after 2 matches"
+    assert moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", None, one) == []  # a first look is the baseline
+
+
+def test_where_the_team_finished_the_lobby():
+    two = _seen(_lobby(2))
+    [won] = moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", two, _seen(_lobby(3, finished=True)))
+    assert (won.kind, won.title, won.priority) == ("final", "Jonathan: GodLike Esports win the lobby · 46 pts", 90)
+    assert won.body == "4 teams · 2 won · 22 finishes · Semi Finals · Day 3"
+    owais = "pubgmobile:Team_SouL_p1"
+    [third] = moments.detect("Esports", "Owais", owais, _seen(_lobby(2), ["Team_SouL"], owais), _seen(_lobby(3, finished=True), ["Team_SouL"], owais))
+    assert third.title == "Owais: Team SouL finish 3rd · 33 pts" and third.priority == 80
+
+
+def test_a_player_left_out_of_the_lobby_hears_nothing():
+    # The line-ups name who played; a benched teammate has no line, so no result for them.
+    bench = "pubgmobile:Bench"
+    assert moments.detect("Esports", "Bench", bench, _seen(_lobby(2), athlete=bench), _seen(_lobby(3, finished=True), athlete=bench)) == []
+    assert moments.detect("Esports", "Jonathan", "pubgmobile:Jonathan", _seen(_lobby(2)), _seen(_lobby(3, finished=True)))
+
+
+def test_form_reads_placings_from_lobby_results():
+    items = [({"result": "1st of 16 · 112 pts"}, None), ({"result": "6th of 16 · 54 pts"}, None), ({"result": "3rd of 16 · 80 pts"}, None)]
+    stats, note = form.summarize("Esports", items, ["GodLike Esports"])
+    assert stats == [{"label": "Avg place", "value": "3.3"}, {"label": "Top 3", "value": "2"}, {"label": "Avg points", "value": "82"}]
+    assert note == "Last 3 lobbies"
+
+
+# ---------------------------------------------------------------- registry, search, credits, scheduling
+
+
+PLAYER = {"pageid": 123456, "pagename": "Jonathan", "id": "JONATHAN", "name": "Jonathan Amaral", "nationality": "India", "birthdate": "1998-09-21", "status": "Active", "team": "GodLike Esports", "teampagename": "GodLike Esports"}
+
+
+def test_registry_rows_from_liquipedia_players():
+    rows = registry.liquipedia_rows([PLAYER, {**PLAYER, "pageid": None}, {**PLAYER, "pageid": 2, "pagename": "Retired", "id": "Ghost", "status": "Retired", "team": None, "teampagename": None}], WIKI)
+    one, ghost = rows
+    assert one["qid"] == "lp:pubgm:123456" and len(one["qid"]) <= 20
+    assert (one["sport"], one["name"], one["aliases"], one["teams"], one["league"], one["country"], one["current"]) == ("esports", "JONATHAN", ["Jonathan Amaral"], ["GodLike Esports"], WIKI, "India", True)
+    assert one["ids"] == {"liquipedia_esports": "pubgmobile:Jonathan"} and str(one["birth_date"]) == "1998-09-21"
+    assert ghost["current"] is False
+
+
+def test_a_liquipedia_row_is_a_search_result_keyed_by_its_page(monkeypatch):
+    monkeypatch.setitem(search.ADAPTERS, "liquipedia_esports", lp.LiquipediaEsports())
+    row = registry.liquipedia_rows([PLAYER], WIKI)[0]
+    r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "jonathan")
+    assert (r.key, r.system, r.athlete_id, r.qid) == ("liquipedia_esports:pubgmobile:Jonathan", "liquipedia_esports", "pubgmobile:Jonathan", None)
+    assert r.sport == "BGMI" and r.detail == "GodLike Esports · India" and r.live_scores  # India plays PUBG Mobile as BGMI
+
+
+def test_the_credits_name_liquipedia_and_its_licence():
+    [entry] = credits.credits({"liquipedia_esports": 1}, stockfish=False)["data"]
+    assert entry["name"] == "Liquipedia" and entry["what"].startswith("BGMI, PUBG Mobile and Free Fire: battle royale standings")
+    assert (entry["licence"], entry["licence_url"]) == ("CC BY-SA 3.0", "https://creativecommons.org/licenses/by-sa/3.0/")
+
+
+def test_esports_players_stay_with_the_source_that_covers_their_game(monkeypatch):
+    monkeypatch.setitem(structured.ADAPTERS, "liquipedia_esports", lp.LiquipediaEsports())
+    football = type("Sportmonks", (), {"system": "sportmonks_football"})()
+    esports = type("PandaScore", (), {"system": "pandascore_esports"})()
+    assert structured.rebind(None, esports)  # no source yet: look them up
+    assert structured.rebind("espn_soccer", football)  # their sport moved to a better source
+    assert not structured.rebind("liquipedia_esports", esports)  # a BGMI pro isn't moved to PandaScore
+
+
+def test_a_lobby_lane_waits_its_own_pace_when_nothing_moves(monkeypatch):
+    source = FakeSource()
+    source.live_cadence = 300
+    lane(monkeypatch, source, {1: {"fixture": "a"}}, changed=False)
+    assert structured.lane_round(source, {1: time.monotonic() - 120}, set()) == 300  # not every minute
+
+
+# ---------------------------------------------------------------- the client
+
+
+class FakeRedis:
+    def __init__(self):
+        self.counts: dict[str, int] = {}
+
+    def incr(self, key):
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key]
+
+    def expire(self, key, seconds):
+        pass
+
+    def get(self, key):
+        return self.counts.get(key)
+
+
+def test_the_key_goes_in_a_header_and_the_hour_is_shared_and_never_overspent(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": [{"match2id": "a"}]})
+
+    redis = FakeRedis()
+    monkeypatch.setattr(liquipedia, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=liquipedia._client.headers))
+    monkeypatch.setattr(liquipedia, "token", lambda: "lp-key")
+    monkeypatch.setattr(liquipedia, "_cache", {})
+    monkeypatch.setattr(liquipedia.bus, "sync_redis", lambda: redis)
+    monkeypatch.setattr(liquipedia, "HOURLY", 8)
+    assert liquipedia.get("match", 0, wiki=WIKI, conditions="[[match2id::a]]") == [{"match2id": "a"}]
+    assert seen[0].headers["authorization"] == "Apikey lp-key" and "lp-key" not in str(seen[0].url)
+    assert "sports-follow" in seen[0].headers["user-agent"]
+    assert liquipedia.spent() == 1 and not liquipedia.spare()  # 8 an hour, 4 kept back, 30 reserved: no background reads
+    for _ in range(3):
+        liquipedia.get("match", 0, wiki=WIKI)
+    with pytest.raises(liquipedia.RateLimited):
+        liquipedia.get("match", 0, wiki=WIKI)  # the 5th of 8: the margin is never spent
+    assert len(seen) == 4
+    assert liquipedia.any_of("match2id", ["a", "b"]) == "[[match2id::a]] OR [[match2id::b]]"
+
+
+def test_without_redis_nothing_is_read(monkeypatch):
+    def broken():
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(liquipedia, "token", lambda: "lp-key")
+    monkeypatch.setattr(liquipedia, "_cache", {})
+    monkeypatch.setattr(liquipedia.bus, "sync_redis", broken)
+    with pytest.raises(liquipedia.RateLimited):
+        liquipedia.get("match", 0, wiki=WIKI)
+    assert not liquipedia.spare()
+
+
+def test_snapshot_of_a_finished_lobby_needs_no_request(monkeypatch):
+    calls = []
+    monkeypatch.setattr(liquipedia, "get", lambda datatype, ttl, **params: calls.append(params) or [_lobby(3, finished=True)])
+    adapter = lp.LiquipediaEsports()
+    adapter.snapshots({1: {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}})
+    snap = adapter.snapshot({"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, final=True)
+    assert isinstance(snap, Snapshot) and snap.status == "final" and len(calls) == 1

@@ -21,7 +21,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, moments, notify, structured
+from . import bus, games, moments, notify, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -122,7 +122,7 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == athlete.qid))
         if holder is not None:
             return holder.player_id, False
-        sport = athlete.sport.title()
+        sport = (games.of_athlete(athlete.league) if athlete.sport == games.ESPORTS else None) or athlete.sport.title()
         slug = _free_slug(db, athlete.name, sport, athlete.qid.lower())
         player = Player(slug=slug, name=athlete.name, sport=sport, status="active", teams=list(athlete.teams or []), wikidata_qid=athlete.qid)
         db.add(player)
@@ -139,7 +139,7 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
     Returns (player_id, created). A new player's card is published at once from the source with
     profile and news pending; the caller queues the fixtures refresh and the agent build.
     """
-    sport = adapter.sports[0].title()
+    sport = structured.sport_name(adapter, ref)
     with session() as db:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder is not None:
@@ -489,7 +489,7 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
     Returns the player the name landed on: this one, or an existing player who already holds the
     athlete (followed earlier under another spelling), into which this one is folded.
     """
-    sport = adapter.sports[0].title()  # "Football", "Cricket", "Basketball", "Tennis", "Chess"
+    sport = structured.sport_name(adapter, ref)  # "Football", "Cricket", "Chess"; an esports pro's game: "CS2", "BGMI"
     individual = ref.team_ids == [ref.athlete_id]
     moved_from = None
     with session() as db:

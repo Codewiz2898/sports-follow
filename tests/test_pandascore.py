@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from sports_follow import credits, form, moments, registry, search, structured
+from sports_follow import credits, form, games, moments, registry, search, structured
 from sports_follow.adapters import pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
@@ -185,6 +185,21 @@ def test_the_series_result_from_the_teams_side():
     assert other.title == "TenZ: Sentinels 2 – 1 NRG"
 
 
+def test_a_pros_sport_is_their_game():
+    assert {games.family(s) for s in ("Valorant", "CS2", "BGMI", "Free Fire", "League of Legends", "Esports")} == {"esports"}
+    assert games.family("Cricket") == "cricket"
+    assert [games.label(s) for s in ("CS2", "League of Legends", "PUBG Mobile", "cricket", "esports")] == ["CS2", "League of Legends", "PUBG Mobile", "Cricket", "Esports"]
+    assert (games.of_athlete("cs-go"), games.of_athlete("pubgmobile", "India"), games.of_athlete("pubgmobile", "Nepal"), games.of_athlete("freefire")) == ("CS2", "BGMI", "PUBG Mobile", "Free Fire")
+    adapter = ps.PandascoreEsports()
+    assert structured.sport_name(adapter, ps.parse_player(PLAYER)) == "Valorant"
+    stored_before = PlayerRef("pandascore_esports", "1", "amster", ["138811"], ["6666"], league="cs-go")  # a binding saved without a game
+    assert structured.sport_name(adapter, stored_before) == "CS2"
+    # The rules read the family: a CS2 pro's series ends like any esports series.
+    [final] = moments.detect("CS2", "TenZ", str(TENZ), _seen(LIVE), _seen(FINAL))
+    assert final.title == "TenZ: Sentinels win 2–1"
+    assert form.summarize("Valorant", [({"result": "Won 2–1"}, None)], [])[1] == "Last 1 series"
+
+
 def test_form_counts_series_and_maps():
     items = [({"result": "Won 2–1"}, None), ({"result": "Lost 0–2"}, None), ({"result": "Won by forfeit"}, None)]
     stats, note = form.summarize("Esports", items, ["Sentinels"])
@@ -208,9 +223,9 @@ def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatc
     monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
     row = registry.esports_rows([PLAYER])[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")
-    assert (r.key, r.system, r.athlete_id, r.sport) == (f"pandascore_esports:{TENZ}", "pandascore_esports", str(TENZ), "Esports")
+    assert (r.key, r.system, r.athlete_id, r.sport) == (f"pandascore_esports:{TENZ}", "pandascore_esports", str(TENZ), "Valorant")  # the game, not "Esports"
     assert r.qid is None  # following goes by the PandaScore id; the server takes only Wikidata ids as qids
-    assert r.detail == "Sentinels · Valorant · Canada" and r.exact and r.live_scores
+    assert r.detail == "Sentinels · Canada" and r.exact and r.live_scores
 
 
 def test_a_pro_on_a_team_ranks_before_a_teamless_namesake():
@@ -223,7 +238,7 @@ def test_a_pro_on_a_team_ranks_before_a_teamless_namesake():
 def test_the_credits_name_pandascore_when_it_runs():
     page = credits.credits({"pandascore_esports": 1, "lichess_chess": 1}, stockfish=False)
     assert [c["name"] for c in page["data"]] == ["Lichess", "PandaScore"]
-    assert page["data"][1]["what"].startswith("Esports: series schedules and results")
+    assert page["data"][1]["what"].startswith("Valorant, CS2, League of Legends, Dota 2 and other team games: series schedules and results")
 
 
 def test_an_armed_series_moved_hours_later_is_disarmed():

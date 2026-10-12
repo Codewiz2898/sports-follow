@@ -52,6 +52,19 @@ export interface EsportsTeam { id: string; name: string; abbr?: string | null; s
 export interface EsportsMap { n: number; status: string; winner?: string | null }  // status: finished | running | not_started
 export interface EsportsState { kind: 'esports'; game?: string | null; teams: EsportsTeam[]; maps: EsportsMap[]; format?: string | null; stage?: string | null; forfeit?: boolean }
 
+// A battle royale lobby: every team's standing, and who won each game ("chicken dinner", "Booyah").
+export interface LobbyGame { n: number; place?: number | null; kills: number; points: number }
+export interface LobbyTeam { id: string; name: string; place: number; points: number; kills: number; wins: number; games: LobbyGame[] }
+export interface BattleRoyaleState {
+  kind: 'battle_royale'
+  game?: string | null
+  win_word?: string
+  stage?: string | null
+  standings: LobbyTeam[]
+  games: { n: number; map?: string | null; status: string; winner?: string | null }[]
+  total?: number
+}
+
 export interface Moment { clock: string; kind: string; text: string; athlete_ids: string[] }
 
 export interface LiveStatus {
@@ -67,7 +80,7 @@ export interface LiveStatus {
   event_id?: number
   competition?: string | null
   headline?: string | null
-  state?: FootballState | CricketState | BasketballState | TennisState | ChessState | EsportsState
+  state?: FootballState | CricketState | BasketballState | TennisState | ChessState | EsportsState | BattleRoyaleState
   moments?: Moment[]
   source?: string
 }

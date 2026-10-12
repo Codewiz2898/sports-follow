@@ -25,8 +25,8 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import registry, structured
-from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess, pandascore_esports
+from . import games, registry, structured
+from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -238,7 +238,9 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
         .order_by(best.desc())
         .limit(LOCAL_LIMIT * 2)
     )
-    if sport:
+    if sport == games.ESPORTS:
+        q = q.where(func.lower(Player.sport).in_(sorted(games.NAMES)))  # a pro's sport is their game
+    elif sport:
         q = q.where(func.lower(Player.sport) == sport)
     rows = db.execute(q).all()
     if not rows:
@@ -259,7 +261,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
         out.append(Result(
             key=f"{system}:{ext}" if system else (f"wikidata:{qid}" if qid else f"player:{player.id}"),
             name=player.name,
-            sport=(player.sport or "").title() or "Sport not known yet",
+            sport=games.label(player.sport) or "Sport not known yet",
             detail=" · ".join(t for t in (player.teams or [])[:2] if t) or (player.role or ""),
             system=system,
             athlete_id=ext,
@@ -283,6 +285,9 @@ def from_athlete(a: Athlete, query: str) -> Result:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
     system = registry.live_system(a.sport)
+    if a.sport == "esports":
+        # Two esports sources side by side, each for its own games: the one this row came from.
+        system = next((s for s in a.ids or {} if s in ADAPTERS), None)
     live_id = (a.ids or {}).get(system) if system else None
     teams = list(a.teams or [])
     if a.sport == "chess":
@@ -292,13 +297,13 @@ def from_athlete(a: Athlete, query: str) -> Result:
     elif a.sport == "basketball":
         parts = [*teams[:1], (a.league or "").upper() if a.current else ""]
     elif a.sport == "esports":
-        parts = [*teams[:1], pandascore_esports.game_name(a.league) or "", a.country or ""]
+        parts = [*teams[:1], a.country or ""]  # the game is the result's sport
     else:
         parts = [*teams[:2], a.country or ""]
     return Result(
         key=f"{system}:{live_id}" if live_id else f"wikidata:{a.qid}",
         name=a.name,
-        sport=a.sport.title(),
+        sport=(games.of_athlete(a.league, a.country) if a.sport == games.ESPORTS else None) or a.sport.title(),
         detail=" · ".join(dict.fromkeys(p for p in parts if p)),
         system=system if live_id else None,
         athlete_id=live_id,
@@ -508,7 +513,7 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
         "athlete_id": ref.athlete_id,
         "league": ref.league,
         "name": ref.name,
-        "sport": adapter.sports[0].title(),
+        "sport": structured.sport_name(adapter, ref),
         "teams": [t for t in ref.team_names if t and t != ref.name],
         "source": structured.SOURCE_NAMES.get(system, system),
         "source_url": ref.profile_url,

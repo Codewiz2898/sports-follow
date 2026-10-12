@@ -17,9 +17,10 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
 The query service allows a client about a minute of query time a minute, so batches run one at a
 time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour.
 
-Esports comes from PandaScore instead (import_esports): Wikidata has a Liquipedia id for only 2,844
-people. Its rows are keyed "pandascore:<id>" where the others hold a Wikidata id, and carry the
-PandaScore id, so following one binds the live source by id like any other.
+Esports comes from its sources instead (import_esports): Wikidata has a Liquipedia id for only 2,844
+people. Team-title pros come from PandaScore, keyed "pandascore:<id>", and battle royale pros (BGMI, Free
+Fire) from Liquipedia, keyed "lp:<wiki>:<page id>", where the others hold a Wikidata id. Each carries
+its source's id, so following one binds that source by id like any other.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, pandascore, pandascore_esports
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
 from .db import session
 from .models import Athlete, PlayerIdentity
 
@@ -362,6 +363,19 @@ def esports_rows(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def import_esports() -> int:
+    """Esports pros from each esports source that runs."""
+    return _import_pandascore() + _import_liquipedia()
+
+
+def _drop_unseen(prefix: str, started: datetime) -> None:
+    """After a complete run of one source, its rows that run didn't see again (retired, moved on)."""
+    with session() as db:
+        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like(f"{prefix}%"), Athlete.updated_at < started)).rowcount
+    if gone:
+        log.info("registry esports: %d %s pros no longer active removed", gone, prefix.rstrip(":"))
+
+
+def _import_pandascore() -> int:
     """Import the active pros of pandascore_esports.IMPORT_GAMES, a page of 100 every ESPORTS_PACE
     seconds and only while live series keep their share of the hour (pandascore.spare). A complete run
     drops the rows it didn't see again (retired, or moved to a title not imported)."""
@@ -401,10 +415,72 @@ def import_esports() -> int:
         page += 1
         time.sleep(ESPORTS_PACE)
     if complete:
-        with session() as db:
-            gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.updated_at < started)).rowcount
-        if gone:
-            log.info("registry esports: %d pros no longer active removed", gone)
+        _drop_unseen("pandascore:", started)
+    return total
+
+
+def liquipedia_rows(players: list[dict[str, Any]], wiki: str) -> list[dict[str, Any]]:
+    """Athlete rows from Liquipedia players on one wiki (pure). The handle is the name, the real name an
+    alias. Liquipedia has no popularity signal either, so sitelinks stay 0."""
+    rows = []
+    for p in players:
+        if not p.get("pageid") or not p.get("pagename"):
+            continue
+        ref = liquipedia_esports.parse_player(p, wiki)
+        if not words(ref.name):
+            continue
+        aliases = [n for n in dict.fromkeys(p.get(k) for k in ("name", "romanizedname", "localizedname")) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
+        rows.append({
+            "qid": f"lp:{liquipedia_esports.SHORT[wiki]}:{p['pageid']}",
+            "sport": ESPORTS,
+            "name": ref.name[:200],
+            "aliases": aliases,
+            "search_text": search_text(ref.name, aliases),
+            "birth_date": _date(ref.born),
+            "country": p.get("nationality") or None,
+            "teams": ref.team_names,
+            "league": wiki,
+            "title": None,
+            "ids": {"liquipedia_esports": ref.athlete_id},
+            "image": None,
+            "sitelinks": 0,
+            "current": p.get("status") == "Active" and bool(ref.team_ids),
+        })
+    return rows
+
+
+def _import_liquipedia() -> int:
+    """Import the active players of each battle royale wiki, 1,000 a request, only while the hour's
+    reserve for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
+    if "liquipedia_esports" not in ADAPTERS:
+        log.info("registry esports: Liquipedia isn't running (no key); skipped")
+        return 0
+    started = datetime.now(timezone.utc)
+    fields = "pageid,pagename,id,name,romanizedname,localizedname,nationality,birthdate,status,team,teampagename"
+    total, complete = 0, True
+    for wiki in liquipedia_esports.IMPORT_WIKIS:
+        offset, waited = 0, 0
+        while True:
+            if not liquipedia.spare() and waited < ESPORTS_WAIT:
+                time.sleep(60)
+                waited += 60
+                continue
+            try:
+                players = liquipedia.get("player", 0, wiki=wiki, conditions="[[status::Active]]", query=fields, order="pageid ASC", limit=liquipedia.PAGE, offset=offset)
+            except AdapterError as exc:
+                log.warning("registry esports: Liquipedia %s at %d failed: %s", wiki, offset, exc)
+                complete = False
+                break
+            rows = liquipedia_rows(players, wiki)
+            with session() as db:
+                upsert(db, rows)
+            total += len(rows)
+            log.info("registry esports: Liquipedia %s, %d players read, %d kept", wiki, offset + len(players), total)
+            if len(players) < liquipedia.PAGE:
+                break
+            offset += liquipedia.PAGE
+    if complete:
+        _drop_unseen("lp:", started)
     return total
 
 

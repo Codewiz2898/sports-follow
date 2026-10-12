@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { BasketballSide, BasketballState, Card, ChessSide, ChessState, CricketState, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
+import type { BasketballSide, BasketballState, BattleRoyaleState, Card, ChessSide, ChessState, CricketState, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
 import { countdown, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
 import { SportMark } from './Icons'
 
@@ -146,7 +146,7 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
  * scorers for football, innings for cricket); scores the research agent read off a web page are
  * text, shown in one generic layout.
  */
-export function LiveScoreboard({ live, playerName, sport, compact }: { live: LiveStatus; playerName: string; sport?: string | null; compact?: boolean }) {
+export function LiveScoreboard({ live, playerName, sport, teams, compact }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean }) {
   const state = live.state
   return (
     <section className={`board${compact ? ' compact' : ''}`} data-sport={sportKey(sport ?? state?.kind)} aria-label="Live now">
@@ -162,6 +162,8 @@ export function LiveScoreboard({ live, playerName, sport, compact }: { live: Liv
         <BasketballBoard state={state} clock={live.clock} compact={compact} />
       ) : state?.kind === 'tennis' ? (
         <TennisBoard state={state} clock={live.clock} />
+      ) : state?.kind === 'battle_royale' ? (
+        <LobbyBoard state={state} clock={live.clock} teams={teams} compact={compact} />
       ) : state?.kind === 'esports' && state.teams.length === 2 ? (
         <EsportsBoard state={state} clock={live.clock} compact={compact} />
       ) : state?.kind === 'chess' && state.white && state.black ? (
@@ -306,6 +308,54 @@ function TennisBoard({ state, clock }: { state: TennisState; clock?: string | nu
   )
 }
 
+const place = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'}`
+const points = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+
+/**
+ * A battle royale lobby: the top of the standings (and the followed player's team, wherever it is),
+ * and one chip a game with who won it.
+ */
+function LobbyBoard({ state, clock, teams, compact }: { state: BattleRoyaleState; clock?: string | null; teams?: string[]; compact?: boolean }) {
+  const ours = (name: string) => (teams ?? []).some((t) => t.toLowerCase() === name.toLowerCase())
+  const top = state.standings.slice(0, compact ? 3 : 5)
+  const mine = state.standings.find((t) => ours(t.name))
+  const rows = mine && !top.includes(mine) ? [...top, mine] : top
+  const tag = (id?: string | null) => shortTeam(state.standings.find((s) => s.id === id)?.name ?? '')
+  return (
+    <div className="stack" style={{ gap: 12 }}>
+      {clock && <span className="num clock">{clock}</span>}
+      <table className="linescore lobby">
+        <thead><tr><th>#</th><th>Team</th><th title={`Games won (${state.win_word ?? 'wins'})`}>Won</th><th title="Finishes">Fin.</th><th>Pts</th></tr></thead>
+        <tbody>
+          {rows.map((t) => (
+            <tr key={t.id} className={ours(t.name) ? 'ours' : undefined}>
+              <td>{place(t.place)}</td><td className="who">{t.name}</td><td>{t.wins}</td><td>{t.kills}</td><td className="total">{points(t.points)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!compact && state.games.length > 0 && (
+        <div className="maps" aria-label="Matches">
+          {state.games.map((g) => (
+            <span key={g.n} className="map" title={g.map ?? undefined}>
+              M{g.n}{g.winner ? <span className="num">{tag(g.winner)}</span> : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {state.game && <span className="live-note">{state.game}</span>}
+    </div>
+  )
+}
+
+const FILLER = /^(team|esports?|gaming|official|club|the)$/i
+
+/** A team's name short enough for a chip: "GodLike Esports" → "GodLike", "Team SouL" → "SouL". */
+function shortTeam(name: string): string {
+  const words = name.split(/\s+/).filter((w) => w && !FILLER.test(w))
+  return (words[0] ?? name).slice(0, 10)
+}
+
 /** A series: the two teams and maps won, the map on now, and one chip a map with who took it. */
 function EsportsBoard({ state, clock, compact }: { state: EsportsState; clock?: string | null; compact?: boolean }) {
   const [a, b] = state.teams
@@ -388,14 +438,14 @@ function ChessBoard({ state, clock, flip, compact }: { state: ChessState; clock?
 
 // Numbers a structured headline already says ("67* (71)", "2/34 (8 ov)", "1 goal, 1 assist",
 // "Leads 1–0 in sets", "White vs Nakamura").
-const IN_HEADLINE = new Set(['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded', 'Goals', 'Assists', 'Sets', 'Colour', 'Opponent'])
+const IN_HEADLINE = new Set(['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded', 'Goals', 'Assists', 'Sets', 'Colour', 'Opponent', 'Place', 'Points'])
 const NO_LINE: Record<string, string> = { cricket: "hasn't batted or bowled yet", football: "isn't in the matchday squad", basketball: "isn't on the game's roster" }
 
 /** The followed player's own numbers in the game, on their sport's colour. */
 function PlayerLine({ live, playerName }: { live: LiveStatus; playerName: string }) {
   const stats = live.player_stats ?? []
   if (!live.headline && !stats.length) {
-    if (!live.state || live.state.kind === 'esports') return null  // esports results are the team's: no player numbers
+    if (!live.state || live.state.kind === 'esports' || live.state.kind === 'battle_royale') return null  // esports results are the team's: no player numbers
     return <span className="small muted">{playerName} {NO_LINE[live.state.kind] ?? 'has no numbers in this game yet'}.</span>
   }
   // Structured lines lead with a headline ("67* (71)", "1 goal"); the agent's lead with the first stat.

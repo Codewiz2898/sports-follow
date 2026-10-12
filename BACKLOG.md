@@ -293,7 +293,7 @@ reached, the app says so plainly rather than looking broken.
   those ids.
 - The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
 
-### 8. Esports (step 1 built)
+### 8. Esports (step 1 built; battle royale built, waiting on a Liquipedia key)
 
 **Built (step 1).** `adapters/pandascore_esports.py` follows a pro's
 team in PandaScore's team titles (Valorant, CS2, LoL, Dota 2, Mobile Legends, Rainbow Six, Overwatch,
@@ -316,7 +316,10 @@ earlier ones, so map moments work without a paid plan. The remaining count is `x
 Real ESL Pro League and VCT results read correctly ("Grand Final · Bo5", "Won 3–0"). The tests use
 made-up responses in PandaScore's shapes, as for Sportmonks, rather than committing theirs.
 An armed series the schedule moves hours later is now disarmed (any sport), so it isn't polled all
-that time or closed unplayed after six days.
+that time or closed unplayed after six days. A pro's sport is their game ("Valorant", "CS2", "BGMI",
+"Free Fire"), shown wherever other players show their sport; "esports" is the family the rules, the
+search filter and the colour share (`sports_follow/games.py`), and pros followed as "Esports" move to
+their game on their next refresh.
 
 **To finish step 1**
 - Follow a pro whose team plays soon and watch one series through: the start, map and result alerts.
@@ -352,17 +355,44 @@ results ("Won 2–1"), and hear when a series ends, from a licensed source named
    plan; until then results are the team's.
 2. **Live scores** once the launch metrics show demand: €1,000 a game a month for LoL or CS (Valorant
    isn't on the live tier), three to six times the launch's whole data budget.
-3. **BGMI and Free Fire (1–2 weeks of code, plus a data deal).** Battle royale doesn't fit the
-   head-to-head model: a match is a 16-team lobby scored by placement and finishes, and a day is a
-   standings table. That needs a new event shape, a standings view and its own moments (chicken
-   dinner, finishes). No licensed live feed found: Liquipedia has results once editors add them, and
-   live data would mean a deal with KRAFTON India or the tournament organisers.
+3. **BGMI and Free Fire: built** on Liquipedia (`adapters/liquipedia.py`, `liquipedia_esports.py`),
+   not yet run: it needs a LiquipediaDB key (requested at liquipedia.net/api, saved as
+   `~/.config/sports-follow/liquipedia-token`). Battle royale is its own event shape: one lobby (a
+   Liquipedia match2: a day of a group, 12 to 24 teams playing several games) is one event, with the
+   standings (points, placement, finishes, games won) and each game's winner. Liquipedia stores each
+   team's placement and finishes in every game (Lua-Modules: `MatchGroup/Input/Util.lua`), which is
+   what the parsers read. The app shows the top of the standings with the player's team marked, one
+   chip a game, and results like "3rd of 16 · 87 pts". Alerts, from the player's team's side: the
+   lobby starting and a chicken dinner (Booyah in Free Fire) and going top (key); each game's
+   placement (everything); where the team finished (key). The line-ups name the four who played, so
+   a benched player isn't told. The registry imports the active players of each battle royale wiki
+   (`SPORTS_FOLLOW_LIQUIPEDIA_WIKIS`), keyed "lp:<wiki>:<page id>"; PandaScore's and Liquipedia's
+   players never move between the two (each covers its own games), and an esports name alone never
+   binds a player: their team must match.
+   - **The free key's limits:** 60 requests an hour, counted in Redis across the API and the worker,
+     never spent past 56; background reads stop at 26. Lobbies are polled every 5 minutes, all of them
+     in one request; fixtures every 30 minutes a team (cached). That suits a few teams; more need a
+     paid plan.
+   - **To check once the key works:** the `[[opponent::Team_Name]]` condition (underscores or spaces),
+     the date format, whether `match2games[].opponents` comes parsed or as a string, and the section
+     and bracket header used for the lobby's name ("Semi Finals · Day 3").
+   - **For a public build:** a commercial Liquipedia plan (reported $49 or $199 a data type a month;
+     their portal says sign-ups are paused), then add `liquipedia_esports` to `SPORTS_FOLLOW_SOURCES`.
+     Data is CC BY-SA 3.0: credited on the Credits page and on every score as "Liquipedia".
+   - **PUBG PC:** PandaScore stopped covering it in September 2020; Liquipedia's PUBG wiki would fit
+     the same adapter. PUBG's own API (free key, tournaments endpoint) keeps matches 14 days.
+   - **CODM next:** Call of Duty: Mobile is head-to-head (5v5 series), so it fits the team model on
+     Liquipedia's Call of Duty wiki. PandaScore's Call of Duty is the PC and console league (CDL), not
+     CODM. Neither Activision nor Garena has a public API.
 
 **Open questions**
-- Which games first: Valorant and CS2 have the cleanest data, BGMI has the audience.
+- Which games first: Valorant and CS2 have the cleanest data, BGMI has the audience. (Both done:
+  team titles from PandaScore, battle royale from Liquipedia, picked 13 Oct 2026.)
 - PandaScore's free plan: confirm in writing that a commercial, non-betting app may use it. (Its
   results do include series scores and map winners, for every team title: checked 13 Oct 2026.)
-- Liquipedia's plans and commercial terms (its API page sits behind a bot check).
+- Liquipedia's commercial plans: free access is only for "educational, non-commercial public-interest
+  and community feature projects" (liquipedia.net/api); the paid plans' price per data type, and
+  whether a battle royale app needs one data type (matches) or several (matches, players).
 
 ## Found while building (not yet scheduled)
 
