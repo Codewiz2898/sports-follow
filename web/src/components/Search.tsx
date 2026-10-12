@@ -6,7 +6,7 @@ import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
-export const SPORTS: [string, string][] = [['', 'All'], ['football', 'Football'], ['cricket', 'Cricket'], ['basketball', 'Basketball'], ['tennis', 'Tennis'], ['chess', 'Chess']]
+export const SPORTS: [string, string][] = [['', 'All'], ['football', 'Football'], ['cricket', 'Cricket'], ['basketball', 'Basketball'], ['tennis', 'Tennis'], ['chess', 'Chess'], ['esports', 'Esports']]
 
 /** Search as you type: one request per 250 ms pause, the previous one cancelled. Keeps the last answer while the next loads. */
 export function useSearch(query: string, sport: string) {
@@ -188,7 +188,7 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
         <span className="dsp" style={{ fontSize: 26 }}>Research it with AI</span>
       </div>
       <p className="small muted" style={{ margin: 0 }}>Our research agent searches the web for “{q}”, works out who it is and builds the page. It takes 1 to 3 minutes and works for any sport.</p>
-      <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources. Other sports get news and results from the agent.</p>
+      <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources, and esports series results from PandaScore. Other sports get news and results from the agent.</p>
       <button type="button" className="btn primary" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
         {busy && <span className="spinner" />}Research “{q}”
       </button>

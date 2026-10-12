@@ -24,7 +24,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
-                                                                              └─▶ Lichess API (chess)
+                                                                              ├─▶ Lichess API (chess)
+                                                                              └─▶ PandaScore API (esports)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
@@ -37,7 +38,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   FBref, NBA/WNBA, ATP/WTA. College players aren't in it. On 29 Sep 2026: football ~260,000, chess
   24,247, cricket 19,745, tennis 10,781, basketball 9,612. First import:
   `.venv/bin/python -m sports_follow.registry` (about 90 minutes, one query at a time as the Wikidata
-  query service asks; football is most of it); `--new` reads only people not imported yet.
+  query service asks; football is most of it); `--new` reads only people not imported yet. Esports
+  pros come from PandaScore instead (Wikidata knows only a few thousand): the active players of
+  `SPORTS_FOLLOW_ESPORTS_GAMES`, by handle and full name, with a PandaScore token
+  (`python -m sports_follow.registry esports`, part of the weekly run).
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
@@ -67,6 +71,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Basketball | ESPN (NBA, WNBA; NCAA if researched) | team schedule, every phase | score, quarters, box-score line | season averages |
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
   | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
+  | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data) | team's series and maps won |
 
   Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
@@ -167,6 +172,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
+| `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
+| `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series; the history lane and the registry import pause below it |
+| `SPORTS_FOLLOW_ESPORTS_GAMES` | `valorant,cs-go,league-of-legends,dota-2` | the titles whose pros the registry imports (PandaScore slugs; `cs-go` is CS2) |
 | `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
 
 ## Deploy

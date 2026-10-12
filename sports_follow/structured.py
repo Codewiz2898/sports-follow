@@ -22,8 +22,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, moments, notify, registry
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport
-from .config import POLL_SESSION
+from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport, pandascore_esports
+from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
 
@@ -34,7 +34,7 @@ OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_not
 BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
@@ -103,8 +103,8 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
             namesakes = pros
         found = []
         for adapter in ADAPTERS.values():
-            if adapter.system == "lichess_chess":
-                continue
+            if adapter.system in ("lichess_chess", "pandascore_esports"):
+                continue  # not on ESPN, so never the one ESPN athlete below; asking would only spend a request
             try:
                 ref = adapter.find_player(query)
             except AdapterError:
@@ -241,6 +241,8 @@ def describe(player_id: int) -> str | None:
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
         league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
+        if row.adapter == "pandascore_esports" and pandascore_esports.game_name(loc.get("league")):
+            league = f" ({pandascore_esports.game_name(loc['league'])} pro, known by this handle)"
         page = f" Their page on {SOURCE_NAMES.get(row.adapter, row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
         return f"{loc.get('name') or player.name}, {player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
@@ -297,8 +299,7 @@ def _refresh(player_id: int) -> None:
             f.status = "final"
     finals_all = [f for f in fixtures if f.status == "final"]
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
-    # A "scheduled" game long past its start is one the source never updated: leave it out.
-    ahead = [f for f in fixtures if f.status != "final" and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))][:UPCOMING_LIMIT]
+    ahead = upcoming(fixtures, now)
     recent: list[tuple[Fixture, Snapshot | None]] = []
     for f in finals:
         try:
@@ -352,13 +353,24 @@ def _refresh(player_id: int) -> None:
     bus.store_card(player_id, card)
 
 
+def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
+    """The games still to come or under way, at most UPCOMING_LIMIT. A "scheduled" game long past its
+    start is one the source never updated, and a postponed one long past is off (or waits for a new
+    date): both are left out."""
+    stale = now - timedelta(hours=12)
+    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale)][:UPCOMING_LIMIT]
+
+
 _ORDER = {"scheduled": 0, "postponed": 0, "armed": 1, "live": 2, "final": 3}
 
 
-def next_status(current: str | None, from_schedule: str) -> str:
+def next_status(current: str | None, from_schedule: str, moved_later: bool = False) -> str:
     """An event's status after a schedule read. Schedules can be minutes old, so a read never moves a
     game backwards: it doesn't un-arm one or reopen one the poller saw finish. A postponed game can
-    come back as scheduled."""
+    come back as scheduled, and an armed one the schedule has moved hours later (an esports series
+    after an overrunning one) is disarmed, so it isn't polled all that time, or closed unplayed."""
+    if current == "armed" and from_schedule == "scheduled" and moved_later:
+        return "scheduled"
     if current is None or current == "postponed" or _ORDER.get(from_schedule, 0) >= _ORDER.get(current, 0):
         return from_schedule
     return current
@@ -379,7 +391,8 @@ def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> E
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    event.status = next_status(event.status, f.status)
+    later = f.start_utc is not None and f.start_utc > _now() + timedelta(seconds=ARM_BEFORE_START) + timedelta(hours=1)
+    event.status = next_status(event.status, f.status, moved_later=later)
     db.flush()
     db.execute(insert(EventPlayer).values(event_id=event.id, player_id=player.id).on_conflict_do_nothing())
     return event
@@ -614,6 +627,22 @@ def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids
         state["eval"] = moments.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
 
 
+def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot) -> moments.Seen | None:
+    """What a player's moments are found against: the event's last state, with their last line. A first
+    look at a game already under way is the baseline (None): no earlier state, or, from a source with
+    player lines, no earlier line for them while it was live. Esports has no player lines, so its
+    earlier state alone is enough."""
+    if latest is None or (last is None and latest.status == "live" and snap.lines):
+        return None
+    return moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
+
+
+def _team_ids(db: Session, system: str, player_ids: list[int]) -> dict[int, list[str]]:
+    """Each player's team ids in a source, as their fixtures binding holds them."""
+    rows = db.execute(select(SourceBinding.player_id, SourceBinding.locator).where(SourceBinding.player_id.in_(player_ids), SourceBinding.purpose == "fixtures", SourceBinding.adapter == system))
+    return {pid: [str(t) for t in (loc or {}).get("team_ids") or []] for pid, loc in rows}
+
+
 def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, str]]] | None:
     """An event's live binding, its adapter and the followed players in it (player id, their id in the
     source); None when no followed player is in it or its source doesn't run."""
@@ -662,6 +691,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         if event is None:
             return "idle", 0, False
         people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
+        # Esports moments are told from the player's team's side ("Sentinels win map 2"): no line says it.
+        sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if snap.state.get("kind") == "esports" else {}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         if snap.state.get("kind") == "chess":
             _evaluate(db, snap, latest, [w[0] for w in watchers])
@@ -682,14 +713,11 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 line_changed = last is None or last.stats != line_json
                 if line_changed:
                     db.add(PlayerLine(event_id=event_id, player_id=player_id, as_of=now, stats=line_json))
-            # What happened to this player since the last poll. A first look at a game already under
-            # way (no earlier state, or no earlier line for them while it was live) is the baseline.
+            # What happened to this player since the last poll.
             if changed or line_changed:
-                before = None
-                if latest is not None and not (last is None and latest.status == "live"):
-                    before = moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
+                before = baseline(latest, last, snap)
                 name, sport = people.get(player_id, ("", ""))
-                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments)
+                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":

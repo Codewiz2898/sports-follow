@@ -20,11 +20,11 @@ def summarize(sport: str, results: list[tuple[dict[str, Any], Line | None]], tea
     sport = (sport or "").lower()
     lines = [line for _, line in results if line]
     stats = [s for s in [_record(sport, [r for r, _ in results], teams)] if s]
-    per_sport = {"football": _football, "soccer": _football, "basketball": _basketball, "cricket": _cricket, "tennis": _tennis, "chess": _chess}.get(sport)
+    per_sport = {"football": _football, "soccer": _football, "basketball": _basketball, "cricket": _cricket, "tennis": _tennis, "chess": _chess, "esports": _esports}.get(sport)
     if per_sport:
         stats += per_sport([r for r, _ in results], lines)
     n = len(results)
-    one, many = ("match", "matches") if sport in ("tennis", "cricket") else ("game", "games")
+    one, many = ("match", "matches") if sport in ("tennis", "cricket") else ("series", "series") if sport == "esports" else ("game", "games")
     note = f"Last {n} {one if n == 1 else many}"
     loading = sum(1 for r, _ in results if r.get("scorecard") is False)
     if loading:
@@ -141,3 +141,13 @@ def _chess(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str
     mine, games = sum(p for p, _ in scored), sum(p + q for p, q in scored)
     fmt = lambda x: (str(int(x)) if x == int(x) else f"{int(x)}½" if x > 1 else "½")  # noqa: E731
     return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
+
+
+def _esports(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
+    """Maps won and lost, from the series results ("Won 2–1"); a forfeit has no maps."""
+    won = lost = 0
+    for r in items:
+        match = re.match(r"(?:Won|Lost|Drew) (\d+)–(\d+)$", r.get("result") or "")
+        if match:
+            won, lost = won + int(match.group(1)), lost + int(match.group(2))
+    return [{"label": "Maps", "value": f"{won}–{lost}"}] if won or lost else []

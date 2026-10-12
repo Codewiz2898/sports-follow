@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { BasketballSide, BasketballState, Card, ChessSide, ChessState, CricketState, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
+import type { BasketballSide, BasketballState, Card, ChessSide, ChessState, CricketState, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
 import { countdown, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
 import { SportMark } from './Icons'
 
@@ -162,6 +162,8 @@ export function LiveScoreboard({ live, playerName, sport, compact }: { live: Liv
         <BasketballBoard state={state} clock={live.clock} compact={compact} />
       ) : state?.kind === 'tennis' ? (
         <TennisBoard state={state} clock={live.clock} />
+      ) : state?.kind === 'esports' && state.teams.length === 2 ? (
+        <EsportsBoard state={state} clock={live.clock} compact={compact} />
       ) : state?.kind === 'chess' && state.white && state.black ? (
         <ChessBoard state={state} clock={live.clock} flip={(live.player_stats ?? []).some((s) => s.label === 'Colour' && s.value === 'Black')} compact={compact} />
       ) : (
@@ -304,6 +306,40 @@ function TennisBoard({ state, clock }: { state: TennisState; clock?: string | nu
   )
 }
 
+/** A series: the two teams and maps won, the map on now, and one chip a map with who took it. */
+function EsportsBoard({ state, clock, compact }: { state: EsportsState; clock?: string | null; compact?: boolean }) {
+  const [a, b] = state.teams
+  const side = (t: EsportsTeam, align: 'left' | 'right') => (
+    <div className="stack" style={{ alignItems: align === 'left' ? 'flex-start' : 'flex-end', textAlign: align, minWidth: 0 }}>
+      <span className="title">{t.name}</span>
+      {t.abbr && t.abbr !== t.name && <span className="tiny muted">{t.abbr}</span>}
+    </div>
+  )
+  const tag = (id?: string | null) => state.teams.find((t) => t.id === id)?.abbr || state.teams.find((t) => t.id === id)?.name
+  return (
+    <div className="stack" style={{ gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: 12 }}>
+        {side(a, 'left')}
+        <div className="stack" style={{ alignItems: 'center' }}>
+          <span className="num score">{a.score}–{b.score}</span>
+          {clock && <span className="num clock">{clock}</span>}
+        </div>
+        {side(b, 'right')}
+      </div>
+      {!compact && state.maps.length > 0 && (
+        <div className="maps" aria-label="Maps">
+          {state.maps.map((m) => (
+            <span key={m.n} className={`map${m.status === 'running' ? ' running' : ''}`}>
+              Map {m.n}{m.winner ? <span className="num">{tag(m.winner)}</span> : m.status === 'running' ? ' · now' : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {state.game && <span className="live-note">{state.game}</span>}
+    </div>
+  )
+}
+
 const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
 
 /** The board from the position's FEN, from the followed player's side, with the last move marked. */
@@ -359,7 +395,7 @@ const NO_LINE: Record<string, string> = { cricket: "hasn't batted or bowled yet"
 function PlayerLine({ live, playerName }: { live: LiveStatus; playerName: string }) {
   const stats = live.player_stats ?? []
   if (!live.headline && !stats.length) {
-    if (!live.state) return null
+    if (!live.state || live.state.kind === 'esports') return null  // esports results are the team's: no player numbers
     return <span className="small muted">{playerName} {NO_LINE[live.state.kind] ?? 'has no numbers in this game yet'}.</span>
   }
   // Structured lines lead with a headline ("67* (71)", "1 goal"); the agent's lead with the first stat.

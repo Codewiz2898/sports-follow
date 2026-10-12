@@ -16,7 +16,7 @@ from typing import Any, Protocol
 class PlayerRef:
     """A player as one source system knows them."""
 
-    system: str  # "espn_soccer", "espn_cricket", "espn_basketball", "espn_tennis", "lichess_chess"
+    system: str  # "espn_soccer", "espn_cricket", "espn_basketball", "espn_tennis", "lichess_chess", "pandascore_esports"…
     athlete_id: str
     name: str
     team_ids: list[str]
@@ -26,7 +26,8 @@ class PlayerRef:
     # "Melbourne Stars"). A source's athlete record names one team; fixtures for the rest are
     # found by matching these against the competitors' names.
     other_teams: list[str] = field(default_factory=list)
-    # The competition family the id lives in, where the source needs it: "nba", "wnba", "atp", "wta".
+    # The competition family the id lives in, where the source needs it: "nba", "wnba", "atp", "wta"; an
+    # esports pro's game ("valorant", "cs-go").
     league: str | None = None
     # Birth date as the source gives it, ISO ("1988-11-05"); how the registry confirms a name match.
     born: str | None = None

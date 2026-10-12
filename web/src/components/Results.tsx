@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
-import { day, hostname, outcome, safeHref } from '../format'
+import { day, hostname, outcome, safeHref, sportKey } from '../format'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
 
 /** One finished game; tapping it opens the final score, the player's whole line and the source. */
-function GameRow({ r, playerId, teams }: { r: RecentResult; playerId: number; teams?: string[] }) {
+function GameRow({ r, playerId, teams, teamOnly }: { r: RecentResult; playerId: number; teams?: string[]; teamOnly?: boolean }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<GameDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -33,15 +33,17 @@ function GameRow({ r, playerId, teams }: { r: RecentResult; playerId: number; te
           {canOpen && <ChevronIcon className={open ? 'chev open' : 'chev'} width={16} height={16} aria-hidden />}
         </span>
       </button>
-      {open && <GameView detail={detail} error={error} />}
+      {open && <GameView detail={detail} error={error} teamOnly={teamOnly} />}
     </li>
   )
 }
 
-function GameView({ detail, error }: { detail: GameDetail | null; error: string | null }) {
+/** teamOnly: a sport whose source has no player numbers (esports), so a result is the team's. */
+function GameView({ detail, error, teamOnly }: { detail: GameDetail | null; error: string | null; teamOnly?: boolean }) {
   if (error) return <div className="game-body small muted">{error}</div>
   if (!detail) return <div className="game-body"><span className="spinner" /></div>
-  const lineNote = detail.scorecard === 'missing' ? 'The source has no scorecard for this game.'
+  const lineNote = teamOnly ? "The team's result: the source has no player numbers."
+    : detail.scorecard === 'missing' ? 'The source has no scorecard for this game.'
     : detail.scorecard ? 'No line for the player in this game.' : "The player's line is still being read."
   return (
     <div className="game-body">
@@ -95,7 +97,7 @@ export function ResultsHistory({ card }: { card: Card }) {
   return (
     <>
       <ul className="card list">
-        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} teams={card.player.teams} />)}
+        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} teams={card.player.teams} teamOnly={sportKey(card.player.sport) === 'esports'} />)}
       </ul>
       {page?.next && (
         <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} onClick={more} disabled={loading}>
@@ -119,7 +121,7 @@ export function StatsWithForm({ card }: { card: Card }) {
   const [view, setView] = useState<View>('overview')
   const [form, setForm] = useState<Partial<Record<10 | 5, Form>>>({})
   const sport = (card.player.sport || '').toLowerCase()
-  const overview = sport === 'cricket' || sport === 'tennis' ? 'Overview' : 'Season'
+  const overview = sport === 'cricket' || sport === 'tennis' || sportKey(sport) === 'esports' ? 'Overview' : 'Season'
 
   useEffect(() => {
     if (view === 'overview' || form[view]) return

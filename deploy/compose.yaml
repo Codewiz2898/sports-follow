@@ -18,6 +18,7 @@ x-app: &app
     LLM_GATEWAY_URL: http://gateway:8787
     SPORTS_FOLLOW_SPORTMONKS_TOKEN_FILE: /run/secrets/sportmonks-token
     SPORTS_FOLLOW_LICHESS_TOKEN_FILE: /run/secrets/lichess-token
+    SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE: /run/secrets/pandascore-token   # optional: esports
     SPORTS_FOLLOW_VAPID_KEY: /run/secrets/vapid-private.pem
   volumes:
     - ${SECRETS_DIR:-/etc/sports-follow}/files:/run/secrets:ro

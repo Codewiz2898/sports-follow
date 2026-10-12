@@ -2,7 +2,7 @@
 
 One request per pause in typing, answered from Postgres: players already on Sports Follow, then
 the player registry (registry.py: every athlete Wikidata knows in the five sports, ranked by how many
-Wikipedias write about them). ESPN's search and Lichess's FIDE search are asked only to fill gaps,
+Wikipedias write about them, and the esports pros PandaScore knows). ESPN's search and Lichess's FIDE search are asked only to fill gaps,
 when the registry has fewer than FILL_BELOW matches (someone too new or too obscure for Wikidata).
 Every result names an exact athlete, by registry id or source id, so following one never guesses
 from the name. College athletes are left out.
@@ -26,7 +26,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from . import registry, structured
-from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess
+from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess, pandascore_esports
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -46,7 +46,8 @@ ESPN_SPORTS = {"s:600": ("football", "espn_soccer"), "s:200": ("cricket", "espn_
 ADAPTER_LEAGUES = {"espn_basketball": {"46": "nba", "59": "wnba"}, "espn_tennis": {"851": "atp", "900": "wta"}}
 COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
 OTHER_SPORTS = {"football": "American football", "racing": "Motor racing", "mma": "MMA", "hockey": "Ice hockey", "baseball": "Baseball", "golf": "Golf", "soccer": "Football", "boxing": "Boxing", "rugby": "Rugby"}
-SPORTS = ("football", "cricket", "basketball", "tennis", "chess")
+SPORTS = ("football", "cricket", "basketball", "tennis", "chess", "esports")
+NOT_ON_ESPN = ("chess", "esports")  # filtering to these never asks ESPN's search
 
 # FIDE federation codes for the countries most players come from; others show as the code.
 FEDERATIONS = {
@@ -290,6 +291,8 @@ def from_athlete(a: Athlete, query: str) -> Result:
         parts = [(a.league or "").upper(), a.country or ""]
     elif a.sport == "basketball":
         parts = [*teams[:1], (a.league or "").upper() if a.current else ""]
+    elif a.sport == "esports":
+        parts = [*teams[:1], pandascore_esports.game_name(a.league) or "", a.country or ""]
     else:
         parts = [*teams[:2], a.country or ""]
     return Result(
@@ -303,7 +306,7 @@ def from_athlete(a: Athlete, query: str) -> Result:
         live_scores=system is not None,  # a running source; an athlete it can't find goes to the agent
         inactive=not a.current,
         exact=_key(a.name) == _key(query) or any(_key(x) == _key(query) for x in a.aliases or []),
-        qid=a.qid,
+        qid=a.qid if a.qid.startswith("Q") else None,  # esports rows are keyed by their PandaScore id instead
         born=a.birth_date.year if a.birth_date else None,
         matched=_prefix_match(query, a.name) or any(_prefix_match(query, x) for x in a.aliases or []),
         popularity=a.sitelinks or 0,
@@ -360,7 +363,7 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
         # Popularity counts double for players of today (registry.score), and triple for the exact
         # name: "djok" is still Djokovic, and "ronaldo" is Cristiano before the Brazilian Ronaldo.
         weight = (1 if r.inactive else 2) * (3 if r.exact else 1)
-        return (group, not r.following, -r.followers if r.player_id else 0, not _prefix_match(query, r.name), -r.popularity * weight, not r.exact, i)
+        return (group, not r.following, -r.followers if r.player_id else 0, not _prefix_match(query, r.name), -r.popularity * weight, not r.exact, r.inactive, i)
 
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
 
@@ -385,7 +388,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # Too new or too obscure for Wikidata: ask the live sources. A name the registry knows well
         # ("bumrah") doesn't need them.
         jobs: dict[str, Any] = {}
-        if sport != "chess":
+        if sport not in NOT_ON_ESPN:
             # ESPN's search has no sport filter; one sport's athletes are a few of every fifty hits.
             jobs["ESPN"] = _pool.submit(_espn, query, 50 if sport else 20)
         if sport == "chess" and len(query) >= 3:
@@ -448,7 +451,7 @@ def suggest(db: Session, query: str, mine: list[Result], sport: str | None, live
     if any(score >= SUGGEST_MIN for score, _ in close) or not live:
         return [r for score, r in close if score >= SUGGEST_MIN][:3]
     words = [w for w in _key(query) if len(w) >= 3]
-    jobs = {f"ESPN:{w}": _pool.submit(_espn, w, 50 if sport else 20) for w in words[:3]} if sport != "chess" else {}
+    jobs = {f"ESPN:{w}": _pool.submit(_espn, w, 50 if sport else 20) for w in words[:3]} if sport not in NOT_ON_ESPN else {}
     found, _ = _collect(jobs)
     for r in found:
         if (not sport or r.sport.lower() == sport) and r.live_scores:

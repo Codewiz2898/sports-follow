@@ -26,6 +26,7 @@
 [data-sport='basketball'] { --sport: #ff7a1a; --on-sport: #170a00; --on-sport-soft: rgba(23, 10, 0, 0.8); --sport-on-ink: #ff7a1a; }
 [data-sport='tennis'] { --sport: #d7f03c; --on-sport: #141600; --on-sport-soft: rgba(20, 22, 0, 0.8); --sport-on-ink: #d7f03c; }
 [data-sport='chess'] { --sport: #7c3aed; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #a98bff; }
+[data-sport='esports'] { --sport: #ff4fa3; --on-sport: #1a0010; --on-sport-soft: rgba(26, 0, 16, 0.8); --sport-on-ink: #ff4fa3; }
 .soft { color: var(--on-sport-soft); }
 
 * { box-sizing: border-box; }
@@ -263,6 +264,12 @@ p { margin: 0; }
 .linescore.tennis td.set-won, .linescore.tennis tr.won .who .title { color: var(--text); }
 .linescore.tennis sup { font-size: 12px; margin-left: 1px; }
 .serve { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--live); margin-left: 8px; vertical-align: middle; }
+
+/* Esports: one chip a map, the winner's tag in it; the map being played is happening now. */
+.maps { display: flex; gap: 6px; flex-wrap: wrap; }
+.map { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 9px; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 800; }
+.map .num { font-size: 15px; color: var(--text); }
+.map.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 
 /* Chess: a board drawn from the FEN. */
 .chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
