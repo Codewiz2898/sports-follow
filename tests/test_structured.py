@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from sqlalchemy.dialects import postgresql
 
 from sports_follow import structured
-from sports_follow.adapters import ADAPTERS, AdapterError, Snapshot, espn_cricket, espn_soccer
+from sports_follow.adapters import ADAPTERS, AdapterError, Fixture, Snapshot, espn_cricket, espn_soccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
-from sports_follow.models import Event
+from sports_follow.models import Event, Player
 
 from .test_adapters import KOHLI, RONALDO, load
 
@@ -80,6 +83,39 @@ def test_a_schedule_read_never_moves_a_game_backwards():
     assert structured.next_status("live", "final") == "final"
     assert structured.next_status("postponed", "scheduled") == "scheduled"  # rescheduled
     assert structured.next_status(None, "scheduled") == "scheduled"
+
+
+class RacedSession:
+    """A session in which a teammate's refresh adds the game between our select and our insert."""
+
+    def __init__(self, theirs: Event):
+        self.theirs, self.sql = theirs, []
+
+    def scalar(self, stmt):
+        return None  # not committed yet when we looked
+
+    def execute(self, stmt):
+        self.sql.append(str(stmt.compile(dialect=postgresql.dialect())))
+
+    def scalars(self, stmt):
+        return SimpleNamespace(one=lambda: self.theirs)
+
+    def add(self, obj):
+        raise AssertionError("a second Event with the same key")
+
+    def flush(self):
+        pass
+
+
+def test_a_game_a_teammate_just_added_is_read_back_not_inserted_again():
+    # Kohli's and Bumrah's refreshes in the same tick (2026-10-12): Bumrah's found no row for the match,
+    # then Kohli's committed one, which the poller has since seen go live.
+    theirs = Event(id=7, key="espn_cricket:1539432", sport="cricket", title="India v Australia", status="live")
+    db = RacedSession(theirs)
+    f = Fixture(source_id="1539432", title="India v Australia", competition="ODI", start_utc=NOW, venue=None, status="scheduled", team_ids=["6"], locator={})
+    event = structured.upsert_event(db, ADAPTERS["espn_cricket"], Player(id=6, sport="cricket"), f)
+    assert event is theirs and event.status == "live"  # a stale schedule doesn't move it back
+    assert db.sql[0].startswith("INSERT INTO event") and "ON CONFLICT (key) DO NOTHING" in db.sql[0]
 
 
 class FakeSource:
