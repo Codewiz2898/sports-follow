@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Credit, type Credits } from '../api'
+import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
 import { safeHref } from '../format'
 
@@ -15,11 +16,9 @@ export function CreditsPage() {
 
   return (
     <>
-      <div className="page-head">
-        <div className="row" style={{ justifyContent: 'flex-start' }}>
-          <Link to="/" className="btn icon" aria-label="Back"><BackIcon /></Link>
-          <h1 className="page-title">Credits</h1>
-        </div>
+      <div className="row" style={{ justifyContent: 'flex-start', gap: 14 }}>
+        <Link to="/" className="btn icon" aria-label="Back"><BackIcon width={20} height={20} /></Link>
+        <h1 className="dsp page-title">Credits</h1>
       </div>
 
       {error && <div className="error-box">{error}</div>}
@@ -30,14 +29,14 @@ export function CreditsPage() {
           <CreditList label="Also from" items={credits.also} />
 
           <section className="section" aria-label="Notices">
-            <span className="eyebrow">Notices</span>
+            <SectionHead title="Notices" />
             <div className="card card-pad stack" style={{ gap: 10 }}>
-              {credits.notices.map((n) => <p key={n} className="small" style={{ margin: 0 }}>{n}</p>)}
+              {credits.notices.map((n) => <p key={n} className="small">{n}</p>)}
             </div>
           </section>
 
           <section className="section" aria-label="Software">
-            <span className="eyebrow">Built with</span>
+            <SectionHead title="Built with" />
             <ul className="card list">
               {credits.software.map((s) => (
                 <li key={s.name} className="row">
@@ -57,7 +56,7 @@ function CreditList({ label, items }: { label: string; items: Credit[] }) {
   if (!items.length) return null
   return (
     <section className="section" aria-label={label}>
-      <span className="eyebrow">{label}</span>
+      <SectionHead title={label} />
       <ul className="card list">
         {items.map((c) => (
           <li key={c.name} className="stack" style={{ gap: 4 }}>
@@ -65,7 +64,7 @@ function CreditList({ label, items }: { label: string; items: Credit[] }) {
             {c.what && <span className="small">{c.what}</span>}
             {(c.licence || c.note) && (
               <span className="tiny muted">
-                {c.licence && (safeHref(c.licence_url) ? <a href={safeHref(c.licence_url)} target="_blank" rel="noreferrer">{c.licence}</a> : c.licence)}
+                {c.licence && (safeHref(c.licence_url) ? <a href={safeHref(c.licence_url)} target="_blank" rel="noreferrer" className="link">{c.licence}</a> : c.licence)}
                 {c.licence && c.note && ' · '}
                 {c.note}
               </span>
@@ -80,6 +79,6 @@ function CreditList({ label, items }: { label: string; items: Credit[] }) {
 function Name({ credit }: { credit: Credit }) {
   const href = safeHref(credit.url)
   return href
-    ? <a className="title" href={href} target="_blank" rel="noreferrer">{credit.name}</a>
+    ? <a className="title link" href={href} target="_blank" rel="noreferrer">{credit.name}</a>
     : <span className="title">{credit.name}</span>
 }

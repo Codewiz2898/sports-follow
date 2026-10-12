@@ -9,7 +9,7 @@
 // Push: a moment (a goal, a fifty, a result; see sports_follow/moments.py) arrives as a notification,
 // silent during the device's quiet hours; tapping it opens the player's page.
 
-const VERSION = 'v1'
+const VERSION = 'v2'  // v2: the Matchday look; new icons and fonts, so the v1 caches go
 const SHELL = `shell-${VERSION}`
 const FILES = `files-${VERSION}`
 const DATA = `data-${VERSION}`

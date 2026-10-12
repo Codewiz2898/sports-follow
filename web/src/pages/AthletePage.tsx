@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, type AthletePreview, type SearchResult } from '../api'
-import { Avatar, ResultsList, StatGrid, UpcomingList } from '../components/Blocks'
+import { PlayerBand, ResultsList, SectionHead, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, PlusIcon } from '../components/Icons'
 import { useSearchActions } from '../components/Search'
 import { safeHref } from '../format'
@@ -39,12 +39,15 @@ export function AthletePage() {
 
   const name = preview?.name ?? hint.result?.name ?? ''
   const born = preview?.born ? `born ${preview.born.slice(0, 4)}` : hint.result?.born ? `born ${hint.result.born}` : null
-  const detail = preview
-    ? [preview.sport, ...preview.teams, preview.league && ['nba', 'wnba', 'atp', 'wta'].includes(preview.league) ? preview.league.toUpperCase() : null, preview.country, born].filter(Boolean).join(' · ')
-    : [hint.result?.sport, hint.result?.detail].filter(Boolean).join(' · ')
+  const athleteSport = preview?.sport ?? hint.result?.sport ?? sport
+  // Who they are, after the sport (the band names the sport on its own).
+  const about = preview
+    ? [...preview.teams, preview.league && ['nba', 'wnba', 'atp', 'wta'].includes(preview.league) ? preview.league.toUpperCase() : null, preview.country, born].filter(Boolean).join(' · ')
+    : hint.result?.detail ?? ''
+  const detail = [athleteSport, about].filter(Boolean).join(' · ')
   // A registry athlete found in a live source follows by that source's id; one no source has, by registry id.
   const follow = () => actions.follow({
-    key: `${system}:${id}`, name, sport: preview?.sport ?? hint.result?.sport ?? sport ?? '', detail,
+    key: `${system}:${id}`, name, sport: athleteSport ?? '', detail,
     system: preview?.system ?? (fromRegistry ? null : system), athlete_id: preview?.athlete_id ?? (fromRegistry ? null : id),
     league: preview?.league ?? league, qid: preview?.qid ?? (fromRegistry ? id : null),
     following: false, followers: 0, live_scores: true, inactive: false, exact: true,
@@ -53,24 +56,23 @@ export function AthletePage() {
 
   return (
     <>
-      <div className="player-head">
-        <Link to={hint.back ?? '/search'} className="btn icon" aria-label="Back to search"><BackIcon /></Link>
-        <div className="player-id">
-          <Avatar name={name || '?'} size="lg" />
-          <div className="stack">
-            <h1 className="page-title" style={{ fontSize: 30 }}>{name || 'Athlete'}</h1>
-            {detail && <span className="small muted">{detail}</span>}
-          </div>
-        </div>
-        <button type="button" className="btn primary follow" disabled={!name || Boolean(actions.pending)} onClick={follow}>
-          {actions.pending ? <span className="spinner" /> : <PlusIcon width={16} height={16} />}Follow
-        </button>
-      </div>
-      <p className="small muted" style={{ margin: 0 }}>
-        {noSource
-          ? 'No live source has this athlete yet, so the research agent builds their page (1 to 3 minutes). That uses one of your AI researches for today.'
-          : 'Live scores start right away. News and background follow in about two minutes.'}
-      </p>
+      <PlayerBand
+        name={name || 'Athlete'}
+        sport={athleteSport}
+        meta={about}
+        back={<Link to={hint.back ?? '/search'} className="btn icon" aria-label="Back to search"><BackIcon width={20} height={20} /></Link>}
+        actions={
+          <button type="button" className="btn primary" disabled={!name || Boolean(actions.pending)} onClick={follow}>
+            {actions.pending ? <span className="spinner" /> : <PlusIcon width={16} height={16} />}Follow
+          </button>
+        }
+      >
+        <p className="small soft" style={{ fontWeight: 600 }}>
+          {noSource
+            ? 'No live source has this athlete yet, so the research agent builds their page (1 to 3 minutes). That uses one of your AI researches for today.'
+            : 'Live scores start right away. News and background follow in about two minutes.'}
+        </p>
+      </PlayerBand>
       {(error || actions.error) && <div className="error-box">{error || actions.error}</div>}
 
       {!preview && !error && (
@@ -82,23 +84,23 @@ export function AthletePage() {
           {preview.system !== 'lichess_chess' && (
             <>
               <section className="section" aria-label="Next">
-                <span className="eyebrow">Next</span>
+                <SectionHead title="Next" />
                 <UpcomingList items={preview.next ? [preview.next] : []} empty="No game scheduled in the source yet." />
               </section>
               <section className="section" aria-label="Last game">
-                <span className="eyebrow">Last game</span>
-                <ResultsList items={preview.last ? [preview.last] : []} />
+                <SectionHead title="Last game" />
+                <ResultsList items={preview.last ? [preview.last] : []} teams={preview.teams} />
               </section>
             </>
           )}
           <section className="section" aria-label="Stats">
-            <span className="eyebrow">Stats</span>
+            <SectionHead title="Stats" />
             <StatGrid stats={preview.stats} />
-            <p className="tiny muted" style={{ margin: 0 }}>
+            <p className="tiny muted">
               {[preview.stats_note, `from ${preview.source}`].filter(Boolean).join(' · ')}
-              {safeHref(preview.source_url) && <> · <a href={safeHref(preview.source_url)} target="_blank" rel="noreferrer">Profile</a></>}
+              {safeHref(preview.source_url) && <> · <a href={safeHref(preview.source_url)} target="_blank" rel="noreferrer" className="link">Profile</a></>}
             </p>
-            {preview.system === 'lichess_chess' && <p className="tiny muted" style={{ margin: 0 }}>Their tournaments and live boards are found once you follow.</p>}
+            {preview.system === 'lichess_chess' && <p className="tiny muted">Their tournaments and live boards are found once you follow.</p>}
           </section>
         </>
       )}

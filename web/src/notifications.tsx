@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type AlertLevel, type PlayerMoment } from './api'
+import { api, type AlertLevel, type Card, type PlayerMoment } from './api'
+import { Avatar } from './components/Blocks'
+import { CloseIcon } from './components/Icons'
 
-export const LEVELS: { value: AlertLevel; label: string; hint: string }[] = [
-  { value: 'key', label: 'Key moments', hint: 'Goals, fifties and hundreds, big points games, wickets, a chess game turning, starts, results, injuries and transfers' },
-  { value: 'everything', label: 'Everything', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set, a chess edge, and milestones' },
-  { value: 'results', label: 'Results only', hint: 'Just the final result' },
-  { value: 'off', label: 'Off', hint: 'No notifications for this player' },
+export const LEVELS: { value: AlertLevel; label: string; short: string; brief: string; hint: string }[] = [
+  { value: 'key', label: 'Key moments', short: 'Key', brief: 'Big moments, starts and results', hint: 'Goals, fifties and hundreds, big points games, wickets, a chess game turning, starts, results, injuries and transfers' },
+  { value: 'everything', label: 'Everything', short: 'All', brief: 'Every milestone, set and card', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set, a chess edge, and milestones' },
+  { value: 'results', label: 'Results only', short: 'Results', brief: 'Just the final result', hint: 'Just the final result' },
+  { value: 'off', label: 'Off', short: 'Off', brief: 'Nothing for this player', hint: 'No notifications for this player' },
 ]
 
 /** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
@@ -114,28 +116,46 @@ export function usePush() {
   return { unavailable, on: Boolean(subscription), permission, quiet, busy, message, enable, disable, saveQuiet, test }
 }
 
-export function AlertSelect({ value, onChange, id }: { value: AlertLevel; onChange: (level: AlertLevel) => void; id?: string }) {
+/** How much to hear about one player: four choices side by side. Arrow keys move between them. */
+export function AlertLevels({ value, onChange, label }: { value: AlertLevel; onChange: (level: AlertLevel) => void; label: string }) {
+  const move = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
+    if (!step) return
+    e.preventDefault()
+    const buttons = Array.from(e.currentTarget.parentElement?.querySelectorAll('button') ?? [])
+    const i = (buttons.indexOf(e.currentTarget) + step + LEVELS.length) % LEVELS.length
+    onChange(LEVELS[i].value)
+    buttons[i]?.focus()
+  }
   return (
-    <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value as AlertLevel)} aria-label="Notify me about">
-      {LEVELS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
-    </select>
+    <div className="segmented full" role="radiogroup" aria-label={label}>
+      {LEVELS.map((l) => (
+        <button key={l.value} type="button" role="radio" aria-checked={value === l.value} tabIndex={value === l.value ? 0 : -1} title={l.label} onClick={() => onChange(l.value)} onKeyDown={move}>
+          {l.short}
+        </button>
+      ))}
+    </div>
   )
 }
 
-/** Key moments for followed players, as toasts while the app is open. */
-export function MomentToasts({ moments, dismiss }: { moments: PlayerMoment[]; dismiss: (id: number) => void }) {
+/** Key moments for followed players, as toasts while the app is open, each with the player's tile. */
+export function MomentToasts({ moments, dismiss, playerOf }: { moments: PlayerMoment[]; dismiss: (id: number) => void; playerOf: (id: number) => Card | undefined }) {
   if (!moments.length) return null
   return (
     <div className="toasts" role="status" aria-live="polite">
-      {moments.map((m) => (
-        <div key={m.id} className="toast">
-          <Link to={m.url} onClick={() => dismiss(m.id)} className="stack" style={{ color: 'var(--text)', minWidth: 0 }}>
-            <span className="title">{m.title}</span>
-            {m.body && <span className="small muted">{m.body}</span>}
-          </Link>
-          <button type="button" className="btn link" onClick={() => dismiss(m.id)} aria-label="Dismiss">✕</button>
-        </div>
-      ))}
+      {moments.map((m) => {
+        const player = playerOf(m.player_id)?.player
+        return (
+          <div key={m.id} className="toast">
+            {player && <Avatar name={player.name} sport={player.sport} />}
+            <Link to={m.url} onClick={() => dismiss(m.id)} className="stack" style={{ minWidth: 0, flex: 1 }}>
+              <span className="title">{m.title}</span>
+              {m.body && <span className="small muted">{m.body}</span>}
+            </Link>
+            <button type="button" className="btn icon" style={{ width: 32, height: 32, background: 'transparent', color: 'inherit' }} onClick={() => dismiss(m.id)} aria-label="Dismiss"><CloseIcon width={16} height={16} /></button>
+          </div>
+        )
+      })}
     </div>
   )
 }

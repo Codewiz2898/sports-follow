@@ -106,7 +106,9 @@ async def read_card(db: Session, player_id: int) -> dict[str, Any] | None:
 
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
     return {k: card.get(k) for k in ("player_id", "slug", "status", "version", "built_at", "player", "live", "upcoming", "freshness", "error")} | {
-        "news": (card.get("news") or [])[:3]
+        "news": (card.get("news") or [])[:3],
+        # The newest result: the app's player tiles and Today's big moment show it.
+        "recent_results": (card.get("recent_results") or [])[:1],
     }
 
 
