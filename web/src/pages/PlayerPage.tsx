@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useActivity } from '../activity'
 import { api, subscribe, type Card, type UpcomingEvent } from '../api'
 import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
@@ -26,6 +27,7 @@ export function PlayerPage() {
   const [tab, setTab] = useState<Tab>('overview')
   const [matches, setMatches] = useState<MatchesView | null>(null)
   const [alertsOpen, setAlertsOpen] = useState(false)
+  const { muted, setMuted } = useActivity()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -101,10 +103,19 @@ export function PlayerPage() {
           <div className="alert-panel" style={{ color: 'var(--text)' }}>
             <span className="row">
               <span className="title">Alerts for {shortName(p.name)}</span>
-              <Link to="/notifications" className="link small">Settings</Link>
+              <Link to="/notifications?tab=settings" className="link small">Settings</Link>
             </span>
             <AlertLevels label={`Alerts for ${p.name}`} value={level} onChange={(l) => following.setAlerts(playerId, l)} />
             <span className="small muted">{LEVELS.find((l) => l.value === level)?.hint}</span>
+            {card.live.is_live && card.live.event_id != null && (() => {
+              const eventId = card.live.event_id
+              const on = muted.has(eventId)
+              return (
+                <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} aria-pressed={on} onClick={() => { setMuted(eventId, !on).catch(() => {}) }}>
+                  {on ? 'Unmute this game' : 'Mute this game'}
+                </button>
+              )
+            })()}
           </div>
         )}
       </PlayerBand>
@@ -156,6 +167,7 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
   const last = results[0]
   const wl = last && outcome(last.result, p.teams)
   const word = last && highlight(p.sport, last.player_contribution)
+  const { muted, setMuted } = useActivity()
   // "Won 133–128" is a score once the badge says won; "West Indies won by 5 wkts" stays a sentence.
   const score = last && /^(Won|Lost|Drew)\s+/.test(last.result) ? last.result.replace(/^(Won|Lost|Drew)\s+/, '') : null
 
@@ -164,6 +176,12 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
       {card.live.is_live ? (
         <>
           <LiveScoreboard live={card.live} playerName={shortName(p.name)} sport={p.sport} />
+          {card.live.event_id != null && muted.has(card.live.event_id) && (
+            <span className="row small" style={{ justifyContent: 'flex-start', gap: 8 }}>
+              <span className="muted">Alerts from this game are muted.</span>
+              <button type="button" className="btn link" onClick={() => { setMuted(card.live.event_id!, false).catch(() => {}) }}>Unmute</button>
+            </span>
+          )}
           <span className="row tiny muted">
             <span>{card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.` : 'Live games refresh on their own about every minute.'}</span>
             <RefreshButton card={card} style={{ flexShrink: 0 }} />

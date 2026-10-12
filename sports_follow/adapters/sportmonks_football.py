@@ -195,7 +195,11 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
             text += ", second yellow"
         if tag == "GOAL" and e.get("related_player_name") and kind != "OWNGOAL":
             text += f", assist {e['related_player_name']}"
-        moments.append({"clock": minute(e), "kind": tag, "text": text, "athlete_ids": [str(i) for i in (e.get("player_id"), e.get("related_player_id")) if i]})
+        moments.append({
+            "clock": minute(e), "kind": tag, "text": text, "athlete_ids": [str(i) for i in (e.get("player_id"), e.get("related_player_id")) if i],
+            # For a goal's notification: whose goal it was, who set it up (moments._goal).
+            "team_id": str(e.get("participant_id")), "assist": e.get("related_player_name") if tag == "GOAL" and kind != "OWNGOAL" else None, "own_goal": kind == "OWNGOAL",
+        })
 
     state = {
         "kind": "football",
@@ -211,7 +215,14 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         lines=parse_lines(x, status),
         moments=moments[:12],
         source_url=None,  # Sportmonks has no public match pages
+        squad=parse_squad(x),
     )
+
+
+def parse_squad(x: dict[str, Any]) -> dict[str, str]:
+    """The team sheet, published about an hour before kick-off: who starts and who's on the bench."""
+    roles = {_STARTER: "starting", _BENCH: "bench"}
+    return {str(r["player_id"]): roles[r.get("type_id")] for r in x.get("lineups") or [] if r.get("player_id") and r.get("type_id") in roles}
 
 
 def parse_player(p: dict[str, Any], today: date | None = None) -> PlayerRef:

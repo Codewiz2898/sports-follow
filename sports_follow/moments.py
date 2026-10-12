@@ -6,12 +6,18 @@ however many polls see the same fifty, fans hear about it once. Its level decide
 
     key    goals, assists, red cards, fifties and hundreds, 3+ wickets, out, 30/40/50 points,
            triple-doubles, chess games starting, a chess player winning, in trouble or turning a
-           game around, every result, upsets, injuries, transfers
+           game around, the line-up (starting or on the bench), every result, upsets, injuries,
+           transfers
     minor  coming on, yellow cards, 20 points, double-doubles, each set, a chess player better,
            worse or level again, milestones in the news
 
 Fans choose per player (follow.alert_rules["level"]): everything, key moments (the default),
 results only, or off.
+
+Each moment also has a priority, 0 to 100: how much it's worth interrupting someone for. A hundred
+outranks a fifty, a late equaliser outranks a fourth goal in a rout, a duck outranks being out for 20.
+alerts.py uses it to pick which moment leads a notification and which may still buzz once a fan's
+phone has buzzed enough.
 """
 
 from __future__ import annotations
@@ -23,7 +29,15 @@ from typing import Any
 LEVELS = ("everything", "key", "results", "off")
 DEFAULT_LEVEL = "key"
 NEWS_KINDS = {"injury": "key", "transfer": "key", "retirement": "key", "milestone": "minor"}
+NEWS_PRIORITY = {"injury": 75, "transfer": 70, "retirement": 90, "milestone": 40}
 ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+# A moment's priority unless its rule sets one (a hundred over a fifty, a late equaliser over a goal).
+PRIORITY = {
+    "final": 80, "start": 40, "lineup": 50, "goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30,
+    "fifty": 70, "hundred": 90, "out": 60, "wickets": 70, "points": 30, "double": 30, "triple": 85,
+    "set": 30, "upset": 90, "swing": 30, "news": 60,
+}
+LATE_MINUTE = 80  # a goal from here on that levels the game or puts a side ahead is "late"
 
 
 @dataclass
@@ -36,6 +50,10 @@ class Seen:
     score: str = ""
     clock: str = ""
     lineups: bool = False  # the source lists who's playing (any player has a line)
+    # The published team sheet's word on this player, before or during the game: starting | bench.
+    role: str | None = None
+    # The source's key events, newest first (Snapshot.moments): football goals with minute, team and assist.
+    events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -45,6 +63,7 @@ class Found:
     title: str
     body: str
     detail: str = ""  # tells two moments of one kind apart in the key ("50", "goal2", "set3")
+    priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY
 
 
 def wanted(level: str, moment_level: str, kind: str) -> bool:
@@ -103,7 +122,7 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
 
     before=None is a first look at a game already under way (the worker just started, or the fan
     followed mid-innings): only a result is reported from it, so nobody hears "reaches 50" for runs
-    scored an hour ago.
+    scored an hour ago. A line-up is still news on a first look, as long as the game hasn't started.
     """
     sport = (sport or "").lower()
     found: list[Found] = []
@@ -111,19 +130,46 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
     head = (now.line or {}).get("headline") or ""
     in_game = now.line is not None and head != "On the bench" and not head.startswith("Did not play")
 
+    found += _lineup(sport, who, now)
     if before is not None and now.status == "live" and was in ("scheduled", "armed", "postponed") and (in_game or sport in ("tennis", "chess")):
         found.append(_start(sport, who, now))
     if now.status == "final" and was != "final" and not _left_out(sport, now):
         found.append(_final(sport, who, now))
         found += _upset(sport, who, athlete_id, now)
-    if before is None:
-        return found
-    rules = {"football": _football, "soccer": _football, "cricket": _cricket, "basketball": _basketball, "tennis": _tennis}.get(sport)
-    if rules and now.line is not None:
-        found += rules(who, before.line, now)
-    if sport == "chess":
-        found += _chess(who, before, now)
+    if before is not None:
+        if sport in ("football", "soccer") and now.line is not None:
+            found += _football(who, athlete_id, before.line, now)
+        elif sport in ("cricket", "basketball", "tennis") and now.line is not None:
+            found += {"cricket": _cricket, "basketball": _basketball, "tennis": _tennis}[sport](who, before.line, now)
+        elif sport == "chess":
+            found += _chess(who, before, now)
+    for f in found:
+        f.priority = f.priority or PRIORITY.get(f.kind, 50)
     return found
+
+
+def _matchup(state: dict[str, Any]) -> str:
+    """"Liverpool v Chelsea" from a football or cricket state, or "" for other sports."""
+    if state.get("kind") == "football":
+        names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
+    else:
+        names = [t.get("name") for t in state.get("teams") or []]
+    return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
+
+
+def _lineup(sport: str, who: str, now: Seen) -> list[Found]:
+    """The team sheet is out, before the start: the player starts, or is on the bench. Its key is the
+    role, so a late change ("now on the bench") is news too. Not being on the sheet isn't told: a
+    national team game shows up for every player of that country, called up or not."""
+    if now.status not in ("scheduled", "armed") or now.role not in ("starting", "bench"):
+        return []
+    starting = now.role == "starting"
+    if sport == "cricket":
+        title = f"{who} is in the XI" if starting else f"{who} is named a substitute"
+    else:
+        title = f"{who} starts" if starting else f"{who} is on the bench"
+    body = " · ".join(x for x in (_matchup(now.state), "line-ups are out") if x)
+    return [Found("lineup", "key", title, body[:1].upper() + body[1:], now.role, 50 if starting else 45)]
 
 
 def _left_out(sport: str, now: Seen) -> bool:
@@ -195,11 +241,12 @@ def _chess(who: str, before: Seen, now: Seen) -> list[Found]:
         title, level = (f"{who} is back level" if old < 0 else f"{who}'s advantage is gone"), "minor"
     else:
         return []  # drifting toward level on the same side
-    if old * new < 0:
+    turnaround = old * new < 0
+    if turnaround:
         title, level = f"Turnaround: {title}", "key"
     opponent = stat(now.line, "Opponent")
     body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
-    return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}")]
+    return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
 
 
 def _score(ev: dict[str, Any], side: int) -> str:
@@ -243,16 +290,48 @@ def _upset(sport: str, who: str, athlete_id: str, now: Seen) -> list[Found]:
     return [Found("upset", "key", f"Upset: {who} beats [{other['seed']}] {other.get('name')}", now.score)]
 
 
-def _football(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:
+def _football(who: str, athlete_id: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:
     found = []
     where = " · ".join(x for x in (now.score, now.clock) if x)
     for label, kind, level, title in (("Goals", "goal", "key", "Goal: {who}"), ("Assists", "assist", "key", "Assist: {who}"), ("Red", "red", "key", "Red card: {who}"), ("Yellow", "yellow", "minor", "Yellow card: {who}")):
         was, got = number(stat(before, label)), number(stat(now.line, label))
         for n in range(was + 1, got + 1):
-            found.append(Found(kind, level, title.format(who=who) + (f" ({n})" if n > 1 and kind in ("goal", "assist") else ""), where, f"{kind}{n}"))
+            if kind == "goal":
+                found.append(_goal(who, athlete_id, n, now, where))
+            else:
+                found.append(Found(kind, level, title.format(who=who) + (f" ({n})" if n > 1 and kind == "assist" else ""), where, f"{kind}{n}"))
     if (before or {}).get("headline") == "On the bench" and (now.line or {}).get("headline") not in (None, "On the bench"):
         found.append(Found("on", "minor", f"{who} comes on", where))
     return found
+
+
+def _goal(who: str, athlete_id: str, n: int, now: Seen, where: str) -> Found:
+    """The player's nth goal, told with what it did when the source's events say: an equaliser, a goal
+    that puts their side ahead (both "late" from LATE_MINUTE), a hat-trick; with its minute and assist."""
+    title, priority = f"Goal: {who}" + (f" ({n})" if n > 1 else ""), 85
+    goals = [e for e in reversed(now.events) if e.get("kind") == "GOAL" and not e.get("own_goal") and (e.get("athlete_ids") or [None])[0] == athlete_id]
+    if len(goals) < n:
+        return Found("goal", "key", title, where, f"goal{n}", priority)
+    goal = goals[n - 1]
+    minute = goal.get("clock") or now.clock
+    body = " · ".join(x for x in (now.score, minute, f"assist {goal['assist']}" if goal.get("assist") else None) if x)
+    if n == 3:
+        title, priority = f"Hat-trick: {who}", 95
+    # What the goal did can be read off the score only if nothing has been scored since.
+    newest = next((e for e in now.events if e.get("kind") == "GOAL"), None)
+    sides = {(now.state.get(s) or {}).get("id"): now.state.get(s) or {} for s in ("home", "away")}
+    mine = sides.get(goal.get("team_id"))
+    if newest is goal and mine and mine.get("name") and len(sides) == 2 and n != 3:
+        theirs = next(v for k, v in sides.items() if k != goal.get("team_id"))
+        lead = number(str(mine.get("score"))) - number(str(theirs.get("score")))
+        late = number(minute) >= LATE_MINUTE
+        if lead == 0:
+            title = f"Late equaliser: {who}" if late else f"Equaliser: {who}"
+        elif lead == 1:
+            title = f"{'Late goal' if late else 'Goal'}: {who} puts {mine['name']} ahead"
+        if lead in (0, 1):
+            priority = 95 if late else 90
+    return Found("goal", "key", title, body, f"goal{n}", priority)
 
 
 def _cricket(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:
@@ -263,15 +342,16 @@ def _cricket(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:
         balls = stat(now.line, "Balls")
         innings = f"{runs_now} ({balls})" if balls else runs_now
         for mark in crossed(number(runs_was), number(runs_now), (50, 100, 150, 200)):
-            found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", f"{innings} · {where}".strip(" ·"), str(mark)))
+            found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", f"{innings} · {where}".strip(" ·"), str(mark), 95 if mark >= 150 else 0))
         out_now = not runs_now.endswith("*") and stat(now.line, "Out") is not None
         out_was = runs_was is not None and not runs_was.endswith("*") and stat(before, "Out") is not None
         if out_now and not out_was:
-            found.append(Found("out", "key", f"{who} out for {number(runs_now)}", f"{innings} · {stat(now.line, 'Out')}", "out"))
+            runs = number(runs_now)
+            found.append(Found("out", "key", f"{who} out for {runs}", f"{innings} · {stat(now.line, 'Out')}", "out", 75 if runs >= 50 else 65 if runs == 0 else 60))
     wickets_was, wickets_now = number(stat(before, "Wickets")), number(stat(now.line, "Wickets"))
     for mark in crossed(wickets_was, wickets_now, (3, 4, 5, 6, 7, 8, 9, 10)):
         figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
-        found.append(Found("wickets", "key", f"{who} takes {mark} wickets", f"{figures} · {where}".strip(" ·"), f"w{mark}"))
+        found.append(Found("wickets", "key", f"{who} takes {mark} wickets", f"{figures} · {where}".strip(" ·"), f"w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
     return found
 
 
@@ -280,7 +360,7 @@ def _basketball(who: str, before: dict[str, Any] | None, now: Seen) -> list[Foun
     was, got = counts(before), counts(now.line)
     where = " · ".join(x for x in ((now.line or {}).get("headline"), now.score, now.clock) if x)
     for mark in crossed(was.get("PTS", 0), got.get("PTS", 0), (20, 30, 40, 50, 60)):
-        found.append(Found("points", "key" if mark >= 30 else "minor", f"{who}: {mark} points", where, str(mark)))
+        found.append(Found("points", "key" if mark >= 30 else "minor", f"{who}: {mark} points", where, str(mark), {20: 30, 30: 65, 40: 85}.get(mark, 95)))
     tens_was = sum(1 for k in ("PTS", "REB", "AST", "STL", "BLK") if was.get(k, 0) >= 10)
     tens_now = sum(1 for k in ("PTS", "REB", "AST", "STL", "BLK") if got.get(k, 0) >= 10)
     if tens_was < 2 <= tens_now:

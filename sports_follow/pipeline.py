@@ -270,7 +270,7 @@ def news_moments(name: str, items: list[dict[str, Any]], now: datetime) -> list[
         published = _parse_time(item.get("published"))
         if kind in moments.NEWS_KINDS and published and now - published <= timedelta(days=3):
             title = {"injury": f"Injury news: {name}", "transfer": f"Transfer news: {name}", "retirement": f"{name} retires", "milestone": f"{name}: a milestone"}[kind]
-            found.append(moments.Found("news", moments.NEWS_KINDS[kind], title, item.get("headline", ""), f"n{item['news_id']}"))
+            found.append(moments.Found("news", moments.NEWS_KINDS[kind], title, item.get("headline", ""), f"n{item['news_id']}", moments.NEWS_PRIORITY[kind]))
     return found
 
 

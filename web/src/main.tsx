@@ -1,6 +1,7 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { BellIcon, HomeIcon, SearchIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
@@ -100,7 +101,7 @@ function Sidebar() {
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
-        <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts</NavLink>
+        <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts<Unread /></NavLink>
       </nav>
       <InstallButton compact />
       <span className="eyebrow" style={{ marginTop: 8 }}>Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
@@ -123,7 +124,15 @@ function ScrollToTop() {
 
 function Toasts() {
   const { moments, dismissMoment, byId } = useFollowing()
-  return <MomentToasts moments={moments} dismiss={dismissMoment} playerOf={byId} />
+  const { muted } = useActivity()
+  return <MomentToasts moments={moments.filter((m) => !m.event_id || !muted.has(m.event_id))} dismiss={dismissMoment} playerOf={byId} />
+}
+
+/** How many moments have come since the fan last looked at Alerts. */
+function Unread() {
+  const { unread } = useActivity()
+  if (!unread) return null
+  return <span className="nav-count" aria-label={`${unread} new`}>{unread > 9 ? '9+' : unread}</span>
 }
 
 function App() {
@@ -146,7 +155,7 @@ function App() {
       <nav className="tabbar" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={20} height={20} />Today</NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
-        <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts</NavLink>
+        <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>
     </div>
   )
@@ -157,7 +166,9 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <PwaProvider>
         <FollowingProvider>
-          <App />
+          <ActivityProvider>
+            <App />
+          </ActivityProvider>
         </FollowingProvider>
       </PwaProvider>
     </BrowserRouter>

@@ -258,6 +258,8 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         lines=parse_lines(x) if status in ("live", "final") else {},
         moments=[],
         source_url=None,  # Sportmonks has no public match pages
+        # The XI, named at the toss; an impact player waiting to come in is a substitute.
+        squad={str(p["id"]): "bench" if (p.get("lineup") or {}).get("substitution") else "starting" for p in x.get("lineup") or [] if p.get("id")},
     )
 
 

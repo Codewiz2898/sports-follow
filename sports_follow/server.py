@@ -12,6 +12,7 @@ import logging
 import re
 import secrets
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -30,7 +31,7 @@ from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
 from .db import get_db, session
-from .models import Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, Follow, Moment, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 log = logging.getLogger("sports_follow")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -363,6 +364,64 @@ async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
     if notify.public_key() is None:
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     return {"sent": await asyncio.to_thread(notify.send_test, fan)}
+
+
+@app.post("/api/notifications/{notification_id}/opened")
+def notification_opened(notification_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    """The service worker says the fan tapped this notification (for the open rate in `notify stats`)."""
+    return {"ok": notify.opened(db, fan, notification_id)}
+
+
+@app.get("/api/me/mutes")
+def mutes(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[int]]:
+    """The games this fan muted, newest first."""
+    return {"event_ids": list(db.scalars(select(NotificationMute.event_id).where(NotificationMute.fan_id == fan).order_by(NotificationMute.created_at.desc()).limit(100)))}
+
+
+@app.put("/api/me/mutes/{event_id}")
+def mute(event_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Nothing more from this game ("Mute this game" on a notification). Its moments stay in the activity list."""
+    if db.get(Event, event_id) is None:
+        raise HTTPException(404, "No such game.")
+    db.execute(insert(NotificationMute).values(fan_id=fan, event_id=event_id).on_conflict_do_nothing())
+    return {"event_id": event_id, "muted": True}
+
+
+@app.delete("/api/me/mutes/{event_id}")
+def unmute(event_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    db.execute(delete(NotificationMute).where(NotificationMute.fan_id == fan, NotificationMute.event_id == event_id))
+    return {"event_id": event_id, "muted": False}
+
+
+ACTIVITY_DAYS = 30
+
+
+@app.get("/api/me/activity")
+def activity(before: int | None = None, limit: int = 30, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Every moment of the fan's players since they followed them, newest first, whatever reached the
+    phone: the app's activity list. Players set to off are left out. Page with ?before=<next>."""
+    limit = max(1, min(limit, 50))
+    level = func.coalesce(Follow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+    query = (
+        select(Moment, Player.name, Event.title, NotificationMute.event_id.is_not(None))
+        .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
+        .join(Player, Player.id == Moment.player_id)
+        .outerjoin(Event, Event.id == Moment.event_id)
+        .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
+        .where(level != "off", Moment.created_at >= Follow.created_at, Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS))
+        .order_by(Moment.id.desc())
+        .limit(limit)
+    )
+    if before is not None:
+        query = query.where(Moment.id < before)
+    items = [
+        {
+            "id": m.id, "kind": m.kind, "level": m.level, "priority": m.priority, "title": m.title, "body": m.body, "url": m.url,
+            "player_id": m.player_id, "player": name, "event_id": m.event_id, "event": event, "muted": bool(muted), "at": m.created_at.isoformat(),
+        }
+        for m, name, event, muted in db.execute(query)
+    ]
+    return {"items": items, "next": items[-1]["id"] if len(items) == limit else None}
 
 
 @app.delete("/api/follows/{player_id}")

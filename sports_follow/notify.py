@@ -1,11 +1,17 @@
-"""Telling fans about moments (moments.py): store each once, then send it to every follower who
-wants it, on every device they turned notifications on for.
+"""Telling fans about moments (moments.py): store each once, then push them to every follower who
+wants them, on every device they turned notifications on for, by the noise rules in alerts.py.
+
+A poll's (or a rebuild's) new moments go out together as one batch: claimed in the database so they
+are sent once, planned per fan (one push per game, sound rationed), logged as notification rows, then
+delivered to each device at once. A batch no sender claimed (the worker restarted between finding a
+moment and sending it) is swept up by the tick; a live moment that has gone stale by then is dropped.
 
 Delivery is Web Push today (browsers, the installed app, the Android app, iPhone home-screen apps);
-it is one function, deliver(), so native push (FCM, APNs) can sit beside it later. A fan's quiet
-hours don't drop a moment: it arrives silently. Devices the push service says are gone are removed.
+it is one function, push(), so native push (FCM, APNs) can sit beside it later. A fan's quiet hours
+don't drop a moment: it arrives silently. Devices the push service says are gone are removed.
 
-    .venv/bin/python -m sports_follow.notify keys     # make this server's VAPID keys, once
+    .venv/bin/python -m sports_follow.notify keys        # make this server's VAPID keys, once
+    .venv/bin/python -m sports_follow.notify stats [7]   # what was sent in the last days, and opened
 """
 
 from __future__ import annotations
@@ -16,31 +22,31 @@ import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, time as clock, timezone
+from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus
+from . import alerts, bus
 from .db import session
-from .moments import DEFAULT_LEVEL, Found, wanted
-from .models import Follow, Moment, PushSubscription
+from .moments import DEFAULT_LEVEL, Found
+from .models import Follow, Moment, Notification, NotificationMute, PushSubscription
 
 log = logging.getLogger("sports_follow.notify")
 
 VAPID_KEY = Path(os.environ.get("SPORTS_FOLLOW_VAPID_KEY", Path.home() / ".config" / "sports-follow" / "vapid-private.pem"))
 # Push services ask who is sending (RFC 8292): a URL for this project, never a person's address.
 VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT", "https://github.com/Codewiz2898/sports-follow")
-LIVE_TTL = 15 * 60  # a goal an hour late isn't news; results and injuries keep for half a day
-LATE_TTL = 12 * 3600
 MAX_FAILURES = 5
+SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
 
-_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="notify")
+_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
+_wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")  # one push to one device each
 
 
 # ---------------------------------------------------------------- keys
@@ -94,7 +100,7 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
         key = f"{event_id or '-'}:{player_id}:{f.kind}:{f.detail}"[:200]
         new_id = db.scalar(
             insert(Moment)
-            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}")
+            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}")
             .on_conflict_do_nothing()
             .returning(Moment.id)
         )
@@ -104,46 +110,126 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
 
 
 def dispatch(moment_ids: list[int]) -> None:
-    """Send moments in the background: a poll mustn't wait on push services."""
-    for moment_id in moment_ids:
-        _pool.submit(_send_safely, moment_id)
+    """Send a batch in the background: a poll mustn't wait on push services."""
+    if moment_ids:
+        _pool.submit(_send_safely, moment_ids)
 
 
-def _send_safely(moment_id: int) -> None:
+def _send_safely(moment_ids: list[int]) -> None:
     try:
-        send(moment_id)
+        send(moment_ids)
     except Exception:
-        log.exception("sending moment %s failed", moment_id)
+        log.exception("sending moments %s failed", moment_ids)
 
 
-def send(moment_id: int) -> int:
-    """Deliver one moment to every device of every follower whose level wants it. Returns how many."""
+def pending(now: datetime | None = None) -> list[int]:
+    """Moments no sender claimed, for the tick to send: older than SWEEP_AFTER, young enough to matter."""
+    now = now or datetime.now(timezone.utc)
     with session() as db:
-        moment = db.get(Moment, moment_id)
-        if moment is None or moment.sent_at is not None:
+        return list(db.scalars(
+            select(Moment.id)
+            .where(Moment.sent_at.is_(None), Moment.created_at <= now - timedelta(seconds=SWEEP_AFTER), Moment.created_at >= now - timedelta(seconds=alerts.LATE_TTL))
+            .order_by(Moment.id)
+            .limit(500)
+        ))
+
+
+def send(moment_ids: list[int], now: datetime | None = None) -> int:
+    """Push a batch of moments to everyone who should hear about them. Returns how many devices took a push."""
+    now = now or datetime.now(timezone.utc)
+    with session() as db:
+        # Claim first: whichever sender gets here first sends; the other finds nothing to do.
+        claimed = db.scalars(update(Moment).where(Moment.id.in_(moment_ids), Moment.sent_at.is_(None)).values(sent_at=now).returning(Moment.id)).all()
+        if not claimed:
             return 0
-        payload = {"id": moment.id, "title": moment.title, "body": moment.body, "url": moment.url, "player_id": moment.player_id, "kind": moment.kind, "level": moment.level}
-        fans = [
-            fan for fan, rules in db.execute(select(Follow.fan_id, Follow.alert_rules).where(Follow.player_id == moment.player_id))
-            if wanted((rules or {}).get("level", DEFAULT_LEVEL), moment.level, moment.kind)
-        ]
-        devices = db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(fans))).all() if fans else []
-        db.execute(update(Moment).where(Moment.id == moment_id).values(sent_at=datetime.now(timezone.utc)))
-        ttl = LATE_TTL if moment.kind in ("final", "news") else LIVE_TTL
-        targets = [(d.id, d.endpoint, d.p256dh, d.auth, quiet(d.timezone, d.quiet_start, d.quiet_end)) for d in devices]
-    # The app shows it too, as a toast, to anyone with the player's page or the Following list open.
-    bus.publish(payload["player_id"], {"type": "moment", "player_id": payload["player_id"], "moment": payload})
-    sent = sum(deliver(device_id, endpoint, p256dh, auth, {**payload, "quiet": is_quiet}, ttl) for device_id, endpoint, p256dh, auth, is_quiet in targets)
-    if targets:
-        log.info("moment %s %r: %d of %d device(s)", moment_id, payload["title"], sent, len(targets))
+        rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
+        items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at) for m in rows]
+        jobs = _plan(db, items, now)
+    # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself.
+    for item in items:
+        if (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
+            bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
+    if not jobs:
+        return 0
+    futures = [(notification_id, device, _wire.submit(push, device[1], device[2], device[3], payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
+    results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
+    _settle(results)
+    sent = sum(1 for _, _, error in results if error is None)
+    log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, len({n for n, _, _ in results}), sent, len(results))
     return sent
 
 
-def deliver(device_id: int, endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: int) -> bool:
-    """One Web Push message. A device the push service says is gone is removed; others that keep
-    failing are removed after MAX_FAILURES."""
+def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
+    """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
+    device: (notification id, (device id, endpoint, p256dh, auth), payload, ttl, topic)."""
+    players = {i.player_id for i in items}
+    events = {i.event_id for i in items if i.event_id}
+    levels: dict[str, dict[int, str]] = {}
+    for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))):
+        levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
+    devices: dict[str, list[PushSubscription]] = {}
+    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels))) if levels else []:
+        devices.setdefault(d.fan_id, []).append(d)
+    if not devices:
+        return []
+    muted: dict[str, set[int]] = {}
+    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(events))) if events else []:
+        muted.setdefault(fan, set()).add(event_id)
+    sent: dict[str, list[alerts.Sent]] = {}
+    earlier = select(Notification).where(Notification.fan_id.in_(devices), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+    for n in db.scalars(earlier):
+        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at))
+
+    jobs = []
+    for fan, fan_devices in devices.items():
+        for p in alerts.plan(items, levels[fan], muted.get(fan, set()), sent.get(fan, []), now):
+            row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
+            db.add(row)
+            db.flush()
+            payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
+            for d in fan_devices:
+                jobs.append((row.id, (d.id, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+    return jobs
+
+
+def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
+    """Write back what the push services said: deliveries per notification, and each device's health."""
+    with session() as db:
+        delivered: dict[int, int] = {}
+        for notification_id, device_id, error in results:
+            delivered[notification_id] = delivered.get(notification_id, 0) + (error is None)
+            _health(db, device_id, error)
+        for notification_id, n in delivered.items():
+            db.execute(update(Notification).where(Notification.id == notification_id).values(delivered=n))
+
+
+def _health(db: Session, device_id: int, error: int | str | None) -> None:
+    """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES."""
+    if error is None:
+        db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
+    elif error in (404, 410):
+        db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
+    else:
+        row = db.get(PushSubscription, device_id)
+        if row is not None:
+            row.failures += 1
+            if row.failures >= MAX_FAILURES:
+                db.delete(row)
+
+
+def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: int, topic: str | None = None) -> int | str | None:
+    """One Web Push message. Returns None when the push service took it, else its status code (or the
+    error, if it never answered).
+
+    The topic replaces a message still waiting for an offline phone with the newer one for the same
+    game (RFC 8030), so a phone back online gets the latest, not a burst. Urgency lets a phone in
+    battery saver wake for a moment with sound and batch the silent ones."""
     from pywebpush import WebPushException, webpush
 
+    loud = payload.get("loud", True) and not payload.get("quiet")
+    headers = {"Urgency": "high" if loud else "normal"}
+    if topic:
+        headers["Topic"] = topic
     try:
         webpush(
             subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
@@ -151,33 +237,36 @@ def deliver(device_id: int, endpoint: str, p256dh: str, auth: str, payload: dict
             vapid_private_key=signer(),
             vapid_claims={"sub": VAPID_SUBJECT},
             ttl=ttl,
-            headers={"Urgency": "normal" if payload.get("quiet") else "high"},
+            headers=headers,
             timeout=10,
         )
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
-        with session() as db:
-            if status in (404, 410):
-                db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
-            else:
-                row = db.get(PushSubscription, device_id)
-                if row is not None:
-                    row.failures += 1
-                    if row.failures >= MAX_FAILURES:
-                        db.delete(row)
-        log.warning("push to device %s failed (%s): %s", device_id, status, str(exc)[:200])
-        return False
-    with session() as db:
-        db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
-    return True
+        log.warning("push to %s… failed (%s): %s", endpoint[:40], status, str(exc)[:200])
+        return status or str(exc)[:100]
+    except Exception as exc:  # a timeout or a refused connection is that device's failure, not the batch's
+        log.warning("push to %s… failed: %s", endpoint[:40], exc)
+        return str(exc)[:100]
+    return None
 
 
 def send_test(fan_id: str) -> int:
     """A test notification to each of this fan's devices. Returns how many took it."""
     with session() as db:
         devices = [(d.id, d.endpoint, d.p256dh, d.auth) for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id == fan_id))]
-    payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "kind": "test", "level": "key", "quiet": False}
-    return sum(deliver(i, e, p, a, payload, 600) for i, e, p, a in devices)
+    payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
+    results = [(i, push(e, p, a, payload, 600)) for i, e, p, a in devices]
+    with session() as db:
+        for device_id, error in results:
+            _health(db, device_id, error)
+    return sum(1 for _, error in results if error is None)
+
+
+def opened(db: Session, fan_id: str, notification_id: int) -> bool:
+    """The fan tapped a notification: the first tap is its open time."""
+    return bool(db.execute(
+        update(Notification).where(Notification.id == notification_id, Notification.fan_id == fan_id, Notification.opened_at.is_(None)).values(opened_at=func.now())
+    ).rowcount)
 
 
 # ---------------------------------------------------------------- quiet hours
@@ -195,9 +284,33 @@ def quiet(tz: str | None, start: str | None, end: str | None, now: datetime | No
     return a <= local < b if a < b else (local >= a or local < b)
 
 
+# ---------------------------------------------------------------- stats
+
+
+def stats(days: int = 7) -> list[dict[str, Any]]:
+    """Per lead moment kind over the last days: pushes, how many made a sound, how many were opened.
+    A kind fans rarely open is a kind to make quieter."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    with session() as db:
+        rows = db.execute(
+            select(Notification.kind, func.count(), func.count().filter(Notification.loud), func.count(Notification.opened_at), func.count(func.distinct(Notification.fan_id)))
+            .where(Notification.created_at >= since, Notification.delivered > 0)
+            .group_by(Notification.kind)
+            .order_by(func.count().desc())
+        ).all()
+    return [{"kind": k, "pushes": n, "loud": loud, "opened": o, "fans": fans} for k, n, loud, o, fans in rows]
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["keys"]:
         print("VAPID public key:", make_keys())
         print("Private key saved to", VAPID_KEY)
+    elif sys.argv[1:2] == ["stats"]:
+        days = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+        print(f"Pushes delivered in the last {days} days, by the moment that led them:")
+        print(f"{'kind':<10} {'pushes':>7} {'loud':>6} {'opened':>7} {'rate':>5} {'fans':>6}")
+        for r in stats(days):
+            rate = r["opened"] / r["pushes"] if r["pushes"] else 0
+            print(f"{r['kind']:<10} {r['pushes']:>7} {r['loud']:>6} {r['opened']:>7} {rate:>5.0%} {r['fans']:>6}")
     else:
-        sys.exit("usage: python -m sports_follow.notify keys")
+        sys.exit("usage: python -m sports_follow.notify keys | stats [days]")

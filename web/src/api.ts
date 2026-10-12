@@ -198,7 +198,10 @@ export interface Pick { system: string; athlete_id: string; league?: string | nu
 export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
 
 /** Something worth telling a player's fans (sports_follow/moments.py). */
-export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number; kind: string; level: 'key' | 'minor' }
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number; event_id?: number | null; kind: string; level: 'key' | 'minor' }
+
+/** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, pushed or not. */
+export interface ActivityItem extends PlayerMoment { priority: number; player: string; event: string | null; muted: boolean; at: string }
 
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
@@ -264,6 +267,9 @@ export const api = {
   pushUnsubscribe: (endpoint: string) =>
     request<{ ok: boolean }>('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) }),
   pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
+  activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
+  mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
+  mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
   config: () => request<{ model: string }>('/api/config'),
   credits: () => request<Credits>('/api/credits'),
 }

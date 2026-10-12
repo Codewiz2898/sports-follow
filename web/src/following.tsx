@@ -13,6 +13,7 @@ interface FollowingState {
   setAlerts: (playerId: number, level: AlertLevel) => Promise<void>
   moments: PlayerMoment[]  // moments to show as toasts while the app is open
   dismissMoment: (id: number) => void
+  heard: number  // moments the stream has brought, any level: the activity list refreshes on it
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -28,6 +29,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false)
   const [progress, setProgress] = useState<Record<number, string[]>>({})
   const [moments, setMoments] = useState<PlayerMoment[]>([])
+  const [heard, setHeard] = useState(0)
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const cardsRef = useRef(cards)
   cardsRef.current = cards
@@ -41,6 +43,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
     } else if (e.type === 'moment') {
+      setHeard((n) => n + 1)
       // With the app in front the service worker skips the system notification, so the toast
       // follows the same per-player level the push does.
       const level = cardsRef.current.find((c) => c.player_id === e.moment.player_id)?.alerts ?? 'key'
@@ -92,7 +95,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     setAlerts,
     moments,
     dismissMoment,
-  }), [cards, loaded, progress, follow, unfollow, setAlerts, moments, dismissMoment])
+    heard,
+  }), [cards, loaded, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

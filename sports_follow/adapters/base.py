@@ -68,6 +68,9 @@ class Snapshot:
     lines: dict[str, Line] = field(default_factory=dict)  # athlete_id -> line
     moments: list[dict[str, Any]] = field(default_factory=list)  # newest first
     source_url: str | None = None
+    # The published team sheet, before kick-off as well as during: athlete_id -> "starting" | "bench".
+    # Empty until the source has one (and for sports without line-ups).
+    squad: dict[str, str] = field(default_factory=dict)
 
 
 class Adapter(Protocol):

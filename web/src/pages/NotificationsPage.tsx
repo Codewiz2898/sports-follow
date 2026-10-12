@@ -1,11 +1,99 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { useActivity } from '../activity'
+import type { ActivityItem } from '../api'
 import { Avatar } from '../components/Blocks'
+import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, usePush } from '../notifications'
 
-/** Alerts: on or off for this device, its quiet hours, and how much to hear about each player. */
+/** Alerts: what's happened to your players (Latest), and what reaches this device (Settings). */
 export function NotificationsPage() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'settings' ? 'settings' : 'latest'
+  const show = (t: 'latest' | 'settings') => setParams(t === 'settings' ? { tab: t } : {}, { replace: true })
+
+  return (
+    <>
+      <h1 className="dsp page-title">Alerts</h1>
+      <div className="segmented" role="group" aria-label="Alerts">
+        <button type="button" aria-pressed={tab === 'latest'} onClick={() => show('latest')}>Latest</button>
+        <button type="button" aria-pressed={tab === 'settings'} onClick={() => show('settings')}>Settings</button>
+      </div>
+      {tab === 'latest' ? <Latest onSettings={() => show('settings')} /> : <Settings />}
+      <Link to="/credits" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Credits and sources</Link>
+    </>
+  )
+}
+
+/** Every moment of the fan's players, newest first, by day; what came since they last looked is marked. */
+function Latest({ onSettings }: { onSettings: () => void }) {
+  const { cards } = useFollowing()
+  const activity = useActivity()
+  // What was new when the list opened stays marked while it's open; the badge clears at once.
+  const [seenAtOpen] = useState(activity.seen)
+  const { markSeen } = activity
+  useEffect(() => { markSeen() }, [markSeen])
+  const sportOf = (id: number) => cards.find((c) => c.player_id === id)?.player.sport
+
+  if (!activity.loaded) return <div className="card empty small"><span className="spinner" /></div>
+  if (!activity.items.length) {
+    return (
+      <div className="card empty small stack" style={{ alignItems: 'center' }}>
+        <span>{cards.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players show up here as they happen.' : 'Follow a player to see their moments here.'}</span>
+        {cards.length > 0 && <button type="button" className="btn link" onClick={onSettings}>Choose what reaches this phone</button>}
+      </div>
+    )
+  }
+  const days: [string, ActivityItem[]][] = []
+  for (const item of activity.items) {
+    const label = dayLabel(item.at)
+    if (days[days.length - 1]?.[0] === label) days[days.length - 1][1].push(item)
+    else days.push([label, [item]])
+  }
+  return (
+    <>
+      {days.map(([label, items]) => (
+        <section key={label} className="section" aria-label={label}>
+          <span className="eyebrow">{label}</span>
+          <ul className="card list">
+            {items.map((item) => <LatestRow key={item.id} item={item} sport={sportOf(item.player_id)} fresh={item.id > seenAtOpen} />)}
+          </ul>
+        </section>
+      ))}
+      {activity.more && <MoreButton more={activity.more} />}
+    </>
+  )
+}
+
+function LatestRow({ item, sport, fresh }: { item: ActivityItem; sport?: string | null; fresh: boolean }) {
+  const [context] = item.body.split('\n')
+  return (
+    <li className={`alert-row${fresh ? ' fresh' : ''}${item.level === 'minor' ? ' minor' : ''}`}>
+      <Avatar name={item.player} sport={sport} size="sm" />
+      <Link to={item.url} className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
+        <span className="title">{item.title}</span>
+        {context && <span className="small muted">{context}</span>}
+        <span className="tiny muted">{[!context?.startsWith(item.event ?? '\0') && item.event, relative(item.at), item.muted && 'Muted'].filter(Boolean).join(' · ')}</span>
+      </Link>
+      {fresh && <span className="fresh-dot" aria-label="New" />}
+    </li>
+  )
+}
+
+function MoreButton({ more }: { more: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+  return (
+    <button type="button" className="btn" style={{ alignSelf: 'center' }} disabled={busy} onClick={() => { setBusy(true); more().finally(() => alive.current && setBusy(false)) }}>
+      {busy && <span className="spinner" />}Show more
+    </button>
+  )
+}
+
+/** On or off for this device, its quiet hours, and how much to hear about each player. */
+function Settings() {
   const push = usePush()
   const { cards, setAlerts } = useFollowing()
   const [start, setStart] = useState(push.quiet.start ?? '22:00')
@@ -14,14 +102,12 @@ export function NotificationsPage() {
 
   return (
     <>
-      <h1 className="dsp page-title">Alerts</h1>
-
       <section className="card" aria-label="This device" style={{ padding: '4px 18px' }}>
         <div className="row" style={{ padding: '14px 0', borderBottom: push.on ? '1px solid var(--line)' : 0 }}>
           <span className="stack">
             <span className="title">On this device</span>
             <span className="small muted">
-              {push.unavailable ?? (push.on ? 'Goals, fifties, big games and results reach you even with the app closed.' : 'Turn on to hear about your players even with the app closed.')}
+              {push.unavailable ?? (push.on ? 'One alert per game, updated as it goes. Only the big moments make a sound.' : 'Turn on to hear about your players even with the app closed.')}
             </span>
           </span>
           {!push.unavailable && (
@@ -75,8 +161,6 @@ export function NotificationsPage() {
           </ul>
         )}
       </section>
-
-      <Link to="/credits" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Credits and sources</Link>
     </>
   )
 }

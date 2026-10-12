@@ -665,6 +665,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         if snap.state.get("kind") == "chess":
             _evaluate(db, snap, latest, [w[0] for w in watchers])
+        if snap.squad:
+            snap.state["team_sheet"] = True  # so the poll that first sees line-ups counts as a change
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
         if changed:
             db.add(EventState(event_id=event_id, as_of=now, status=snap.status, score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))
@@ -687,7 +689,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 if latest is not None and not (last is None and latest.status == "live"):
                     before = moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
                 name, sport = people.get(player_id, ("", ""))
-                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines))
+                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments)
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
