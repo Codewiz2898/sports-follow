@@ -368,8 +368,10 @@ def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> E
     key = f"{adapter.system}:{f.source_id}"
     event = db.scalar(select(Event).where(Event.key == key))
     if event is None:
-        event = Event(key=key, sport=player.sport, title=f.title, status=f.status)
-        db.add(event)
+        # A teammate's refresh may be adding the same game at this moment: the first insert makes the
+        # row, the other waits for it to commit and reads it back instead of failing on the key.
+        db.execute(insert(Event).values(key=key, sport=player.sport, title=f.title, status=f.status).on_conflict_do_nothing(index_elements=[Event.key]))
+        event = db.scalars(select(Event).where(Event.key == key)).one()
     event.title = f.title
     event.competition = f.competition
     event.start_utc = f.start_utc
