@@ -557,13 +557,15 @@ class Due:
     lives: list[int] = field(default_factory=list)  # unbound players who need an agent live check
     refreshes: list[int] = field(default_factory=list)  # bound players whose fixtures and stats are stale
     polls: list[int] = field(default_factory=list)  # events with a live binding that are armed or live
+    lanes: list[str] = field(default_factory=list)  # sources whose armed and live events are polled together
 
 
 def due_work(now: datetime | None = None) -> Due:
     """What the scheduler should enqueue now. Only followed players get work.
 
     Events move scheduled -> armed at T-30 min. An armed or live event with a live binding gets one
-    poll job, shared by every player in it; players without a binding get agent live checks.
+    poll job, shared by every player in it, or, from a source that fetches many events in one
+    request, a place in that source's lane; players without a binding get agent live checks.
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
     (a Test match runs five).
     """
@@ -619,12 +621,16 @@ def due_work(now: datetime | None = None) -> Due:
             .where(Event.status.in_(("armed", "live")), EventPlayer.player_id.in_(followed))
         ).all()
         polls: set[int] = set()
+        lanes: set[str] = set()
         for event_id, live_binding, pid in armed:
-            if live_binding:
+            if live_binding and structured.batched(live_binding.get("adapter")):
+                lanes.add(live_binding["adapter"])
+            elif live_binding:
                 polls.add(event_id)
             elif pid not in bound:
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
+        due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]
         stale_before = now - timedelta(seconds=LIVE_CHECK_INTERVAL)
         for pid in lives if AGENT_LIVE else ():  # off by default: no model calls spent watching games
             card = db.get(PlayerCard, pid)

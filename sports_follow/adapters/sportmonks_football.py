@@ -266,7 +266,8 @@ def parse_season_stats(p: dict[str, Any], team_ids: list[str]) -> tuple[list[dic
 class SportmonksFootball:
     system = "sportmonks_football"
     sports = ("football", "soccer", "association football")
-    live_cadence = 15  # 240 requests an hour per live match, well inside a 2,500 hourly limit
+    live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,500
+    MULTI_MAX = 50  # fixture ids fixtures/multi takes in one request
     WINDOW_BACK, WINDOW_AHEAD = 120, 60  # days of fixtures a refresh reads; older ones come from history_pages
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
 
@@ -329,6 +330,20 @@ class SportmonksFootball:
         if not data.get("data"):
             raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
         return parse_match(data["data"])
+
+    def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
+        """Many matches at once, MULTI_MAX to a request (fixtures/multi): the live lane's one fetch a
+        round, however many matches are on. Keyed as given; a fixture Sportmonks doesn't return is left out."""
+        wanted = {key: str(loc["fixture"]) for key, loc in locators.items()}
+        ids = sorted(set(wanted.values()))
+        found: dict[str, Snapshot] = {}
+        for i in range(0, len(ids), self.MULTI_MAX):
+            # Not cached: each round wants the matches as they are now, and a matchday's worth is large.
+            data = sportmonks.get_json(f"/football/fixtures/multi/{','.join(ids[i:i + self.MULTI_MAX])}", ttl=0, include=MATCH_INCLUDE)
+            rows = data.get("data") or []
+            for x in [rows] if isinstance(rows, dict) else rows:
+                found[str(x.get("id"))] = parse_match(x)
+        return {key: found[fid] for key, fid in wanted.items() if fid in found}
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return _result_label(fixture, team_ids)
