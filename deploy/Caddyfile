@@ -1,0 +1,25 @@
+# HTTPS for the whole app: Caddy gets and renews a Let's Encrypt certificate for $DOMAIN by itself
+# (a real domain, or <server-ip>.sslip.io to try it out). The API serves the web app too, so there is
+# one origin for pages, API, live streams, the service worker and the Android app's asset links.
+{$DOMAIN} {
+	# Live updates are server-sent events: pass them through as they come, never compressed or buffered.
+	@stream path /api/me/stream /api/players/*/stream
+	handle @stream {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy api:8000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	log
+}

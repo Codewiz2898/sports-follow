@@ -156,6 +156,11 @@ that build too: turn them on under Notifications in the sidebar. Always pass
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
 | `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
 
+## Deploy
+
+One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
+[deploy/README.md](deploy/README.md). The public build runs licensed sources only.
+
 ## Android app
 
 `android/` holds the Android app: a Trusted Web Activity, Google's standard way to ship a web app on

@@ -1,0 +1,14 @@
+# Only what the image needs; never local secrets, caches or other builds.
+.git
+.env
+.env.*
+.venv
+**/__pycache__
+**/.pytest_cache
+web/node_modules
+web/dist
+android
+docs
+tests
+deploy
+*.pem
