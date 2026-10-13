@@ -27,7 +27,7 @@ function SidebarSearch() {
   const navigate = useNavigate()
   const close = useCallback(() => { setOpen(false); setQuery(''); input.current?.blur() }, [])
   const actions = useSearchActions(close)
-  const { data, loading } = useSearch(query, '')
+  const { data, fresh, loading } = useSearch(query, '')
   const flat = data ? sections(data).flatMap((s) => s.items) : []
   const current = flat[Math.min(active, flat.length - 1)]
 
@@ -62,10 +62,13 @@ function SidebarSearch() {
     else if (e.key === 'ArrowUp' && flat.length) { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)) }
     else if (e.key === 'Enter') {
       e.preventDefault()
-      if (!current) {
+      // The list may still be the previous query's while this one loads: wait for its own results.
+      if (!fresh && loading) return
+      if (!fresh || !current) {
         if (query.trim().length >= 2) { navigate(`/search?q=${encodeURIComponent(query.trim())}`); close() }
-      } else if (e.shiftKey && !(current.player_id && actions.isFollowing(current.player_id))) actions.follow(current)
-      else if (current.player_id || current.system) actions.open(current)
+      } else if (e.shiftKey) {
+        if (!actions.pending && !(current.player_id && actions.isFollowing(current.player_id))) actions.follow(current)
+      } else if (current.player_id || current.system) actions.open(current)
     }
   }
 

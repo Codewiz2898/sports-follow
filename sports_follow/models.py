@@ -100,6 +100,9 @@ class Athlete(Base):
     # " virat kohli | king kohli" folded to plain ASCII words; trigram-indexed for search as you type.
     search_text: Mapped[str] = mapped_column(Text)
     birth_date: Mapped[datetime | None] = mapped_column(Date)
+    # How much of birth_date Wikidata knows: 11 the day, 10 the month, 9 the year (stored as 1 January).
+    # None for rows imported before it was read, and for esports pros.
+    birth_precision: Mapped[int | None] = mapped_column(Integer)
     country: Mapped[str | None] = mapped_column(String(120))
     teams: Mapped[list] = mapped_column(JSONB, default=list)  # current teams, club first
     league: Mapped[str | None] = mapped_column(String(20))  # nba | wnba | atp | wta; an esports pro's game (valorant)

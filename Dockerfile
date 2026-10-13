@@ -26,5 +26,9 @@ COPY sports_follow/ sports_follow/
 COPY --from=web /web/dist web/dist
 RUN useradd --system --uid 10001 app
 USER app
+# Whose X-Forwarded-For and -Proto uvicorn believes: the proxy's, on the compose network (Docker gives its
+# networks private addresses), never a client's. With "*", anyone who reached the port could pick the
+# address the AI research limit counts by, and the scheme the cookie's Secure flag follows.
+ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 EXPOSE 8000
-CMD ["uvicorn", "sports_follow.server:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "sports_follow.server:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

@@ -232,6 +232,37 @@ def test_a_goal_says_what_it_did():
     assert [(f.title, f.body.split(" · ")[1]) for f in found] == [("Goal: Mohamed Salah (2)", "60'"), ("Hat-trick: Mohamed Salah", "80'")]
 
 
+def _told(polls: list[Seen]) -> list[tuple[str, str]]:
+    """What a fan hears over these polls: each moment once, by its key, as notify.record stores them."""
+    stored, told = set(), []
+    for before, now in zip(polls, polls[1:]):
+        for f in detect("Football", "Mohamed Salah", "173896", before, now):
+            if (f.kind, f.detail) not in stored:
+                stored.add((f.kind, f.detail))
+                told.append((f.title, f.body))
+    return told
+
+
+def test_a_goal_after_one_var_rules_out_is_told():
+    # 23': a goal; 25': VAR rules it out, the count drops and the play leaves the events; 70': a real
+    # one. Keyed by the count, the 70' goal was "goal1" again and never told.
+    ruled_out, real = goal("23'", id="101"), goal("70'", id="102")
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [ruled_out], clock="23'"), scored(0, 0, [], goals=0, clock="25'"), scored(1, 0, [real], clock="70'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'")]
+    # A source without play ids (Sportmonks): by the goal's minute.
+    polls = [scored(0, 0, [], goals=0), scored(1, 0, [goal("23'")]), scored(0, 0, [], goals=0), scored(1, 0, [goal("70'")])]
+    assert [body for _, body in _told(polls)] == ["Egypt 1 – 0 South Africa · 23'", "Egypt 1 – 0 South Africa · 70'"]
+    # The count dropping and coming back for the same goal (a glitch in the line) isn't a new goal.
+    polls = [scored(0, 0, [], goals=0), scored(1, 0, [ruled_out]), scored(1, 0, [ruled_out], goals=0), scored(1, 0, [ruled_out])]
+    assert len(_told(polls)) == 1
+    # The assist on a goal VAR rules out doesn't hide the next one.
+    def assisted(n: int, plays: list[dict]) -> Seen:
+        return Seen("live", state=FOOTBALL, line=line("Started", Assists=str(n)), score="Egypt 1 – 0 South Africa", events=plays)
+
+    polls = [assisted(0, []), assisted(1, [goal("23'", id="1", athlete_ids=["9", "173896"])]), assisted(0, []), assisted(1, [goal("70'", id="2", athlete_ids=["9", "173896"])])]
+    assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah", "Assist: Mohamed Salah"]
+
+
 def test_priorities_rank_moments():
     def ranked(sport, before, now):
         return [(f.kind, f.priority) for f in detect(sport, "X", "1", before, now)]

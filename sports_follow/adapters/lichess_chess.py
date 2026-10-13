@@ -179,6 +179,11 @@ def ref_for(record: dict[str, Any]) -> PlayerRef:
     return PlayerRef("lichess_chess", fide_id, full, [fide_id], [full], f"https://lichess.org/fide/{fide_id}/{quote(slug)}")
 
 
+# A PGN tag: [Name "value"], where the value escapes a quote or a backslash with a backslash
+# ([Event "The \"Alcalá\" Open"]).
+_TAG = r'\[(\w+) "((?:[^"\\]|\\.)*)"\]'
+
+
 def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
     """A tournament's PGN export -> its games grouped by round id, shaped like the round JSON's games.
 
@@ -186,8 +191,8 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
     Each game's GameURL ends in /{roundId}/{gameId}.
     """
     rounds: dict[str, list[dict[str, Any]]] = {}
-    for block in re.findall(r'(?:^\[\w+ "[^"]*"\]\n?)+', pgn, flags=re.M):
-        tags = dict(re.findall(r'\[(\w+) "([^"]*)"\]', block))
+    for block in re.finditer(rf"(?:^{_TAG}\n?)+", pgn, flags=re.M):
+        tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, block[0])}
         parts = (tags.get("GameURL") or "").rstrip("/").split("/")
         if len(parts) < 2:
             continue

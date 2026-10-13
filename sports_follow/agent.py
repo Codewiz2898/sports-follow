@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -34,6 +35,10 @@ KEYS_FILE = Path(os.environ.get("LLM_PROVIDERS_KEYS_FILE", "~/.config/llm-provid
 MAX_TURNS = 16
 # The final call writes the whole report in one reply, so it gets more room than a research turn needs.
 CALL_TIMEOUT_MS = 300_000
+# A whole run's time, however many turns and retries: a build's job (worker.py) and lock (pipeline.py)
+# outlast it, so one player never has two runs at once.
+RUN_LIMIT = 600
+LIVE_LIMIT = 240  # a live check's, within its 300 s lock (pipeline.refresh_live)
 RETRYABLE = {"timeout", "server", "network", "rate_limit"}
 
 SYSTEM_PROMPT = """\
@@ -143,15 +148,21 @@ def _run(
     effort: str,
     label: str,
     soft_turns: int,
+    limit: float = RUN_LIMIT,
 ) -> Iterator[dict[str, Any]]:
-    """Agent loop. Yields progress events, then a final {"type": "result", "data": ...}."""
+    """Agent loop. Yields progress events, then a final {"type": "result", "data": ...}. Gives up after
+    limit seconds in all: no model call is allowed to run past it."""
     tools = [*TOOL_DEFS, _submit_tool(submit_name, submit_description, result_model)]
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    deadline = time.monotonic() + limit
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         for turn in range(MAX_TURNS):
             yield _progress("Thinking…" if turn else f"Asking {MODEL.split(':', 1)[-1]}…")
             for attempt in range(2):
+                left = deadline - time.monotonic()
+                if left < 30:  # too little for a reply worth waiting for
+                    raise AgentError("The agent did not finish within its time limit.")
                 try:
                     r = llm.complete(
                         model=MODEL,
@@ -162,7 +173,7 @@ def _run(
                         thinking="adaptive",
                         effort=effort,
                         cache_system=True,
-                        timeout_ms=CALL_TIMEOUT_MS,
+                        timeout_ms=int(min(CALL_TIMEOUT_MS, left * 1000)),
                         label=label,
                     )
                     break
@@ -266,4 +277,5 @@ def live_update(llm: Client, player: str, sport: str, teams: list[str]) -> Itera
         effort="low",
         label="live-update",
         soft_turns=2,
+        limit=LIVE_LIMIT,
     )

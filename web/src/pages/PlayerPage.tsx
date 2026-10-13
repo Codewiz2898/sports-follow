@@ -5,7 +5,7 @@ import { api, subscribe, type Card, type UpcomingEvent } from '../api'
 import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
-import { countdown, dateTime, day, outcome, parseDate, relative, shortName, sportKey, sportName } from '../format'
+import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName, sportKey, sportName } from '../format'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS } from '../notifications'
 
@@ -151,10 +151,10 @@ export function PlayerPage() {
   )
 }
 
-/** The next game that hasn't started (a fixture with no time yet counts). */
+/** The next game that hasn't started (a fixture with no date yet counts; one with a day but no time, all that day). */
 function nextGame(card: Card) {
   const now = Date.now()
-  return (card.upcoming ?? []).find((u) => (parseDate(u.start_utc)?.getTime() ?? Infinity) > now)
+  return (card.upcoming ?? []).find((u) => !parseDate(u.start_utc) || ahead(u.start_utc, now))
 }
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
@@ -211,7 +211,7 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
         <section className="game-card" aria-label="Last game">
           <span className="row">
             <span className="eyebrow">Last game</span>
-            <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{[last.competition, last.date && day(last.date)].filter(Boolean).join(' · ')}</span>
+            <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{[last.competition, day(playedOn(last))].filter(Boolean).join(' · ')}</span>
           </span>
           <span className="row" style={{ justifyContent: 'flex-start' }}>
             {wl && <span className={`wl ${wl}`} role="img" aria-label={{ W: 'Won', D: 'Drew', L: 'Lost' }[wl]}>{wl}</span>}

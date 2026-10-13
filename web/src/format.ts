@@ -1,16 +1,41 @@
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/
+const ZONELESS = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/
+
 export function parseDate(value?: string | null): Date | null {
   if (!value) return null
-  // A bare date ("2026-10-12", a result's day) is a calendar day here, not midnight UTC, which
-  // west of UTC would be the evening before.
-  const ymd = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  const d = ymd ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])) : new Date(value)
+  // A bare date ("2026-10-12", an agent's result day, a fixture with no time yet) is a calendar day
+  // here, not midnight UTC, which west of UTC would be the evening before.
+  const ymd = value.match(DAY)
+  // A time without a zone is UTC, as the server reads it (pipeline._parse_time), never the phone's time.
+  const d = ymd ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])) : new Date(ZONELESS.test(value) ? `${value.replace(' ', 'T')}Z` : value)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-/** "in 3d", "in 4h 12m", "12m ago". */
+/** A day with no time of day: a fixture whose start isn't known yet ("time TBC"). */
+export function dateOnly(value?: string | null): boolean {
+  return Boolean(value && DAY.test(value))
+}
+
+/** Whether a start is still to come. A day without a time counts until that day is over. */
+export function ahead(value?: string | null, now = Date.now()): boolean {
+  const d = parseDate(value)
+  if (!d) return false
+  return (dateOnly(value) ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1) : d).getTime() > now
+}
+
+/** When a result was played: its start, so it's dated by the fan's own day, else the agent's bare date. */
+export function playedOn(r?: { date?: string | null; start_utc?: string | null } | null): string | null {
+  return r?.start_utc || r?.date || null
+}
+
+/** "in 3d", "in 4h 12m", "12m ago"; for a day without a time, whole days ("today", "tomorrow", "in 3d"). */
 export function relative(value?: string | null, now = Date.now()): string {
   const d = parseDate(value)
   if (!d) return ''
+  if (dateOnly(value)) {
+    const n = -daysAgo(value, new Date(now))!
+    return n === 0 ? 'today' : n === 1 ? 'tomorrow' : n === -1 ? 'yesterday' : n > 0 ? `in ${n}d` : `${-n}d ago`
+  }
   const diff = d.getTime() - now
   const abs = Math.abs(diff)
   const days = Math.floor(abs / 864e5)
@@ -23,6 +48,7 @@ export function relative(value?: string | null, now = Date.now()): string {
 export function dateTime(value?: string | null): string {
   const d = parseDate(value)
   if (!d) return value ?? ''
+  if (dateOnly(value)) return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} · time TBC`
   return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
@@ -55,10 +81,10 @@ export function safeHref(url?: string | null): string | undefined {
   return url && /^https?:\/\//i.test(url) ? url : undefined
 }
 
-/** "2d 11h", "4h 12m", "12m" until a start; empty once it has passed. */
+/** "2d 11h", "4h 12m", "12m" until a start; empty once it has passed, or when its time isn't known. */
 export function countdown(value?: string | null, now = Date.now()): string {
   const d = parseDate(value)
-  if (!d) return ''
+  if (!d || dateOnly(value)) return ''
   const diff = d.getTime() - now
   if (diff <= 0) return ''
   const days = Math.floor(diff / 864e5)
@@ -80,12 +106,12 @@ export function dayLabel(value?: string | null, now = new Date()): string {
   return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : day(value)
 }
 
-/** "Thu 08:00": a start within the week; further out, the date. */
+/** "Thu 08:00": a start within the week ("Thu" when its time isn't known); further out, the date. */
 export function shortWhen(value?: string | null, now = Date.now()): string {
   const d = parseDate(value)
   if (!d) return 'TBC'
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  if (d.getTime() - now < 6 * 864e5) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
+  const time = dateOnly(value) ? '' : ` ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+  if (d.getTime() - now < 6 * 864e5) return `${d.toLocaleDateString(undefined, { weekday: 'short' })}${time}`
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
@@ -122,19 +148,35 @@ export function shortName(name: string): string {
   return words.slice(start).join(' ')
 }
 
+// Letters Unicode doesn't decompose into a base letter plus an accent (espn._LETTERS on the server).
+const LETTERS: Record<string, string> = { ø: 'o', Ø: 'O', æ: 'ae', Æ: 'Ae', œ: 'oe', Œ: 'Oe', ß: 'ss', đ: 'd', Đ: 'D', ł: 'l', Ł: 'L', þ: 'th', Þ: 'Th', ð: 'd', ı: 'i' }
+
+/** A team name reduced for exact comparison, as the server's espn.team_key: "Australia 'A'" is "australia a". */
+function teamKey(name: string): string {
+  return name
+    .replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])
+    .normalize('NFKD')
+    .replace(/[\u0080-\uffff]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
 /**
  * Win, draw or loss from the player's side. Structured results say "Won…"/"Lost…"; cricket names
- * the winning side ("India won by 8 wkts"), so the player's teams decide, the same way the server
+ * the winning side ("India won by 8 wkts", "Match tied (India won the Super Over)"), so the player's
+ * teams decide by whole name ("India A" and "Mumbai Indians" aren't India), the same way the server
  * counts form (form._cricket_outcome).
  */
 export function outcome(result: string, teams: string[] = []): 'W' | 'D' | 'L' | null {
-  const r = result.trim().toLowerCase()
-  if (/^won\b/.test(r)) return 'W'
-  if (/^lost\b/.test(r)) return 'L'
-  if (/^(drew|draw|drawn|tied)\b/.test(r)) return 'D'
-  if (!r.includes(' won ')) return /drawn|tied|no result/.test(r) ? 'D' : null
-  const winner = r.split(' won ', 1)[0]
-  if (teams.some((t) => t && winner.includes(t.toLowerCase()))) return 'W'
+  const r = result.trim()
+  if (/^won\b/i.test(r)) return 'W'
+  if (/^lost\b/i.test(r)) return 'L'
+  if (/^(drew|draw|drawn|tied)\b/i.test(r)) return 'D'
+  const winner = r.match(/(?:^|\()([^()]+?) won\b/i)
+  if (!winner) return /drawn|tied|no result/i.test(r) ? 'D' : null
+  const named = teamKey(winner[1])
+  if (named && teams.some((t) => teamKey(t) === named)) return 'W'
   return teams.length ? 'L' : null
 }
 

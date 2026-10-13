@@ -56,8 +56,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   An athlete no live source has gets an agent-built page (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following.
 - **AI research is capped.** A name no source knows goes to the research agent, 3 per fan per UTC day
-  (`search.RESEARCH_PER_DAY`, counted in Redis). Following a player already here, or a search result
-  with a live source, doesn't count. The gateway's per-app budget is the hard ceiling behind it.
+  (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
+  fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
+  already here, or a search result with a live source, doesn't count. The gateway's per-app budget is
+  the hard ceiling behind it.
 - **Names converge.** "Kohli" and "Virat Kohli" end up on the same player: every typed name becomes an
   alias, and when a build discovers the athlete already exists, the rows are merged. A player bound to a
   source is never renamed or merged by an agent report, and keeps the source's sections when a typed
@@ -177,6 +179,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
+| `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
@@ -236,7 +240,8 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   each needs its licence and credit fetched first.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance
   and no sport filter, and Lichess allows one request at a time.
-- AI research counts are per anonymous cookie, so clearing cookies resets them; accounts will fix that.
+- A fan's three AI researches are counted per anonymous cookie, so clearing cookies resets them (the
+  per-address and hourly limits still hold); accounts will fix that.
 - A name typed into "Research with AI" that the sources don't recognize still waits for the agent (1–4
   minutes) before the adapter is bound, because the agent is what says which sport it belongs to.
 - Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's

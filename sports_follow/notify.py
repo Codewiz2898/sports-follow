@@ -43,6 +43,7 @@ VAPID_KEY = Path(os.environ.get("SPORTS_FOLLOW_VAPID_KEY", Path.home() / ".confi
 # Push services ask who is sending (RFC 8292): a URL for this project, never a person's address.
 VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT", "https://github.com/Codewiz2898/sports-follow")
 MAX_FAILURES = 5
+MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
 
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
@@ -168,8 +169,11 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[in
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))):
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
     devices: dict[str, list[PushSubscription]] = {}
-    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels))) if levels else []:
-        devices.setdefault(d.fan_id, []).append(d)
+    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels)).order_by(PushSubscription.id.desc())) if levels else []:
+        mine = devices.setdefault(d.fan_id, [])
+        # However many are stored, one fan's fan-out can't fill the push threads every other fan waits on.
+        if len(mine) < MAX_DEVICES:
+            mine.append(d)
     if not devices:
         return []
     muted: dict[str, set[int]] = {}
@@ -253,7 +257,8 @@ def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: in
 def send_test(fan_id: str) -> int:
     """A test notification to each of this fan's devices. Returns how many took it."""
     with session() as db:
-        devices = [(d.id, d.endpoint, d.p256dh, d.auth) for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id == fan_id))]
+        newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
+        devices = [(d.id, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
     payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
     results = [(i, push(e, p, a, payload, 600)) for i, e, p, a in devices]
     with session() as db:

@@ -58,6 +58,29 @@ def _score(c: dict[str, Any]) -> str:
     return str(score or "")
 
 
+def _shootout(c: dict[str, Any]) -> int | None:
+    """Penalties scored in a shootout, or None without one: on the competitor in a summary, in its
+    score in a schedule."""
+    value = c.get("shootoutScore")
+    if value is None and isinstance(c.get("score"), dict):
+        value = c["score"].get("shootoutScore")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _scoring(e: dict[str, Any]) -> bool:
+    """A key event that is a goal, however it went in ("goal---header", "goal---volley",
+    "penalty---scored", "own-goal"); a shootout's kicks aren't."""
+    return bool(e.get("scoringPlay")) and not e.get("shootout")
+
+
+def _pens(a: int | None, b: int | None) -> str:
+    """ " (4–2 pens)" after a shootout, else ""."""
+    return f" ({a}–{b} pens)" if a is not None and b is not None else ""
+
+
 # ---------------------------------------------------------------- parsers (pure)
 
 
@@ -75,8 +98,8 @@ def parse_schedule(data: dict[str, Any]) -> list[Fixture]:
         result = None
         if status == "final":
             result = {
-                "home": {"id": home["team"]["id"], "name": home["team"]["displayName"], "score": _score(home), "winner": home.get("winner")},
-                "away": {"id": away["team"]["id"], "name": away["team"]["displayName"], "score": _score(away), "winner": away.get("winner")},
+                "home": {"id": home["team"]["id"], "name": home["team"]["displayName"], "score": _score(home), "winner": home.get("winner"), "pens": _shootout(home)},
+                "away": {"id": away["team"]["id"], "name": away["team"]["displayName"], "score": _score(away), "winner": away.get("winner"), "pens": _shootout(away)},
             }
         out.append(
             Fixture(
@@ -109,7 +132,7 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
         clock_label = clock
 
     events = data.get("keyEvents") or []
-    goals = [e for e in events if e.get("scoringPlay")]
+    goals = [e for e in events if _scoring(e)]
 
     def scorers(team_id: str) -> list[str]:
         out = []
@@ -155,26 +178,30 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
     moments = []
     for e in reversed(events):
         kind_e = (e.get("type") or {}).get("type") or ""
-        if kind_e not in ("goal", "yellow-card", "red-card", "own-goal", "penalty---scored"):
+        goal = _scoring(e)
+        if not goal and kind_e not in ("yellow-card", "red-card"):
             continue
+        own_goal = goal and kind_e.startswith("own-goal")
         people = [(p.get("athlete") or {}) for p in e.get("participants") or []]
         moments.append({
+            "id": str(e["id"]) if e.get("id") else None,  # the play's id: a goal's alert is keyed by it
             "clock": (e.get("clock") or {}).get("displayValue", ""),
-            "kind": "GOAL" if e.get("scoringPlay") else ("RED" if "red" in kind_e else "YELLOW"),
+            "kind": "GOAL" if goal else ("RED" if "red" in kind_e else "YELLOW"),
             "text": e.get("text") or e.get("shortText") or "",
             "athlete_ids": [str(a.get("id")) for a in people],
             "team_id": str((e.get("team") or {}).get("id")),
-            "assist": people[1].get("displayName") if len(people) > 1 and e.get("scoringPlay") and kind_e != "own-goal" else None,
-            "own_goal": kind_e == "own-goal",
+            "assist": people[1].get("displayName") if len(people) > 1 and goal and not own_goal else None,
+            "own_goal": own_goal,
         })
 
     return Snapshot(
         status=status,
-        score_label=f"{home['team']['displayName']} {_score(home)} – {_score(away)} {away['team']['displayName']}",
+        score_label=f"{home['team']['displayName']} {_score(home)} – {_score(away)} {away['team']['displayName']}{_pens(_shootout(home), _shootout(away))}",
         clock_label=clock_label,
         state=state,
         lines=lines,
-        moments=moments[:12],
+        # The newest dozen, and every goal: a goal's alert reads its minute and assist here.
+        moments=[m for i, m in enumerate(moments) if i < 12 or m["kind"] == "GOAL"],
         source_url=f"https://www.espn.com/soccer/match/_/gameId/{header.get('id')}",
         squad=squad,
     )
@@ -205,20 +232,29 @@ def parse_season_stats(data: dict[str, Any]) -> tuple[list[dict[str, str]], str]
     return stats, note
 
 
+def _tally(side: dict[str, Any]) -> tuple[int, int] | None:
+    """A side's goals, then its shootout penalties, to compare; None if the score isn't a number."""
+    score = str(side.get("score") or "")
+    return (int(score), side.get("pens") or 0) if score.isdigit() else None
+
+
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
-    """ "Won 2–1" / "Lost 0–1" / "Drew 1–1" from the player's team's side, else the plain score."""
+    """ "Won 2–1" / "Lost 0–1" / "Drew 1–1" from the player's team's side, else the plain score; a
+    shootout adds its score ("Lost 0–0 (2–4 pens)")."""
     r = fixture.result
     if not r:
         return ""
     home, away = r["home"], r["away"]
     ours, theirs = (home, away) if str(home["id"]) in team_ids else (away, home) if str(away["id"]) in team_ids else (None, None)
     if ours is None:
-        return f"{home['name']} {home['score']}–{away['score']} {away['name']}"
-    score = f"{ours['score']}–{theirs['score']}"
-    if ours.get("winner"):
-        return f"Won {score}"
-    if theirs.get("winner"):
-        return f"Lost {score}"
+        return f"{home['name']} {home['score']}–{away['score']} {away['name']}{_pens(home.get('pens'), away.get('pens'))}"
+    score = f"{ours['score']}–{theirs['score']}{_pens(ours.get('pens'), theirs.get('pens'))}"
+    if ours.get("winner") or theirs.get("winner"):
+        return f"{'Won' if ours.get('winner') else 'Lost'} {score}"
+    # No winner flag: the score decides.
+    mine, other = _tally(ours), _tally(theirs)
+    if mine and other and mine != other:
+        return f"{'Won' if mine > other else 'Lost'} {score}"
     return f"Drew {score}"
 
 

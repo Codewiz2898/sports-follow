@@ -85,6 +85,14 @@ def _winner(m: dict[str, Any]) -> str | None:
     return str(m["winner_id"]) if m.get("winner_id") is not None and m.get("winner_type") in (None, "Team") else None
 
 
+def _status(m: dict[str, Any]) -> str:
+    """Ours from PandaScore's. A forfeit is "canceled" with the series awarded (forfeit and a winner):
+    a result, not a cancelled series."""
+    if m.get("status") == "canceled" and m.get("forfeit") and _winner(m):
+        return "final"
+    return _STATUS.get(m.get("status") or "", "scheduled")
+
+
 def _format(m: dict[str, Any]) -> str | None:
     """ "Bo3", "First to 4", "2 games"."""
     n = int(m.get("number_of_games") or 0)
@@ -134,7 +142,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
         teams = _teams(m)
         if not teams or not m.get("id"):
             continue  # a 1v1 title's match, or no team decided yet
-        status = _STATUS.get(m.get("status") or "", "scheduled")
+        status = _status(m)
         names = [t.get("name") or "" for t in teams]
         result = None
         if status == "final":
@@ -181,14 +189,16 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 
 def parse_match(m: dict[str, Any]) -> Snapshot:
     """A match -> snapshot: the series score, each map's winner, which map is on."""
-    status = _STATUS.get(m.get("status") or "", "scheduled")
+    status = _status(m)
     teams = _teams(m)
     scores, winner = _scores(m), _winner(m)
     sides = [{
         "id": str(t["id"]), "name": t.get("name") or "", "abbr": t.get("acronym"),
         "score": scores.get(str(t["id"]), 0), "winner": (winner == str(t["id"])) if status == "final" and winner else None,
     } for t in teams]
-    games = sorted((g for g in m.get("games") or [] if g.get("status") != "not_played"), key=lambda g: g.get("position") or 0)
+    # Maps never played aren't maps: "not_played" after a series is won, still "not_started" in a forfeit.
+    unplayed = ("not_played", "not_started") if status == "final" else ("not_played",)
+    games = sorted((g for g in m.get("games") or [] if g.get("status") not in unplayed), key=lambda g: g.get("position") or 0)
     maps = [{"n": g.get("position"), "status": g.get("status"), "winner": str((g.get("winner") or {}).get("id")) if (g.get("winner") or {}).get("id") is not None else None} for g in games]
     running = next((g for g in games if g.get("status") == "running"), None)
     fmt = _format(m)
@@ -289,7 +299,7 @@ class PandascoreEsports:
 
     def _keep(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for m in rows:
-            if m.get("id") and m.get("status") == "finished":
+            if m.get("id") and _status(m) == "final":
                 self._seen[str(m["id"])] = m
         if len(self._seen) > 5000:
             for key in list(self._seen)[:1000]:

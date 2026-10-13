@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
-import { day, hostname, outcome, safeHref, sportKey } from '../format'
+import { day, hostname, outcome, playedOn, safeHref, sportKey } from '../format'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
 
@@ -25,7 +25,7 @@ function GameRow({ r, playerId, teams, teamOnly }: { r: RecentResult; playerId: 
         <span className={`wl ${wl ?? 'D'}`} role={wl ? 'img' : undefined} aria-label={wl ? { W: 'Won', D: 'Drew', L: 'Lost' }[wl] : undefined} style={wl ? undefined : { visibility: 'hidden' }}>{wl}</span>
         <span className="stack" style={{ minWidth: 0, flex: 1 }}>
           <span className="title">{r.title}</span>
-          <span className="small muted">{[r.date && day(r.date), r.competition].filter(Boolean).join(' · ')}</span>
+          <span className="small muted">{[day(playedOn(r)), r.competition].filter(Boolean).join(' · ')}</span>
           {r.player_contribution && <span className="small" style={{ fontWeight: 800 }}>{r.player_contribution}</span>}
         </span>
         <span className={score.length > 14 ? 'game-result long' : 'game-result'}>

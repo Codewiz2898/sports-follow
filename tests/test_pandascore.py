@@ -185,6 +185,28 @@ def test_the_series_result_from_the_teams_side():
     assert other.title == "TenZ: Sentinels 2 – 1 NRG"
 
 
+def test_a_forfeit_is_a_result():
+    # As PandaScore sends every forfeit (all 100 in /matches/past?filter[forfeit]=true on 2026-10-13):
+    # "canceled", with forfeit set, the series awarded (winner_id) and no map played. It was stored as
+    # postponed, "Cancelled", with no result.
+    unplayed = [_game(1, "not_started"), _game(2, "not_started"), _game(3, "not_started")]
+    forfeit = _match("canceled", games=unplayed, forfeit=True, winner_id=SEN, begin_at=None)
+    [f] = ps.parse_fixtures([forfeit])
+    assert (f.status, f.start_utc) == ("final", datetime(2026, 10, 11, 19, 0, tzinfo=timezone.utc))
+    assert (ps.result_label(f, [str(SEN)]), ps.result_label(f, [str(NRG)])) == ("Won by forfeit", "Lost by forfeit")
+    snap = ps.parse_match(forfeit)
+    assert (snap.status, snap.clock_label, snap.state["forfeit"], snap.state["maps"]) == ("final", "Forfeit", True, [])
+    assert [t["winner"] for t in snap.state["teams"]] == [True, False]
+    [final] = moments.detect("Esports", "TenZ", str(TENZ), _seen(_match("not_started")), _seen(forfeit))
+    assert (final.kind, final.title) == ("final", "TenZ: Sentinels win by forfeit")
+    adapter = ps.PandascoreEsports()
+    adapter._keep([forfeit])
+    assert "777" in adapter._seen  # a finished series' snapshot needs no request of its own
+    # Cancelled with the series awarded to nobody is still off.
+    cancelled = ps.parse_match(_match("canceled", games=unplayed, begin_at=None))
+    assert (cancelled.status, cancelled.clock_label) == ("postponed", "Cancelled")
+
+
 def test_a_pros_sport_is_their_game():
     assert {games.family(s) for s in ("Valorant", "CS2", "BGMI", "Free Fire", "League of Legends", "Esports")} == {"esports"}
     assert games.family("Cricket") == "cricket"

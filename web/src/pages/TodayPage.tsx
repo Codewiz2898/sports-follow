@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Card, LatestResult, UpcomingEvent } from '../api'
 import { highlight, LiveScoreboard, NextStrip, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
 import { PlusIcon, SearchIcon } from '../components/Icons'
-import { daysAgo, lineStats, parseDate } from '../format'
+import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
 
@@ -26,7 +27,7 @@ function upNext(cards: Card[]): Next | null {
   for (const c of cards) {
     for (const u of c.upcoming ?? []) {
       const start = parseDate(u.start_utc)
-      if (!start || start.getTime() < now) continue
+      if (!start || !ahead(u.start_utc, now)) continue
       const key = u.event_id != null ? `event:${u.event_id}` : `${u.title.toLowerCase()}|${start.toDateString()}`
       const found = merged.get(key)
       if (found) found.players.push(c.player.name)
@@ -38,7 +39,7 @@ function upNext(cards: Card[]): Next | null {
 
 /** Live first, then whoever plays soonest, then the rest in the order they were followed. */
 function tileOrder(cards: Card[]) {
-  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).map((u) => parseDate(u.start_utc)?.getTime() ?? Infinity).filter((t) => t > Date.now()))
+  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).filter((u) => ahead(u.start_utc)).map((u) => parseDate(u.start_utc)!.getTime()))
   return [...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live) || nextAt(a) - nextAt(b))
 }
 
@@ -50,16 +51,30 @@ function tileOrder(cards: Card[]) {
 function bigMoment(cards: Card[]): { result: LatestResult; sport: string } | null {
   const recent = cards.flatMap((c) => {
     const r = c.recent_results?.[0]
-    const days = daysAgo(r?.date)
-    return r && days != null && days <= 1 ? [{ result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport }] : []
+    // Today or yesterday where the fan is; a game dated tomorrow (an agent's slip) isn't today's moment.
+    const days = daysAgo(playedOn(r))
+    return r && days != null && days >= 0 && days <= 1 ? [{ result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport }] : []
   })
   const rank = (m: { result: LatestResult; sport: string }) => (highlight(m.sport, m.result.player_contribution) ? 2 : lineStats(m.result.player_contribution) ? 1 : 0)
-  const time = (m: { result: LatestResult }) => parseDate(m.result.date)?.getTime() ?? 0
+  const time = (m: { result: LatestResult }) => parseDate(playedOn(m.result))?.getTime() ?? 0
   return recent.reduce<(typeof recent)[number] | null>((best, m) => (!best || rank(m) > rank(best) || (rank(m) === rank(best) && time(m) > time(best)) ? m : best), null)
 }
 
+/** The follow list didn't load: say so, rather than "Pick your players" to a fan who has some. */
+function LoadFailed() {
+  const { reload } = useFollowing()
+  const [trying, setTrying] = useState(false)
+  const retry = () => { setTrying(true); reload().finally(() => setTrying(false)) }
+  return (
+    <div className="notice" role="alert">
+      <span>Couldn't load your players.</span>
+      <button type="button" className="btn link" onClick={retry} disabled={trying}>{trying && <span className="spinner" />}Retry</button>
+    </div>
+  )
+}
+
 export function TodayPage() {
-  const { cards, loaded, progress } = useFollowing()
+  const { cards, loaded, failed, progress } = useFollowing()
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
 
   const header = (
@@ -95,6 +110,7 @@ export function TodayPage() {
   return (
     <>
       {header}
+      {failed && !loaded && <LoadFailed />}
 
       {games.map((group) => (
         <Link key={group[0].player_id} to={`/player/${group[0].player_id}`} className="stack" style={{ gap: 8 }}>

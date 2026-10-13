@@ -84,7 +84,7 @@ def test_registry_rows_as_search_results():
     foord = Athlete(qid="Q5", sport="football", name="Caitlin Foord", aliases=[], teams=["Arsenal"], country="Australia", ids={"transfermarkt": "1"}, sitelinks=20, current=True)
     r = search.from_athlete(foord, "caitl")
     # No ESPN id yet: followed by registry id, and found in ESPN by name and birth date then.
-    assert (r.key, r.system, r.qid, r.detail, r.live_scores) == ("wikidata:Q5", None, "Q5", "Arsenal · Australia", True)
+    assert (r.key, r.system, r.qid, r.detail, r.live_scores) == ("wikidata:Q5:football", None, "Q5", "Arsenal · Australia", True)
 
 
 def test_a_followed_player_and_their_registry_row_are_one_result():
@@ -94,3 +94,40 @@ def test_a_followed_player_and_their_registry_row_are_one_result():
     ranked = search.rank("caitl", [ours], [theirs, other])
     assert [r.key for r in ranked] == ["espn_basketball:4433403", "wikidata:Q10"]
     assert ranked[0].detail == "Indiana Fever · WNBA"
+
+
+def test_a_birth_date_known_to_the_year_compares_by_the_year():
+    # Wikidata has "2004" for Pau Sans, which reads as 1 January 2004; ESPN has 24 November 2004, so
+    # he was never found there and following him spent an AI research (BUG-071).
+    core = [{"p": WD + "Q11940570", "birth": "2004-01-01T00:00:00Z", "birth_precision": "9", "id_transfermarkt": "1061123"}]
+    names = [{"p": WD + "Q11940570", "n": "Pau Sans", "kind": "label", "lang": "en"}]
+    [sans] = registry.build("football", core, names, [], TODAY)
+    assert (sans["birth_date"], sans["birth_precision"]) == (date(2004, 1, 1), registry.YEAR)
+    # Two statements, the year and the day: the day is kept.
+    both = [*core, {**core[0], "birth": "2004-11-24T00:00:00Z", "birth_precision": "11"}]
+    [sans_day] = registry.build("football", both, names, [], TODAY)
+    assert (sans_day["birth_date"], sans_day["birth_precision"]) == (date(2004, 11, 24), registry.DAY)
+    # A century says nothing.
+    [vague] = registry.build("football", [{**core[0], "birth_precision": "7"}], names, [], TODAY)
+    assert vague["birth_date"] is None
+
+    year = date(2004, 1, 1)
+    assert registry.same_day(year, "2004-11-24", registry.YEAR) is True
+    assert registry.same_day(year, "2005-11-24", registry.YEAR) is False
+    assert registry.same_day(year, "2004-11-24", registry.DAY) is False  # a real New Year's birthday
+    assert registry.same_day(year, "2004-11-24") is True  # imported before the precision: 1 January is the year
+    assert registry.same_day(date(2004, 11, 1), "2004-11-24", registry.MONTH) is True
+
+    person = registry.Person("Q11940570", "football", "Pau Sans", [], year, ["Real Zaragoza"], None, {"transfermarkt": "1061123"}, registry.YEAR)
+    assert registry.same_person(person, PlayerRef("espn_soccer", "1", "Pau Sans", ["1"], ["Real Zaragoza"], born="2004-11-24"))
+    # The year alone isn't enough: the name must match too.
+    assert not registry.same_person(person, PlayerRef("espn_soccer", "2", "Pau Torres", ["1"], ["Aston Villa"], born="2004-03-16"))
+    assert not registry.same_person(person, PlayerRef("espn_soccer", "3", "Pau Sans", ["1"], ["Real Zaragoza"], born="2003-11-24"))
+
+
+def test_a_whole_name_is_a_name_or_an_alias_not_the_end_of_one():
+    # "% ronaldo |%" matched " cristiano ronaldo |" too, filling the namesakes with Cristiano, and "silva"
+    # with every da Silva (BUG-074).
+    sql = str(registry.named("ronaldo").compile(compile_kwargs={"literal_binds": True}))
+    assert "' ronaldo |%'" in sql and "'%| ronaldo |%'" in sql
+    assert "'% ronaldo |%'" not in sql

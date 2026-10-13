@@ -50,7 +50,8 @@ services:
 
   api:
     <<: *app
-    command: ["uvicorn", "sports_follow.server:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--workers", "${API_WORKERS:-2}"]
+    # Forwarded headers are trusted from the compose network only (FORWARDED_ALLOW_IPS, in the Dockerfile).
+    command: ["uvicorn", "sports_follow.server:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--workers", "${API_WORKERS:-2}"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
       interval: 15s

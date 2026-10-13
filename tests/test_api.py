@@ -1,0 +1,561 @@
+"""What a client can make the API do, and what it does when two requests race.
+
+AI research is capped per fan, per client address and per hour across all fans, so a new cookie doesn't
+reset it (BUG-011), and a follow that fails gives it back. Only a follower can refresh a player, once a
+minute per player (BUG-012). Writes are committed before the answer goes out (BUG-029). Two fans
+following a new athlete at once land on one player (BUG-030). A pick links a registry athlete only when
+the registry agrees they're the same person (BUG-033). A push goes to a fan's newest few devices
+(BUG-055). Redis, the database and the job queue are fakes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import contextmanager
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql.dml import Delete, Insert
+
+from sports_follow import alerts, bus, db as db_module, notify, pipeline, registry, server, structured
+from sports_follow.adapters import ADAPTERS, PlayerRef
+from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
+
+PUBLIC = "81.2.69.142"
+
+
+def _param(stmt, column: str):
+    """The value a statement binds for a column ("fan_id", "player_id")."""
+    return next((v for k, v in stmt.compile().params.items() if k.startswith(column)), None)
+
+
+class Rows(list):
+    """What execute() returns: the rows, and rowcount for an UPDATE."""
+
+    rowcount = 1
+
+    def first(self):
+        return self[0] if self else None
+
+    def all(self):
+        return list(self)
+
+
+def _athlete_sports(stmt) -> bool:
+    """Is this the lookup of a registry athlete's sports (pipeline._in_other_sport)?"""
+    d = stmt.column_descriptions[0]
+    return d["entity"] is Athlete and d["name"] == "sport"
+
+
+def _holds_qid(stmt) -> bool:
+    """Is this the lookup of who holds a registry qid (pipeline._qid_holder)?"""
+    return [d["name"] for d in getattr(stmt, "column_descriptions", [])] == ["player_id", "sport"]
+
+
+class Redis:
+    """The calls the API makes. Keys don't expire: a test that needs a later minute deletes the key."""
+
+    def __init__(self):
+        self.data: dict[str, object] = {}
+
+    async def get(self, key):
+        return self.data.get(key)
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return None
+        self.data[key] = value
+        return True
+
+    async def incr(self, key):
+        self.data[key] = int(self.data.get(key, 0)) + 1
+        return self.data[key]
+
+    async def decr(self, key):
+        self.data[key] = int(self.data.get(key, 0)) - 1
+        return self.data[key]
+
+    async def expire(self, key, seconds):
+        return True
+
+
+class Queue:
+    def __init__(self):
+        self.jobs: list[tuple] = []
+
+    async def enqueue_job(self, name, *args):
+        self.jobs.append((name, *args))
+
+
+class Db:
+    """One ready player (id 1), one game (id 5), the follows in `api.follows`, the registry qids players
+    hold in `api.qids` and the registry's sports for a qid in `api.sports`. Writes are noted and dropped."""
+
+    def __init__(self, api):
+        self.api = api
+
+    def get(self, model, key):
+        if model is PlayerCard and key == 1:
+            return SimpleNamespace(player_id=1, status="ready", card={})
+        return SimpleNamespace(id=key) if model is Event and key == 5 else None
+
+    def scalar(self, stmt):
+        d = stmt.column_descriptions[0]
+        if d["expr"] is PlayerIdentity.player_id and _param(stmt, "system") == "wikidata":
+            return self.api.qids.get(_param(stmt, "external_id"), (None,))[0]  # who holds a qid, by qid alone
+        if d["entity"] is not Follow:
+            return None
+        follows = (_param(stmt, "fan_id"), _param(stmt, "player_id")) in self.api.follows
+        return (SimpleNamespace(alert_rules={}) if stmt.column_descriptions[0]["expr"] is Follow else 1) if follows else None
+
+    def scalars(self, stmt):
+        return Rows(self.api.sports.get(_param(stmt, "qid"), []) if _athlete_sports(stmt) else [])
+
+    def execute(self, stmt):
+        self.api.statements.append(stmt)
+        held = self.api.qids.get(_param(stmt, "external_id")) if _holds_qid(stmt) else None
+        return Rows([SimpleNamespace(player_id=held[0], sport=held[1])] if held else [])
+
+    def add(self, row):
+        pass
+
+    def flush(self):
+        pass
+
+    def commit(self):
+        self.api.log.append("commit")
+
+    def rollback(self):
+        self.api.log.append("rollback")
+
+
+class Api:
+    """The server with fake Redis, queue and sessions (in_db's and get_db's). `log` notes each commit and
+    when the answer started going out."""
+
+    def __init__(self):
+        self.redis, self.queue = Redis(), Queue()
+        self.follows: set[tuple[str, int]] = set()
+        self.qids: dict[str, tuple[int, str]] = {}  # qid: (player id, Player.sport)
+        self.sports: dict[str, list[str]] = {}  # qid: the registry's sports for them
+        self.log: list[str] = []
+        self.statements: list = []
+
+    @contextmanager
+    def session(self):
+        db = Db(self)
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    def call(self, method: str, path: str, *, fan: str | None = None, address: str = "127.0.0.1", body: dict | None = None) -> httpx.Response:
+        """One request through the whole app, from `address` with `fan`'s cookie."""
+
+        async def recorded(scope, receive, send):
+            async def sending(message):
+                if message["type"] == "http.response.start":
+                    self.log.append("response")
+                await send(message)
+
+            await server.app(scope, receive, sending)
+
+        async def go():
+            transport = httpx.ASGITransport(app=recorded, client=(address, 50000), raise_app_exceptions=False)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.request(method, path, json=body, headers={"Cookie": f"sf_fan={fan}"} if fan else {})
+
+        return asyncio.run(go())
+
+
+@pytest.fixture
+def api(monkeypatch):
+    fake = Api()
+    monkeypatch.setattr(server, "session", fake.session)
+    monkeypatch.setattr(db_module, "session", fake.session)
+    # Any other module's session (pipeline's, registry's) would reach a real database: fail instead.
+    monkeypatch.setattr(db_module, "SessionLocal", lambda: pytest.fail("a test reached a real database session"))
+    monkeypatch.setitem(server.state, "redis", fake.redis)
+    monkeypatch.setitem(server.state, "arq", fake.queue)
+    # A typed name nobody has followed: a new placeholder player, so following it counts as a research.
+    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query))
+    return fake
+
+
+# ---------------------------------------------------------------- AI research (BUG-011)
+
+
+def research(api: Api, address: str, fan: str) -> httpx.Response:
+    """A follow of a name no source knows."""
+    return api.call("POST", "/api/follows", fan=fan, address=address, body={"query": "Brand New Name"})
+
+
+def test_new_cookies_from_one_address_share_its_daily_research(api, monkeypatch):
+    monkeypatch.setattr(server, "RESEARCH_PER_HOUR", 100, raising=False)
+    monkeypatch.setattr(server, "RESEARCH_PER_ADDRESS", 5, raising=False)
+    answers = [research(api, PUBLIC, f"script-{i}") for i in range(6)]
+    assert [r.status_code for r in answers] == [200] * 5 + [429]
+    assert answers[-1].json()["detail"] == "Your network has used today's AI researches. Try again tomorrow."
+    assert research(api, "81.2.69.143", "someone-else").status_code == 200  # another address isn't held up
+    # A fan's own three a day are as before.
+    assert [research(api, "81.2.69.144", "one-fan").status_code for _ in range(4)] == [200, 200, 200, 429]
+
+
+def test_researches_across_all_fans_stop_at_the_hourly_ceiling(api, monkeypatch):
+    monkeypatch.setattr(server, "RESEARCH_PER_HOUR", 4, raising=False)
+    answers = [research(api, f"81.2.69.{10 + i}", f"fan-{i}") for i in range(5)]
+    assert [r.status_code for r in answers] == [200] * 4 + [429]
+    assert "this hour" in answers[-1].json()["detail"]
+    # The refused one counted nowhere: not against its fan, its address or the hour.
+    counts = api.redis.data
+    assert counts[server.player_search.research_hour_key()] == 4
+    assert counts[server.player_search.research_key("fan-4")] == counts[server.player_search.research_address_key("81.2.69.14")] == 0
+
+
+def test_a_follow_that_fails_gives_its_research_back_everywhere_it_was_counted(api, monkeypatch):
+    def broken(db, query):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(pipeline, "resolve_or_create", broken)
+    assert research(api, PUBLIC, "fan").status_code == 500
+    counts = {k: v for k, v in api.redis.data.items() if k.startswith("research")}
+    assert len(counts) == 3 and set(counts.values()) == {0}  # the fan's day, the address's day, the hour
+
+
+def test_a_research_that_fails_to_start_is_given_back(api, monkeypatch):
+    """A registry athlete no source has: the agent builds them, and that counts, unless creating them fails."""
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def nowhere(person):
+        return None
+
+    def broken(person):
+        raise IntegrityError("INSERT INTO player", {}, Exception("duplicate key"))
+
+    monkeypatch.setattr(server, "_resolve", nowhere)
+    monkeypatch.setattr(pipeline, "start_from_registry", broken)
+    assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"qid": "Q99", "sport": "football"}).status_code == 500
+    counts = {k: v for k, v in api.redis.data.items() if k.startswith("research")}
+    assert len(counts) == 3 and set(counts.values()) == {0}
+
+
+def test_limits_count_the_public_address_a_client_comes_from():
+    def address(host):
+        return server.client_address(SimpleNamespace(client=SimpleNamespace(host=host) if host else None))
+
+    assert address(PUBLIC) == PUBLIC
+    assert address("::ffff:81.2.69.142") == PUBLIC
+    # One home or phone has a whole IPv6 /64: counted as one.
+    assert address("2a02:c7c:4c3a:9a00:1:2:3:4") == address("2a02:c7c:4c3a:9a00:ffff::1") == "2a02:c7c:4c3a:9a00::/64"
+    # This machine, the proxy (if its forwarded address isn't trusted) or a test client would put every
+    # fan behind one address: only the fan's and the hourly limits apply to them.
+    assert [address(h) for h in ("127.0.0.1", "::1", "172.18.0.5", "10.0.0.2", "testclient", None)] == [None] * 6
+
+
+# ---------------------------------------------------------------- refresh (BUG-012)
+
+
+def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monkeypatch):
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: object())
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    api.follows |= {("fan-a", 1), ("fan-b", 1)}
+
+    def refresh(fan=None):
+        return api.call("POST", "/api/players/1/refresh", fan=fan)
+
+    assert refresh().status_code == 403  # no cookie
+    assert refresh("stranger").status_code == 403
+    assert refresh("fan-a").json() == {"queued": True}
+    assert refresh("fan-a").status_code == 429
+    assert refresh("fan-b").status_code == 429  # the player was just re-read, for every follower
+    assert api.queue.jobs == [("refresh_structured", 1)]
+    del api.redis.data["refresh:1"]  # a minute later
+    assert refresh("fan-b").json() == {"queued": True}
+    assert len(api.queue.jobs) == 2
+
+
+# ---------------------------------------------------------------- writes (BUG-029)
+
+
+SUBSCRIPTION = {"endpoint": "https://fcm.googleapis.com/fcm/send/newest", "keys": {"p256dh": "k", "auth": "a"}}
+
+
+@pytest.mark.parametrize("method, path, body", [
+    ("PUT", "/api/follows/1/alerts", {"level": "off"}),
+    ("DELETE", "/api/follows/1", None),
+    ("PUT", "/api/me/mutes/5", None),
+    ("DELETE", "/api/me/mutes/5", None),
+    ("POST", "/api/push/subscriptions", {"subscription": SUBSCRIPTION}),
+    ("DELETE", "/api/push/subscriptions", {"endpoint": SUBSCRIPTION["endpoint"]}),
+    ("POST", "/api/notifications/3/opened", None),
+])
+def test_a_write_is_committed_before_the_fan_hears_ok(api, method, path, body):
+    """get_db's own commit runs after the response is sent: a read straight after saw the old row, and an
+    unfollow then follow could lose the follow."""
+    api.follows.add(("fan", 1))
+    assert api.call(method, path, fan="fan", body=body).status_code == 200
+    assert "commit" in api.log and api.log.index("commit") < api.log.index("response")
+
+
+# ---------------------------------------------------------------- push devices (BUG-055)
+
+
+class PlanDb:
+    """What _plan reads: two fans following player 1, their devices as ordered (newest first), no earlier pushes."""
+
+    def __init__(self, devices):
+        self.devices, self.rows = devices, []
+
+    def execute(self, stmt):
+        return [("big", 1, {}), ("small", 1, {})]
+
+    def scalars(self, stmt):
+        return self.devices if stmt.column_descriptions[0]["entity"] is PushSubscription else []
+
+    def add(self, row):
+        self.rows.append(row)
+
+    def flush(self):
+        for i, row in enumerate(self.rows, 1):
+            row.id = i
+
+
+def test_a_push_goes_to_a_fans_newest_devices_however_many_are_stored():
+    def device(i, fan):
+        return SimpleNamespace(id=i, fan_id=fan, endpoint=f"https://fcm.googleapis.com/fcm/send/{i}", p256dh="k", auth="a", timezone="UTC", quiet_start=None, quiet_end=None)
+
+    devices = sorted([device(i, "big") for i in range(1, 61)] + [device(61, "small")], key=lambda d: -d.id)
+    now = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
+    db = PlanDb(devices)
+    jobs = notify._plan(db, [alerts.Item(1, 1, None, "news", "key", 75, "Injury news", "x", "/player/1", now)], now)
+    fan_of = {d.id: d.fan_id for d in devices}
+    sent: dict[str, list[int]] = {}
+    for _, (device_id, *_), *_ in jobs:
+        sent.setdefault(fan_of[device_id], []).append(device_id)
+    assert sent == {"big": list(range(60, 60 - notify.MAX_DEVICES, -1)), "small": [61]}
+    assert sorted((n.fan_id, n.devices) for n in db.rows if isinstance(n, Notification)) == [("big", notify.MAX_DEVICES), ("small", 1)]
+
+
+def test_subscribing_drops_the_fans_oldest_devices_beyond_the_cap(api):
+    assert api.call("POST", "/api/push/subscriptions", fan="fan-a", body={"subscription": SUBSCRIPTION}).status_code == 200
+    dialect = postgresql.dialect()
+    trims = [str(s.compile(dialect=dialect, compile_kwargs={"literal_binds": True})) for s in api.statements if isinstance(s, Delete) and s.table.name == "push_subscription"]
+    assert len(trims) == 1
+    # Only this fan's devices, never the one just subscribed; the newest MAX_DEVICES - 1 others stay.
+    for part in ("push_subscription.fan_id = 'fan-a'", f"push_subscription.endpoint != '{SUBSCRIPTION['endpoint']}'", "NOT IN (SELECT push_subscription.id",
+                 "ORDER BY push_subscription.id DESC", f"LIMIT {notify.MAX_DEVICES - 1}"):
+        assert part in trims[0]
+
+
+# ---------------------------------------------------------------- following a new athlete at once (BUG-030)
+
+
+OTHER = 41  # the player the other request created
+
+
+class Race:
+    """Another request creates the same athlete while this one does, and commits first: this one's insert
+    fails on the unique constraint (`conflict`: the player's slug or the athlete's identity), as in
+    Postgres, and anything after sees the other's rows."""
+
+    def __init__(self, conflict: type):
+        self.conflict, self.attempts, self.committed = conflict, 0, []
+
+    @contextmanager
+    def session(self):
+        self.attempts += 1
+        db = RaceDb(self, other_visible=self.attempts > 1)
+        yield db
+        self.committed += db.added
+
+    def record(self, player_id, ref, confidence=1.0):
+        # Where the old code met the identity race: the other request's identity insert won.
+        raise IntegrityError("INSERT INTO player_identity", {}, Exception("duplicate key value violates unique constraint"))
+
+
+class RaceDb:
+    def __init__(self, race: Race, other_visible: bool):
+        self.race, self.other_visible, self.added = race, other_visible, []
+
+    def scalar(self, stmt):
+        if isinstance(stmt, Insert):
+            return None  # ON CONFLICT DO NOTHING: the other request has the slug
+        entity = stmt.column_descriptions[0]["entity"]
+        if entity is PlayerIdentity and self.other_visible:
+            return SimpleNamespace(player_id=OTHER)
+        if entity is Player and stmt.column_descriptions[0]["expr"] is Player and self.other_visible:
+            return SimpleNamespace(id=OTHER)  # the typed name's alias, now the other's
+        return None
+
+    def execute(self, stmt):
+        held = _holds_qid(stmt) and self.other_visible
+        return Rows([SimpleNamespace(player_id=OTHER, sport="Basketball")] if held else [])
+
+    def add(self, row):
+        self.added.append(row)
+
+    def flush(self):
+        if not self.other_visible and any(isinstance(r, self.race.conflict) for r in self.added):
+            raise IntegrityError("INSERT", {}, Exception(f"duplicate key value violates unique constraint on {self.race.conflict.__tablename__}"))
+        for i, row in enumerate(self.added, 100):
+            row.id = getattr(row, "id", None) or i
+
+    def get(self, model, key):
+        return None
+
+
+@pytest.mark.parametrize("conflict", [Player, PlayerIdentity])
+def test_two_fans_picking_a_new_athlete_at_once_get_the_same_player(monkeypatch, conflict):
+    race = Race(conflict)
+    monkeypatch.setattr(pipeline, "session", race.session)
+    monkeypatch.setattr(structured, "record", race.record)
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: pytest.fail("the other request publishes the card"))
+    ref = PlayerRef("espn_basketball", "5104157", "Victor Wembanyama", ["24"], ["San Antonio Spurs"], league="nba")
+    assert pipeline.start_from_pick(ADAPTERS["espn_basketball"], ref) == (OTHER, False)
+    assert race.committed == []  # no second player, nothing left half made
+
+
+@pytest.mark.parametrize("conflict", [Player, PlayerIdentity])
+def test_two_fans_following_a_new_registry_athlete_at_once_get_the_same_player(monkeypatch, conflict):
+    race = Race(conflict)
+    monkeypatch.setattr(pipeline, "session", race.session)
+    monkeypatch.setattr(registry, "link", lambda db, player_id, qid: db.add(PlayerIdentity(player_id=player_id, system="wikidata", external_id=qid)) or db.flush())
+    person = registry.Person("Q72941595", "basketball", "Victor Wembanyama", [], date(2004, 1, 4), [], "nba", {})
+    assert pipeline.start_from_registry(person) == (OTHER, False)
+    assert race.committed == []
+
+
+def test_two_fans_typing_a_new_name_at_once_get_the_same_player():
+    db = RaceDb(Race(Player), other_visible=False)
+    looked = []
+
+    def scalar(stmt):
+        looked.append(stmt)
+        db.other_visible = len(looked) > 2  # the alias, the insert (which waits for the other), then the alias again
+        return RaceDb.scalar(db, stmt)
+
+    db.scalar = scalar
+    assert pipeline.resolve_or_create(db, "Brand New Name").id == OTHER
+    assert db.added == []
+
+
+# ---------------------------------------------------------------- the registry athlete sent with a pick (BUG-033)
+
+
+SALAH = registry.Person("Q1354960", "football", "Mohamed Salah", [], date(1992, 6, 15), ["Liverpool"], None, {"espn_soccer": "173896"})
+
+
+@pytest.mark.parametrize("person, pick, linked", [
+    # amster, sent with Salah's qid: every fan picking Salah would follow amster from then on.
+    (SALAH, PlayerRef("pandascore_esports", "31229", "amster", ["1"], ["6666"], game="CS2"), False),
+    # The pair the app sends: the registry's own id for the athlete.
+    (SALAH, PlayerRef("espn_soccer", "173896", "Mohamed Salah", ["364"], ["Liverpool"]), True),
+    # The registry has another id in this source: someone else.
+    (SALAH, PlayerRef("espn_soccer", "999", "Mohamed Salah", ["1"], ["Al Ahly"]), False),
+    # No id in this source: the birth date decides.
+    (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "173896", "Mohamed Salah", ["364"], ["Liverpool"], born="1992-06-15"), True),
+    (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "555", "Mohamed Salah", ["1"], ["Al Ahly"], born="1995-03-02"), False),
+])
+def test_a_pick_links_the_registry_athlete_only_when_the_registry_agrees(api, monkeypatch, person, pick, linked):
+    links = []
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+    monkeypatch.setattr(ADAPTERS[pick.system], "player", lambda athlete_id, league=None: pick)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, False))
+    monkeypatch.setattr(registry, "link", lambda db, player_id, qid: links.append((player_id, qid)))
+    body = {"system": pick.system, "athlete_id": pick.athlete_id, "qid": person.qid, "sport": "football"}
+    assert api.call("POST", "/api/follows", fan="fan", body=body).json()["player_id"] == 5
+    assert links == ([(5, person.qid)] if linked else [])
+
+
+# ---------------------------------------------------------------- someone in two sports (BUG-069's follow-up)
+
+
+CHAHAL = {sport: registry.Person("Q4991413", sport, "Yuzvendra Chahal", [], date(1990, 7, 23), [], None, {}) for sport in ("cricket", "chess")}
+
+
+@pytest.fixture
+def two_sports(api, monkeypatch):
+    """The cricketer is followed already (player 3 holds the qid); the chess row is a different athlete row."""
+    api.qids["Q4991413"] = (3, "Cricket")
+    api.sports["Q4991413"] = ["cricket", "chess"]
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: CHAHAL.get(str(body.get("sport") or "")) or CHAHAL["cricket"])
+    chess = PlayerRef("lichess_chess", "chahal", "Yuzvendra Chahal", ["chahal"], [])
+
+    async def resolve(person):
+        return (ADAPTERS["lichess_chess"], chess) if person.sport == "chess" else None
+
+    monkeypatch.setattr(server, "_resolve", resolve)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (9, True))
+    monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: {"system": system, "athlete_id": athlete_id, "name": "Yuzvendra Chahal"})
+    return api
+
+
+def test_picking_the_other_sport_of_a_two_sport_athlete_follows_that_sports_player(two_sports):
+    def follow(body):
+        return two_sports.call("POST", "/api/follows", fan="fan", body=body).json()["player_id"]
+
+    assert follow({"qid": "Q4991413", "sport": "chess"}) == 9
+    assert follow({"qid": "Q4991413", "sport": "cricket"}) == 3
+    assert follow({"qid": "Q4991413"}) == 3  # no sport: whoever holds the qid, as before
+    # A player whose page renamed the sport ("Soccer", "T20 cricket") is still theirs: only a sport the
+    # registry has for them is another sport.
+    two_sports.qids["Q4991413"] = (3, "T20 cricket")
+    assert follow({"qid": "Q4991413", "sport": "cricket"}) == 3
+
+
+def test_the_preview_of_the_other_sport_isnt_the_followed_player(two_sports):
+    def preview(sport=None):
+        return two_sports.call("GET", "/api/athletes/wikidata/Q4991413" + (f"?sport={sport}" if sport else "")).json()
+
+    assert preview("chess")["system"] == "lichess_chess"
+    assert preview("cricket") == preview() == {"player_id": 3}
+
+
+class TwoSportDb:
+    """The cricketer's player holds the qid, who is in the registry for cricket and chess; `made` lists
+    players made for the qid since, as (id, sport)."""
+
+    def __init__(self, holder_sport: str, made: list[tuple[int, str]]):
+        self.holder_sport, self.made, self.added = holder_sport, made, []
+
+    def execute(self, stmt):
+        if _holds_qid(stmt):
+            return Rows([SimpleNamespace(player_id=3, sport=self.holder_sport)])
+        return Rows(self.made if [d["name"] for d in getattr(stmt, "column_descriptions", [])] == ["id", "sport"] else [])
+
+    def scalar(self, stmt):
+        return None
+
+    def scalars(self, stmt):
+        return Rows(["cricket", "chess"] if _athlete_sports(stmt) else [])
+
+    def add(self, row):
+        self.added.append(row)
+
+    def flush(self):
+        for row in self.added:
+            row.id = getattr(row, "id", None) or 10
+
+
+@pytest.mark.parametrize("holder_sport, made, expected", [
+    ("Chess", [], (3, False)),  # the qid's player is the chess player
+    ("Cricket", [], (10, True)),  # a new chess player, without the qid the cricketer holds
+    ("Cricket", [(10, "Chess")], (10, False)),  # and found again by the next fan
+])
+def test_a_registry_athlete_in_a_second_sport_gets_their_own_player(monkeypatch, holder_sport, made, expected):
+    db = TwoSportDb(holder_sport, made)
+
+    @contextmanager
+    def session():
+        yield db
+
+    monkeypatch.setattr(pipeline, "session", session)
+    assert pipeline.start_from_registry(CHAHAL["chess"]) == expected
+    assert not any(isinstance(r, PlayerIdentity) for r in db.added)  # one player per qid: the cricketer keeps it

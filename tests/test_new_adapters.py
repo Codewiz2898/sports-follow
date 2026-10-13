@@ -181,3 +181,18 @@ def test_tournament_pgn_gives_every_round_in_one_read():
     assert len(final) == 8
     assert lichess_chess.match_score(final, CARLSEN) == (6.0, 8)  # same as the round JSON says
     assert final[0]["players"][0] == {"name": "Carlsen, Magnus", "fideId": 1503014, "rating": 2823, "title": "GM"}
+
+
+def test_tournament_pgn_reads_tags_with_escaped_quotes():
+    # Campeonato de Sevilla 2026 (recorded 2026-10-13): its name ends in an escaped quote
+    # (Guadaíra\"), and every game of the broadcast lost its tags, so no player was found in it.
+    with gzip.open(FIXTURES / "lichess/tour-sevilla-round1.pgn.gz", "rt") as f:
+        rounds = lichess_chess.parse_pgn_rounds(f.read())
+    games = rounds["6gyT8UBN"]
+    assert len(games) == 6 and all(g["players"][0]["fideId"] and g["status"] != "*" for g in games)
+    [game] = lichess_chess.games_of({"games": games}, "24543241")
+    assert game["players"][0] == {"name": "Garcia Jimenez, Santiago", "fideId": 24543241, "rating": 2278, "title": None}
+    assert game["status"] == "1-0"
+    # A value is unescaped: \" is a quote, \\ a backslash.
+    pgn = '[White "O\\"Neill, Pat \\\\ IM"]\n[Black "B"]\n[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/ijklmnop"]\n'
+    assert lichess_chess.parse_pgn_rounds(pgn)["abcdefgh"][0]["players"][0]["name"] == 'O"Neill, Pat \\ IM'

@@ -431,21 +431,37 @@ def _football(who: str, athlete_id: str, before: dict[str, Any] | None, now: See
         for n in range(was + 1, got + 1):
             if kind == "goal":
                 found.append(_goal(who, athlete_id, n, now, where))
+            elif kind == "assist":
+                found.append(Found(kind, level, title.format(who=who) + (f" ({n})" if n > 1 else ""), where, _play_key(kind, n, _play(now, athlete_id, n, at=1))))
             else:
-                found.append(Found(kind, level, title.format(who=who) + (f" ({n})" if n > 1 and kind == "assist" else ""), where, f"{kind}{n}"))
+                found.append(Found(kind, level, title.format(who=who), where, f"{kind}{n}"))
     if (before or {}).get("headline") == "On the bench" and (now.line or {}).get("headline") not in (None, "On the bench"):
         found.append(Found("on", "minor", f"{who} comes on", where))
     return found
+
+
+def _play(now: Seen, athlete_id: str, n: int, at: int = 0) -> dict[str, Any] | None:
+    """The nth goal the player scored (at=0) or set up (at=1) in the source's events, or None when the
+    events don't have it. Their own goals are neither."""
+    plays = [e for e in reversed(now.events) if e.get("kind") == "GOAL" and not e.get("own_goal") and (e.get("athlete_ids") or [])[at:at + 1] == [athlete_id]]
+    return plays[n - 1] if len(plays) >= n else None
+
+
+def _play_key(kind: str, n: int, play: dict[str, Any] | None) -> str:
+    """A goal's or assist's key detail: the source's play (its id, else its minute), not the count. A
+    goal VAR rules out takes the count down, and the next real one would have the same count again.
+    The count ("goal2") only when the events don't have the play yet."""
+    ref = play and (play.get("id") or play.get("clock"))
+    return f"{kind}@{ref}" if ref else f"{kind}{n}"
 
 
 def _goal(who: str, athlete_id: str, n: int, now: Seen, where: str) -> Found:
     """The player's nth goal, told with what it did when the source's events say: an equaliser, a goal
     that puts their side ahead (both "late" from LATE_MINUTE), a hat-trick; with its minute and assist."""
     title, priority = f"Goal: {who}" + (f" ({n})" if n > 1 else ""), 85
-    goals = [e for e in reversed(now.events) if e.get("kind") == "GOAL" and not e.get("own_goal") and (e.get("athlete_ids") or [None])[0] == athlete_id]
-    if len(goals) < n:
-        return Found("goal", "key", title, where, f"goal{n}", priority)
-    goal = goals[n - 1]
+    goal = _play(now, athlete_id, n)
+    if goal is None:
+        return Found("goal", "key", title, where, _play_key("goal", n, None), priority)
     minute = goal.get("clock") or now.clock
     body = " · ".join(x for x in (now.score, minute, f"assist {goal['assist']}" if goal.get("assist") else None) if x)
     if n == 3:
@@ -464,7 +480,7 @@ def _goal(who: str, athlete_id: str, n: int, now: Seen, where: str) -> Found:
             title = f"{'Late goal' if late else 'Goal'}: {who} puts {mine['name']} ahead"
         if lead in (0, 1):
             priority = 95 if late else 90
-    return Found("goal", "key", title, body, f"goal{n}", priority)
+    return Found("goal", "key", title, body, _play_key("goal", n, goal), priority)
 
 
 def _cricket(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:

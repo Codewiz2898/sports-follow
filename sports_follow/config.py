@@ -23,6 +23,12 @@ POLL_SESSION = int(os.environ.get("SPORTS_FOLLOW_POLL_SESSION", 10 * 60))
 
 FAN_COOKIE = "sf_fan"
 
+# AI researches beyond each fan's daily three (search.RESEARCH_PER_DAY): at most this many an hour across
+# all fans, well under the gateway's daily budget (about 40 builds), and this many a UTC day from one
+# client address, so a script that drops its cookie can't spend the day's research for everyone.
+RESEARCH_PER_HOUR = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_HOUR", 10))
+RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 10))
+
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters
 # read unofficial endpoints whose terms forbid automated and commercial use.
