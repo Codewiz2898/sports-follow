@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import games
 from .adapters.espn_cricket import batting_bowling
 
 Line = dict[str, Any]  # {"headline": "38 PTS · 16 REB · 2 AST", "stats": [{"label", "value"}]}
@@ -17,14 +18,16 @@ def summarize(sport: str, results: list[tuple[dict[str, Any], Line | None]], tea
     """(stats, note) over these results (newest first), each with the player's line if it's stored."""
     if not results:
         return [], ""
-    sport = (sport or "").lower()
+    sport = games.family(sport)
     lines = [line for _, line in results if line]
     stats = [s for s in [_record(sport, [r for r, _ in results], teams)] if s]
     per_sport = {"football": _football, "soccer": _football, "basketball": _basketball, "cricket": _cricket, "tennis": _tennis, "chess": _chess, "esports": _esports}.get(sport)
     if per_sport:
         stats += per_sport([r for r, _ in results], lines)
     n = len(results)
-    one, many = ("match", "matches") if sport in ("tennis", "cricket") else ("series", "series") if sport == "esports" else ("game", "games")
+    one, many = ("match", "matches") if sport in ("tennis", "cricket") else ("game", "games")
+    if sport == "esports":
+        one, many = ("lobby", "lobbies") if any(_placed(r.get("result")) for r, _ in results) else ("series", "series")
     note = f"Last {n} {one if n == 1 else many}"
     loading = sum(1 for r, _ in results if r.get("scorecard") is False)
     if loading:
@@ -143,8 +146,23 @@ def _chess(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str
     return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
 
 
+def _placed(result: str | None) -> tuple[int, int, float] | None:
+    """ "3rd of 16 · 87 pts" (a battle royale lobby) -> (3, 16, 87.0)."""
+    match = re.match(r"(\d+)(?:st|nd|rd|th) of (\d+) · ([\d.]+) pts", result or "")
+    return (int(match.group(1)), int(match.group(2)), float(match.group(3))) if match else None
+
+
 def _esports(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
-    """Maps won and lost, from the series results ("Won 2–1"); a forfeit has no maps."""
+    """Battle royale: placings and points from the lobby results ("3rd of 16 · 87 pts"). Team series:
+    maps won and lost, from the results ("Won 2–1"); a forfeit has no maps."""
+    placed = [p for p in (_placed(r.get("result")) for r in items) if p]
+    if placed:
+        n = len(placed)
+        return [
+            {"label": "Avg place", "value": f"{sum(p for p, _, _ in placed) / n:.1f}"},
+            {"label": "Top 3", "value": str(sum(1 for p, _, _ in placed if p <= 3))},
+            {"label": "Avg points", "value": f"{sum(pts for _, _, pts in placed) / n:.0f}"},
+        ]
     won = lost = 0
     for r in items:
         match = re.match(r"(?:Won|Lost|Drew) (\d+)–(\d+)$", r.get("result") or "")

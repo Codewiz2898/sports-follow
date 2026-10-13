@@ -25,7 +25,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
                                                                               ├─▶ Lichess API (chess)
-                                                                              └─▶ PandaScore API (esports)
+                                                                              ├─▶ PandaScore API (esports: team titles)
+                                                                              └─▶ LiquipediaDB API (esports: battle royale)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
@@ -39,8 +40,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   24,247, cricket 19,745, tennis 10,781, basketball 9,612. First import:
   `.venv/bin/python -m sports_follow.registry` (about 90 minutes, one query at a time as the Wikidata
   query service asks; football is most of it); `--new` reads only people not imported yet. Esports
-  pros come from PandaScore instead (Wikidata knows only a few thousand): the active players of
-  `SPORTS_FOLLOW_ESPORTS_GAMES`, by handle and full name, with a PandaScore token
+  pros come from their sources instead (Wikidata knows only a few thousand): the active players of
+  `SPORTS_FOLLOW_ESPORTS_GAMES` from PandaScore and of `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` from
+  Liquipedia, by handle and real name, with each source's key
   (`python -m sports_follow.registry esports`, part of the weekly run).
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
@@ -72,6 +74,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
   | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
   | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data) | team's series and maps won |
+  | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
 
   Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
@@ -175,6 +178,10 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series; the history lane and the registry import pause below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | `valorant,cs-go,league-of-legends,dota-2` | the titles whose pros the registry imports (PandaScore slugs; `cs-go` is CS2) |
+| `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |
+| `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes and never overspent (a paid plan raises it) |
+| `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fixtures; the history lane and the registry import pause below it |
+| `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` | `pubgmobile,freefire` | the battle royale wikis whose active players the registry imports |
 | `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
 
 ## Deploy

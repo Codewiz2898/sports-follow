@@ -98,7 +98,7 @@ export function TodayPage() {
 
       {games.map((group) => (
         <Link key={group[0].player_id} to={`/player/${group[0].player_id}`} className="stack" style={{ gap: 8 }}>
-          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} compact />
+          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} compact />
           {group.length > 1 && <span className="tiny muted" style={{ fontWeight: 700 }}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</span>}
         </Link>
       ))}

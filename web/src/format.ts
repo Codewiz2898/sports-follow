@@ -91,12 +91,13 @@ export function shortWhen(value?: string | null, now = Date.now()): string {
 
 export type SportKey = 'football' | 'cricket' | 'basketball' | 'tennis' | 'chess' | 'esports' | 'other'
 
-const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|league of legends|dota|mobile legends|overwatch|rainbow six|rocket league|call of duty|bgmi|pubg|free fire/
+// An esports pro's sport is their game ("Valorant", "BGMI"); every game wears the esports colour.
+const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire/
 
 /** Which colour a sport wears (styles.css, [data-sport]). Other codes of football, table tennis and padel wear none. */
 export function sportKey(sport?: string | null): SportKey {
   const s = (sport ?? '').toLowerCase()
-  if (ESPORTS.test(s)) return 'esports'  // the agent may name the game ("Valorant") rather than the sport
+  if (ESPORTS.test(s)) return 'esports'
   if (/american|australian|gaelic|canadian|rugby|rules/.test(s)) return 'other'
   if (s.includes('soccer') || s.includes('football')) return 'football'
   if (/table tennis|padel|beach tennis/.test(s)) return 'other'
@@ -145,8 +146,10 @@ export function lineStats(text?: string | null): { value: string; label: string 
   return parts.map((m) => ({ value: m![1], label: m![2] }))
 }
 
-/** Models report the sport in whatever case they like ("cricket", "CRICKET"); show it one way. */
+/** Models report the sport in whatever case they like ("cricket", "CRICKET"); show it one way. A game's
+ * own name stays as written ("CS2", "League of Legends", "PUBG Mobile"). */
 export function sportName(sport?: string | null): string {
   if (!sport) return ''
+  if (sportKey(sport) === 'esports' && /[A-Z]/.test(sport) && sport.toLowerCase() !== 'esports') return sport
   return sport.replace(/\S+/g, (w) => (w === w.toUpperCase() && w.length <= 4 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
 }

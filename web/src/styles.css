@@ -271,6 +271,12 @@ p { margin: 0; }
 .map .num { font-size: 15px; color: var(--text); }
 .map.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 
+/* Battle royale: the lobby's standings, the followed player's team marked. */
+.linescore.lobby td, .linescore.lobby th { text-align: right; }
+.linescore.lobby td:first-child, .linescore.lobby th:first-child, .linescore.lobby td.who, .linescore.lobby th:nth-child(2) { text-align: left; }
+.linescore.lobby td.who { width: 100%; color: var(--text); overflow-wrap: anywhere; }
+.linescore.lobby tr.ours td { color: var(--sport-on-ink); font-weight: 800; }
+
 /* Chess: a board drawn from the FEN. */
 .chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
 .chessboard.sm { width: min(100%, 176px); }

@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, moments, notify, registry
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport, pandascore_esports
+from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport, liquipedia_esports, pandascore_esports
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -34,7 +34,7 @@ OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_not
 BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore", "liquipedia_esports": "Liquipedia"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
@@ -144,6 +144,7 @@ def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
     only one athlete has) it is recorded as given. Without one, a player already bound or holding an
     identity is re-read by that id, and only a player with neither is looked up by name.
     """
+    given = ref is not None
     with session() as db:
         player = db.get(Player, player_id)
         if player is None:
@@ -186,6 +187,11 @@ def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
     # Picked by id, or the name matched and a team the agent also named (or, in individual sports, the
     # same full name) makes it certain.
     same_name = sorted(espn.fold(ref.name).split()) == sorted(espn.fold(name).split())
+    if getattr(adapter, "games", None) and not given and not pinned and person is None and not _teams_overlap(ref.team_names, teams):
+        # Esports handles repeat across games ("Jonathan" plays BGMI, another Jonathan LoL): a name alone
+        # never binds a player to a source covering other games; their team must match too.
+        log.info("bind %s: %s's %r plays for %s, not %s; not binding", player_id, adapter.system, ref.name, ", ".join(ref.team_names) or "no team", ", ".join(teams) or "a team we know")
+        return False
     confidence = 1.0 if pinned or _teams_overlap(ref.team_names, teams) or (not teams and same_name) else 0.8
     known = {espn.team_key(t) for t in ref.team_names}
     ref.other_teams = [t for t in teams if t and espn.team_key(t) not in known]
@@ -241,10 +247,11 @@ def describe(player_id: int) -> str | None:
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
         league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
-        if row.adapter == "pandascore_esports" and pandascore_esports.game_name(loc.get("league")):
-            league = f" ({pandascore_esports.game_name(loc['league'])} pro, known by this handle)"
+        game = pandascore_esports.game_name(loc.get("league")) or liquipedia_esports.game_name(loc.get("league"))
+        if row.adapter in ("pandascore_esports", "liquipedia_esports") and game:
+            league = f" ({game} pro, known by this handle)"
         page = f" Their page on {SOURCE_NAMES.get(row.adapter, row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
-        return f"{loc.get('name') or player.name}, {player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
+        return f"{loc.get('name') or player.name}, {player.sport if league else player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
 
 # ---------------------------------------------------------------- fixtures, results, stats
@@ -265,7 +272,7 @@ def refresh(player_id: int) -> None:
             row = binding(db, player_id)
             preferred = for_sport(db.scalar(select(Player.sport).where(Player.id == player_id)))
             current = row.adapter if row else None
-        if current is None or (preferred and preferred.system != current):
+        if rebind(current, preferred):
             rebound = bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) and bind(player_id)
             if not rebound and current is None:
                 return
@@ -277,6 +284,23 @@ def refresh(player_id: int) -> None:
         log.exception("refresh %s crashed", player_id)
     finally:
         bus.release(lock)
+
+
+def sport_name(adapter: Adapter, ref: PlayerRef) -> str:
+    """A player's sport as Sports Follow names it: their game for an esports pro ("CS2", "BGMI"), else
+    the sport their source covers ("Football")."""
+    game_of = getattr(adapter, "game_of", None)
+    return (game_of(ref) if game_of else None) or adapter.sports[0].title()
+
+
+def rebind(current: str | None, preferred: Adapter | None) -> bool:
+    """Whether a player is looked up again: they have no source yet, or their sport's preferred source is
+    another one (ESPN football once Sportmonks runs). A source covering only some games of a sport
+    (esports: PandaScore's team titles, Liquipedia's battle royale) sits beside the others, so its
+    players stay."""
+    if current is None:
+        return True
+    return bool(preferred and preferred.system != current and not getattr(ADAPTERS.get(current), "games", None))
 
 
 def _refresh(player_id: int) -> None:
@@ -314,6 +338,9 @@ def _refresh(player_id: int) -> None:
         card_row = db.get(PlayerCard, player_id)
         if player is None or card_row is None:
             return
+        game = sport_name(adapter, ref) if getattr(adapter, "games", None) else None
+        if game and player.sport != game:
+            player.sport = game  # an esports pro's sport is their game (bound as "Esports", or changed games)
         events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
         for f, snap in recent:
             if snap:
@@ -329,6 +356,7 @@ def _refresh(player_id: int) -> None:
         source = SOURCE_NAMES.get(adapter.system, adapter.system)
         stamp = now.isoformat()
         card = copy.deepcopy(card_row.card)
+        card["player"] = {**card.get("player", {}), "sport": player.sport}
         card["upcoming"] = [_upcoming_item(f, events[f.source_id], ref) for f in ahead]
         card["recent_results"] = [result_item(adapter, f, snap, events[f.source_id], ref) for f, snap in reversed(recent)]
         if stats:
@@ -607,7 +635,8 @@ def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> 
         if changed or event_id not in moved:
             moved[event_id] = now
         busy = busy or (status == "live" and now - moved[event_id] <= 60)
-    return adapter.live_cadence if busy else 60
+    # A source read every few minutes (Liquipedia) isn't read more often while nothing moves.
+    return adapter.live_cadence if busy else max(60, adapter.live_cadence)
 
 
 def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:

@@ -6,10 +6,12 @@ however many polls see the same fifty, fans hear about it once. Its level decide
 
     key    goals, assists, red cards, fifties and hundreds, 3+ wickets, out, 30/40/50 points,
            triple-doubles, chess games starting, a chess player winning, in trouble or turning a
-           game around, the line-up (starting or on the bench), esports series starting, every
-           result, upsets, injuries, transfers
-    minor  coming on, yellow cards, 20 points, double-doubles, each set, each esports map, a chess
-           player better, worse or level again, milestones in the news
+           game around, the line-up (starting or on the bench), esports series and lobbies
+           starting, a chicken dinner (Booyah), going top of a lobby, every result, upsets,
+           injuries, transfers
+    minor  coming on, yellow cards, 20 points, double-doubles, each set, each esports map, each
+           battle royale game's placement, a chess player better, worse or level again, milestones
+           in the news
 
 Fans choose per player (follow.alert_rules["level"]): everything, key moments (the default),
 results only, or off.
@@ -26,6 +28,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import games
+
 LEVELS = ("everything", "key", "results", "off")
 DEFAULT_LEVEL = "key"
 NEWS_KINDS = {"injury": "key", "transfer": "key", "retirement": "key", "milestone": "minor"}
@@ -35,7 +39,7 @@ ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
 PRIORITY = {
     "final": 80, "start": 40, "lineup": 50, "goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30,
     "fifty": 70, "hundred": 90, "out": 60, "wickets": 70, "points": 30, "double": 30, "triple": 85,
-    "set": 30, "map": 30, "upset": 90, "swing": 30, "news": 60,
+    "set": 30, "map": 30, "game": 30, "dinner": 90, "lead": 75, "upset": 90, "swing": 30, "news": 60,
 }
 LATE_MINUTE = 80  # a goal from here on that levels the game or puts a side ahead is "late"
 
@@ -126,14 +130,15 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
     followed mid-innings): only a result is reported from it, so nobody hears "reaches 50" for runs
     scored an hour ago. A line-up is still news on a first look, as long as the game hasn't started.
     """
-    sport = (sport or "").lower()
+    sport = games.family(sport)
     found: list[Found] = []
     was = before.status if before else None
     head = (now.line or {}).get("headline") or ""
     in_game = now.line is not None and head != "On the bench" and not head.startswith("Did not play")
 
     found += _lineup(sport, who, now)
-    if before is not None and now.status == "live" and was in ("scheduled", "armed", "postponed") and (in_game or sport in ("tennis", "chess", "esports")):
+    # Esports without line-ups (a series, a lobby nobody listed players for) starts for the whole team.
+    if before is not None and now.status == "live" and was in ("scheduled", "armed", "postponed") and (in_game or sport in ("tennis", "chess") or (sport == "esports" and not now.lineups)):
         found.append(_start(sport, who, now))
     if now.status == "final" and was != "final" and not _left_out(sport, now):
         found.append(_final(sport, who, now))
@@ -146,7 +151,7 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
         elif sport == "chess":
             found += _chess(who, before, now)
         elif sport == "esports":
-            found += _maps(who, before, now)
+            found += _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now)
     for f in found:
         f.priority = f.priority or PRIORITY.get(f.kind, 50)
     return found
@@ -180,7 +185,7 @@ def _left_out(sport: str, now: Seen) -> bool:
     """Known not to be in the game: the line-ups are out and the player isn't in them (a national
     team game they weren't called up for). The card says the same ("Not in the matchday squad").
     In cricket no line only means they haven't batted or bowled, so it doesn't count."""
-    return sport in ("football", "soccer", "basketball") and now.lineups and now.line is None
+    return (sport in ("football", "soccer", "basketball") or (sport == "esports" and _lobby(now))) and now.lineups and now.line is None
 
 
 # ---------------------------------------------------------------- chess swings
@@ -271,6 +276,9 @@ def _start(sport: str, who: str, now: Seen) -> Found:
         return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}")
     if sport == "tennis":
         return Found("start", "key", f"{who}'s match has started", " · ".join(x for x in (now.state.get("round"), now.state.get("tournament")) if x))
+    if sport == "esports" and _lobby(now):
+        games = now.state.get("total")
+        return Found("start", "key", f"{who} is playing", " · ".join(x for x in (now.state.get("stage"), f"{games} matches" if games else None, now.state.get("game")) if x))
     if sport == "esports":
         return Found("start", "key", f"{who}'s series has started", " · ".join(x for x in (_matchup(now.state), now.state.get("format"), now.state.get("stage")) if x))
     return Found("start", "key", f"{who}'s game has started", " · ".join(x for x in (now.score, now.clock) if x))
@@ -278,7 +286,7 @@ def _start(sport: str, who: str, now: Seen) -> Found:
 
 def _final(sport: str, who: str, now: Seen) -> Found:
     if sport == "esports":
-        return _series(who, now)
+        return _lobby_final(who, now) if _lobby(now) else _series(who, now)
     head = (now.line or {}).get("headline") or ""
     if sport in ("tennis", "chess"):
         return Found("final", "key", f"{who}: {head or 'result'}", now.score)
@@ -325,6 +333,62 @@ def _maps(who: str, before: Seen, now: Seen) -> list[Found]:
         title = f"{who}: {ours['name']} {'win' if won else 'lose'} map {m.get('n')}"
         found.append(Found("map", "minor", title, f"{ours['name']} {ours['score']}–{theirs['score']} {theirs['name']}", f"map{m.get('n')}"))
     return found
+
+
+def _lobby(seen: Seen) -> bool:
+    return seen.state.get("kind") == "battle_royale"
+
+
+def _standing(seen: Seen) -> dict[str, Any] | None:
+    """The player's team's row in a battle royale lobby's standings."""
+    return next((t for t in seen.state.get("standings") or [] if t.get("id") in seen.teams), None)
+
+
+def _place(n: int | None) -> str:
+    if not n:
+        return "?"
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _pts(value: Any) -> str:
+    points = float(value or 0)
+    return str(int(points)) if points == int(points) else f"{points:.1f}"
+
+
+def _lobby_games(who: str, before: Seen, now: Seen) -> list[Found]:
+    """Each game of a lobby the player's team finished since the last poll: a chicken dinner (Booyah)
+    when they won it, their placement otherwise; and going top of the lobby."""
+    ours = _standing(now)
+    if ours is None or now.status == "final":
+        return []  # the result says it
+    found = []
+    seen = {g.get("n") for g in (_standing(before) or {}).get("games") or []}
+    for g in ours.get("games") or []:
+        if g.get("n") in seen or not g.get("place"):
+            continue
+        where = f"Match {g['n']} · {g.get('kills', 0)} finishes · {_place(ours.get('place'))} overall, {_pts(ours.get('points'))} pts"
+        if g["place"] == 1:
+            found.append(Found("dinner", "key", f"{now.state.get('win_word') or 'Win'}: {ours['name']}", f"{who} · {where}", f"g{g['n']}"))
+        else:
+            found.append(Found("game", "minor", f"{who}: {ours['name']} {_place(g['place'])} in match {g['n']}", where, f"g{g['n']}"))
+    was = (_standing(before) or {}).get("place")
+    if found and ours.get("place") == 1 and was not in (None, 1):
+        played = len(ours.get("games") or [])
+        found.append(Found("lead", "key", f"{who}: {ours['name']} go top", f"{_pts(ours.get('points'))} pts after {played} match{'es' if played != 1 else ''}", f"lead{played}"))
+    return found
+
+
+def _lobby_final(who: str, now: Seen) -> Found:
+    """Where the player's team finished the lobby: "Jonathan: GodLike Esports finish 3rd · 87 pts"."""
+    ours = _standing(now)
+    teams = len(now.state.get("standings") or [])
+    stage = now.state.get("stage")
+    if ours is None:
+        return Found("final", "key", f"{who}: {now.score or 'lobby over'}", stage or "")
+    place = ours.get("place")
+    verb = "win the lobby" if place == 1 else f"finish {_place(place)}"
+    body = " · ".join(x for x in (f"{teams} teams" if teams else None, f"{ours.get('wins')} won" if ours.get("wins") else None, f"{ours.get('kills', 0)} finishes", stage) if x)
+    return Found("final", "key", f"{who}: {ours['name']} {verb} · {_pts(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
 
 
 def _upset(sport: str, who: str, athlete_id: str, now: Seen) -> list[Found]:

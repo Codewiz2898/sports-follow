@@ -31,6 +31,8 @@ class PlayerRef:
     league: str | None = None
     # Birth date as the source gives it, ISO ("1988-11-05"); how the registry confirms a name match.
     born: str | None = None
+    # The game an esports pro plays, as fans name it ("Valorant", "BGMI"): their sport on Sports Follow.
+    game: str | None = None
 
 
 @dataclass

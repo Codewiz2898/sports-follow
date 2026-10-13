@@ -11,7 +11,9 @@ chmod 700 "$D"
 
 install -m 400 "$in/sportmonks-token" "$D/files/sportmonks-token"
 install -m 400 "$in/lichess-token" "$D/files/lichess-token"
-[ -f "$in/pandascore-token" ] && install -m 400 "$in/pandascore-token" "$D/files/pandascore-token"
+for f in pandascore-token liquipedia-token; do
+  [ -f "$in/$f" ] && install -m 400 "$in/$f" "$D/files/$f"
+done
 [ -f "$D/files/vapid-private.pem" ] || openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$D/files/vapid-private.pem"
 chmod 400 "$D/files"/*
 chown -R 10001:10001 "$D/files"   # the app containers' user

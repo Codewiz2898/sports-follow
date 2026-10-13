@@ -220,6 +220,7 @@ def parse_player(p: dict[str, Any]) -> PlayerRef:
         team_names=[team.get("name") or ""] if team.get("id") else [],
         league=(p.get("current_videogame") or {}).get("slug"),
         born=p.get("birthday"),
+        game=game_name((p.get("current_videogame") or {}).get("slug")),
     )
 
 
@@ -258,7 +259,9 @@ def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) ->
 
 class PandascoreEsports:
     system = "pandascore_esports"
-    sports = ("esports", "e-sports", "electronic sports", "valorant", "counter-strike", "cs2", "cs:go", "league of legends", "dota 2", "mobile legends")
+    # Its games by name too: a pro's sport is their game ("CS2"), and for_sport() finds the source by it.
+    sports = ("esports", "e-sports", "electronic sports", *(g.lower() for g in GAMES.values()), "counter-strike", "cs:go")
+    games = tuple(GAMES)  # covers these games of the sport, beside Liquipedia's: players never move between them
     live_cadence = 60  # map results arrive as each map ends; one request a round for every live series
     MULTI_MAX = 100  # match ids one request takes (a page)
     WINDOW_BACK, WINDOW_AHEAD = 60, 45  # days of series a refresh reads; older ones come from history_pages
@@ -271,6 +274,10 @@ class PandascoreEsports:
     def spare(self) -> bool:
         """Whether history.py may read now: live series need the hour's last LIVE_RESERVE requests."""
         return pandascore.spare()
+
+    def game_of(self, ref: PlayerRef) -> str | None:
+        """The pro's game, from the ref, or from its league for a binding stored before refs had one."""
+        return ref.game or game_name(ref.league)
 
     def _keep(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for m in rows:
