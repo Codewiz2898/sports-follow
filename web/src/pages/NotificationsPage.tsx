@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { useAccount } from '../account'
 import { useActivity } from '../activity'
 import type { ActivityItem, AlertLevel } from '../api'
 import { useNow } from '../clock'
 import { Avatar } from '../components/Blocks'
+import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
 import { AlertLevels, levelText, usePush } from '../notifications'
@@ -22,7 +24,10 @@ export function NotificationsPage() {
         <button type="button" aria-pressed={tab === 'settings'} onClick={() => show('settings')}>Settings</button>
       </div>
       {tab === 'latest' ? <Latest onSettings={() => show('settings')} /> : <Settings />}
-      <Link to="/credits" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Credits and sources</Link>
+      <span className="row tiny muted" style={{ justifyContent: 'flex-start' }}>
+        <Link to="/credits" className="link">Credits and sources</Link>
+        <Link to="/privacy" className="link">Privacy</Link>
+      </span>
     </>
   )
 }
@@ -95,6 +100,24 @@ function MoreButton({ more }: { more: () => Promise<void> }) {
   )
 }
 
+/** Signed in or not: the way to keep these settings on every device. */
+function AccountRow() {
+  const { me } = useAccount()
+  if (!me) return null
+  return (
+    <Link to="/account" className="card row" style={{ padding: '14px 18px' }}>
+      <span className="row" style={{ justifyContent: 'flex-start' }}>
+        <UserIcon width={20} height={20} />
+        <span className="stack">
+          <span className="title">{me.signed_in ? me.email : 'Sign in'}</span>
+          <span className="small muted">{me.signed_in ? 'These settings are the same on every device you sign in on.' : 'Keep your players and these settings on every device.'}</span>
+        </span>
+      </span>
+      <ChevronIcon width={18} height={18} style={{ flexShrink: 0 }} />
+    </Link>
+  )
+}
+
 /** On or off for this device, its quiet hours, and how much to hear about each player. */
 function Settings() {
   const push = usePush()
@@ -110,6 +133,7 @@ function Settings() {
 
   return (
     <>
+      <AccountRow />
       <section className="card" aria-label="This device" style={{ padding: '4px 18px' }}>
         <div className="row" style={{ padding: '14px 0', borderBottom: push.on ? '1px solid var(--line)' : 0 }}>
           <span className="stack">

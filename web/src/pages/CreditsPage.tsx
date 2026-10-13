@@ -48,6 +48,7 @@ export function CreditsPage() {
           </section>
         </>
       )}
+      <Link to="/privacy" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Privacy: what we keep, and why</Link>
     </>
   )
 }
