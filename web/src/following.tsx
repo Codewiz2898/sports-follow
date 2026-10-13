@@ -13,7 +13,7 @@ interface FollowingState {
   setAlerts: (playerId: number, level: AlertLevel) => Promise<void>
   moments: PlayerMoment[]  // moments to show as toasts while the app is open
   dismissMoment: (id: number) => void
-  heard: number  // moments the stream has brought, any level: the activity list refreshes on it
+  heard: number  // moments the stream has brought, any level, and its reconnects: the activity list refreshes on it
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -23,6 +23,7 @@ const TOAST_MS = 8000
 /**
  * The fan's followed players, kept live over ONE stream (/api/me/stream) for all of them.
  * The stream's channel set is fixed at connect time, so it reconnects when the follow list changes.
+ * Every connect opens with the players' cards as they are now, so a reconnect is also a resync.
  */
 export function FollowingProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([])
@@ -39,7 +40,18 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const apply = useCallback((e: StreamEvent) => {
-    if (e.type === 'card') {
+    if (e.type === 'following') {
+      // First on every (re)connect: each card as it is now, so a score or result published while the
+      // stream was down (a locked phone, a restart) isn't missed, and the activity list catches up.
+      // Who the fan follows, and their alert levels, stay as this app has them.
+      const fresh = new Map(e.players.map((c) => [c.player_id, c]))
+      setCards((prev) => prev.map((c) => {
+        const f = fresh.get(c.player_id)
+        return f && f.version >= c.version ? { ...c, ...f, alerts: c.alerts } : c
+      }))
+      setProgress((p) => ({ ...p, ...Object.fromEntries(e.players.filter((c) => c.status !== 'building').map((c) => [c.player_id, []])) }))
+      setHeard((n) => n + 1)
+    } else if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
     } else if (e.type === 'moment') {

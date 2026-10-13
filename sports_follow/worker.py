@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import bus, engine, history, notify, pipeline, registry, structured
+from . import bus, db, engine, history, notify, pipeline, registry, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
+
+# A job holds a thread for as long as it runs: a poll or a lane up to POLL_SESSION (ten minutes), the
+# registry import about two hours. asyncio's default pool has min(32, cpus + 4) threads, six on the
+# 2 vCPU server, so six long jobs used to leave every other job, and the tick, waiting for one.
+MAX_JOBS = 24
+_tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
 
 # arq's CLI configures only its own logger; show the pipeline's too (binds, polls, refresh failures).
 _handler = logging.StreamHandler()
@@ -97,8 +104,21 @@ async def import_registry(ctx) -> None:
     await asyncio.to_thread(_import_registry)
 
 
+async def startup(ctx) -> None:
+    """A thread for every job slot, so no job waits for one, and a few for the event loop's own use
+    (it looks up hosts in one)."""
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
+    # A connection for each of those threads, the tick's and notify's: checkouts give up after 5 s.
+    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
+
+
+async def _in_tick_pool(fn):
+    """The tick works on threads of its own: whatever the jobs are doing, the scheduler keeps its minute."""
+    return await asyncio.get_running_loop().run_in_executor(_tick_pool, fn)
+
+
 async def tick(ctx) -> None:
-    due = await asyncio.to_thread(pipeline.due_work)
+    due = await _in_tick_pool(pipeline.due_work)
     for player_id in due.builds:
         await ctx["redis"].enqueue_job("build_card", player_id)
     for player_id in due.refreshes:
@@ -109,13 +129,13 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("poll_lane", system, _job_id=f"poll-lane:{system}")
     for player_id in due.lives:
         await ctx["redis"].enqueue_job("refresh_live", player_id)
-    if await asyncio.to_thread(engine.needs_lane):
+    if await _in_tick_pool(engine.needs_lane):
         await ctx["redis"].enqueue_job("engine_lane", _job_id="engine-lane")
-    unsent = await asyncio.to_thread(notify.pending)
+    unsent = await _in_tick_pool(notify.pending)
     if unsent:
         log.info("tick: sending %d moment(s) no sender claimed", len(unsent))
         await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
-    if await asyncio.to_thread(history.has_work):
+    if await _in_tick_pool(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
     if due.builds or due.refreshes or due.polls or due.lanes or due.lives:
         log.info("tick: %d builds, %d refreshes, %d polls, %d poll lanes, %d agent live checks", len(due.builds), len(due.refreshes), len(due.polls), len(due.lanes), len(due.lives))
@@ -129,7 +149,8 @@ class WorkerSettings:
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
     ]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
+    on_startup = startup
     # A poll job or lane holds its slot for up to POLL_SESSION while games are on; builds hold one for minutes.
-    max_jobs = 24
+    max_jobs = MAX_JOBS
     job_timeout = 900
     keep_result = 0

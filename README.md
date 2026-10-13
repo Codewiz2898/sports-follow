@@ -60,7 +60,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   with a live source, doesn't count. The gateway's per-app budget is the hard ceiling behind it.
 - **Names converge.** "Kohli" and "Virat Kohli" end up on the same player: every typed name becomes an
   alias, and when a build discovers the athlete already exists, the rows are merged. A player bound to a
-  source is never renamed or merged by an agent report, so a namesake's report can't take them over.
+  source is never renamed or merged by an agent report, and keeps the source's sections when a typed
+  name is merged into them; a player picked in search is never merged into another by name. So a
+  namesake's report can't take them over.
 - **Structured sources where they exist, the agent everywhere else.** After the agent says who a
   player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
@@ -98,8 +100,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
   points, a set, the start and the result; news from a rebuild adds injuries, transfers and
-  retirements. Each moment is stored once (a stable key) with a priority: a hundred over a fifty, a
-  late equaliser over a fourth goal. The noise rules (`sports_follow/alerts.py`) then plan each fan's
+  retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
+  stable key) with a priority: a hundred over a fifty, a late equaliser over a fourth goal. The noise
+  rules (`sports_follow/alerts.py`) then plan each fan's
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are

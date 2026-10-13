@@ -75,6 +75,16 @@ def test_cricket_form_and_record_from_the_teams_side():
     assert note == "Last 3 matches"
 
 
+def test_cricket_form_counts_both_innings_of_a_test():
+    # A line's stats are its latest innings; the headline has them all.
+    stats, _ = form.summarize("cricket", [
+        (result("India won by 120 runs"), line("103 (152) & 104* (140) · 2/30 (12 ov) & 3/45 (20 ov)", Runs="104*", Balls="140", Wickets="3", Runs_conceded="45", Overs="20")),
+    ], ["India"])
+    got = {s["label"]: s["value"] for s in stats}
+    assert (got["Runs"], got["Average"], got["Highest"], got["100s / 50s"]) == ("207", "207.00", "104", "2 / 0")
+    assert (got["Wickets"], got["Economy"]) == ("5", "2.34")
+
+
 def test_tennis_and_chess_form():
     tennis, _ = form.summarize("Tennis", [(result("Won 6-4 6-3"), line("Won in 2 sets", Sets="2–0")), (result("Lost 4-6 6-7(5)"), line("Lost in 2 sets", Sets="0–2"))], [])
     assert {s["label"]: s["value"] for s in tennis} == {"W–L": "1–1", "Sets": "2–2"}

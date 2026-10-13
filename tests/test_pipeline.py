@@ -1,0 +1,240 @@
+"""The pipeline's decisions (pipeline.py): which news makes an alert, when a failed build is tried
+again, and which player a report lands on. The database and Redis are fakes."""
+
+from __future__ import annotations
+
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from sports_follow import bus, config, notify, pipeline, structured
+from sports_follow.agent import AgentError
+from sports_follow.models import Player, PlayerCard
+
+NOW = datetime(2026, 10, 13, 7, 40, tzinfo=timezone.utc)
+
+
+def _selected(stmt) -> str:
+    """What a select reads: "PlayerCard" for whole rows, "PlayerIdentity.id" for one column."""
+    d = stmt.column_descriptions[0]
+    return d["entity"].__name__ if d["expr"] is d["entity"] else f"{d['entity'].__name__}.{d['name']}"
+
+
+class FakeDb:
+    """A session holding a few rows: get() by primary key, scalars() of a whole model, and scalar()
+    answered from `answers` by what the query selects. Anything else finds nothing."""
+
+    def __init__(self, *rows, answers=None):
+        self.rows, self.answers, self.deleted = list(rows), answers or {}, []
+
+    def get(self, model, key):
+        return next((r for r in self.rows if type(r) is model and (r.player_id if model is PlayerCard else r.id) == key), None)
+
+    def scalar(self, stmt):
+        return self.answers.get(_selected(stmt))
+
+    def scalars(self, stmt):
+        return [r for r in self.rows if type(r).__name__ == _selected(stmt)]
+
+    def execute(self, stmt):
+        return SimpleNamespace(all=lambda: [])
+
+    def add(self, row):
+        self.rows.append(row)
+
+    def delete(self, row):
+        self.deleted.append(row)
+
+    def flush(self):
+        pass
+
+
+class FakeRedis:
+    """The calls bus.py makes. Keys don't expire: the tests move their own clock."""
+
+    def __init__(self):
+        self.data = {}
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return None
+        self.data[key] = value
+        return True
+
+    def get(self, key):
+        return self.data.get(key)
+
+    def exists(self, key):
+        return int(key in self.data)
+
+    def delete(self, *keys):
+        for key in keys:
+            self.data.pop(key, None)
+
+    def publish(self, channel, message):
+        pass
+
+
+@pytest.fixture
+def redis(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(bus, "_sync", fake)
+    return fake
+
+
+# ---------------------------------------------------------------- news alerts
+
+
+def story(headline: str, kind: str | None, breaking: bool | None, hours_ago: int = 2, news_id: int = 1) -> dict:
+    return {"headline": headline, "kind": kind, "breaking": breaking, "published": (NOW - timedelta(hours=hours_ago)).isoformat(), "news_id": news_id}
+
+
+def test_a_story_about_a_retirement_is_not_news_of_one():
+    # BUG-002: an opinion piece on Kohli's May 2025 retirement went to every follower as "Virat Kohli retires".
+    items = [
+        story("Wasim Jaffer says Virat Kohli retired from Test cricket out of bitterness", "retirement", False, news_id=29),
+        story("Sanju Samson equals Virat Kohli's joint-fastest T20I fifty record", "milestone", False, news_id=31),
+        story("Kohli ruled out of the third ODI", "injury", None, news_id=32),  # no word from the agent: no alert
+    ]
+    assert pipeline.news_moments("Virat Kohli", items, NOW) == []
+
+
+def test_a_contract_extension_is_not_transfer_news():
+    # BUG-002: "Transfer news: Nikola Jokic", from a story about an extension he hasn't signed.
+    items = [story("Jokic's Unsigned Extension Looms Over Everything for the Nuggets", "contract extension", True)]
+    assert pipeline.news_moments("Nikola Jokic", items, NOW) == []
+
+
+def test_breaking_news_says_no_more_than_the_story():
+    items = [story("Salah out for six weeks with a hamstring tear, Liverpool confirm", "injury", True, news_id=7)]
+    [f] = pipeline.news_moments("Mohamed Salah", items, NOW)
+    assert (f.kind, f.level, f.priority, f.detail) == ("news", "key", 75, "n7")
+    assert (f.title, f.body) == ("Mohamed Salah: injury news", "Salah out for six weeks with a hamstring tear, Liverpool confirm")
+    [f] = pipeline.news_moments("Virat Kohli", [story("Virat Kohli announces his retirement from ODIs", "Retirement", True)], NOW)
+    assert (f.title, f.level, f.priority) == ("Virat Kohli: retirement news", "key", 90)
+    assert pipeline.news_moments("Mohamed Salah", [story("Salah out for six weeks", "injury", True, hours_ago=96)], NOW) == []
+
+
+# ---------------------------------------------------------------- failed rebuilds
+
+
+def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
+    # BUG-016, the worker log at 07:40: rebuilds failing on a model timeout were queued again every minute.
+    stale = Player(id=1, slug="one", name="Player One", sport="Hurling", status="active", teams=[])
+    from_source = Player(id=2, slug="two", name="Player Two", sport="Hurling", status="active", teams=[])
+    cards = [
+        PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7)),
+        PlayerCard(player_id=2, status="ready", card={"status": "ready", "pending": ["profile", "news"]}, version=1, built_at=None),
+    ]
+    db = FakeDb(stale, from_source, *cards)
+    clock, runs = [NOW], {1: [], 2: []}
+
+    def timing_out(llm, name, known):
+        runs[1 if name == "Player One" else 2].append(int((clock[0] - NOW).total_seconds() // 60))
+        raise AgentError("Model call failed (timeout): openrouter moonshotai/kimi-k2.6:nitro: timeout")
+        yield
+
+    monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(pipeline, "_now", lambda: clock[0])
+    monkeypatch.setattr(pipeline, "llm", lambda: None)
+    monkeypatch.setattr(pipeline, "follow_player", timing_out)
+    monkeypatch.setattr(structured, "describe", lambda player_id: None)
+    for minute in range(12 * 60):  # the scheduler's tick, once a minute for 12 hours
+        clock[0] = NOW + timedelta(minutes=minute)
+        for player_id in pipeline.due_work(clock[0]).builds:
+            pipeline.build_card(player_id)
+    # 30 minutes, then an hour, 2, 4, and never more than CARD_MAX_AGE (6 hours) apart.
+    assert runs == {1: [0, 30, 90, 210, 450], 2: [0, 30, 90, 210, 450]}
+    assert [c.status for c in cards] == ["ready", "ready"] and cards[1].card["pending_error"].startswith("The research agent")
+
+    # A build still running is never queued twice, and one that succeeds starts the count again.
+    later = NOW + timedelta(hours=20)
+    assert bus.try_lock("build:1", 900) and not pipeline.rebuild_due(cards[0], later)
+    bus.release("build:1")
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: iter([{"type": "result", "data": {}}]))
+    monkeypatch.setattr(pipeline, "apply_report", lambda player_id, report: player_id)
+    monkeypatch.setattr(structured, "bind", lambda player_id: False)
+    pipeline.build_card(1)
+    assert pipeline.back_off(1, later) == later + timedelta(minutes=30)
+
+
+def test_a_failed_first_build_waits_for_a_fan():
+    card = PlayerCard(player_id=1, status="failed", card={}, built_at=None)
+    assert not pipeline.rebuild_due(card, NOW)
+
+
+# ---------------------------------------------------------------- where a report lands
+
+
+def test_a_namesake_picked_in_search_is_never_folded_into_the_star():
+    # BUG-018 (H2): Al Ahly's Mohamed Salah, picked from the registry, was folded into Liverpool's by name.
+    star = Player(id=1, slug="mohamed-salah", name="Mohamed Salah", sport="Football")
+    namesake = Player(id=2, slug="mohamed-salah-football", name="Mohamed Salah", sport="Football")
+    db = FakeDb(answers={"Player": star, "PlayerIdentity.id": 77})  # 77: the namesake's Wikidata identity
+    assert pipeline._canonicalize(db, namesake, "Mohamed Salah") == (namesake, None)
+    assert db.deleted == [] and namesake.slug == "mohamed-salah-football"
+
+
+def test_a_typed_name_still_converges_on_the_player_who_has_it():
+    kohli = Player(id=5, slug="virat-kohli", name="Virat Kohli", sport="Cricket")
+    typed = Player(id=9, slug="kohli", name="Kohli", sport="")
+    db = FakeDb(answers={"Player": kohli})
+    assert pipeline._canonicalize(db, typed, "Virat Kohli") == (kohli, 9)
+    assert db.deleted == [typed]
+
+
+def test_a_report_folded_into_a_bound_player_keeps_the_sources_sections(monkeypatch, redis):
+    # BUG-018 (H6): "Kohli" typed while Virat Kohli was batting; the report replaced his live score,
+    # fixtures, results and stats with the agent's guesses.
+    kohli = Player(id=5, slug="virat-kohli", name="Virat Kohli", sport="Cricket", status="active", teams=["India"])
+    typed = Player(id=9, slug="kohli", name="Kohli", sport="", status="unknown", teams=[])
+    source_card = {
+        "status": "ready", "version": 40,
+        "live": {"is_live": True, "score": "IND 187/2 (31.4)", "headline": "74* (61)"},
+        "upcoming": [{"title": "India v NZ", "event_id": 140}],
+        "recent_results": [{"title": "India v WI", "result": "India won by 7 wkts", "event_id": 50}],
+        "season_stats": [{"label": "Runs", "value": "412"}],
+        "provenance": {"upcoming": {"source": "ESPNcricinfo", "url": "https://espncricinfo.com/player/253802"}},
+        "freshness": {"live": NOW.isoformat(), "fixtures": NOW.isoformat(), "stats": NOW.isoformat()},
+    }
+    card_row = PlayerCard(player_id=5, status="ready", card=source_card, version=40, built_at=NOW - timedelta(hours=7), is_live=True)
+    db = FakeDb(kohli, typed, card_row)
+    guessed = []
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: SimpleNamespace(adapter="espn_cricket") if player_id == 5 else None)
+    monkeypatch.setattr(pipeline, "_canonicalize", lambda db, player, name: (kohli, player.id))  # the name is Kohli's
+    monkeypatch.setattr(pipeline, "_upsert_event", lambda db, player, **event: guessed.append(event["title"]))
+    monkeypatch.setattr(pipeline, "_write_news", lambda db, player, items: [])
+    monkeypatch.setattr(notify, "record", lambda *args: [])
+    monkeypatch.setattr(notify, "dispatch", lambda ids: None)
+    report = {
+        "player": {"name": "Virat Kohli", "sport": "Cricket", "status": "active", "nationality": "India", "role": "Batter", "teams": ["India", "RCB"], "summary": "s"},
+        "live": {"is_live": False, "player_stats": []},
+        "news": [{"headline": "Kohli in the nets"}],
+        "upcoming": [{"title": "India v Australia (agent guess)", "competition": "ODI", "start_utc": "2026-10-16T08:00:00Z"}],
+        "recent_results": [{"title": "agent's recollection", "result": "Won"}],
+        "season_stats": [{"label": "Agent stat", "value": "?"}],
+        "sources": ["https://example.org/kohli"],
+    }
+    assert pipeline.apply_report(9, report) == 5
+    card = card_row.card
+    assert guessed == []
+    assert {k: card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")} == {k: source_card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")}
+    assert card_row.is_live and card["news"] == [{"headline": "Kohli in the nets"}] and card["player"]["teams"] == ["India"]
+    assert card["sources"] == ["https://espncricinfo.com/player/253802", "https://example.org/kohli"]
+
+
+def test_a_typed_name_a_source_knows_lands_on_the_player_holding_that_athlete(monkeypatch, redis):
+    # BUG-031: the NBA's Nikola Jokić is held by id; a footballer of the same name has the plain alias.
+    footballer = Player(id=1, slug="nikola-jokic", name="Nikola Jokić", sport="Football")
+    nba = Player(id=2, slug="nikola-jokic-basketball", name="Nikola Jokić", sport="Basketball")
+    typed = Player(id=3, slug="jokic-nikola", name="Jokic Nikola", sport="", teams=[])
+    db = FakeDb(footballer, nba, typed, answers={"Player": footballer, "PlayerIdentity": SimpleNamespace(player_id=2)})
+    ref = SimpleNamespace(system="espn_basketball", athlete_id="3112335", name="Nikola Jokić", team_ids=["7"], team_names=["Denver Nuggets"])
+    adapter = SimpleNamespace(sports=["basketball"])
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    assert pipeline._start_from_source(3, adapter, ref) == 2
+    assert db.deleted == [typed]

@@ -373,9 +373,12 @@ results ("Won 2–1"), and hear when a series ends, from a licensed source named
      never spent past 56; background reads stop at 26. Lobbies are polled every 5 minutes, all of them
      in one request; fixtures every 30 minutes a team (cached). That suits a few teams; more need a
      paid plan.
-   - **To check once the key works:** the `[[opponent::Team_Name]]` condition (underscores or spaces),
-     the date format, whether `match2games[].opponents` comes parsed or as a string, and the section
-     and bracket header used for the lobby's name ("Semi Finals · Day 3").
+   - **To check once the key works:** the opponent condition, which asks for each spelling of a team
+     page as Liquipedia's MatchTicker does (`([[opponent::Team SouL]] OR [[opponent::Team_SouL]] OR …)`):
+     that the API takes the brackets and which spelling the rows hold; how `dateexact` comes (a lobby
+     without a time waits for its first result); the date format, whether `match2games[].opponents`
+     comes parsed or as a string, and the section and bracket header used for the lobby's name
+     ("Semi Finals · Day 3").
    - **For a public build:** a commercial Liquipedia plan (reported $49 or $199 a data type a month;
      their portal says sign-ups are paused), then add `liquipedia_esports` to `SPORTS_FOLLOW_SOURCES`.
      Data is CC BY-SA 3.0: credited on the Credits page and on every score as "Liquipedia".

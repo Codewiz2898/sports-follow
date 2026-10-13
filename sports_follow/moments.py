@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import games
+from .adapters.espn_cricket import innings as cricket_innings
 
 LEVELS = ("everything", "key", "results", "off")
 DEFAULT_LEVEL = "key"
@@ -68,7 +69,7 @@ class Found:
     level: str  # key | minor
     title: str
     body: str
-    detail: str = ""  # tells two moments of one kind apart in the key ("50", "goal2", "set3")
+    detail: str = ""  # tells two moments of one kind apart in the key ("50", "i2:100", "goal2", "set3")
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY
 
 
@@ -84,12 +85,10 @@ def wanted(level: str, moment_level: str, kind: str) -> bool:
 
 
 def news_kind(value: str | None) -> str | None:
-    """The agent's free-text kind as one of NEWS_KINDS ("Loan" is a transfer), or None."""
+    """The agent's kind if it is one of NEWS_KINDS ("Injury" is), else None. Matched whole: by substring,
+    "contract extension" was a transfer and "record" a milestone."""
     text = (value or "").strip().lower()
-    for kind, words in (("injury", ("injur", "fitness", "ruled out")), ("transfer", ("transfer", "loan", "sign", "contract", "move")), ("retirement", ("retire",)), ("milestone", ("milestone", "record", "award"))):
-        if text.startswith(kind) or any(w in text for w in words):
-            return kind
-    return None
+    return text if text in NEWS_KINDS else None
 
 
 # ---------------------------------------------------------------- reading a line
@@ -339,9 +338,11 @@ def _lobby(seen: Seen) -> bool:
     return seen.state.get("kind") == "battle_royale"
 
 
-def _standing(seen: Seen) -> dict[str, Any] | None:
-    """The player's team's row in a battle royale lobby's standings."""
-    return next((t for t in seen.state.get("standings") or [] if t.get("id") in seen.teams), None)
+def _standing(seen: Seen, teams: list[str] | None = None) -> dict[str, Any] | None:
+    """The player's team's row in a battle royale lobby's standings (their team now, for an earlier poll:
+    the poller's baseline doesn't carry it)."""
+    teams = seen.teams if teams is None else teams
+    return next((t for t in seen.state.get("standings") or [] if t.get("id") in teams), None)
 
 
 def _place(n: int | None) -> str:
@@ -362,7 +363,8 @@ def _lobby_games(who: str, before: Seen, now: Seen) -> list[Found]:
     if ours is None or now.status == "final":
         return []  # the result says it
     found = []
-    seen = {g.get("n") for g in (_standing(before) or {}).get("games") or []}
+    earlier = _standing(before, now.teams) or {}
+    seen = {g.get("n") for g in earlier.get("games") or [] if g.get("place")}  # points can come a poll before the placing
     for g in ours.get("games") or []:
         if g.get("n") in seen or not g.get("place"):
             continue
@@ -371,8 +373,8 @@ def _lobby_games(who: str, before: Seen, now: Seen) -> list[Found]:
             found.append(Found("dinner", "key", f"{now.state.get('win_word') or 'Win'}: {ours['name']}", f"{who} · {where}", f"g{g['n']}"))
         else:
             found.append(Found("game", "minor", f"{who}: {ours['name']} {_place(g['place'])} in match {g['n']}", where, f"g{g['n']}"))
-    was = (_standing(before) or {}).get("place")
-    if found and ours.get("place") == 1 and was not in (None, 1):
+    was = earlier.get("place")
+    if ours.get("place") == 1 and was not in (None, 1):  # on the points, which may come before the placing
         played = len(ours.get("games") or [])
         found.append(Found("lead", "key", f"{who}: {ours['name']} go top", f"{_pts(ours.get('points'))} pts after {played} match{'es' if played != 1 else ''}", f"lead{played}"))
     return found
@@ -448,24 +450,53 @@ def _goal(who: str, athlete_id: str, n: int, now: Seen, where: str) -> Found:
 
 
 def _cricket(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:
+    """Fifties, hundreds, out and wicket hauls in the player's latest innings: a line's stats are its
+    latest batting and bowling innings, and its headline lists every innings ("103 (152) & 48* (60)").
+    In a Test the second innings starts again from nothing, and its moments say which innings they
+    are in the detail ("i2:100"), so they aren't taken for the first's ("100")."""
     found = []
-    where = " · ".join(x for x in (now.score,) if x)
+    (bats_was, bowls_was), (bats_now, bowls_now) = (cricket_innings((line or {}).get("headline")) for line in (before, now.line))
     runs_was, runs_now = stat(before, "Runs"), stat(now.line, "Runs")
+    if _another(bats_was, bats_now):
+        runs_was = None  # the last poll's runs were the innings before
     if runs_now is not None:
         balls = stat(now.line, "Balls")
         innings = f"{runs_now} ({balls})" if balls else runs_now
+        pre, nth = _nth(len(bats_now))
         for mark in crossed(number(runs_was), number(runs_now), (50, 100, 150, 200)):
-            found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", f"{innings} · {where}".strip(" ·"), str(mark), 95 if mark >= 150 else 0))
+            found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", _body(innings, nth, now.score), f"{pre}{mark}", 95 if mark >= 150 else 0))
         out_now = not runs_now.endswith("*") and stat(now.line, "Out") is not None
         out_was = runs_was is not None and not runs_was.endswith("*") and stat(before, "Out") is not None
         if out_now and not out_was:
             runs = number(runs_now)
-            found.append(Found("out", "key", f"{who} out for {runs}", f"{innings} · {stat(now.line, 'Out')}", "out", 75 if runs >= 50 else 65 if runs == 0 else 60))
+            found.append(Found("out", "key", f"{who} out for {runs}", _body(innings, nth, stat(now.line, "Out")), f"{pre}out", 75 if runs >= 50 else 65 if runs == 0 else 60))
     wickets_was, wickets_now = number(stat(before, "Wickets")), number(stat(now.line, "Wickets"))
+    if _another(bowls_was, bowls_now):
+        wickets_was = 0
+    pre, nth = _nth(len(bowls_now))
     for mark in crossed(wickets_was, wickets_now, (3, 4, 5, 6, 7, 8, 9, 10)):
         figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
-        found.append(Found("wickets", "key", f"{who} takes {mark} wickets", f"{figures} · {where}".strip(" ·"), f"w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
+        found.append(Found("wickets", "key", f"{who} takes {mark} wickets", _body(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
     return found
+
+
+def _another(was: list[Any], now: list[Any]) -> bool:
+    """Whether the player has started another innings since the last poll: the line has more innings,
+    and the ones it had are unchanged. A last line that read otherwise (one holding only the latest
+    innings) doesn't count, so milestones already passed aren't told late."""
+    return len(now) > len(was) and now[:len(was)] == was
+
+
+def _nth(innings: int) -> tuple[str, str]:
+    """The player's innings in a cricket moment: the detail's prefix ("i2:"; none for their first, as
+    before) and its name in the body ("2nd innings")."""
+    if innings < 2:
+        return "", ""
+    return f"i{innings}:", f"{ORDINAL.get(innings, f'{innings}th')} innings"
+
+
+def _body(*parts: str | None) -> str:
+    return " · ".join(p for p in parts if p)
 
 
 def _basketball(who: str, before: dict[str, Any] | None, now: Seen) -> list[Found]:

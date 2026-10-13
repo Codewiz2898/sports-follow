@@ -117,7 +117,7 @@ def _basketball(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str
 
 
 def _cricket(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
-    return batting_bowling([ln.get("stats") or [] for ln in lines])
+    return batting_bowling(lines)
 
 
 def _tennis(items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

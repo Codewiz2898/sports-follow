@@ -127,6 +127,24 @@ def test_live_lines_raise_the_usual_cricket_alerts():
     assert [(f.kind, f.title) for f in found] == [("fifty", "Abhishek reaches 50"), ("out", "Abhishek out for 52"), ("wickets", "Abhishek takes 3 wickets")]
 
 
+def test_a_hundred_in_each_innings_of_a_test_is_told_twice():
+    # 103 in the first innings, 104 in the third: each moment has its own detail, so its own key.
+    def seen(*batting: dict) -> moments.Seen:
+        snap = sc.parse_match({**_match("3rd Innings", [FIRST, CHASE]), "type": "Test/5day", "batting": list(batting)})
+        return moments.Seen(snap.status, snap.state, asdict(snap.lines[str(OPENER)]), snap.score_label)
+
+    caught = {"bowler": _player(1, "Khan"), "catchstump": _player(2, "Gurbaz")}
+    first = _bat(OPENER, 103, 152, "Catch Out", **caught)
+    polls = [
+        seen(_bat(OPENER, 48, 70, None)), seen(_bat(OPENER, 103, 150, None)), seen(first),
+        seen(first, _bat(OPENER, 48, 60, None, board="S3")), seen(first, _bat(OPENER, 104, 140, None, board="S3")),
+        seen(first, _bat(OPENER, 104, 141, "Catch Out", board="S3", **caught)),
+    ]
+    found = [f for before, now in zip(polls, polls[1:]) for f in moments.detect("cricket", "Abhishek", str(OPENER), before, now)]
+    assert [f.detail for f in found] == ["50", "100", "out", "i2:50", "i2:100", "i2:out"]
+    assert found[-1].body == "104 (141) · 2nd innings · c Gurbaz b Khan"
+
+
 def test_current_teams_are_each_competitions_latest_recent_season():
     seasons = {1: {"name": "2024", "league_id": 3}, 2: {"name": "2026", "league_id": 3}, 3: {"name": "2022/2023", "league_id": 5}, 4: {"name": "2025/2026", "league_id": 5}}
     player = {"teams": [
