@@ -1,21 +1,25 @@
-"""How one snapshot changes a player's card (structured._apply_snapshot), on recorded ESPN data, and how a
-lane polls all of a source's games together (structured.lane_round)."""
+"""How one snapshot changes a player's card (structured._apply_snapshot), on recorded ESPN data, how a
+lane polls all of a source's games together (structured.lane_round), what a poll's moments are found
+against (structured.baseline), and games the schedule finishes before the poller does."""
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
-from sports_follow import structured
-from sports_follow.adapters import ADAPTERS, AdapterError, Fixture, Snapshot, espn_cricket, espn_soccer
+from sports_follow import bus, moments, structured
+from sports_follow.adapters import ADAPTERS, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn_cricket, espn_soccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
-from sports_follow.models import Event, Player
+from sports_follow.models import Event, EventState, Player, PlayerCard, PlayerLine, SourceBinding
 
 from .test_adapters import KOHLI, RONALDO, load
+from .test_pipeline import FakeDb, FakeRedis
 
 NOW = datetime(2026, 9, 29, 13, 45, tzinfo=timezone.utc)
 
@@ -204,3 +208,191 @@ def test_only_sources_that_fetch_many_games_at_once_get_a_lane(monkeypatch):
     assert structured.batched("sportmonks_football")
     assert not structured.batched("sportmonks_cricket") and not structured.batched("espn_soccer")
     assert not structured.batched(None) and not structured.batched("not_running")
+
+
+# ---------------------------------------------------------------- binding by name
+
+
+class BindSession:
+    """The one player bind() reads, with no binding, identity or registry id yet."""
+
+    def __init__(self, player: Player):
+        self.player = player
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, model, key):
+        return self.player
+
+    def scalar(self, stmt):
+        return None
+
+
+class NameSource:
+    """A source whose name search finds one athlete."""
+
+    system = "espn_soccer"
+    sports = ("football",)
+
+    def __init__(self, ref):
+        self.ref = ref
+
+    def find_player(self, name):
+        return self.ref
+
+
+def bind_by_name(monkeypatch, player: Player, ref) -> list:
+    recorded = []
+    monkeypatch.setattr(structured, "session", lambda: BindSession(player))
+    monkeypatch.setattr(structured, "for_sport", lambda sport: NameSource(ref))
+    monkeypatch.setattr(structured, "record", lambda player_id, ref, confidence=1.0: recorded.append((ref.athlete_id, confidence)) or True)
+    structured.bind(player.id)
+    return recorded
+
+
+def test_a_name_search_never_binds_a_namesake_from_another_team(monkeypatch):
+    # The agent researched Al Ahly's Mohamed Salah; ESPN's search finds Liverpool's (BUG-032).
+    liverpool = PlayerRef("espn_soccer", "173896", "Mohamed Salah", ["364", "2620"], ["Liverpool", "Egypt"])
+    assert bind_by_name(monkeypatch, Player(id=1, name="Mohamed Salah", sport="Football", teams=["Al Ahly"]), liverpool) == []
+    assert bind_by_name(monkeypatch, Player(id=1, name="Ahmed Salah", sport="Football", teams=[]), liverpool) == []
+    # A team in common, or the same full name when the agent named no team, is certain.
+    assert bind_by_name(monkeypatch, Player(id=1, name="Mohamed Salah", sport="Football", teams=["Liverpool FC"]), liverpool) == [("173896", 1.0)]
+    assert bind_by_name(monkeypatch, Player(id=1, name="Mohamed Salah", sport="Football", teams=[]), liverpool) == [("173896", 1.0)]
+
+
+def test_an_individual_athlete_binds_on_the_full_name(monkeypatch):
+    # The source has no team for a tennis player, so the agent's "Serbia" can't overlap anything.
+    novak = PlayerRef("espn_tennis", "296", "Novak Djokovic", ["296"], ["Novak Djokovic"], league="atp")
+    assert bind_by_name(monkeypatch, Player(id=2, name="Novak Djokovic", sport="Tennis", teams=["Serbia"]), novak) == [("296", 1.0)]
+    assert bind_by_name(monkeypatch, Player(id=2, name="Marko Djokovic", sport="Tennis", teams=[]), novak) == []
+
+
+@pytest.fixture
+def redis(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(bus, "_sync", fake)
+    return fake
+
+
+# ---------------------------------------------------------------- what a poll's moments are found against
+
+
+def football(status: str, clock: str, goals: int, score: str) -> tuple[Snapshot, moments.Seen]:
+    """Mohamed Salah (athlete 9) in a football snapshot, and the Seen detect() compares it as."""
+    stats = [{"label": "Goals", "value": str(goals)}] if goals else []
+    line = Line(f"{goals} goals" if goals else "Started", stats)
+    snap = Snapshot(status=status, score_label=score, clock_label=clock, state={"kind": "football"}, lines={"9": line})
+    seen = moments.Seen(status, snap.state, {"headline": line.headline, "stats": stats}, score, clock, lineups=True)
+    return snap, seen
+
+
+def told(before: moments.Seen | None, seen: moments.Seen) -> list[str]:
+    return [f.kind for f in moments.detect("Football", "Mohamed Salah", "9", before, seen)]
+
+
+def test_a_game_first_seen_well_past_kick_off_is_the_baseline():
+    # BUG-053: the last state was from before kick-off and the next poll found the game at 61' with two
+    # goals: "game has started", "Goal: Mohamed Salah" and "Goal (2)" all went out, loud, as new.
+    pre = EventState(status="armed", score_label="LIV 0 – 0 CHE", clock_label="", state={"kind": "football"})
+    snap, seen = football("live", "61'", 2, "LIV 2 – 0 CHE")
+    assert structured.baseline(pre, None, snap) is None
+    assert told(structured.baseline(pre, None, snap), seen) == []
+    # Seen go from before the start to over: only the result is told.
+    snap, seen = football("final", "FT", 2, "LIV 2 – 0 CHE")
+    assert told(structured.baseline(pre, None, snap), seen) == ["final"]
+
+
+def test_a_game_seen_kicking_off_still_says_so():
+    pre = EventState(status="armed", score_label="LIV 0 – 0 CHE", clock_label="", state={"kind": "football"})
+    snap, seen = football("live", "1'", 0, "LIV 0 – 0 CHE")
+    assert told(structured.baseline(pre, None, snap), seen) == ["start"]
+
+
+def test_a_gap_in_polling_is_the_baseline():
+    # BUG-053: a worker restart, or an hour of ESPN 502s, then the next poll pushed an hour of goals as new.
+    live = EventState(status="live", score_label="LIV 0 – 0 CHE", clock_label="20'", state={"kind": "football"})
+    last = PlayerLine(stats={"headline": "Started", "stats": []})
+    snap, seen = football("live", "75'", 2, "LIV 2 – 0 CHE")
+    assert structured.baseline(live, last, snap, recent=False) is None
+    assert told(structured.baseline(live, last, snap, recent=False), seen) == []
+    assert told(structured.baseline(live, last, snap), seen) == ["goal", "goal"]  # polled all along: news
+
+
+def test_a_poll_knows_whether_the_one_before_was_recent(redis):
+    assert structured._polled(7, 15) is False  # nobody polled it within POLL_GAP
+    assert structured._polled(7, 15) is True
+    assert redis.ttl["polled:7"] == structured.POLL_GAP
+    structured._polled(8, 300)  # Liquipedia reads every five minutes: three of its rounds
+    assert redis.ttl["polled:8"] == 900
+
+
+# ---------------------------------------------------------------- games the schedule finishes first
+
+
+class FinishedSource:
+    """A source whose schedule says the game is over; its final scorecard can be read, or not. A final read
+    is served from the cache, which (as ESPN's does) still holds the poller's last live read."""
+
+    system = "fake_source"
+    sports = ("hurling",)
+    live_cadence = 15
+
+    def __init__(self, scorecard: bool):
+        self.scorecard = scorecard
+
+    def fixtures(self, ref):
+        return [Fixture(source_id="1", title="A vs B", competition="L", start_utc=NOW - timedelta(hours=2), venue=None, status="final", team_ids=["T1", "T2"], locator={"id": 1}, team_names=["A", "B"])]
+
+    def snapshot(self, locator, final=False):
+        if not self.scorecard:
+            raise AdapterError("Fake returned HTTP 502 for /summary")
+        line = {"A1": Line("1 goal", [{"label": "Goals", "value": "1"}])}
+        if final:
+            return Snapshot(status="live", score_label="A 2 – 1 B", clock_label="90'+3", state={"kind": "football"}, lines=line)
+        return Snapshot(status="final", score_label="A 2 – 1 B", clock_label="FT", state={"kind": "football"}, lines=line)
+
+    def result_label(self, fixture, team_ids):
+        return "Won 2–1"
+
+    def stats(self, ref, recent):
+        return [], ""
+
+
+def finished(monkeypatch, scorecard: bool) -> tuple[Event, PlayerCard, list]:
+    """Player 1's game (event 10) live on their card at 90'+3 when the schedule refresh finds it over;
+    returns the event, the card and the final polls applied."""
+    source = FinishedSource(scorecard)
+    player = Player(id=1, slug="p1", name="P1", sport="Hurling", status="active", teams=["A"])
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
+                        locator={"system": source.system, "athlete_id": "A1", "name": "P1", "team_ids": ["T1"], "team_names": ["A"]})
+    event = Event(id=10, key="fake_source:1", sport="Hurling", title="A vs B", status="live", start_utc=NOW - timedelta(hours=2))
+    live = {"is_live": True, "event_id": 10, "event": "A vs B", "score": "A 2 – 1 B", "clock": "90'+3"}
+    card_row = PlayerCard(player_id=1, status="ready", version=5, is_live=True, card={**card(live=live), "status": "ready", "upcoming": [{"event_id": 10}]})
+    db = FakeDb(player, row, event, card_row, answers={"SourceBinding": row, "Player.sport": "Hurling", "Event": event, "Event.id": [(10, "fake_source:1")]})
+    polls = []
+    monkeypatch.setitem(structured.ADAPTERS, source.system, source)
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "_watching", lambda event_id: ({"adapter": source.system, "locator": {"id": 1}, "cadence": 15}, source, [(1, "A1")]))
+    monkeypatch.setattr(structured, "apply_poll", lambda event_id, live_binding, adapter, watchers, snap: polls.append((event_id, snap.status, snap.score_label)))
+    return event, card_row, polls
+
+
+def test_a_game_the_schedule_finished_between_polls_gets_its_final_poll(monkeypatch, redis):
+    # BUG-019 (H6 exp6): the schedule refresh found the game over in the poller's hand-over gap; the card
+    # stayed LIVE at 90'+3, and nobody heard the result.
+    event, card_row, polls = finished(monkeypatch, scorecard=True)
+    structured.refresh(1)
+    assert polls == [(10, "final", "A 2 – 1 B")]  # the poller's path: the result moment, the card's live block
+
+
+def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
+    # BUG-019: with no final scorecard to apply, the card still mustn't say LIVE.
+    event, card_row, polls = finished(monkeypatch, scorecard=False)
+    structured.refresh(1)
+    assert polls == [] and event.status == "final"
+    assert card_row.card["live"] == {"is_live": False, "player_stats": []} and not card_row.is_live
+    assert card_row.card["upcoming"] == []

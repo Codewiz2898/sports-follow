@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type Research, type SearchResponse, type SearchResult } from '../api'
 import { relative, sportKey } from '../format'
@@ -8,16 +8,21 @@ import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
 export const SPORTS: [string, string][] = [['', 'All'], ['football', 'Football'], ['cricket', 'Cricket'], ['basketball', 'Basketball'], ['tennis', 'Tennis'], ['chess', 'Chess'], ['esports', 'Esports']]
 
-/** Search as you type: one request per 250 ms pause, the previous one cancelled. Keeps the last answer while the next loads. */
+/**
+ * Search as you type: one request per 250 ms pause, the previous one cancelled. Keeps the last answer
+ * on screen while the next loads; `fresh` says it answers what's typed now, so Enter never acts on the
+ * previous query's results.
+ */
 export function useSearch(query: string, sport: string) {
-  const [data, setData] = useState<SearchResponse | null>(null)
+  const [answer, setAnswer] = useState<{ asked: string; data: SearchResponse } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const q = query.trim()
+  const asked = `${sport}|${q}`
 
   useEffect(() => {
     if (q.length < 2) {
-      setData(null)
+      setAnswer(null)
       setLoading(false)
       setError(null)
       return
@@ -26,14 +31,15 @@ export function useSearch(query: string, sport: string) {
     setLoading(true)
     const t = setTimeout(() => {
       api.search(q, sport || null, ctrl.signal)
-        .then((r) => { setData(r); setError(null) })
+        .then((r) => { setAnswer({ asked: `${sport}|${q}`, data: r }); setError(null) })
         .catch((e: Error) => { if (e.name !== 'AbortError') setError(e.message) })
         .finally(() => { if (!ctrl.signal.aborted) setLoading(false) })
     }, 250)
     return () => { clearTimeout(t); ctrl.abort() }
   }, [q, sport])
 
-  return { data: q.length >= 2 ? data : null, loading, error }
+  const data = q.length >= 2 ? answer?.data ?? null : null
+  return { data, fresh: data != null && answer?.asked === asked, loading, error }
 }
 
 export interface Section { key: string; title: string; items: SearchResult[] }
@@ -62,6 +68,7 @@ export function useSearchActions(onDone?: () => void) {
   const location = useLocation()
   const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const inFlight = useRef(false)
 
   const open = useCallback((r: SearchResult) => {
     const state = { result: r, back: `${location.pathname}${location.search}` }
@@ -75,6 +82,9 @@ export function useSearchActions(onDone?: () => void) {
   }, [navigate, location.pathname, location.search, onDone])
 
   const run = useCallback(async (key: string, go: () => ReturnType<typeof following.follow>) => {
+    // One follow or research at a time: a second press (a held Shift+Enter) must not send another.
+    if (inFlight.current) return
+    inFlight.current = true
     setError(null)
     setPending(key)
     try {
@@ -84,6 +94,7 @@ export function useSearchActions(onDone?: () => void) {
     } catch (e) {
       setError((e as Error).message)
     } finally {
+      inFlight.current = false
       setPending(null)
     }
   }, [navigate, onDone])
@@ -100,7 +111,8 @@ export function useSearchActions(onDone?: () => void) {
   return { open, follow, research, pending, error, isFollowing: following.isFollowing }
 }
 
-const fold = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+// Accents and apostrophes dropped, as the server compares names: "aja" is the start of A'ja.
+const fold = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['’`]/g, '').toLowerCase()
 
 /** The name with the typed start of each word in bold: "Caitl" in Caitlin Clark. */
 export function Highlight({ name, query }: { name: string; query: string }) {
@@ -207,7 +219,10 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
   idFor?: (r: SearchResult) => string
 }) {
   const parts = sections(data)
-  const exactName = data.results.find((r) => r.exact)?.name ?? query
+  // The name one of them goes by ("Ronaldo", not "Ronaldo da Silva Souza", whose alias it is); when
+  // only aliases have it ("Silva"), the name as typed.
+  const plain = (s: string) => fold(s).split(/[^a-z0-9]+/).filter(Boolean).sort().join(' ')
+  const exactName = data.results.find((r) => r.exact && plain(r.name) === plain(data.query))?.name ?? data.query.replace(/(^|\s)\S/g, (c) => c.toUpperCase())
   const nothing = !data.results.length
   return (
     <div className="search-results" aria-busy={loading || undefined}>

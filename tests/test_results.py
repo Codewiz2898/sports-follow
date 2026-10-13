@@ -75,6 +75,30 @@ def test_cricket_form_and_record_from_the_teams_side():
     assert note == "Last 3 matches"
 
 
+def test_cricket_record_reads_the_winner_by_whole_name():
+    # By substring, "Mumbai Indians won" was a win for anyone whose teams include India, and "India A
+    # won" a win for India. The app's outcome() (web/src/format.ts) reads these the same way.
+    kohli = ["India", "Royal Challengers Bengaluru"]
+    cases = [
+        ("Mumbai Indians won by 5 wkts (12b rem)", kohli, "L"),
+        ("Royal Challengers Bengaluru won by 7 runs", kohli, "W"),
+        ("India A won by 3 runs", ["India"], "L"),
+        ("South Africa A won by 10 runs", ["South Africa"], "L"),
+        ("India won by 8 wkts (50b rem)", ["India"], "W"),
+        ("Australia A won by 4 wkts", ["Australia 'A'"], "W"),
+        ("LIONS won by 6 wkts", ["Lions"], "W"),
+        ("Match tied (India won the Super Over)", ["India"], "W"),
+        ("Match tied (Mumbai Indians won the Super Over)", ["India"], "L"),
+        ("Match drawn", ["India"], "D"),
+        ("No result", ["India"], "D"),
+        ("Match abandoned without a ball bowled", ["India"], None),
+        ("West Indies won by 12 runs", [], None),
+    ]
+    assert [form._cricket_outcome(text, teams) for text, teams, _ in cases] == [want for _, _, want in cases]
+    stats, _ = form.summarize("cricket", [(result(text), None) for text, teams, _ in cases if teams == kohli], kohli)
+    assert stats == [{"label": "W–D–L", "value": "1–0–1"}]
+
+
 def test_cricket_form_counts_both_innings_of_a_test():
     # A line's stats are its latest innings; the headline has them all.
     stats, _ = form.summarize("cricket", [

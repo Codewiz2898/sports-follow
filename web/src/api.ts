@@ -105,7 +105,8 @@ export interface UpcomingEvent {
 export interface RecentResult {
   title: string
   result: string
-  date?: string | null
+  date?: string | null  // the UTC day, or an agent's bare date
+  start_utc?: string | null  // when the game started: the app shows the fan's local day of it
   player_contribution?: string | null
   competition?: string | null
   source_url?: string | null
@@ -126,7 +127,6 @@ export interface ResultsPage {
 /** One finished game in full, from the player's side. */
 export interface GameDetail extends RecentResult {
   venue?: string | null
-  start_utc?: string | null
   score?: string | null
   clock?: string | null
   line?: { headline: string; stats: Stat[] } | null

@@ -70,15 +70,26 @@ def fold(text: str) -> str:
     return unicodedata.normalize("NFKD", text.translate(_LETTERS)).encode("ascii", "ignore").decode().lower().strip()
 
 
+def words(text: str) -> list[str]:
+    """A name as plain lower-case ASCII words, the one form names are compared in: "A'ja Wilson" and
+    "A’ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"], "M.S. Dhoni" -> ["m", "s", "dhoni"]."""
+    return re.sub(r"[^a-z0-9]+", " ", fold(re.sub(r"['’`]", "", text or ""))).split()
+
+
 def team_key(name: str) -> str:
     """A team name reduced for exact comparison: "Australia 'A'" == "australia a"; never a substring match."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", fold(name)).split())
 
 
 def names_match(wanted: str, found: str) -> bool:
-    """Accept a search hit only if the surnames agree, so a bare "Ronaldo" can't bind the wrong athlete."""
-    w, f = fold(wanted).split(), fold(found).split()
-    return bool(w and f) and (w[-1] == f[-1] or w[-1] in f)
+    """Accept a search hit only if the surnames agree and every word of the shorter name is in the
+    longer one (an initial stands for its word): "Ronaldo" is Cristiano Ronaldo and "Jasprit Bumrah" is
+    "Jasprit Jasbirsingh Bumrah", but "Ahmed Salah" isn't Mohamed Salah."""
+    w, f = words(wanted), words(found)
+    if not (w and f) or not (w[-1] == f[-1] or w[-1] in f):
+        return False
+    short, long = (w, f) if len(w) <= len(f) else (f, w)
+    return all(any(a == b or (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b)) for b in long) for a in short)
 
 
 def birth_date(athlete: dict[str, Any]) -> str | None:

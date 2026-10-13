@@ -32,6 +32,18 @@ log = logging.getLogger("sports_follow.structured")
 # Card sections a bound player's source owns; an agent rebuild keeps them as they are.
 OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_note", "provenance")
 BIND_RETRY = 6 * 3600
+# A refresh's lock outlasts the worker's job_timeout (900 s): arq's timeout doesn't stop the refresh's
+# thread (a Lichess refresh reads for minutes), so the lock, not the job, says one is still running.
+REFRESH_LOCK = 20 * 60
+# A failed refresh is tried again after REFRESH_RETRY, twice as long after each failure in a row, at most
+# REFRESH_RETRY_MAX: an outage, or a team the plan doesn't cover, mustn't cost a request every minute.
+REFRESH_RETRY = 2 * 60
+REFRESH_RETRY_MAX = 2 * 3600
+# Polls of a live event further apart than this (or three of its source's rounds) left a gap: a restart,
+# or the source failing for a while. What changed meanwhile is old news, not a moment.
+POLL_GAP = 5 * 60
+PRE_MATCH = ("scheduled", "armed", "postponed")
+UNDER_WAY = 10  # minutes on a football clock: a game first seen live this late was missed, not just started
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
 SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore", "liquipedia_esports": "Liquipedia", "pubg_esports": "PUBG"}
@@ -71,7 +83,8 @@ CHESS_TITLES = {"GM", "IM", "WGM", "WIM", "FM", "WFM"}
 
 
 def _name_key(name: str) -> list[str]:
-    return sorted(espn.fold(name).replace("-", " ").replace(".", " ").split())
+    """A name's words in any order, folded as the registry folds them ("N’Golo Kanté" == "ngolo kante")."""
+    return sorted(registry.words(name))
 
 
 def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
@@ -184,15 +197,19 @@ def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
     if ref is None:
         log.info("bind %s: %s has no athlete %s", player_id, adapter.system, f"with id {pinned[0]}" if pinned else f"named {name!r}")
         return False
-    # Picked by id, or the name matched and a team the agent also named (or, in individual sports, the
-    # same full name) makes it certain.
-    same_name = sorted(espn.fold(ref.name).split()) == sorted(espn.fold(name).split())
-    if getattr(adapter, "games", None) and not given and not pinned and person is None and not _teams_overlap(ref.team_names, teams):
-        # Esports handles repeat across games ("Jonathan" plays BGMI, another Jonathan LoL): a name alone
-        # never binds a player to a source covering other games; their team must match too.
-        log.info("bind %s: %s's %r plays for %s, not %s; not binding", player_id, adapter.system, ref.name, ", ".join(ref.team_names) or "no team", ", ".join(teams) or "a team we know")
+    # Picked by id, or the name matched and a team the agent also named makes it certain; so does the same
+    # full name when the agent named no team, or in individual sports, where the source has none. A name
+    # found by search and nothing else is a namesake as often as not (the agent's "Mohamed Salah" of Al
+    # Ahly isn't ESPN's of Liverpool), so it isn't bound. Esports handles repeat across games ("Jonathan"
+    # plays BGMI, another Jonathan LoL): there the team must match.
+    same_name = _name_key(ref.name) == _name_key(name)
+    overlap = _teams_overlap(ref.team_names, teams)
+    individual = ref.team_ids == [ref.athlete_id]
+    certain = bool(pinned) or overlap or (same_name and not getattr(adapter, "games", None) and (not teams or individual))
+    if not (certain or given):
+        log.info("bind %s: %s's %r (%s) may not be the %r of %s; not binding", player_id, adapter.system, ref.name, ", ".join(ref.team_names) or "no team", name, ", ".join(teams) or "no team")
         return False
-    confidence = 1.0 if pinned or _teams_overlap(ref.team_names, teams) or (not teams and same_name) else 0.8
+    confidence = 1.0 if certain else 0.8
     known = {espn.team_key(t) for t in ref.team_names}
     ref.other_teams = [t for t in teams if t and espn.team_key(t) not in known]
     return record(player_id, ref, confidence)
@@ -264,15 +281,22 @@ def refresh(player_id: int) -> None:
     A player followed before their sport had an adapter is bound here first, and one bound to a source
     their sport has since moved off (ESPN football once Sportmonks runs) is bound again; a lookup that
     finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
+    A source down to what its live games need isn't read (spare); a failure is noted in the binding's
+    health, which the scheduler waits on before the next try (retry_at).
     """
     lock = f"structured:{player_id}"
-    if not bus.try_lock(lock, 300):
+    token = bus.try_lock(lock, REFRESH_LOCK)
+    if not token:
         return
     try:
         with session() as db:
             row = binding(db, player_id)
             preferred = for_sport(db.scalar(select(Player.sport).where(Player.id == player_id)))
             current = row.adapter if row else None
+        reading = ADAPTERS.get(current) if current else preferred
+        if reading is not None and not spare(reading):
+            log.info("refresh %s: %s is down to what live games need; next tick", player_id, reading.system)
+            return
         if rebind(current, preferred):
             rebound = bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) and bind(player_id)
             if not rebound and current is None:
@@ -281,10 +305,29 @@ def refresh(player_id: int) -> None:
     except AdapterError as exc:
         log.warning("refresh %s failed: %s", player_id, exc)
         _record_health(player_id, ok=False, error=str(exc))
-    except Exception:
+    except Exception as exc:
         log.exception("refresh %s crashed", player_id)
+        _record_health(player_id, ok=False, error=f"crashed: {exc}"[:300])
     finally:
-        bus.release(lock)
+        bus.release(lock, token)
+
+
+def spare(adapter: Adapter) -> bool:
+    """Whether a background read (a refresh, older results) leaves what a source with an hourly allowance
+    keeps for live games (Sportmonks, PandaScore, Liquipedia). A source without one always has room."""
+    check = getattr(adapter, "spare", None)
+    return check() if check else True
+
+
+def retry_at(health: dict[str, Any] | None) -> datetime | None:
+    """When a player whose refreshes are failing is tried again (from their binding's health), or None
+    if the last one worked: REFRESH_RETRY after the first failure, twice as long after each one in a row."""
+    failures = int((health or {}).get("failures") or 0)
+    checked = (health or {}).get("checked_at")
+    if not failures or not checked:
+        return None
+    wait = min(REFRESH_RETRY * 2 ** min(failures - 1, 16), REFRESH_RETRY_MAX)
+    return datetime.fromisoformat(checked) + timedelta(seconds=wait)
 
 
 def sport_name(adapter: Adapter, ref: PlayerRef) -> str:
@@ -325,14 +368,21 @@ def _refresh(player_id: int) -> None:
     finals_all = [f for f in fixtures if f.status == "final"]
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
     ahead = upcoming(fixtures, now)
+    # A game the schedule says is over but that is still armed or live here, the poller didn't see finish
+    # (it was between sessions, or the source's live feed was failing): _finish gives it a last poll.
+    with session() as db:
+        unfinished = {key: event_id for event_id, key in db.execute(select(Event.id, Event.key).where(Event.key.in_([f"{adapter.system}:{f.source_id}" for f in finals_all]), Event.status.in_(("armed", "live")))).all()}
     recent: list[tuple[Fixture, Snapshot | None]] = []
     for f in finals:
         try:
-            recent.append((f, adapter.snapshot(f.locator, final=True)))
+            # A final read may come from the cache, which for an unfinished game holds the last live poll.
+            recent.append((f, adapter.snapshot(f.locator, final=f"{adapter.system}:{f.source_id}" not in unfinished)))
         except AdapterError as exc:
             log.warning("refresh %s: no scorecard for %s: %s", player_id, f.source_id, exc)
             recent.append((f, None))
     stats, note = adapter.stats(ref, [(f, s) for f, s in recent if s])
+    snaps = {f.source_id: snap for f, snap in recent if snap}
+    _finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})
 
     with session() as db:
         player = db.get(Player, player_id)
@@ -347,7 +397,6 @@ def _refresh(player_id: int) -> None:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
         # Every finished game the source returns joins the player's results history, kept for good.
-        snaps = {f.source_id: snap for f, snap in recent if snap}
         for f in finals_all:
             snap = snaps.get(f.source_id)
             keep_result(db, events[f.source_id].id, player_id, result_item(adapter, f, snap, events[f.source_id], ref), scorecard=snap is not None)
@@ -388,6 +437,51 @@ def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     date): both are left out."""
     stale = now - timedelta(hours=12)
     return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale)][:UPCOMING_LIMIT]
+
+
+def _finish(unfinished: dict[int, Snapshot | None]) -> None:
+    """Games the schedule says are over that the poller never saw finish, with each one's scorecard read
+    afresh (None if it couldn't be). A final one goes the poller's way (apply_poll), so its cards leave
+    LIVE and the result is told; the rest are closed, and their cards stop showing them live."""
+    unseen = []
+    for event_id, snap in unfinished.items():
+        watching = _watching(event_id) if snap is not None and snap.status == "final" else None
+        if watching is None:
+            unseen.append(event_id)
+            continue
+        live_binding, source, watchers = watching
+        log.info("refresh: event %s ended between polls; applying its final scorecard", event_id)
+        apply_poll(event_id, live_binding, source, watchers, snap)
+    if not unseen:
+        return
+    with session() as db:
+        for event in db.scalars(select(Event).where(Event.id.in_(unseen))):
+            event.status = "final"
+        cleared = close_live(db, unseen)
+    for player_id, card in cleared:
+        bus.store_card(player_id, card)
+
+
+def close_live(db: Session, event_ids: list[int]) -> list[tuple[int, dict[str, Any]]]:
+    """Cards still showing one of these events live, now it's over without a final poll: their live section
+    is cleared, the game leaves their upcoming list, and their fixtures are due for a re-read. Returns the
+    cards to publish once committed."""
+    if not event_ids:
+        return []
+    ids = set(event_ids)
+    players = select(EventPlayer.player_id).where(EventPlayer.event_id.in_(sorted(ids)))
+    cleared = []
+    for card_row in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(players))):
+        if ((card_row.card or {}).get("live") or {}).get("event_id") not in ids:
+            continue
+        card = copy.deepcopy(card_row.card)
+        card["live"] = {"is_live": False, "player_stats": []}
+        card["upcoming"] = [u for u in card.get("upcoming", []) if u.get("event_id") not in ids]
+        card["freshness"] = {**card.get("freshness", {}), "fixtures": None}
+        card["version"] = (card_row.version or 0) + 1
+        card_row.card, card_row.version, card_row.freshness, card_row.is_live = card, card["version"], card["freshness"], False
+        cleared.append((card_row.player_id, card))
+    return cleared
 
 
 _ORDER = {"scheduled": 0, "postponed": 0, "armed": 1, "live": 2, "final": 3}
@@ -480,6 +574,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
         "result": adapter.result_label(f, ref.team_ids) or snap_result(snap),
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
+        "start_utc": _iso(f.start_utc),  # the app dates a result by the fan's local day of the game
         "player_contribution": contribution(snap, ref.athlete_id),
         "competition": f.competition,
         "event_id": event.id if event else None,
@@ -540,7 +635,8 @@ def poll_event(event_id: int) -> None:
     until it moves again.
     """
     lock = f"poll:{event_id}"
-    if not bus.try_lock(lock, 120):
+    token = bus.try_lock(lock, 120)
+    if not token:
         return
     try:
         deadline = time.monotonic() + POLL_SESSION
@@ -553,12 +649,12 @@ def poll_event(event_id: int) -> None:
                 quiet_since = time.monotonic()
             elif time.monotonic() - quiet_since > 60:
                 wait = max(wait, 60)
-            bus.extend(lock, wait + 120)
+            bus.extend(lock, wait + 120, token)
             time.sleep(wait)
     except Exception:
         log.exception("poll %s crashed", event_id)
     finally:
-        bus.release(lock)
+        bus.release(lock, token)
 
 
 def batched(system: str | None) -> bool:
@@ -586,7 +682,8 @@ def poll_lane(system: str) -> None:
     """
     adapter = ADAPTERS.get(system)
     lock = f"lane:{system}"
-    if adapter is None or not bus.try_lock(lock, 120):
+    token = bus.try_lock(lock, 120) if adapter is not None else None
+    if not token:
         return
     try:
         deadline = time.monotonic() + POLL_SESSION
@@ -596,12 +693,12 @@ def poll_lane(system: str) -> None:
             wait = lane_round(adapter, moved, missing)
             if wait is None or time.monotonic() + wait > deadline:
                 return
-            bus.extend(lock, wait + 120)
+            bus.extend(lock, wait + 120, token)
             time.sleep(wait)
     except Exception:
         log.exception("poll lane %s crashed", system)
     finally:
-        bus.release(lock)
+        bus.release(lock, token)
 
 
 def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> int | None:
@@ -657,14 +754,31 @@ def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids
         state["eval"] = moments.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
 
 
-def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot) -> moments.Seen | None:
+def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True) -> moments.Seen | None:
     """What a player's moments are found against: the event's last state, with their last line. A first
-    look at a game already under way is the baseline (None): no earlier state, or, from a source with
-    player lines, no earlier line for them while it was live. Esports has no player lines, so its
-    earlier state alone is enough."""
-    if latest is None or (last is None and latest.status == "live" and snap.lines):
+    look at a game already under way is the baseline (None), which tells only a result or a line-up: no
+    earlier state; a gap in polling (recent is False: a restart, an hour of a source's errors), so what
+    happened meanwhile is old news; a game last seen before the start and now over, or (football) well
+    past kick-off; or, from a source with player lines, no earlier line for them while it was live.
+    Esports has no player lines, so its earlier state alone is enough."""
+    if latest is None or not recent or (last is None and latest.status == "live" and snap.lines):
+        return None
+    if latest.status in PRE_MATCH and (snap.status == "final" or (snap.status == "live" and _under_way(snap))):
         return None
     return moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
+
+
+def _under_way(snap: Snapshot) -> bool:
+    """A football game well past kick-off by its clock ("61'"). Polled every minute before the start, a
+    game is first seen live a minute or two in, so one this far along was missed (the source lagged)."""
+    return snap.state.get("kind") == "football" and moments.number(snap.clock_label) >= UNDER_WAY
+
+
+def _polled(event_id: int, cadence: int) -> bool:
+    """Note a poll of an event. Returns whether the one before it was recent: within POLL_GAP, or three of
+    a slow source's rounds (Liquipedia reads every five minutes)."""
+    seconds = max(POLL_GAP, 3 * cadence)
+    return bus.sync_redis().set(f"polled:{event_id}", "1", ex=seconds, get=True) is not None
 
 
 def _team_ids(db: Session, system: str, player_ids: list[int]) -> dict[int, list[str]]:
@@ -724,6 +838,9 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         # Esports moments are told from the player's team's side ("Sentinels win map 2"): no line says it.
         sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if snap.state.get("kind") in ("esports", "battle_royale") else {}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
+        # Only changes are stored, so the latest state can be old in a game polled all along (the
+        # minutes before kick-off); whether polling had a gap comes from the polls themselves.
+        recent = _polled(event_id, int(live_binding.get("cadence") or 10))
         if snap.state.get("kind") == "chess":
             _evaluate(db, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -745,7 +862,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                     db.add(PlayerLine(event_id=event_id, player_id=player_id, as_of=now, stats=line_json))
             # What happened to this player since the last poll.
             if changed or line_changed:
-                before = baseline(latest, last, snap)
+                before = baseline(latest, last, snap, recent)
                 name, sport = people.get(player_id, ("", ""))
                 seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
@@ -801,6 +918,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "title": title,
             "result": snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label,
             "date": event.start_utc.date().isoformat() if event.start_utc else None,
+            "start_utc": _iso(event.start_utc),
             "player_contribution": line.headline if line else None,
             "competition": event.competition,
             "event_id": event.id,

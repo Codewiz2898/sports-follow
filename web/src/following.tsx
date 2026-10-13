@@ -5,6 +5,8 @@ import { wanted } from './notifications'
 interface FollowingState {
   cards: Card[]
   loaded: boolean
+  failed: boolean  // the follow list couldn't be loaded (yet): not the same as following nobody
+  reload: () => Promise<void>
   progress: Record<number, string[]>
   follow: (target: FollowTarget) => Promise<Card>
   unfollow: (playerId: number) => Promise<void>
@@ -19,6 +21,13 @@ interface FollowingState {
 const Ctx = createContext<FollowingState | null>(null)
 const MAX_PROGRESS = 8
 const TOAST_MS = 8000
+const RETRY_MS = 2000
+const RETRY_MAX_MS = 60_000
+
+/** The fan's players as the server lists them, and any this app followed that the list doesn't have yet. */
+function withLocal(players: Card[], prev: Card[]): Card[] {
+  return [...players, ...prev.filter((c) => !players.some((p) => p.player_id === c.player_id))]
+}
 
 /**
  * The fan's followed players, kept live over ONE stream (/api/me/stream) for all of them.
@@ -28,24 +37,58 @@ const TOAST_MS = 8000
 export function FollowingProvider({ children }: { children: ReactNode }) {
   const [cards, setCards] = useState<Card[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [progress, setProgress] = useState<Record<number, string[]>>({})
   const [moments, setMoments] = useState<PlayerMoment[]>([])
   const [heard, setHeard] = useState(0)
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const cardsRef = useRef(cards)
   cardsRef.current = cards
+  const loadedRef = useRef(loaded)
+  loadedRef.current = loaded
 
+  const reload = useCallback(() => api.following().then((r) => {
+    setCards((prev) => withLocal(r.players, prev))
+    setLoaded(true)
+    setFailed(false)
+  }, () => setFailed(true)), [])
+
+  useEffect(() => { reload() }, [reload])
+
+  // Until the list loads, try again: soon, then less often, and at once on coming back online or to the app.
   useEffect(() => {
-    api.following().then((r) => { setCards(r.players); setLoaded(true) }).catch(() => setLoaded(true))
-  }, [])
+    if (loaded || !failed) return
+    let wait = RETRY_MS
+    let stopped = false
+    let timer: number | undefined
+    const again = () => reload().then(() => {
+      wait = Math.min(wait * 2, RETRY_MAX_MS)
+      if (!stopped) timer = window.setTimeout(again, wait)
+    })
+    timer = window.setTimeout(again, wait)
+    const wake = () => { if (document.visibilityState === 'visible') reload() }
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      window.removeEventListener('online', wake)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [loaded, failed, reload])
 
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {
       // First on every (re)connect: each card as it is now, so a score or result published while the
       // stream was down (a locked phone, a restart) isn't missed, and the activity list catches up.
-      // Who the fan follows, and their alert levels, stay as this app has them.
+      // Who the fan follows, and their alert levels, stay as this app has them, unless the list never
+      // loaded (a player was followed since): then this is the list.
       const fresh = new Map(e.players.map((c) => [c.player_id, c]))
-      setCards((prev) => prev.map((c) => {
+      if (!loadedRef.current) {
+        setCards((prev) => withLocal(e.players, prev))
+        setLoaded(true)
+        setFailed(false)
+      } else setCards((prev) => prev.map((c) => {
         const f = fresh.get(c.player_id)
         return f && f.version >= c.version ? { ...c, ...f, alerts: c.alerts } : c
       }))
@@ -99,6 +142,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const value = useMemo<FollowingState>(() => ({
     cards,
     loaded,
+    failed,
+    reload,
     progress,
     follow,
     unfollow,
@@ -108,7 +153,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     moments,
     dismissMoment,
     heard,
-  }), [cards, loaded, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard])
+  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

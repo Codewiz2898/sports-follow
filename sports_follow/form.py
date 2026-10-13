@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from . import games
+from .adapters.espn import team_key
 from .adapters.espn_cricket import batting_bowling
 
 Line = dict[str, Any]  # {"headline": "38 PTS · 16 REB · 2 AST", "stats": [{"label", "value"}]}
@@ -73,11 +74,14 @@ def _record(sport: str, items: list[dict[str, Any]], teams: list[str]) -> dict[s
 
 
 def _cricket_outcome(summary: str, teams: list[str]) -> str | None:
-    text = summary.lower()
-    if " won " not in text:
-        return "D" if any(w in text for w in ("drawn", "tied", "no result")) else None
-    winner = text.split(" won ", 1)[0]
-    if any(t and t.lower() in winner for t in teams):
+    """The winner a result names ("India won by 8 wkts", "Match tied (India won the Super Over)"), as
+    one of the player's teams by whole name: "India A" and "Mumbai Indians" aren't India. The app's
+    outcome() in web/src/format.ts reads results the same way."""
+    winner = re.search(r"(?:^|\()([^()]+?) won\b", summary, re.I)
+    if not winner:
+        return "D" if any(w in summary.lower() for w in ("drawn", "tied", "no result")) else None
+    named = team_key(winner.group(1))
+    if named and any(team_key(t) == named for t in teams):
         return "W"
     return "L" if teams else None
 

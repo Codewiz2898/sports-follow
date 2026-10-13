@@ -40,6 +40,7 @@ REGISTRY_LIMIT = 12
 FILL_BELOW = 3  # registry matches under which ESPN and Lichess are asked too
 NOTABLE = 10  # Wikipedia editions that make one registry match enough
 SUGGEST_MIN = 0.78  # how close a spelling must be to be offered as "did you mean"
+SURELY = 0.9  # a "did you mean" this close is the name, misspelled: the live sources aren't asked as well
 
 # ESPN uid prefix -> (our sport, adapter). Leagues an adapter can't follow come back as "AI only".
 ESPN_SPORTS = {"s:600": ("football", "espn_soccer"), "s:200": ("cricket", "espn_cricket"), "s:40": ("basketball", "espn_basketball"), "s:850": ("tennis", "espn_tennis")}
@@ -86,6 +87,7 @@ class Result:
 
 
 def _key(name: str) -> list[str]:
+    """A name's words as the registry indexes them, in any order: "N’Golo Kanté" is "ngolo kante"."""
     return structured._name_key(name)
 
 
@@ -103,6 +105,16 @@ def closeness(query: str, name: str) -> float:
     typed = " ".join(q)
     spans = [" ".join(sorted(n[i : i + len(q)])) for i in range(max(1, len(n) - len(q) + 1))]
     return max(SequenceMatcher(None, typed, x).ratio() for x in [" ".join(_key(name)), *spans])
+
+
+def surely(query: str, name: str) -> bool:
+    """Whether a "did you mean" is surely the athlete meant: nearly the spelling typed ("sabalnka"), or
+    the same surname with the first name spelled another way ("mohammad salah"). "shane warne" isn't
+    Shane Watson, nor "kobe bryant" Em Bryant."""
+    if closeness(query, name) >= SURELY:
+        return True
+    q, n = registry.words(query), registry.words(name)
+    return len(q) >= 2 and len(n) >= 2 and q[-1] == n[-1] and q[0][0] == n[0][0]
 
 
 # ---------------------------------------------------------------- sources
@@ -259,7 +271,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
             league = (row.locator or {}).get("league") if row else None
         qid = qids.get(player.id)
         out.append(Result(
-            key=f"{system}:{ext}" if system else (f"wikidata:{qid}" if qid else f"player:{player.id}"),
+            key=f"{system}:{ext}" if system else (f"wikidata:{qid}:{player.sport.lower()}" if qid else f"player:{player.id}"),
             name=player.name,
             sport=games.label(player.sport) or "Sport not known yet",
             detail=" · ".join(t for t in (player.teams or [])[:2] if t) or (player.role or ""),
@@ -301,7 +313,8 @@ def from_athlete(a: Athlete, query: str) -> Result:
     else:
         parts = [*teams[:2], a.country or ""]
     return Result(
-        key=f"{system}:{live_id}" if live_id else f"wikidata:{a.qid}",
+        # A person in two sports is two rows (Chahal plays cricket and chess), so the sport is in the key.
+        key=f"{system}:{live_id}" if live_id else f"wikidata:{a.qid}:{a.sport}",
         name=a.name,
         sport=(games.of_athlete(a.league, a.country) if a.sport == games.ESPORTS else None) or a.sport.title(),
         detail=" · ".join(dict.fromkeys(p for p in parts if p)),
@@ -338,18 +351,19 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
     then names that start with what was typed, then notable ones (a headshot on ESPN, a title in
     chess), in the source's own order."""
     seen: dict[str, Result] = {}
-    by_qid: dict[str, Result] = {}
+    # One person in one sport: Chahal the cricketer and Chahal the chess player share a Wikidata id.
+    by_qid: dict[tuple[str, str], Result] = {}
     for r in local_results:
         if r.matched:  # a typo-level likeness is offered as "did you mean", not listed as the name
             seen[r.key] = r
             if r.qid:
-                by_qid[r.qid] = r
+                by_qid[(r.qid, r.sport)] = r
     for r in source_results:
-        held = seen.get(r.key) or (by_qid.get(r.qid) if r.qid else None)
+        held = seen.get(r.key) or (by_qid.get((r.qid, r.sport)) if r.qid else None)
         if held is None:
             seen[r.key] = r
             if r.qid:
-                by_qid[r.qid] = r
+                by_qid[(r.qid, r.sport)] = r
             continue
         # The same athlete from two places: one row, keeping what each knows.
         held.qid = held.qid or r.qid
@@ -362,13 +376,27 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
             # their teams, which for a chess player can be a league side.
             held.detail = r.detail
 
-    def order(pair: tuple[int, Result]) -> tuple:
-        i, r = pair
-        group = 0 if r.player_id else (1 if r.live_scores else 2)
+    def group(r: Result) -> int:
+        return 0 if r.player_id else (1 if r.live_scores else 2)
+
+    def score(r: Result) -> float:
         # Popularity counts double for players of today (registry.score), and triple for the exact
         # name: "djok" is still Djokovic, and "ronaldo" is Cristiano before the Brazilian Ronaldo.
-        weight = (1 if r.inactive else 2) * (3 if r.exact else 1)
-        return (group, not r.following, -r.followers if r.player_id else 0, not _prefix_match(query, r.name), -r.popularity * weight, not r.exact, r.inactive, i)
+        return r.popularity * (1 if r.inactive else 2) * (3 if r.exact else 1)
+
+    # An exact name with no popularity to go by (an esports pro: their sources have none) comes after
+    # the exact names whose popularity is known and before every partial match below them: "tenz" is
+    # TenZ before the Tenzins, and "ronaldo" Cristiano, the Brazilian Ronaldo, then the LoL pro.
+    floor: dict[int, float] = {}
+    for r in seen.values():
+        if r.exact and r.popularity:
+            floor[group(r)] = min(floor.get(group(r), math.inf), score(r))
+
+    def order(pair: tuple[int, Result]) -> tuple:
+        i, r = pair
+        popularity = floor.get(group(r), math.inf) - 0.5 if r.exact and not r.popularity else score(r)
+        starts = r.exact or _prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
+        return (group(r), not r.following, -r.followers if r.player_id else 0, not starts, -popularity, not r.exact, r.inactive, i)
 
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
 
@@ -387,9 +415,11 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     ours = [r for r in mine if r.matched]
     suggestions: list[Result] = []
     if not matched and not ours:
-        # Nothing starts with that: a typo the registry can place ("kohly") needs no live source.
+        # Nothing starts with that: a spelling the registry can place. Only one that is surely the name
+        # ("sabalnka") spares the live sources; "shane warne" is offered Shane Watson, and ESPN is asked.
         suggestions = suggest(db, query, mine, sport, live=False)
-    if len(matched) < FILL_BELOW and not suggestions and not any(r.exact or r.popularity >= NOTABLE for r in matched):
+    sure = any(surely(query, s.name) for s in suggestions)
+    if len(matched) < FILL_BELOW and not sure and not any(r.exact or r.popularity >= NOTABLE for r in matched):
         # Too new or too obscure for Wikidata: ask the live sources. A name the registry knows well
         # ("bumrah") doesn't need them.
         jobs: dict[str, Any] = {}
@@ -404,7 +434,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
             found = [r for r in found if r.sport.lower() == sport]
         # A live hit with the name of a registry athlete in the same sport is that athlete: the
         # registry's row, confirmed by birth date when followed, stands for both.
-        named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed]}
+        named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
         found = [r for r in found if (tuple(_key(r.name)), r.sport) not in named]
     espn_hits = [r for r in found if r.system != "lichess_chess"][: ESPN_LIMIT + 4]
     results = rank(query, mine, [*matched, *espn_hits, *[r for r in found if r.system == "lichess_chess"]])
@@ -412,14 +442,17 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         suggestions = suggest(db, query, mine, sport)
     if suggestions:
         results = [r for r in results if r.key not in {s.key for s in suggestions}]
-    namesakes = sum(1 for r in results if r.exact)
+    # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
+    # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
+    results = [r for i, r in enumerate(results) if i < ESPN_LIMIT + LOCAL_LIMIT or r.exact]
+    namesakes = len({r.qid or r.key for r in results if r.exact})
     for r in results:
         if namesakes > 1 and r.exact and r.born and str(r.born) not in r.detail:
             r.detail = " · ".join(x for x in (r.detail, f"born {r.born}") if x)
     return {
         "query": query,
         "sport": sport,
-        "results": [_public(r) for r in results[: ESPN_LIMIT + LOCAL_LIMIT]],
+        "results": [_public(r) for r in results],
         "suggestions": [_public(r) for r in suggestions],
         "namesakes": namesakes if namesakes > 1 else 0,
         "partial": partial,
@@ -481,6 +514,17 @@ RESEARCH_PER_DAY = 3
 def research_key(fan: str, now: datetime | None = None) -> str:
     day = (now or datetime.now(timezone.utc)).date().isoformat()
     return f"research:{fan}:{day}"
+
+
+def research_address_key(address: str, now: datetime | None = None) -> str:
+    """One client address's count for the UTC day. Not under "research:", where a fan id could name it."""
+    day = (now or datetime.now(timezone.utc)).date().isoformat()
+    return f"research-address:{address}:{day}"
+
+
+def research_hour_key(now: datetime | None = None) -> str:
+    """The count across all fans for the UTC hour."""
+    return f"research-hour:{(now or datetime.now(timezone.utc)):%Y-%m-%dT%H}"
 
 
 def research_status(used: int, now: datetime | None = None) -> dict[str, Any]:

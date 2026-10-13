@@ -11,7 +11,7 @@ export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const [query, setQuery] = useState(params.get('q') ?? '')
   const [sport, setSport] = useState(params.get('sport') ?? '')
-  const { data, loading, error } = useSearch(query, sport)
+  const { data, fresh, loading, error } = useSearch(query, sport)
   const actions = useSearchActions()
 
   // The query lives in the URL, so back from a preview returns to the same results.
@@ -24,6 +24,8 @@ export function SearchPage() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    // Still showing the previous query's results: they aren't what was asked for.
+    if (!fresh) return
     const first = data && sections(data)[0]?.items[0]
     if (first && (first.exact || data.results.length === 1)) actions.open(first)
   }

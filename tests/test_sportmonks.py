@@ -3,6 +3,7 @@ don't allow republishing real ones, so none are committed)."""
 
 from __future__ import annotations
 
+import time
 from datetime import date
 from types import SimpleNamespace
 
@@ -70,6 +71,21 @@ def test_fixtures_read_teams_round_and_result():
 
 def test_states_map_to_our_four():
     assert [sm._status({"developer_name": s}) for s in ("NS", "INPLAY_1ST_HALF", "HT", "FT_PEN", "POSTPONED", "TBA")] == ["scheduled", "live", "live", "final", "postponed", "scheduled"]
+
+
+def test_a_stopped_match_stays_live_on_its_day():
+    # BUG-052 (H3 t_interrupt): INTERRUPTED and SUSPENDED were "postponed", so a match stopped for
+    # weather or floodlights left the live lane until the next schedule read (up to 30 minutes), and the
+    # goals after the restart arrived that late.
+    kick_off = int(time.time()) - 3600
+    for state, clock in (("INTERRUPTED", "Interrupted"), ("SUSPENDED", "Suspended")):
+        snap = sm.parse_match(_match(state, 1, 0, starting_at_timestamp=kick_off, lineups=LINEUPS))
+        assert (snap.status, snap.clock_label) == ("live", clock)
+        assert snap.lines[str(STAR)].headline == "2 goals, 1 assist"
+        assert sm.parse_fixtures([_match(state, 1, 0, starting_at_timestamp=kick_off)])[0].status == "live"
+    # Still stopped six hours after kick-off, it's off, as postponed, cancelled and abandoned matches are.
+    assert sm.parse_match(_match("SUSPENDED", 1, 0, starting_at_timestamp=kick_off - 6 * 3600)).status == "postponed"
+    assert [sm._status({"developer_name": s}) for s in ("POSTPONED", "CANCELLED", "ABANDONED")] == ["postponed"] * 3
 
 
 def test_a_live_match_has_score_clock_scorers_lines_and_moments():

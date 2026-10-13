@@ -7,13 +7,14 @@ data work happens in the worker, keyed by player.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
 import secrets
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -31,7 +32,7 @@ from sqlalchemy.orm import Session
 from . import bus, credits as credits_page, games, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
 from .db import get_db, session
 from .models import Event, Follow, Moment, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -163,23 +164,53 @@ async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
 # ---------------------------------------------------------------- AI research allowance
 
 
+DAY = 24 * 3600
+
+
+def client_address(request: Request) -> str | None:
+    """Who is asking, for per-address limits: the client's IP as uvicorn sees it (behind the proxy,
+    --proxy-headers sets it), or an IPv6 client's /64, since one home or phone holds a whole one. None
+    for an address that isn't public: this machine, or the proxy when its forwarded address wasn't
+    trusted, would put every fan behind one address."""
+    try:
+        ip = ipaddress.ip_address(request.client.host if request.client else "")
+    except ValueError:
+        return None
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if not ip.is_global:
+        return None
+    return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if ip.version == 6 else str(ip)
+
+
 async def research_used(fan: str) -> int:
     return int(await state["redis"].get(player_search.research_key(fan)) or 0)
 
 
-async def take_research(fan: str) -> bool:
-    """Count one AI research against the fan's day; False (and nothing counted) when none are left."""
-    key = player_search.research_key(fan)
-    used = await state["redis"].incr(key)
-    await state["redis"].expire(key, 2 * 24 * 3600)
-    if used > player_search.RESEARCH_PER_DAY:
+async def take_research(fan: str, address: str | None, used_up: str) -> list[str]:
+    """Count one AI research against the fan's UTC day, their address's day and this hour across all
+    fans. Returns the counts taken, for give_back_research; when any is used up, nothing is counted and
+    the fan gets a 429 (`used_up` when it's their own three)."""
+    now = datetime.now(timezone.utc)
+    limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
+    if address:
+        limits.append((player_search.research_address_key(address, now), RESEARCH_PER_ADDRESS, 2 * DAY, "Your network has used today's AI researches. Try again tomorrow."))
+    limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, "Sports Follow has done all the AI research it can this hour. Try again later."))
+    taken: list[str] = []
+    for key, limit, ttl, refusal in limits:
+        used = await state["redis"].incr(key)
+        taken.append(key)
+        await state["redis"].expire(key, ttl)
+        if used > limit:
+            await give_back_research(taken)
+            raise HTTPException(429, refusal)
+    return taken
+
+
+async def give_back_research(taken: list[str]) -> None:
+    """A research that didn't happen goes back on the counts it was taken from (the day it was taken)."""
+    for key in taken:
         await state["redis"].decr(key)
-        return False
-    return True
-
-
-async def give_back_research(fan: str) -> None:
-    await state["redis"].decr(player_search.research_key(fan))
 
 
 @app.get("/api/me/research")
@@ -203,6 +234,17 @@ def _holder(db: Session, system: str, external_id: str) -> int | None:
     return db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id == external_id))
 
 
+def _same_athlete(person: registry.Person, ref: Any) -> bool:
+    """Is the registry athlete sent with a pick the picked source athlete? The registry has this id for
+    them, or has none in this source and they match by birth date (or name and team). The client sends
+    both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
+    adapter = ADAPTERS.get(ref.system)
+    if adapter is None or person.sport not in adapter.sports:
+        return False
+    known = person.ids.get(ref.system)
+    return known == ref.athlete_id if known else registry.same_person(person, ref)
+
+
 async def _resolve(person: registry.Person) -> tuple[Any, Any] | None:
     try:
         return await asyncio.to_thread(registry.resolve, person)
@@ -211,7 +253,7 @@ async def _resolve(person: registry.Person) -> tuple[Any, Any] | None:
         raise HTTPException(502, "Couldn't reach the live source to find this athlete. Try again in a moment.")
 
 
-async def _follow_athlete(body: dict, fan: str) -> int:
+async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     """Follow the exact athlete a fan picked in search, by registry id or source id; never by name.
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
@@ -221,18 +263,23 @@ async def _follow_athlete(body: dict, fan: str) -> int:
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
+    taken: list[str] = []
     if person and not body.get("system"):
-        holder = await in_db(_holder, "wikidata", person.qid)
+        holder = await in_db(pipeline.registry_holder, person.qid, person.sport if body.get("sport") else None)
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
             if found is None:
-                if not await take_research(fan):
-                    raise HTTPException(429, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
-                player_id, created = await asyncio.to_thread(pipeline.start_from_registry, person)
+                taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
+                try:
+                    player_id, created = await asyncio.to_thread(pipeline.start_from_registry, person)
+                except Exception:
+                    await give_back_research(taken)
+                    raise
                 if not created:
-                    await give_back_research(fan)
+                    await give_back_research(taken)  # another fan's research is building them
+                    taken = []
                 ref = None
             else:
                 adapter, ref = found
@@ -254,12 +301,15 @@ async def _follow_athlete(body: dict, fan: str) -> int:
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
-        if person and (ref is None or person.ids.get(ref.system) in (None, ref.athlete_id)):
+        if person and (ref is None or _same_athlete(person, ref)):
             registry.link(db, player_id, person.qid)
-        if not db.scalar(select(Follow).where(Follow.fan_id == fan, Follow.player_id == player_id)):
-            db.add(Follow(fan_id=fan, player_id=player_id, alert_rules={}))
+        db.execute(insert(Follow).values(fan_id=fan, player_id=player_id, alert_rules={}).on_conflict_do_nothing())
 
-    await in_db(save)  # committed before the jobs are queued and the fan is answered
+    try:
+        await in_db(save)  # committed before the jobs are queued and the fan is answered
+    except Exception:
+        await give_back_research(taken)
+        raise
     if created:
         # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
         # of minutes. Without one: the agent builds the whole page.
@@ -270,9 +320,9 @@ async def _follow_athlete(body: dict, fan: str) -> int:
 
 
 @app.post("/api/follows")
-async def follow(body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     if body.get("system") or body.get("qid"):
-        player_id = await _follow_athlete(body, fan)
+        player_id = await _follow_athlete(body, fan, client_address(request))
         return {"player_id": player_id, "card": await read_card(player_id)}
     if body.get("player_id") is not None:
         # A player already here, by id: a name could belong to their namesake ("nikola-jokic-football").
@@ -293,8 +343,7 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
-    if counted and not await take_research(fan):
-        raise HTTPException(429, "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.")
+    taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
     def save(db: Session) -> tuple[int, bool, dict[str, Any] | None] | None:
         """The follow, in one transaction: (player id, needs a build, the card to republish), or None for a name with nothing to search by."""
@@ -302,9 +351,7 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str
             target = pipeline.resolve_or_create(db, query) if query is not None else player
         except ValueError:
             return None
-        exists = db.scalar(select(Follow).where(Follow.fan_id == fan, Follow.player_id == target.id))
-        if not exists:
-            db.add(Follow(fan_id=fan, player_id=target.id, alert_rules={}))
+        db.execute(insert(Follow).values(fan_id=fan, player_id=target.id, alert_rules={}).on_conflict_do_nothing())
         card_row = db.get(PlayerCard, target.id)
         needs_build = card_row is None or card_row.status in ("building", "failed")
         retrying = card_row is not None and card_row.status == "failed"
@@ -315,10 +362,13 @@ async def follow(body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str
             card_row.card = {**pipeline.placeholder_card(target), "version": card_row.version}
         return target.id, needs_build, card_row.card if retrying else None
 
-    saved = await in_db(save)
+    try:
+        saved = await in_db(save)
+    except Exception:
+        await give_back_research(taken)
+        raise
     if saved is None:
-        if counted:
-            await give_back_research(fan)
+        await give_back_research(taken)
         raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
     player_id, needs_build, retried = saved
     if retried is not None:
@@ -340,6 +390,9 @@ def set_alerts(player_id: int, body: dict = Body(...), fan: str = Depends(fan_id
     if row is None:
         raise HTTPException(404, "Follow the player first.")
     row.alert_rules = {**(row.alert_rules or {}), "level": level}
+    # Committed before the answer, as in every write route here: get_db's own commit runs only after the
+    # response is sent, so a read straight after would see the old level, and a failed commit said OK.
+    db.commit()
     return {"player_id": player_id, "alerts": level}
 
 
@@ -391,12 +444,19 @@ def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = 
             db.delete(old)
     stmt = insert(PushSubscription).values(fan_id=fan, endpoint=endpoint, p256dh=p256dh, auth=auth, timezone=tz, quiet_start=start, quiet_end=end)
     db.execute(stmt.on_conflict_do_update(index_elements=["endpoint"], set_={"fan_id": fan, "p256dh": p256dh, "auth": auth, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0}))
+    # This device and the fan's newest others, up to notify.MAX_DEVICES: every push goes to each of them,
+    # so piled-up subscriptions mustn't turn one alert into hundreds of sends.
+    others = PushSubscription.fan_id == fan, PushSubscription.endpoint != endpoint
+    newest = select(PushSubscription.id).where(*others).order_by(PushSubscription.id.desc()).limit(notify.MAX_DEVICES - 1)
+    db.execute(delete(PushSubscription).where(*others, PushSubscription.id.not_in(newest)))
+    db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
 
 
 @app.delete("/api/push/subscriptions")
 def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == str(body.get("endpoint") or "")))
+    db.commit()
     return {"ok": True}
 
 
@@ -410,7 +470,9 @@ async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
 @app.post("/api/notifications/{notification_id}/opened")
 def notification_opened(notification_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     """The service worker says the fan tapped this notification (for the open rate in `notify stats`)."""
-    return {"ok": notify.opened(db, fan, notification_id)}
+    ok = notify.opened(db, fan, notification_id)
+    db.commit()
+    return {"ok": ok}
 
 
 @app.get("/api/me/mutes")
@@ -425,12 +487,14 @@ def mute(event_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db
     if db.get(Event, event_id) is None:
         raise HTTPException(404, "No such game.")
     db.execute(insert(NotificationMute).values(fan_id=fan, event_id=event_id).on_conflict_do_nothing())
+    db.commit()
     return {"event_id": event_id, "muted": True}
 
 
 @app.delete("/api/me/mutes/{event_id}")
 def unmute(event_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     db.execute(delete(NotificationMute).where(NotificationMute.fan_id == fan, NotificationMute.event_id == event_id))
+    db.commit()
     return {"event_id": event_id, "muted": False}
 
 
@@ -468,6 +532,7 @@ def activity(before: int | None = None, limit: int = 30, fan: str = Depends(fan_
 @app.delete("/api/follows/{player_id}")
 def unfollow(player_id: int, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
+    db.commit()  # or a follow sent straight after could find this one still there, and then lose it
     return {"ok": True}
 
 
@@ -512,23 +577,38 @@ async def card(player_id: int, request: Request, response: Response, fan: str = 
     return {**card, "following": following, "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL) if following else None}
 
 
+REFRESH_EVERY = 60  # seconds: one refresh of a player a minute, whoever asks
+
+
+async def _refresh_due(player_id: int) -> None:
+    """A refresh is a worker job and source (or model) calls, and what it reads is every follower's: one a
+    minute per player is plenty, and a 429 for the rest."""
+    if not await state["redis"].set(f"refresh:{player_id}", "1", nx=True, ex=REFRESH_EVERY):
+        raise HTTPException(429, "This player was refreshed a moment ago. Their page updates by itself; try again in a minute.")
+
+
 @app.post("/api/players/{player_id}/refresh")
-async def refresh(player_id: int) -> dict[str, Any]:
+async def refresh(player_id: int, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Read the player's source again now, for a fan following them."""
     row = await in_db(lambda db: db.get(PlayerCard, player_id))
     if row is None:
         raise HTTPException(404, "No such player.")
+    if await in_db(lambda db: db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id))) is None:
+        raise HTTPException(403, "Follow this player to refresh them.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
     if await in_db(structured.binding, player_id) is not None:
         # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
         if bus.is_locked(f"structured:{player_id}"):
             return {"queued": False, "reason": "A refresh is already running."}
+        await _refresh_due(player_id)
         await arq().enqueue_job("refresh_structured", player_id)
         return {"queued": True}
     if not AGENT_LIVE:
         return {"queued": False, "reason": "Live scores aren't available for this sport yet."}
     if bus.is_locked(f"live:{player_id}"):
         return {"queued": False, "reason": "A live check is already running."}
+    await _refresh_due(player_id)
     await arq().enqueue_job("refresh_live", player_id)
     return {"queued": True}
 
@@ -555,7 +635,7 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
     person = await in_db(_registry_athlete, {"qid": qid, "sport": sport})
     if person is None:
         raise HTTPException(404, "No such athlete.")
-    holder = await in_db(_holder, "wikidata", person.qid)
+    holder = await in_db(pipeline.registry_holder, person.qid, person.sport if sport else None)
     if holder is not None:
         return {"player_id": holder}
     found = await _resolve(person)

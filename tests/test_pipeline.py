@@ -3,15 +3,20 @@ again, and which player a report lands on. The database and Redis are fakes."""
 
 from __future__ import annotations
 
+import json
+import time
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import Select
+from sqlalchemy.sql.dml import Update
 
 from sports_follow import bus, config, notify, pipeline, structured
+from sports_follow.adapters import AdapterError
 from sports_follow.agent import AgentError
-from sports_follow.models import Player, PlayerCard
+from sports_follow.models import Player, PlayerCard, SourceBinding
 
 NOW = datetime(2026, 10, 13, 7, 40, tzinfo=timezone.utc)
 
@@ -22,24 +27,40 @@ def _selected(stmt) -> str:
     return d["entity"].__name__ if d["expr"] is d["entity"] else f"{d['entity'].__name__}.{d['name']}"
 
 
+class Rows(list):
+    def all(self):
+        return list(self)
+
+
 class FakeDb:
-    """A session holding a few rows: get() by primary key, scalars() of a whole model, and scalar()
-    answered from `answers` by what the query selects. Anything else finds nothing."""
+    """A session holding a few rows: get() by primary key, scalars() of a whole model, and scalar() and
+    execute() answered from `answers` by what the query selects (a callable answers when asked), an
+    UPDATE … RETURNING from answers["Update"]. Anything else finds nothing."""
 
     def __init__(self, *rows, answers=None):
         self.rows, self.answers, self.deleted = list(rows), answers or {}, []
+
+    def _answer(self, key, default=None):
+        value = self.answers.get(key, default)
+        return value() if callable(value) else value
 
     def get(self, model, key):
         return next((r for r in self.rows if type(r) is model and (r.player_id if model is PlayerCard else r.id) == key), None)
 
     def scalar(self, stmt):
-        return self.answers.get(_selected(stmt))
+        return self._answer(_selected(stmt))
 
     def scalars(self, stmt):
-        return [r for r in self.rows if type(r).__name__ == _selected(stmt)]
+        if isinstance(stmt, Update):
+            return Rows(self._answer("Update", []))
+        what = _selected(stmt)
+        if "." in what:  # one column: the first of each answered row
+            return Rows(r[0] if isinstance(r, tuple) else r for r in self._answer(what, []))
+        return Rows(r for r in self.rows if type(r).__name__ == what)
 
     def execute(self, stmt):
-        return SimpleNamespace(all=lambda: [])
+        rows = self._answer(_selected(stmt), []) if isinstance(stmt, Select) else []
+        return SimpleNamespace(all=lambda: list(rows))
 
     def add(self, row):
         self.rows.append(row)
@@ -52,16 +73,17 @@ class FakeDb:
 
 
 class FakeRedis:
-    """The calls bus.py makes. Keys don't expire: the tests move their own clock."""
+    """The calls bus.py makes. Keys don't expire: the tests move their own clock (or delete a key)."""
 
     def __init__(self):
-        self.data = {}
+        self.data, self.ttl = {}, {}
 
-    def set(self, key, value, nx=False, ex=None):
+    def set(self, key, value, nx=False, ex=None, get=False):
         if nx and key in self.data:
             return None
-        self.data[key] = value
-        return True
+        old = self.data.get(key)
+        self.data[key], self.ttl[key] = value, ex
+        return old if get else True
 
     def get(self, key):
         return self.data.get(key)
@@ -72,6 +94,20 @@ class FakeRedis:
     def delete(self, *keys):
         for key in keys:
             self.data.pop(key, None)
+
+    def expire(self, key, seconds):
+        self.ttl[key] = seconds
+        return int(key in self.data)
+
+    def eval(self, script, numkeys, key, token, *args):
+        """bus.py's two scripts: delete, or set a new expiry, only if the key still holds the token."""
+        if self.data.get(key) != token:
+            return 0
+        if script == bus._RELEASE:
+            del self.data[key]
+        else:
+            self.ttl[key] = int(args[0])
+        return 1
 
     def publish(self, channel, message):
         pass
@@ -164,6 +200,173 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
 def test_a_failed_first_build_waits_for_a_fan():
     card = PlayerCard(player_id=1, status="failed", card={}, built_at=None)
     assert not pipeline.rebuild_due(card, NOW)
+
+
+# ---------------------------------------------------------------- one build at a time
+
+
+def test_a_build_that_outlives_its_lock_never_frees_the_next_ones(monkeypatch, redis):
+    # BUG-017 (H6 exp2): a build ran past its lock's 900 s, the scheduler started a second, and the
+    # first one's release then deleted the second's lock, so a third could start beside it.
+    player = Player(id=1, slug="one", name="Player One", sport="Hurling", status="active", teams=[])
+    card = PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7))
+    held, extended, second = [], [], []
+
+    def outlived(llm, name, known):
+        held.append(redis.ttl["lock:build:1"])
+        redis.ttl["lock:build:1"] = 5  # minutes of research later
+        yield {"type": "progress", "message": "Searching the web…"}
+        extended.append(redis.ttl["lock:build:1"])  # each step of the agent renews the lock
+        del redis.data["lock:build:1"]  # the lock lapsed anyway (a stalled thread)…
+        second.append(bus.try_lock("build:1", 1200))  # …and the scheduler started another build
+        yield {"type": "progress", "message": "Thinking…"}
+        raise AgentError("Model call failed (timeout)")
+
+    monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(FakeDb(player, card)))
+    monkeypatch.setattr(pipeline, "_now", lambda: NOW)
+    monkeypatch.setattr(pipeline, "llm", lambda: None)
+    monkeypatch.setattr(pipeline, "follow_player", outlived)
+    monkeypatch.setattr(structured, "describe", lambda player_id: None)
+    pipeline.build_card(1)
+    assert second[0] and bus.is_locked("build:1")  # the second build's lock: the first didn't release it…
+    assert redis.ttl["lock:build:1"] == 1200  # …or renew it
+    assert held == extended == [pipeline.BUILD_LOCK]  # its own lock lasted, and each step renewed it
+
+
+def test_a_lock_outlasts_its_job_and_the_job_outlasts_the_agent():
+    # BUG-017: the lock (900 s) lapsed exactly when arq gave up on the job (900 s), whose thread kept
+    # running, and an agent run could take 16 turns of up to 300 s each.
+    from sports_follow import agent, worker
+
+    assert pipeline.BUILD_LOCK > worker.WorkerSettings.job_timeout > agent.RUN_LIMIT
+    assert structured.REFRESH_LOCK > worker.WorkerSettings.job_timeout  # a Lichess refresh reads for minutes
+    assert agent.LIVE_LIMIT < 300  # refresh_live's lock
+
+
+def test_an_agent_run_stops_at_its_time_limit(monkeypatch):
+    # BUG-017: 16 turns of up to 300 s each (and a retry) let one run outlast its build's lock.
+    from sports_follow import agent
+
+    clock = [0.0]
+
+    class SlowModel:
+        """Takes 200 s a turn and never submits."""
+
+        def __init__(self):
+            self.timeouts = []
+
+        def complete(self, **request):
+            self.timeouts.append(request["timeout_ms"])
+            clock[0] += min(200, request["timeout_ms"] / 1000)
+            return SimpleNamespace(finish="stop", message={"role": "assistant", "content": "Still looking."}, tool_calls=[])
+
+    model = SlowModel()
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    with pytest.raises(AgentError, match="time limit"):
+        list(agent.follow_player(model, "Player One"))
+    assert clock[0] <= agent.RUN_LIMIT
+    assert model.timeouts == [300_000, 300_000, 200_000]  # the last call gets only the time that's left
+
+
+# ---------------------------------------------------------------- source refreshes
+
+
+class RefusingSource:
+    """A source whose fixtures read fails (a team its plan doesn't cover), counting its requests."""
+
+    system = "fake_source"
+    sports = ("hurling",)
+    live_cadence = 15
+
+    def __init__(self, room: bool = True):
+        self.room, self.requests, self.failing = room, [], True
+
+    def spare(self):
+        return self.room
+
+    def fixtures(self, ref):
+        self.requests.append(ref.athlete_id)
+        if self.failing:
+            raise AdapterError("Sportmonks returned HTTP 403 for /football/fixtures/between: not in your plan")
+        return []
+
+    def stats(self, ref, recent):
+        return [], ""
+
+
+def bound_player(monkeypatch, source, clock) -> tuple[FakeDb, SourceBinding, PlayerCard]:
+    """Player 1, followed and bound to source, whose card's fixtures were read an hour before clock[0]."""
+    player = Player(id=1, slug="one", name="Player One", sport="Hurling", status="active", teams=[])
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
+                        locator={"system": source.system, "athlete_id": "A1", "name": "Player One", "team_ids": ["T"], "team_names": ["Team"]})
+    read = (clock[0] - timedelta(hours=1)).isoformat()
+    card = PlayerCard(player_id=1, status="ready", card={"status": "ready", "live": {"is_live": False}, "freshness": {"fixtures": read}}, version=1, built_at=clock[0], freshness={"fixtures": read})
+    db = FakeDb(player, row, card, answers={"SourceBinding": row, "Player.sport": "Hurling", "SourceBinding.player_id": lambda: [(1, source.system, row.health)]})
+    monkeypatch.setitem(structured.ADAPTERS, source.system, source)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "_now", lambda: clock[0])
+    return db, row, card
+
+
+def test_a_failing_refresh_waits_longer_each_time(monkeypatch, redis):
+    # BUG-020 (H6 exp9, the worker log): "refresh 17 failed: PandaScore unreachable" every tick; one
+    # player whose team the plan doesn't cover cost a source request a minute.
+    clock = [NOW]
+    source = RefusingSource()
+    _, row, card = bound_player(monkeypatch, source, clock)
+    asked = []
+    for minute in range(10 * 60):  # the scheduler's tick, once a minute for 10 hours
+        clock[0] = NOW + timedelta(minutes=minute)
+        for player_id in pipeline.due_work(clock[0]).refreshes:
+            asked.append(minute)
+            structured.refresh(player_id)
+    # 2 minutes, then 4, 8, … and never more than two hours apart.
+    assert asked == [0, 2, 6, 14, 30, 62, 126, 246, 366, 486] and len(source.requests) == len(asked)
+    assert row.health["failures"] == 10 and "not in your plan" in row.health["error"]
+
+    # Once the source answers, the count starts again and fixtures are read every FIXTURES_MAX_AGE.
+    source.failing = False
+    clock[0] = NOW + timedelta(minutes=606)
+    assert pipeline.due_work(clock[0]).refreshes == [1]
+    structured.refresh(1)
+    assert row.health["failures"] == 0 and card.freshness["fixtures"] == clock[0].isoformat()
+    assert pipeline.due_work(clock[0] + timedelta(minutes=1)).refreshes == []
+
+
+def test_refreshes_leave_a_sources_live_reserve_alone(monkeypatch, redis):
+    # BUG-020: refreshes ignored spare(), so on Sportmonks they ate the hour's reserve for live matches,
+    # and live scores then stopped on 429s.
+    clock = [NOW]
+    source = RefusingSource(room=False)
+    bound_player(monkeypatch, source, clock)
+    assert pipeline.due_work(NOW).refreshes == []
+    structured.refresh(1)  # queued another way (a fan's refresh button)
+    assert source.requests == []
+    source.room = True  # the hour turned
+    assert pipeline.due_work(NOW).refreshes == [1]
+
+
+# ---------------------------------------------------------------- games nobody saw finish
+
+
+def test_a_game_closed_after_six_days_stops_showing_live(monkeypatch, redis):
+    # BUG-019 (H6 exp5): the source stopped returning a match; the tick closed it after six days, and the
+    # card kept saying LIVE "A 245/6 (43.2)" at the top of Today.
+    player = Player(id=1, slug="one", name="Player One", sport="Cricket", status="active", teams=[])
+    stuck = PlayerCard(player_id=1, status="ready", version=5, built_at=NOW, is_live=True, freshness={"fixtures": NOW.isoformat()}, card={
+        "status": "ready", "version": 5, "live": {"is_live": True, "event_id": 10, "score": "A 245/6 (43.2)"},
+        "upcoming": [{"event_id": 10}, {"event_id": 11}], "freshness": {"fixtures": NOW.isoformat()},
+    })
+    elsewhere = PlayerCard(player_id=2, status="ready", version=2, built_at=NOW, is_live=True, card={"status": "ready", "live": {"is_live": True, "event_id": 12}})
+    db = FakeDb(player, stuck, elsewhere, answers={"Update": [10]})  # the six-day close returns event 10
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    pipeline.due_work(NOW)
+    assert (stuck.is_live, stuck.version, stuck.card["live"]) == (False, 6, {"is_live": False, "player_stats": []})
+    assert stuck.card["upcoming"] == [{"event_id": 11}] and stuck.freshness["fixtures"] is None
+    assert json.loads(redis.data["card:1"])["live"]["is_live"] is False  # published to the app
+    assert elsewhere.card["live"]["is_live"] and "card:2" not in redis.data
 
 
 # ---------------------------------------------------------------- where a report lands

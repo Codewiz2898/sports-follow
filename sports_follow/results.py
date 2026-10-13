@@ -45,7 +45,10 @@ def decode(cursor: str) -> tuple[datetime, int] | None:
 
 
 def _item(event: Event, result: dict[str, Any]) -> dict[str, Any]:
-    return {**result, "event_id": event.id, "date": result.get("date") or (event.start_utc.date().isoformat() if event.start_utc else None)}
+    """A stored result as the app reads it. start_utc dates it: the app shows the fan's local day of the
+    game, which isn't the UTC day for a US night game or a European evening seen from India."""
+    start = event.start_utc.isoformat() if event.start_utc else result.get("start_utc")
+    return {**result, "event_id": event.id, "date": result.get("date") or (event.start_utc.date().isoformat() if event.start_utc else None), "start_utc": start}
 
 
 def page(db: Session, player_id: int, before: str | None = None, limit: int = 20) -> dict[str, Any]:
@@ -81,7 +84,6 @@ def detail(db: Session, player_id: int, event_id: int) -> dict[str, Any] | None:
     return {
         **_item(event, result),
         "venue": event.venue,
-        "start_utc": event.start_utc.isoformat() if event.start_utc else None,
         "score": final.score_label if final else None,
         "clock": final.clock_label if final else None,
         "line": _line(db, event_id, player_id),

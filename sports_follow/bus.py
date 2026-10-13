@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import redis
@@ -38,19 +39,34 @@ def store_card(player_id: int, card: dict[str, Any]) -> None:
     publish(player_id, {"type": "card", "player_id": player_id, "card": card})
 
 
-def try_lock(name: str, seconds: int) -> bool:
-    """A short lock so two workers never run the same player's job at once."""
-    return bool(sync_redis().set(f"lock:{name}", "1", nx=True, ex=seconds))
+# Release and extend a lock only while it is still the caller's: a job that outlived its lock must not
+# delete or prolong the lock of the job that took over.
+_RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+_EXTEND = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) end return 0"
 
 
-def release(name: str) -> None:
-    sync_redis().delete(f"lock:{name}")
+def try_lock(name: str, seconds: int) -> str | None:
+    """A lock so two workers never run the same player's job at once. Returns the holder's token, or
+    None if someone else holds it; release and extend with the token."""
+    token = uuid.uuid4().hex
+    return token if sync_redis().set(f"lock:{name}", token, nx=True, ex=seconds) else None
+
+
+def release(name: str, token: str | None = None) -> None:
+    """Free a lock: with its token, only if the caller still holds it."""
+    if token is None:
+        sync_redis().delete(f"lock:{name}")
+    else:
+        sync_redis().eval(_RELEASE, 1, f"lock:{name}", token)
 
 
 def is_locked(name: str) -> bool:
     return bool(sync_redis().exists(f"lock:{name}"))
 
 
-def extend(name: str, seconds: int) -> None:
-    """Keep a lock held by a long-running job (the live poller renews it every poll)."""
-    sync_redis().expire(f"lock:{name}", seconds)
+def extend(name: str, seconds: int, token: str | None = None) -> bool:
+    """Keep a lock held by a long-running job (the live poller renews it every poll, a build as the agent
+    works). With its token, only if the caller still holds it. Returns whether it's held seconds more."""
+    if token is None:
+        return bool(sync_redis().expire(f"lock:{name}", seconds))
+    return bool(sync_redis().eval(_EXTEND, 1, f"lock:{name}", token, seconds))

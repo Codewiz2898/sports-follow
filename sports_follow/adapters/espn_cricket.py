@@ -23,6 +23,9 @@ DAYS_BACK = 30  # enough completed matches for recent form
 HISTORY_DAYS = 180  # how far back history.py reads, once, ten days at a time
 
 _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
+# Status type ids of matches that weren't played, though their state is "post": the feed's types have
+# an id and a description ("Postponed", "Abandoned"), no name.
+_POSTPONED, _ABANDONED = "113", "6"
 
 
 def _time(value: str | None) -> datetime | None:
@@ -41,6 +44,15 @@ def _int(value: Any) -> int:
         return 0
 
 
+def _off(kind: dict[str, Any], played: bool) -> bool:
+    """A match that won't be played or wasn't: postponed, cancelled, or abandoned without a ball bowled.
+    One abandoned after play is a no result, with its scorecard."""
+    words = f"{kind.get('name') or ''} {kind.get('description') or ''}".upper()
+    if str(kind.get("id")) == _POSTPONED or "POSTPONE" in words or "CANCEL" in words:
+        return True
+    return (str(kind.get("id")) == _ABANDONED or "ABANDON" in words) and not played
+
+
 # ---------------------------------------------------------------- parsers (pure)
 
 
@@ -53,8 +65,7 @@ def parse_day(data: dict[str, Any]) -> list[Fixture]:
             if len(competitors) < 2:
                 continue
             status = _STATUS.get(e.get("status"), "scheduled")
-            kind = ((e.get("fullStatus") or {}).get("type") or {}).get("name") or ""
-            if "ABANDON" in kind or "POSTPONE" in kind or "CANCEL" in kind:
+            if _off((e.get("fullStatus") or {}).get("type") or {}, any(c.get("score") for c in competitors)):
                 status = "postponed"
             detail = (e.get("description") or "").split(",")[0] or None  # "2nd ODI (D/N)"
             cls = (e.get("class") or {}).get("generalClassCard")
@@ -109,6 +120,8 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
                 "target": _int(ls.get("target")) or None,
             })
     innings.sort(key=lambda i: (i["period"] or 0))
+    if _off(kind, bool(innings)):
+        status = "postponed"
 
     def fmt(i: dict[str, Any]) -> str:
         wk = "" if i["wickets"] >= 10 else f"/{i['wickets']}"
@@ -119,6 +132,9 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
     clock_label = " · ".join(b for b in clock_bits if b) or kind.get("shortDetail") or ""
     if status == "final":
         clock_label = status_obj.get("summary") or kind.get("description") or "Result"
+    elif status == "postponed":
+        # "Postponed" or "Abandoned"; a postponed match's summary is still its old start time.
+        clock_label = kind.get("description") or "Postponed"
 
     return Snapshot(
         status=status,

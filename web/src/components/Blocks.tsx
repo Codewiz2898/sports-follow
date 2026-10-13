@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { BasketballSide, BasketballState, BattleRoyaleState, Card, ChessSide, ChessState, CricketState, DotaLiveMap, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
-import { countdown, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
+import { ahead, countdown, dateOnly, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
 import { SportMark } from './Icons'
 
 export function Avatar({ name, sport, size }: { name: string; sport?: string | null; size?: 'sm' | 'lg' }) {
@@ -71,7 +71,7 @@ export function ResultHero({ result, sport }: { result: LatestResult; sport?: st
     <Link to={`/player/${result.player_id}`} className="hero" data-sport={key} aria-label={`${result.player_name}: ${result.title}, ${result.result}`}>
       <SportMark sport={key} className="hero-mark" />
       <span className="row">
-        <span className="pill ink" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{dayLabel(result.date)}</span>
+        <span className="pill ink" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{dayLabel(playedOn(result))}</span>
         {result.competition && <span className="tag soft" style={{ textAlign: 'right' }}>{result.competition}</span>}
       </span>
       <span className="dsp hero-name">{shortName(result.player_name)}</span>
@@ -100,7 +100,7 @@ export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & {
     <Link to={`/player/${playerId}`} className="strip" data-sport={sportKey(sport)}>
       <span className="tag">Next</span>
       <span className="dsp when">{shortWhen(event.start_utc)}</span>
-      <span className="what">{[event.players?.map(shortName).join(', '), event.title].filter(Boolean).join(' · ')}</span>
+      <span className="what">{[event.players?.map(shortName).join(', '), event.title, dateOnly(event.start_utc) && 'time TBC'].filter(Boolean).join(' · ')}</span>
       {left && <span className="dsp count">{left}</span>}
     </Link>
   )
@@ -115,10 +115,10 @@ export function statusLine(card: Card, progress?: string[]): string {
     return [card.live.score, lead].filter(Boolean).join(' · ') || 'Live now'
   }
   const now = Date.now()
-  const next = (card.upcoming ?? []).find((u) => (parseDate(u.start_utc)?.getTime() ?? 0) > now)
+  const next = (card.upcoming ?? []).find((u) => ahead(u.start_utc, now))
   const nextAt = parseDate(next?.start_utc)?.getTime() ?? Infinity
   const last = card.recent_results?.[0]
-  const lastAt = parseDate(last?.date)?.getTime() ?? 0
+  const lastAt = parseDate(playedOn(last))?.getTime() ?? 0
   if (next && nextAt - now < 7 * 864e5) return `${shortWhen(next.start_utc)} · ${next.title}`
   if (last && now - lastAt < 14 * 864e5) return last.result
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
@@ -503,16 +503,17 @@ export function UpcomingList({ items, who, empty }: { items: (UpcomingEvent & { 
     <ul className="card list">
       {items.map((u) => {
         const d = parseDate(u.start_utc)
+        const timed = d && !dateOnly(u.start_utc)
         return (
           <li key={`${u.title}-${u.start_utc ?? ''}`} className="fixture">
             <span className="when-block">
               <span className="tag">{d ? d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) : 'TBC'}</span>
-              <span className="num">{d ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '–'}</span>
+              <span className="num">{timed ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '–'}</span>
             </span>
             <span className="stack" style={{ flex: 1 }}>
               <span className="title">{u.title}</span>
               <span className="small muted">
-                {[who && u.players?.join(', '), u.competition, d ? null : 'Date to be confirmed', u.venue].filter(Boolean).join(' · ')}
+                {[who && u.players?.join(', '), u.competition, d ? (timed ? null : 'Time to be confirmed') : 'Date to be confirmed', u.venue].filter(Boolean).join(' · ')}
               </span>
               {u.notes && <span className="small muted">{u.notes}</span>}
             </span>
@@ -557,7 +558,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
               {safeHref(r.source_url)
                 ? <a className="title" href={safeHref(r.source_url)} target="_blank" rel="noreferrer">{r.title}</a>
                 : <span className="title">{r.title}</span>}
-              <span className="small muted">{[r.date && day(r.date), r.competition].filter(Boolean).join(' · ')}</span>
+              <span className="small muted">{[day(playedOn(r)), r.competition].filter(Boolean).join(' · ')}</span>
               {!score && <span className="small" style={{ fontWeight: 800 }}>{r.result}</span>}
               {r.player_contribution && <span className="small" style={{ fontWeight: 800 }}>{r.player_contribution}</span>}
             </div>

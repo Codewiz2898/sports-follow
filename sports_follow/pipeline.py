@@ -12,14 +12,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import bus, games, moments, notify, structured
@@ -27,6 +29,7 @@ from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
 from .models import (
+    Athlete,
     Event,
     EventPlayer,
     EventState,
@@ -46,6 +49,10 @@ log = logging.getLogger("sports_follow.pipeline")
 # A ready card whose rebuild failed is tried again after this, and twice as long after each failure in a
 # row: a slow model or a spent budget must not turn into an agent run every minute.
 BUILD_RETRY = 30 * 60
+# How long a build's lock lasts without the agent moving on: longer than the worker's job_timeout (900 s),
+# which is longer than an agent run may take (agent.RUN_LIMIT). arq's timeout doesn't stop the build's
+# thread, so the lock, not the job, says a build is still running.
+BUILD_LOCK = 20 * 60
 
 _llm = None
 
@@ -75,6 +82,44 @@ def _parse_time(value: str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _agent_time(value: Any) -> str | None:
+    """An agent's date or time as a card keeps it. A day without a time stays a day ("2026-10-20"); a
+    time gets its zone, UTC when it has none (as the agent is told and _parse_time reads it), so the
+    app and the scheduler mean the same instant. None for anything that isn't ISO 8601."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    dt = _parse_time(value)
+    if dt is None:
+        return None
+    return value if _DAY.fullmatch(value) else dt.astimezone(timezone.utc).isoformat()
+
+
+def _timed(item: dict[str, Any], key: str) -> dict[str, Any]:
+    return {**item, key: _agent_time(item[key])} if item.get(key) else item
+
+
+def _newest_first(news: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The report's stories newest first; undated ones last, in the agent's order."""
+
+    def newest(item: dict[str, Any]) -> tuple[int, float]:
+        published = _parse_time(item.get("published"))
+        return (0, -published.timestamp()) if published else (1, 0.0)
+
+    return sorted((_timed(n, "published") for n in news), key=newest)
+
+
+def _agent_result(item: dict[str, Any]) -> dict[str, Any]:
+    """A result the agent dated: a bare day stays a day; with a time, start_utc carries the instant (the
+    app shows the fan's local day of it) and date its UTC day, as a source's results do."""
+    item = _timed(item, "date")
+    when = item.get("date")
+    return {**item, "date": when[:10], "start_utc": when} if when and "T" in when else item
+
+
 def _event_key(sport: str, title: str, start: datetime | None) -> str:
     day = start.date().isoformat() if start else "undated"
     raw = f"{slugify(sport)}|{slugify(title)}|{day}"
@@ -97,13 +142,17 @@ def resolve_or_create(db: Session, query: str) -> Player:
     alias = slugify(query)
     if not alias:
         raise ValueError("empty player name")
-    player = db.scalar(select(Player).join(PlayerAlias, PlayerAlias.player_id == Player.id).where(PlayerAlias.alias == alias))
+    named = select(Player).join(PlayerAlias, PlayerAlias.player_id == Player.id).where(PlayerAlias.alias == alias)
+    player = db.scalar(named)
     if player:
         return player
-    player = Player(slug=alias, name=query.strip(), sport="", status="unknown", teams=[])
-    db.add(player)
-    db.flush()
-    db.add(PlayerAlias(alias=alias, player_id=player.id))
+    # Two follows of a new name at once: the second's insert waits for the first's transaction, does
+    # nothing, and the second reads the first's player back instead of failing on the slug.
+    created = db.scalar(insert(Player).values(slug=alias, name=query.strip(), sport="", status="unknown", teams=[]).on_conflict_do_nothing().returning(Player.id))
+    if created is None:
+        return db.scalar(named) or db.scalar(select(Player).where(Player.slug == alias))
+    player = db.get(Player, created)
+    db.execute(insert(PlayerAlias).values(alias=alias, player_id=player.id).on_conflict_do_nothing())
     db.add(PlayerCard(player_id=player.id, status="building", card=placeholder_card(player), version=0))
     db.flush()
     return player
@@ -118,24 +167,91 @@ def _free_slug(db: Session, name: str, sport: str, athlete_id: str) -> str:
     return f"{base}-{athlete_id}"[:120]
 
 
+T = TypeVar("T")
+
+
+def _create(make: Callable[[Session], T]) -> T:
+    """make(db) in a transaction of its own, run again if another request created the same athlete (or
+    took the same slug) a moment before: the next run finds what that request made."""
+    tries = 3
+    while True:
+        try:
+            with session() as db:
+                return make(db)
+        except IntegrityError:
+            tries -= 1
+            if not tries:
+                raise
+
+
+def _claim(db: Session, player_id: int, system: str, external_id: str, evidence_url: str | None) -> None:
+    """The athlete's identity, written with their new player: of two fans following them at once, the
+    second's insert fails here and the whole creation is rolled back for _create to retry."""
+    db.add(PlayerIdentity(player_id=player_id, system=system, external_id=external_id, confidence=1.0, evidence_url=evidence_url))
+    db.flush()
+
+
+# What else a registry sport may be called on a player (an agent-built page's word for it).
+SPORT_NAMES = {"soccer": "football", "association football": "football"}
+
+
+def registry_sport(sport: str | None) -> str:
+    """A sport as the registry names it: "football" for "Football" or "Soccer", "esports" for any game."""
+    family = games.family(sport)
+    return SPORT_NAMES.get(family, family)
+
+
+def _qid_holder(db: Session, qid: str) -> Any:
+    """(player_id, sport) of the player holding this registry athlete's qid, their "wikidata" identity."""
+    return db.execute(
+        select(PlayerIdentity.player_id, Player.sport).join(Player, Player.id == PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == qid)
+    ).first()
+
+
+def _in_other_sport(db: Session, qid: str, player_sport: str | None, sport: str) -> bool:
+    """Whether a player of this registry athlete is their player in another of their sports. Someone in
+    two sports (a cricketer who plays chess) is a registry row in each under one qid, and only one player
+    can hold the qid. A sport the registry doesn't have for them is a renamed one, not another sport."""
+    theirs = registry_sport(player_sport)
+    return theirs != registry_sport(sport) and theirs in db.scalars(select(Athlete.sport).where(Athlete.qid == qid)).all()
+
+
+def registry_holder(db: Session, qid: str, sport: str | None) -> int | None:
+    """The player already here for this registry athlete: whoever holds the qid, unless, given the sport
+    picked, they're the athlete's player in another sport."""
+    held = _qid_holder(db, qid)
+    if held is None or (sport and _in_other_sport(db, qid, held.sport, sport)):
+        return None
+    return held.player_id
+
+
 def start_from_registry(athlete: Any) -> tuple[int, bool]:
     """A registry athlete no live source could confirm: a player the research agent builds, told
     exactly who it is (registry.describe). Returns (player_id, created)."""
-    from . import registry
 
-    with session() as db:
-        holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == athlete.qid))
-        if holder is not None:
-            return holder.player_id, False
+    def create(db: Session) -> tuple[int, bool]:
+        held = _qid_holder(db, athlete.qid)
+        other = held is not None and _in_other_sport(db, athlete.qid, held.sport, athlete.sport)
+        if held is not None and not other:
+            return held.player_id, False
+        if other:
+            # Their other sport's player holds the qid: this sport's player, if made before, has it as
+            # wikidata_qid. A new one goes without the identity.
+            for player_id, sport in db.execute(select(Player.id, Player.sport).where(Player.wikidata_qid == athlete.qid, Player.id != held.player_id)):
+                if not _in_other_sport(db, athlete.qid, sport, athlete.sport):
+                    return player_id, False
         sport = (games.of_athlete(athlete.league) if athlete.sport == games.ESPORTS else None) or athlete.sport.title()
         slug = _free_slug(db, athlete.name, sport, athlete.qid.lower())
         player = Player(slug=slug, name=athlete.name, sport=sport, status="active", teams=list(athlete.teams or []), wikidata_qid=athlete.qid)
         db.add(player)
         db.flush()
+        if not other:
+            _claim(db, player.id, "wikidata", athlete.qid, f"https://www.wikidata.org/wiki/{athlete.qid}")  # as registry.link writes it
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
         db.add(PlayerCard(player_id=player.id, status="building", card=placeholder_card(player), version=0))
-        registry.link(db, player.id, athlete.qid)
         return player.id, True
+
+    return _create(create)
 
 
 def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
@@ -145,26 +261,33 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
     profile and news pending; the caller queues the fixtures refresh and the agent build.
     """
     sport = structured.sport_name(adapter, ref)
-    with session() as db:
+
+    def create(db: Session) -> tuple[int, dict[str, Any] | None]:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder is not None:
-            return holder.player_id, False
+            return holder.player_id, None
         slug = _free_slug(db, ref.name, sport, ref.athlete_id)
         individual = ref.team_ids == [ref.athlete_id]
         player = Player(slug=slug, name=ref.name, sport=sport, status="active", teams=[] if individual else [t for t in ref.team_names if t])
         db.add(player)
         db.flush()
+        _claim(db, player.id, ref.system, ref.athlete_id, ref.profile_url)
         # The plain name becomes an alias only if it's free: typing it keeps finding whoever had it first.
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
         card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile", "news"]}
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
-        player_id = player.id
-    if not structured.record(player_id, ref):
-        # Another request bound the same athlete a moment ago: that player is the one.
+        return player.id, card
+
+    player_id, card = _create(create)
+    if card is None:
+        return player_id, False
+    try:
+        structured.record(player_id, ref)  # the identity is this player's already: this writes the bindings
+    except Exception:
+        # Unbound, the player would never get fixtures, and the next pick would find them: start again.
         with session() as db:
             db.execute(delete(Player).where(Player.id == player_id))
-            holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
-            return holder.player_id, False
+        raise
     bus.store_card(player_id, card)
     return player_id, True
 
@@ -303,10 +426,10 @@ def _card_from_report(player: Player, report: dict[str, Any], version: int, buil
         "version": version,
         "built_at": stamp,
         "player": report["player"],
-        "live": report["live"],
-        "news": report["news"],
-        "upcoming": report["upcoming"],
-        "recent_results": report["recent_results"],
+        "live": _timed(report["live"], "as_of"),
+        "news": _newest_first(report["news"]),
+        "upcoming": [_timed(u, "start_utc") for u in report["upcoming"]],
+        "recent_results": [_agent_result(r) for r in report["recent_results"]],
         "season_stats": report["season_stats"],
         "sources": report["sources"],
         "freshness": {"live": stamp, "fixtures": stamp, "stats": stamp, "news": stamp},
@@ -393,12 +516,13 @@ def apply_live(player_id: int, update_: dict[str, Any]) -> None:
         card_row = db.get(PlayerCard, player_id)
         if player is None or card_row is None or card_row.status != "ready":
             return
-        live = update_["live"]
+        live = _timed(update_["live"], "as_of")
         _write_live(db, player, live, now)
         card = dict(card_row.card)
         card["live"] = live
         nxt = update_.get("next_event")
         if nxt:
+            nxt = _timed(nxt, "start_utc")
             upcoming = [u for u in card.get("upcoming", []) if u.get("title") != nxt.get("title")]
             card["upcoming"] = [nxt, *upcoming]
             _upsert_event(db, player, title=nxt["title"], competition=nxt["competition"], start=_parse_time(nxt.get("start_utc")), venue=nxt.get("venue"), notes=nxt.get("notes"), status="scheduled")
@@ -487,7 +611,8 @@ def mark_failed(player_id: int, message: str) -> None:
 def build_card(player_id: int) -> None:
     """Run the research agent for one player and publish the result. Progress goes to the player's channel."""
     lock = f"build:{player_id}"
-    if not bus.try_lock(lock, 900):
+    token = bus.try_lock(lock, BUILD_LOCK)
+    if not token:
         return
     try:
         from .config import CARD_MAX_AGE
@@ -517,6 +642,7 @@ def build_card(player_id: int) -> None:
                 name = found[1].name
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
         for event in follow_player(llm(), name, structured.describe(player_id)):
+            bus.extend(lock, BUILD_LOCK, token)  # held while the agent is working, however long that takes
             if event["type"] == "progress":
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
             elif event["type"] == "result":
@@ -532,7 +658,7 @@ def build_card(player_id: int) -> None:
         log.exception("build %s crashed", player_id)
         mark_failed(player_id, f"Unexpected error: {exc}")
     finally:
-        bus.release(lock)
+        bus.release(lock, token)
 
 
 def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
@@ -581,7 +707,8 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
 
 def refresh_live(player_id: int) -> None:
     lock = f"live:{player_id}"
-    if not bus.try_lock(lock, 300):
+    token = bus.try_lock(lock, 300)  # longer than a live check may take (agent.LIVE_LIMIT)
+    if not token:
         return
     try:
         with session() as db:
@@ -597,7 +724,7 @@ def refresh_live(player_id: int) -> None:
         log.warning("live check %s failed: %s", player_id, exc)
         bus.publish(player_id, {"type": "live_error", "player_id": player_id, "message": str(exc)})
     finally:
-        bus.release(lock)
+        bus.release(lock, token)
 
 
 # ---------------------------------------------------------------- scheduling (design section 3)
@@ -633,7 +760,9 @@ def due_work(now: datetime | None = None) -> Due:
     poll job, shared by every player in it, or, from a source that fetches many events in one
     request, a place in that source's lane; players without a binding get agent live checks.
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
-    (a Test match runs five).
+    (a Test match runs five), and a card still showing one live stops. A bound player whose refreshes
+    keep failing waits longer each time (structured.retry_at), and none is refreshed while their
+    source is down to what its live games need (structured.spare).
     """
     from .config import ARM_BEFORE_START, FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
 
@@ -652,12 +781,23 @@ def due_work(now: datetime | None = None) -> Due:
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))
             .values(status="final")
         )
-        db.execute(
+        closed = db.scalars(
             update(Event)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(days=6))
             .values(status="final")
-        )
-        bound = set(db.scalars(select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(structured.ADAPTERS)), SourceBinding.player_id.in_(followed))))
+            .returning(Event.id)
+        ).all()
+        # Closed without a final poll (the source stopped returning the game): its cards stop saying LIVE.
+        unstuck = structured.close_live(db, list(closed))
+        # Each followed player's fixtures binding (structured.binding()'s pick: highest priority, newest).
+        bindings: dict[int, tuple[str, dict[str, Any] | None]] = {}
+        for pid, adapter, health in db.execute(
+            select(SourceBinding.player_id, SourceBinding.adapter, SourceBinding.health)
+            .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(structured.ADAPTERS)), SourceBinding.player_id.in_(followed))
+            .order_by(SourceBinding.priority.desc(), SourceBinding.id.desc())
+        ).all():
+            bindings.setdefault(pid, (adapter, health))
+        room = {name: structured.spare(structured.ADAPTERS[name]) for name, _ in bindings.values()}
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
         sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
@@ -666,13 +806,16 @@ def due_work(now: datetime | None = None) -> Due:
                 due.builds.append(pid)
             if card.status != "ready":
                 continue
-            if pid in bound:
+            if pid in bindings:
+                adapter, health = bindings[pid]
                 checked = _parse_time((card.freshness or {}).get("fixtures"))
-                if (not checked or checked < fixtures_stale) and not bus.is_locked(f"structured:{pid}"):
+                retry = structured.retry_at(health)
+                if (not checked or checked < fixtures_stale) and not (retry and now < retry) and room[adapter] and not bus.is_locked(f"structured:{pid}"):
                     due.refreshes.append(pid)
                 continue
             # Followed before their sport had an adapter: the refresh binds them first.
-            if structured.for_sport(sports.get(pid)) and not bus.is_locked(f"bindtry:{pid}") and not bus.is_locked(f"structured:{pid}"):
+            preferred = structured.for_sport(sports.get(pid))
+            if preferred and structured.spare(preferred) and not bus.is_locked(f"bindtry:{pid}") and not bus.is_locked(f"structured:{pid}"):
                 due.refreshes.append(pid)
             if card.is_live:
                 lives.add(pid)
@@ -688,7 +831,7 @@ def due_work(now: datetime | None = None) -> Due:
                 lanes.add(live_binding["adapter"])
             elif live_binding:
                 polls.add(event_id)
-            elif pid not in bound:
+            elif pid not in bindings:
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]
@@ -697,6 +840,8 @@ def due_work(now: datetime | None = None) -> Due:
             card = db.get(PlayerCard, pid)
             if card and card.status == "ready" and (card.live_checked_at is None or card.live_checked_at < stale_before) and not bus.is_locked(f"live:{pid}"):
                 due.lives.append(pid)
+    for pid, card in unstuck:
+        bus.store_card(pid, card)
     return due
 
 

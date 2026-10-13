@@ -26,8 +26,13 @@ PLAYER_INCLUDE = "teams.team;nationality"
 # Match states (…/football/states): everything else is "scheduled".
 _LIVE = {"INPLAY_1ST_HALF", "HT", "BREAK", "INPLAY_2ND_HALF", "INPLAY_ET", "EXTRA_TIME_BREAK", "INPLAY_ET_SECOND_HALF", "PEN_BREAK", "INPLAY_PENALTIES", "AWAITING_UPDATES"}
 _FINAL = {"FT", "AET", "FT_PEN", "WO", "AWARDED"}
-_OFF = {"POSTPONED", "SUSPENDED", "CANCELLED", "ABANDONED", "INTERRUPTED", "DELETED"}
+# Play stopped (weather, floodlights, the crowd) and may restart: the match stays live, and polled, on
+# its day; STOPPED_FOR after kick-off it's off until the schedule says otherwise.
+_STOPPED = {"INTERRUPTED", "SUSPENDED"}
+STOPPED_FOR = timedelta(hours=6)
+_OFF = {"POSTPONED", "CANCELLED", "ABANDONED", "DELETED"}
 _CLOCK = {"HT": "Half-time", "BREAK": "Break", "EXTRA_TIME_BREAK": "Extra-time break", "PEN_BREAK": "Before penalties", "INPLAY_PENALTIES": "Penalties",
+          "INTERRUPTED": "Interrupted", "SUSPENDED": "Suspended",
           "FT": "Full time", "AET": "After extra time", "FT_PEN": "After penalties", "AWAITING_UPDATES": "Awaiting result"}
 
 # A player's match stats in the order a fan reads them: Sportmonks type -> label (labels as ESPN's adapter).
@@ -38,12 +43,14 @@ _STARTER, _BENCH = 11, 12  # lineup type ids
 _GOALS = {"GOAL", "OWNGOAL", "PENALTY"}
 
 
-def _status(state: dict[str, Any] | None) -> str:
+def _status(state: dict[str, Any] | None, start: datetime | None = None, now: datetime | None = None) -> str:
     code = (state or {}).get("developer_name") or ""
     if code in _LIVE:
         return "live"
     if code in _FINAL:
         return "final"
+    if code in _STOPPED:
+        return "live" if start is None or (now or datetime.now(timezone.utc)) - start < STOPPED_FOR else "postponed"
     if code in _OFF:
         return "postponed"
     return "scheduled"
@@ -86,7 +93,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
         home, away = _sides(x)
         if not home.get("id") or not away.get("id"):
             continue
-        status = _status(x.get("state"))
+        status = _status(x.get("state"), _start(x))
         goals = _goals(x)
         result = None
         if status == "final":
@@ -160,7 +167,7 @@ def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
 def parse_match(x: dict[str, Any]) -> Snapshot:
     """A fixture with participants, scores, state, periods, line-ups and events -> snapshot."""
     home, away = _sides(x)
-    status = _status(x.get("state"))
+    status = _status(x.get("state"), _start(x))
     goals = _goals(x)
     events = sorted(x.get("events") or [], key=lambda e: (e.get("minute") or 0, e.get("extra_minute") or 0, e.get("sort_order") or 0))
 

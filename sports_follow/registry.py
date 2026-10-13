@@ -40,12 +40,13 @@ from sqlalchemy.orm import Session
 
 from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
 from .db import session
-from .models import Athlete, PlayerIdentity
+from .models import Athlete, Player, PlayerIdentity
 
 log = logging.getLogger("sports_follow.registry")
 
 WDQS = "https://query.wikidata.org/sparql"
 BATCH = 2000
+NAMESAKES = 40  # athletes with exactly the typed name that search lists, all for the picker (the most is 30)
 LABEL_LANGS = ("en", "mul", "es", "pt", "fr", "de", "it", "nl")
 MAX_ALIASES = 8
 
@@ -77,6 +78,8 @@ YOUTH = re.compile(r"\b(under-?\d+|u-?\d{2}|youth|olympic|academy|reserves?|b te
 # team isn't their team.
 COLLEGE = re.compile(r"(men's|women's) (basketball|soccer|football|cricket)$|\b(college|university|ncaa)\b", re.I)
 NATIONAL = re.compile(r"\s+(men's |women's )?national (association )?(football|cricket|basketball|soccer) team$", re.I)
+# Wikidata's date precisions (wikibase:timePrecision): a date known to the year is stored as 1 January.
+DAY, MONTH, YEAR = 11, 10, 9
 
 _client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/sparql-results+json"}, timeout=90)
 
@@ -86,14 +89,20 @@ _client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "applic
 
 def words(text: str) -> list[str]:
     """Plain lower-case ASCII words: "A'ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"]."""
-    return re.sub(r"[^a-z0-9]+", " ", espn.fold(re.sub(r"['’`]", "", text or ""))).split()
+    return espn.words(text)
 
 
 def search_text(name: str, aliases: Iterable[str]) -> str:
     """ " virat kohli | king kohli |": every word starts after a space and every name ends in " |",
-    so "% koh%" finds a word start and "% virat kohli |%" a whole name."""
+    so "% koh%" finds a word start and named("virat kohli") a whole name."""
     names = [" ".join(words(n)) for n in [name, *aliases]]
     return " " + " | ".join(dict.fromkeys(n for n in names if n)) + " |"
+
+
+def named(key: str):
+    """Athletes with this whole name (folded words), as their name or an alias: " ronaldo |" and
+    "| ronaldo |", never " cristiano ronaldo |"."""
+    return or_(Athlete.search_text.like(f" {key} |%"), Athlete.search_text.like(f"%| {key} |%"))
 
 
 # ---------------------------------------------------------------- the query service
@@ -141,7 +150,7 @@ def fetch(sport: str, qids: list[str]) -> tuple[list[dict], list[dict], list[dic
     core = sparql(f"""SELECT * WHERE {{
       VALUES ?p {{ {values} }}
       OPTIONAL {{ ?p wikibase:sitelinks ?sitelinks }}
-      OPTIONAL {{ ?p wdt:P569 ?birth }}
+      OPTIONAL {{ ?p p:P569 ?bst . ?bst a wikibase:BestRank ; psv:P569 [ wikibase:timeValue ?birth ; wikibase:timePrecision ?birth_precision ] }}
       OPTIONAL {{ ?p wdt:P570 ?death }}
       OPTIONAL {{ ?p wdt:P18 ?image }}
       OPTIONAL {{ ?p wdt:P1532 ?c1 . ?c1 rdfs:label ?sport_country FILTER(LANG(?sport_country) = "en") }}
@@ -189,7 +198,12 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
     for r in core:
         p = people.setdefault(_qid(r["p"]), {"ids": {}, "countries": [], "dead": False})
         p["dead"] = p["dead"] or bool(r.get("death"))
-        p.setdefault("birth", _date(r.get("birth")))
+        birth, known = _date(r.get("birth")), int(r["birth_precision"]) if r.get("birth_precision") else None
+        if birth and known is not None and known < YEAR:
+            birth = known = None  # a decade or a century says nothing about which person this is
+        if birth and (p.get("birth") is None or (known or 0) > (p.get("birth_precision") or 0)):
+            # Two dates for one person (Pau Sans: "2004", and 24 November 2004): the more precise one.
+            p["birth"], p["birth_precision"] = birth, known
         p["sitelinks"] = max(p.get("sitelinks", 0), int(r.get("sitelinks") or 0))
         if r.get("image") and not p.get("image"):
             p["image"] = r["image"].rsplit("/", 1)[-1].replace("%20", " ")
@@ -254,6 +268,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             "aliases": extra,
             "search_text": search_text(name, extra),
             "birth_date": birth,
+            "birth_precision": p.get("birth_precision") if birth else None,
             "country": (p["countries"] or [None])[0],
             "teams": team_list,
             "league": league,
@@ -277,7 +292,7 @@ def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
     db.execute(stmt.on_conflict_do_update(
         index_elements=["qid", "sport"],
         set_={
-            "name": ex.name, "aliases": ex.aliases, "search_text": ex.search_text, "birth_date": ex.birth_date,
+            "name": ex.name, "aliases": ex.aliases, "search_text": ex.search_text, "birth_date": ex.birth_date, "birth_precision": ex.birth_precision,
             "country": ex.country, "teams": ex.teams, "league": ex.league, "title": ex.title,
             # Ids learned from the live sources (resolve) are kept; Wikidata's own overwrite theirs.
             "ids": Athlete.ids.op("||")(ex.ids),
@@ -537,9 +552,10 @@ def score():
 
 
 def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> list[Athlete]:
-    """Athletes whose name or an alias has a word starting with every typed word: whole-name matches
-    first, then the rest by popularity (score), players of today first where that ties (esports rows
-    have no popularity: a pro on a team comes before a teamless one with the same handle)."""
+    """Athletes whose name or an alias has a word starting with every typed word: every one with the
+    whole name typed (up to NAMESAKES), then the rest by popularity (score), players of today first
+    where that ties (esports rows have no popularity: a pro on a team comes before a teamless one with
+    the same handle)."""
     typed = words(query)
     if not typed or len(" ".join(typed)) < 2:
         return []
@@ -547,7 +563,7 @@ def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> 
     base = select(Athlete).where(*starts)
     if sport:
         base = base.where(Athlete.sport == sport)
-    exact = db.scalars(base.where(Athlete.search_text.like(f"% {' '.join(typed)} |%")).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(10)).all()
+    exact = db.scalars(base.where(named(" ".join(typed))).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(NAMESAKES)).all()
     popular = db.scalars(base.order_by(score().desc(), Athlete.current.desc()).limit(limit)).all()
     return list({a.id: a for a in [*exact, *popular]}.values())
 
@@ -586,31 +602,52 @@ class Person:
     teams: list[str]
     league: str | None
     ids: dict[str, str]
+    birth_precision: int | None = None
 
     @classmethod
     def of(cls, a: Athlete) -> "Person":
-        return cls(a.qid, a.sport, a.name, list(a.aliases or []), a.birth_date, list(a.teams or []), a.league, dict(a.ids or {}))
+        return cls(a.qid, a.sport, a.name, list(a.aliases or []), a.birth_date, list(a.teams or []), a.league, dict(a.ids or {}), a.birth_precision)
 
 
-def same_day(born: date | None, source: str | None) -> bool | None:
-    """Whether a Wikidata birth date and a source's agree; None if either is missing. ESPN writes
-    day/month/year, but a day of 12 or less could be either way round, so both readings count."""
+def date_precision(born: date | None, stored: int | None) -> int:
+    """How much of a registry birth date to trust. Rows imported before the precision was read hold a
+    year-only date as 1 January, so until the next import a 1 January counts as the year alone: a real
+    New Year's birthday then matches anyone of that name born that year, where otherwise every
+    footballer Wikidata knows only to the year couldn't be found at all."""
+    if stored is not None:
+        return stored
+    return YEAR if born is not None and (born.month, born.day) == (1, 1) else DAY
+
+
+def same_day(born: date | None, source: str | None, stored: int | None = None) -> bool | None:
+    """Whether a Wikidata birth date and a source's agree, as far as Wikidata knows it (stored: its
+    precision); None if either is missing. ESPN writes day/month/year, but a day of 12 or less could be
+    either way round, so both readings count."""
     if born is None or not source:
         return None
     try:
         y, m, d = (int(x) for x in source.split("-"))
     except ValueError:
         return None
+    known = date_precision(born, stored)
+    if known <= YEAR:
+        return y == born.year
+    if known == MONTH:
+        return y == born.year and born.month in (m, d)
     return (y, m, d) == (born.year, born.month, born.day) or (y, d, m) == (born.year, born.month, born.day)
 
 
 def same_person(person: Person, ref: PlayerRef) -> bool:
-    """Is this source athlete the registry's person? The birth date decides when both know it;
-    otherwise the whole name must match and, in team sports, a team too."""
-    agree = same_day(person.birth_date, ref.born)
-    if agree is not None:
+    """Is this source athlete the registry's person? The birth date decides when both know it to the
+    day; a date Wikidata knows only to the year (or month) must agree and the names match too.
+    Otherwise the whole name must match and, in team sports, a team too."""
+    agree = same_day(person.birth_date, ref.born, person.birth_precision)
+    if agree is not None and date_precision(person.birth_date, person.birth_precision) == DAY:
         return agree
-    if sorted(words(ref.name)) not in [sorted(words(n)) for n in [person.name, *person.aliases]]:
+    names = [person.name, *person.aliases]
+    if agree is not None:
+        return agree and any(espn.names_match(n, ref.name) for n in names)
+    if sorted(words(ref.name)) not in [sorted(words(n)) for n in names]:
         return False
     if person.sport in TEAM_SPORTS and person.teams:
         return any(espn.team_key(a) in espn.team_key(b) or espn.team_key(b) in espn.team_key(a) for a in person.teams for b in ref.team_names if a and b)
@@ -686,8 +723,8 @@ def link(db: Session, player_id: int, qid: str) -> None:
         (PlayerIdentity.system == "wikidata") & (PlayerIdentity.player_id == player_id),
     )).limit(1))
     if taken is None:
-        db.add(PlayerIdentity(player_id=player_id, system="wikidata", external_id=qid, confidence=1.0, evidence_url=f"https://www.wikidata.org/wiki/{qid}"))
-        db.flush()
+        # Two fans following the athlete at once both get here: the second's insert does nothing.
+        db.execute(insert(PlayerIdentity).values(player_id=player_id, system="wikidata", external_id=qid, confidence=1.0, evidence_url=f"https://www.wikidata.org/wiki/{qid}").on_conflict_do_nothing())
 
 
 def link_players(sport: str | None = None) -> int:
@@ -712,8 +749,8 @@ def link_players(sport: str | None = None) -> int:
                 if ref is None:
                     continue
                 key = " ".join(words(ref.name))
-                named = db.scalars(select(Athlete).where(Athlete.sport == sport, Athlete.search_text.like(f"% {key} |%")).limit(5)).all()
-                matches = [a for a in named if same_day(a.birth_date, ref.born)]
+                namesakes = db.scalars(select(Athlete).where(Athlete.sport == sport, named(key)).limit(5)).all()
+                matches = [a for a in namesakes if same_day(a.birth_date, ref.born, a.birth_precision)]
                 if len(matches) != 1:
                     continue
                 athlete = matches[0]
@@ -736,7 +773,9 @@ def describe(player_id: int) -> str | None:
     """Who a player linked to the registry is, for the research agent when no live source knows them."""
     with session() as db:
         qid = db.scalar(select(PlayerIdentity.external_id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata"))
-        a = get(db, qid) if qid else None
+        sport = (db.scalar(select(Player.sport).where(Player.id == player_id)) or "").lower()
+        # The row in the player's sport: Chahal the cricketer isn't to be researched as a chess player.
+        a = (get(db, qid, sport) or get(db, qid)) if qid else None
         if a is None:
             return None
         facts = [a.sport, *(a.teams or []), f"born {a.birth_date.isoformat()}" if a.birth_date else "", a.country or ""]

@@ -9,7 +9,7 @@ import gzip
 import json
 from pathlib import Path
 
-from sports_follow import structured
+from sports_follow import moments, structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer
 from sports_follow.adapters.base import Fixture
 
@@ -17,6 +17,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "espn"
 KOHLI = "253802"
 RONALDO = "22774"
 AL_NASSR = "817"
+MATSUDA, HENDERSON = "270555", "127262"
+BURNLEY, BRADFORD = "379", "387"
 
 
 def load(name: str) -> dict:
@@ -32,6 +34,18 @@ def test_names_match_on_surname_and_accents():
     assert espn.names_match("Kohli", "Virat Kohli")
     assert espn.names_match("Jokic", "Nikola Jokić")
     assert not espn.names_match("Ronaldo", "Ronald Araújo")
+
+
+def test_names_match_needs_every_word_of_the_shorter_name():
+    # The surname alone used to do: "Ahmed Salah" bound Liverpool's Mohamed Salah (BUG-032).
+    assert not espn.names_match("Ahmed Salah", "Mohamed Salah")
+    assert not espn.names_match("Mohamed Salah", "Ahmed Salah")
+    assert espn.names_match("Jasprit Bumrah", "Jasprit Jasbirsingh Bumrah")  # ESPNcricinfo's longer legal name
+    assert espn.names_match("Cristiano Ronaldo", "Ronaldo")
+    assert espn.names_match("L. Messi", "Lionel Messi")  # an initial stands for its word
+    assert espn.names_match("MS Dhoni", "M. S. Dhoni")
+    assert espn.names_match("Trent Alexander-Arnold", "Trent Alexander Arnold")
+    assert espn.names_match("N’Golo Kanté", "N'Golo Kante")
 
 
 def test_search_hits_are_filtered_by_sport():
@@ -59,6 +73,25 @@ def test_cricket_day_feed_gives_fixtures_with_real_result():
     # The feed's top-level summary is just "Result"; the parser must reach the real one.
     assert odi.result["summary"] == "India won by 8 wkts (50b rem)"
     assert espn_cricket.match_format(odi) == "ODI"
+
+
+def test_cricket_postponed_and_abandoned_matches_are_not_results():
+    # 13 Oct 2026: Arunachal Pradesh v Nagaland was postponed (status type 113, "post", with the old
+    # start time as its summary); it was stored as a result, "Starts at 09:30 local time".
+    day = {f.source_id: f for f in espn_cricket.parse_day(load("cricket-day-20261013"))}
+    assert (day["1546542"].status, day["1546542"].result) == ("postponed", None)
+    assert (day["1555670"].status, day["1555670"].result["summary"]) == ("final", "Match drawn")  # a draw is a result
+    # 29 Sep 2026: three matches abandoned without a ball bowled (type 6).
+    abandoned = [f for f in espn_cricket.parse_day(load("cricket-day-20260929")) if f.source_id in ("1551842", "1552774", "1552775")]
+    assert [(f.status, f.result) for f in abandoned] == [("postponed", None)] * 3
+    snap = espn_cricket.parse_summary(load("cricket-summary-postponed"))
+    assert (snap.status, snap.score_label, snap.clock_label) == ("postponed", "Arunachal Pradesh v Nagaland", "Postponed")
+    snap = espn_cricket.parse_summary(load("cricket-summary-abandoned"))  # Nepal v Sri Lanka, Asian Games
+    assert (snap.status, snap.score_label, snap.clock_label) == ("postponed", "Nepal v Sri Lanka", "Abandoned")
+    # Abandoned after play is a no result, with a scorecard to keep.
+    rained_off = load("cricket-summary-final")
+    rained_off["header"]["competitions"][0]["status"].update(summary="No result", type={"id": "6", "description": "Abandoned", "state": "post"})
+    assert espn_cricket.parse_summary(rained_off).status == "final"
 
 
 def test_cricket_final_scorecard_gives_the_players_line():
@@ -168,6 +201,45 @@ def test_soccer_summary_scorers_and_unused_sub():
     assert snap.lines[RONALDO].headline == "On the bench"
     assert snap.lines[RONALDO].stats == []
     assert snap.moments[0]["kind"] == "YELLOW"
+
+
+def _seen(snap, athlete_id: str) -> moments.Seen:
+    line = snap.lines[athlete_id]
+    return moments.Seen("live", snap.state, {"headline": line.headline, "stats": line.stats}, snap.score_label, snap.clock_label, events=snap.moments)
+
+
+def test_soccer_goals_of_every_kind_are_told_with_their_minute():
+    # Kyoto Sanga 1–0 Ratchaburi (recorded 2026-10-13): the 88' winner was a volley ("goal---volley"),
+    # which the events left out, so it went out as a plain "Goal" at the clock's 90'+1'.
+    snap = espn_soccer.parse_summary(load("soccer-summary-volley"), "all")
+    [goal] = [m for m in snap.moments if m["kind"] == "GOAL"]
+    assert (goal["id"], goal["clock"], goal["athlete_ids"][0], goal["assist"]) == ("53579366", "88'", MATSUDA, "Haruki Arai")
+    [f] = moments.detect("Football", "Temma Matsuda", MATSUDA, moments.Seen("live", line={"headline": "Started", "stats": [{"label": "Goals", "value": "0"}]}), _seen(snap, MATSUDA))
+    assert (f.title, f.body, f.priority) == ("Late goal: Temma Matsuda puts Kyoto Sanga ahead", "Kyoto Sanga 1 – 0 Ratchaburi FC · 88' · assist Haruki Arai", 95)
+    # Chelsea 5–1 Bournemouth (recorded 2026-10-13): Henderson's second was a free kick
+    # ("goal---free-kick"); without it his second goal had no minute of its own.
+    snap = espn_soccer.parse_summary(load("soccer-summary-free-kick"), "eng.1")
+    assert [m["clock"] for m in snap.moments if m["kind"] == "GOAL"] == ["70'", "67'", "51'", "46'", "3'", "2'"]
+    before = {"headline": "1 goal, 1 assist", "stats": [{"label": "Goals", "value": "1"}, {"label": "Assists", "value": "1"}]}
+    [f] = moments.detect("Football", "Jordan Henderson", HENDERSON, moments.Seen("live", line=before), _seen(snap, HENDERSON))
+    assert (f.title, f.body, f.detail) == ("Goal: Jordan Henderson (2)", "Chelsea 5 – 1 AFC Bournemouth · 70'", "goal@53391731")
+
+
+def test_soccer_shootouts_say_who_won_on_penalties():
+    # Bradford City 0–0 Burnley in the Carabao Cup (recorded 2026-10-13): Bradford won 4–2 on penalties.
+    snap = espn_soccer.parse_summary(load("soccer-summary-shootout"), "eng.league_cup")
+    assert (snap.status, snap.score_label, snap.clock_label) == ("final", "Bradford City 0 – 0 Burnley (4–2 pens)", "FT-Pens")
+    fixtures = {f.source_id: f for f in espn_soccer.parse_schedule(load("soccer-schedule-shootouts"))}
+    cup = fixtures["401908136"]
+    assert espn_soccer.result_label(cup, [BURNLEY]) == "Lost 0–0 (2–4 pens)"
+    assert espn_soccer.result_label(cup, [BRADFORD]) == "Won 0–0 (4–2 pens)"
+    assert espn_soccer.result_label(cup, ["1"]) == "Bradford City 0–0 Burnley (4–2 pens)"
+    assert espn_soccer.result_label(fixtures["401880603"], [BURNLEY]) == "Won 1–1 (4–3 pens)"
+    assert espn_soccer.result_label(fixtures["401880254"], [BURNLEY]) == "Drew 1–1"  # no shootout
+    # No winner flag: the score decides, not "Drew".
+    unflagged = Fixture("1", "Burnley vs Derby County", "", None, None, "final", [BURNLEY, "374"], {}, result={
+        "home": {"id": BURNLEY, "name": "Burnley", "score": "2", "winner": None}, "away": {"id": "374", "name": "Derby County", "score": "1", "winner": None}})
+    assert (espn_soccer.result_label(unflagged, [BURNLEY]), espn_soccer.result_label(unflagged, ["374"])) == ("Won 2–1", "Lost 1–2")
 
 
 def test_soccer_season_stats():
