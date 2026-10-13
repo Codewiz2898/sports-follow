@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import engine
-from .adapters import ADAPTERS
+from .adapters import ADAPTERS, opendota
 from .agent import MODEL
 
 CC_BY_SA = "https://creativecommons.org/licenses/by-sa/4.0/"
@@ -140,6 +140,13 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
             "url": "https://ratings.fide.com",
             "what": "Chess titles and ratings, looked up player by player through Lichess.",
             "note": "Ratings are FIDE's.",
+        })
+    if "pandascore_esports" in running and opendota.ENABLED:
+        also.append({
+            "name": "OpenDota",
+            "url": "https://www.opendota.com",
+            "what": "Dota 2 inside the map: kills, the clock and the gold lead while a map is on, and each player's hero, kills, deaths, assists, gold a minute and last hits after it, from Valve's match data.",
+            "note": "Run by the OpenDota community, best effort.",
         })
     if engine.enabled() if stockfish is None else stockfish:
         also.append({

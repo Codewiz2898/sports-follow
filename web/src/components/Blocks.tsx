@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { BasketballSide, BasketballState, BattleRoyaleState, Card, ChessSide, ChessState, CricketState, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
+import type { BasketballSide, BasketballState, BattleRoyaleState, Card, ChessSide, ChessState, CricketState, DotaLiveMap, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
 import { countdown, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
 import { SportMark } from './Icons'
 
@@ -348,6 +348,19 @@ function LobbyBoard({ state, clock, teams, compact }: { state: BattleRoyaleState
   )
 }
 
+/** Inside the Dota 2 map being played (its number and clock are under the score): kills, in the board's
+ * team order, and who leads on gold once it's a real lead. */
+function DotaMapLine({ live, order }: { live: DotaLiveMap; order: string[] }) {
+  const [a, b] = order[0] === live.dire.id ? [live.dire, live.radiant] : [live.radiant, live.dire]
+  const leader = live.gold_lead.id === live.radiant.id ? live.radiant : live.dire
+  return (
+    <div className="row small" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }} aria-label={`Map ${live.n}: kills and gold`}>
+      <span>Kills <b className="num">{a.kills}–{b.kills}</b></span>
+      {live.gold_lead.amount >= 1000 && <span className="muted">{leader.name} +{(live.gold_lead.amount / 1000).toFixed(1)}k gold</span>}
+    </div>
+  )
+}
+
 const FILLER = /^(team|esports?|gaming|official|club|the)$/i
 
 /** A team's name short enough for a chip: "GodLike Esports" → "GodLike", "Team SouL" → "SouL". */
@@ -385,6 +398,7 @@ function EsportsBoard({ state, clock, compact }: { state: EsportsState; clock?: 
           ))}
         </div>
       )}
+      {!compact && state.dota?.live && state.dota.live.clock !== 'draft' && <DotaMapLine live={state.dota.live} order={state.teams.map((t) => t.id)} />}
       {state.game && <span className="live-note">{state.game}</span>}
     </div>
   )
@@ -445,7 +459,7 @@ const NO_LINE: Record<string, string> = { cricket: "hasn't batted or bowled yet"
 function PlayerLine({ live, playerName }: { live: LiveStatus; playerName: string }) {
   const stats = live.player_stats ?? []
   if (!live.headline && !stats.length) {
-    if (!live.state || live.state.kind === 'esports' || live.state.kind === 'battle_royale') return null  // esports results are the team's: no player numbers
+    if (!live.state || live.state.kind === 'esports' || live.state.kind === 'battle_royale') return null  // no line: the team's result says it
     return <span className="small muted">{playerName} {NO_LINE[live.state.kind] ?? 'has no numbers in this game yet'}.</span>
   }
   // Structured lines lead with a headline ("67* (71)", "1 goal"); the agent's lead with the first stat.

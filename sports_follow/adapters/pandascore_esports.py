@@ -11,16 +11,24 @@ series moments.
 
 Players are known by their PandaScore id: the registry imports the pros of IMPORT_GAMES from here
 (registry.import_esports), since Wikidata knows only a few thousand esports players.
+
+Dota 2 series get what happens inside each map from OpenDota (dota.py): kills, the clock and the gold
+lead while a map is on, and every roster player's hero and numbers once it's over.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import espn, pandascore
+from .. import bus
+from . import dota, espn, opendota, pandascore
 from .base import AdapterError, Fixture, PlayerRef, Snapshot
+
+log = logging.getLogger("sports_follow.esports")
 
 # PandaScore's team titles: slug -> the name fans use. Its 1v1 titles (StarCraft, EA Sports FC), battle
 # royale (PUBG) and simulated matches (eSoccer, eCricket…) are left out.
@@ -344,7 +352,65 @@ class PandascoreEsports:
         if not isinstance(data, dict) or not data.get("id"):
             raise AdapterError(f"PandaScore has no match {match_id}")
         self._keep([data])
-        return parse_match(data)
+        snap = parse_match(data)
+        if not final:
+            self._dota(data, snap)
+        return snap
+
+    @staticmethod
+    def _known_maps(series: str, n: int, game: dict[str, Any] | None) -> dict[str, int]:
+        """The series' maps seen live so far (map number -> OpenDota match), kept in Redis for the worker and
+        the API alike, with the live game added as map n (dota.remember)."""
+        key = f"dota:series:{series}"
+        try:
+            r = bus.sync_redis()
+            known = json.loads(r.get(key) or "{}")
+            if game:
+                updated = dota.remember(known, n, int(game["match_id"]))
+                if updated != known:
+                    r.set(key, json.dumps(updated), ex=3 * 86400)
+                known = updated
+            return known
+        except Exception:  # Redis down: no memory, the fallback still works
+            return {}
+
+    def _dota(self, m: dict[str, Any], snap: Snapshot) -> None:
+        """A Dota 2 series on now (or just over) gains what OpenDota knows inside its maps: the map being
+        played, and each finished map's numbers for both rosters' players. Anything OpenDota can't say
+        leaves the series as PandaScore has it."""
+        if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
+            return
+        teams = snap.state.get("teams") or []
+        if len(teams) != 2:
+            return
+        try:
+            roster = [p for t in teams for p in (pandascore.get_json(f"/teams/{t['id']}", ttl=24 * 3600) or {}).get("players") or []]
+            finished = [g for g in snap.state.get("maps") or [] if g.get("winner")]
+            over = opendota.pro_matches()
+            game = dota.find_live(opendota.live(), teams) if snap.status == "live" else None
+            if game and int(game.get("match_id") or 0) in {int(x.get("match_id") or 0) for x in over}:
+                game = None  # finished: the live list lags a little
+            players = dota.accounts(roster, [t["name"] for t in teams], opendota.pro_players(), (game or {}).get("players") or [])
+            heroes = opendota.heroes()
+            known = self._known_maps(str(m.get("id")), len(finished) + 1, game)
+            numbered = sorted((int(n), mid) for n, mid in known.items() if int(n) <= len(finished))
+            if not numbered and finished:
+                # Nothing seen live (the worker started mid-series): OpenDota's last hundred pro matches.
+                begin = _time(m.get("begin_at") or m.get("scheduled_at"))
+                numbered = dota.number_maps(dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
+            maps = []
+            for n, match_id in numbered if players else []:
+                details = opendota.match(match_id)
+                if details:
+                    maps.append({"n": n, "match_id": match_id, "players": dota.map_stats(details, players, heroes)})
+            live = dota.live_map(game, teams, players, heroes, len(finished) + 1) if game else None
+        except AdapterError as exc:
+            log.info("dota %s: no OpenDota data: %s", m.get("id"), exc)
+            return
+        snap.state["dota"] = {"maps": maps, "live": live}
+        snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
+        if live:
+            snap.clock_label = f"Map {live['n']} · {live['clock']}"
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many series at once, MULTI_MAX to a request: the live lane's one fetch a round. Keyed as
@@ -355,7 +421,8 @@ class PandascoreEsports:
         for i in range(0, len(ids), self.MULTI_MAX):
             rows = pandascore.get_json("/matches", ttl=0, **{"filter[id]": ",".join(ids[i:i + self.MULTI_MAX]), "page[size]": self.MULTI_MAX})
             for m in self._keep(rows if isinstance(rows, list) else []):
-                found[str(m.get("id"))] = parse_match(m)
+                found[str(m.get("id"))] = snap = parse_match(m)
+                self._dota(m, snap)
         return {key: found[mid] for key, mid in wanted.items() if mid in found}
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:

@@ -50,7 +50,9 @@ export interface ChessState {
 
 export interface EsportsTeam { id: string; name: string; abbr?: string | null; score: number; winner?: boolean | null }
 export interface EsportsMap { n: number; status: string; winner?: string | null }  // status: finished | running | not_started
-export interface EsportsState { kind: 'esports'; game?: string | null; teams: EsportsTeam[]; maps: EsportsMap[]; format?: string | null; stage?: string | null; forfeit?: boolean }
+// Dota 2 inside the map (OpenDota): the map being played, kills a side, clock and gold lead.
+export interface DotaLiveMap { n: number; clock: string; radiant: { id: string; name: string; kills: number }; dire: { id: string; name: string; kills: number }; gold_lead: { id: string; amount: number } }
+export interface EsportsState { kind: 'esports'; game?: string | null; teams: EsportsTeam[]; maps: EsportsMap[]; format?: string | null; stage?: string | null; forfeit?: boolean; dota?: { live?: DotaLiveMap | null } }
 
 // A battle royale lobby: every team's standing, and who won each game ("chicken dinner", "Booyah").
 export interface LobbyGame { n: number; place?: number | null; kills: number; points: number }

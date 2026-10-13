@@ -9,7 +9,8 @@ however many polls see the same fifty, fans hear about it once. Its level decide
            game around, the line-up (starting or on the bench), esports series and lobbies
            starting, a chicken dinner (Booyah), going top of a lobby, every result, upsets,
            injuries, transfers
-    minor  coming on, yellow cards, 20 points, double-doubles, each set, each esports map, each
+    minor  coming on, yellow cards, 20 points, double-doubles, each set, each esports map (with a Dota
+           player's kills, deaths and assists once OpenDota has them), each
            battle royale game's placement, a chess player better, worse or level again, milestones
            in the news
 
@@ -40,7 +41,7 @@ ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
 PRIORITY = {
     "final": 80, "start": 40, "lineup": 50, "goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30,
     "fifty": 70, "hundred": 90, "out": 60, "wickets": 70, "points": 30, "double": 30, "triple": 85,
-    "set": 30, "map": 30, "game": 30, "dinner": 90, "lead": 75, "upset": 90, "swing": 30, "news": 60,
+    "set": 30, "map": 30, "kda": 30, "game": 30, "dinner": 90, "lead": 75, "upset": 90, "swing": 30, "news": 60,
 }
 LATE_MINUTE = 80  # a goal from here on that levels the game or puts a side ahead is "late"
 
@@ -136,8 +137,10 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
     in_game = now.line is not None and head != "On the bench" and not head.startswith("Did not play")
 
     found += _lineup(sport, who, now)
-    # Esports without line-ups (a series, a lobby nobody listed players for) starts for the whole team.
-    if before is not None and now.status == "live" and was in ("scheduled", "armed", "postponed") and (in_game or sport in ("tennis", "chess") or (sport == "esports" and not now.lineups)):
+    # A series starts for the whole team (a Dota player OpenDota can't name has no line), and so does a
+    # lobby nobody listed players for.
+    team_start = sport == "esports" and (not _lobby(now) or not now.lineups)
+    if before is not None and now.status == "live" and was in ("scheduled", "armed", "postponed") and (in_game or sport in ("tennis", "chess") or team_start):
         found.append(_start(sport, who, now))
     if now.status == "final" and was != "final" and not _left_out(sport, now):
         found.append(_final(sport, who, now))
@@ -150,7 +153,7 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
         elif sport == "chess":
             found += _chess(who, before, now)
         elif sport == "esports":
-            found += _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now)
+            found += _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
     for f in found:
         f.priority = f.priority or PRIORITY.get(f.kind, 50)
     return found
@@ -331,6 +334,21 @@ def _maps(who: str, before: Seen, now: Seen) -> list[Found]:
         won = m["winner"] == ours["id"]
         title = f"{who}: {ours['name']} {'win' if won else 'lose'} map {m.get('n')}"
         found.append(Found("map", "minor", title, f"{ours['name']} {ours['score']}–{theirs['score']} {theirs['name']}", f"map{m.get('n')}"))
+    return found
+
+
+def _dota(who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
+    """A Dota 2 player's numbers for each map whose figures arrived since the last poll (OpenDota has
+    them a few minutes after the map ends): "Yatoro: 12/2/9 on Faceless Void"."""
+    had = {m.get("n") for m in ((before.state.get("dota") or {}).get("maps") or []) if athlete_id in (m.get("players") or {})}
+    found = []
+    for m in (now.state.get("dota") or {}).get("maps") or []:
+        p = (m.get("players") or {}).get(athlete_id)
+        if not p or m.get("n") in had:
+            continue
+        title = f"{who}: {p['kills']}/{p['deaths']}/{p['assists']} on {p['hero']}"
+        body = f"Map {m['n']} {'won' if p.get('won') else 'lost'} · {p['gpm']} GPM · {p['last_hits']} last hits"
+        found.append(Found("kda", "minor", title, body, f"kda{m['n']}", 60 if p["kills"] >= 10 else 0))
     return found
 
 
