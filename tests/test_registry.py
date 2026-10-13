@@ -3,9 +3,13 @@ live-source athlete (registry.py). Rows are shaped like the query service's JSON
 
 from __future__ import annotations
 
+import importlib.util
 from datetime import date
+from pathlib import Path
 
-from sports_follow import registry, search
+import pytest
+
+from sports_follow import bus, registry, search
 from sports_follow.adapters import PlayerRef
 from sports_follow.models import Athlete
 
@@ -131,3 +135,124 @@ def test_a_whole_name_is_a_name_or_an_alias_not_the_end_of_one():
     sql = str(registry.named("ronaldo").compile(compile_kwargs={"literal_binds": True}))
     assert "' ronaldo |%'" in sql and "'%| ronaldo |%'" in sql
     assert "'% ronaldo |%'" not in sql
+
+
+def test_commons_file_names_are_decoded_in_full():
+    # Only "%20" was decoded: 29,253 of 65,597 names kept "%C4%87" and "%28cropped%29" (BUG-077).
+    path = "http://commons.wikimedia.org/wiki/Special:FilePath/"
+    for encoded, name in [
+        ("Zlatan%20Ibrahimovi%C4%87%20nyc.jpg", "Zlatan Ibrahimović nyc.jpg"),
+        ("Jan-Krzysztof%20Duda%202021%20%28cropped%29.jpg", "Jan-Krzysztof Duda 2021 (cropped).jpg"),
+        ("100%25%20Pure.jpg", "100% Pure.jpg"),  # a "%" in the name itself
+        ("C++%20Cup.png", "C++ Cup.png"),  # "+" is a plus in a path, not a space
+    ]:
+        [row] = registry.build("chess", [{"p": WD + "Q1", "id_lichess_chess": "1", "image": path + encoded}], [{"p": WD + "Q1", "n": "Somebody", "kind": "label", "lang": "en"}], [], TODAY)
+        assert row["image"] == name
+
+
+def test_the_stored_names_are_decoded_once_and_only_once():
+    """The migration that decodes names already stored: a decoded name is never decoded again, since
+    MediaWiki allows no "%" and two hex digits in a title."""
+    spec = importlib.util.spec_from_file_location("decode_images", Path(__file__).parent.parent / "migrations/versions/f4a7c2e9b1d6_decode_athlete_image_names.py")
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert migration.decoded("Zlatan Ibrahimovi%C4%87 nyc.jpg") == "Zlatan Ibrahimović nyc.jpg"
+    assert migration.decoded("100%25 Pure %28cropped%29.jpg") == "100% Pure (cropped).jpg"
+    for decoded in ["Zlatan Ibrahimović nyc.jpg", "100% Pure (cropped).jpg", "50 % off.jpg"]:
+        assert migration.decoded(decoded) == decoded
+    assert migration.decoded("Cut at 300 characters Ibrahimovi%C4") == "Cut at 300 characters Ibrahimovi%C4"  # left for the import
+
+
+def test_national_cricket_sides_without_national_in_the_name():
+    # "Ireland cricket team" (123 athletes), "West Indies cricket team" (86) and "England cricket team" (66)
+    # were kept as clubs (BUG-082); domestic sides named the same way are clubs.
+    assert registry.team_name("Ireland cricket team") == "Ireland"
+    assert registry.team_name("West Indies women's cricket team") == "West Indies"
+    assert registry.team_name("South Africa national women's cricket team") == "South Africa"
+    assert registry.team_name("Guernsey cricket team") == "Guernsey"
+    for club in ["Tasmania cricket team", "Mumbai cricket team", "United States Virgin Islands cricket team", "Pakistan International Airlines cricket team", "National Bank of Pakistan cricket team"]:
+        assert not registry.is_national(club) and registry.team_name(club) == club
+    core = [{"p": WD + "Q1", "birth": "1988-04-29T00:00:00Z", "id_espn_cricket": "276298", "citizenship": "Jamaica"}]
+    teams = [
+        {"p": WD + "Q1", "teamLabel": "West Indies cricket team", "start": "2010-01-01T00:00:00Z"},
+        {"p": WD + "Q1", "teamLabel": "Kolkata Knight Riders", "start": "2014-01-01T00:00:00Z"},
+        {"p": WD + "Q1", "teamLabel": "Jamaica Tallawahs", "start": "2013-01-01T00:00:00Z"},
+    ]
+    [russell] = registry.build("cricket", core, [{"p": WD + "Q1", "n": "Andre Russell", "kind": "label", "lang": "en"}], teams, TODAY)
+    assert russell["teams"] == ["West Indies", "Kolkata Knight Riders"]  # cricket: the country first, then the latest club
+
+
+# ---------------------------------------------------------------- one run at a time, one sport at a time (BUG-023)
+
+
+def test_one_failed_sport_doesnt_stop_the_others(monkeypatch, caplog):
+    asked = []
+
+    def import_sport(sport, new_only=False):
+        asked.append(sport)
+        if sport == "basketball":
+            raise RuntimeError("wikidata query service kept failing")
+        return 10
+
+    monkeypatch.setattr(registry, "import_sport", import_sport)
+    monkeypatch.setattr(registry, "import_esports", lambda: asked.append("esports") or 3)
+    done = registry.import_all()
+    assert asked == [*registry.SPORTS, registry.ESPORTS]
+    assert done == {"chess": 10, "basketball": None, "tennis": 10, "cricket": 10, "football": 10, "esports": 3}
+    assert "basketball failed" in caplog.text
+
+
+def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):
+    ran = []
+
+    def pandascore():
+        ran.append("pandascore")
+        raise KeyError("id")
+
+    monkeypatch.setattr(registry, "_import_pandascore", pandascore)
+    monkeypatch.setattr(registry, "_import_liquipedia", lambda: ran.append("liquipedia") or 4)
+    monkeypatch.setattr(registry, "import_pubg", lambda: ran.append("pubg") or 5)
+    with pytest.raises(RuntimeError, match="PandaScore failed"):
+        registry.import_esports()
+    assert ran == ["pandascore", "liquipedia", "pubg"]
+
+
+def test_an_empty_answer_from_wikidata_deletes_nothing(monkeypatch):
+    # BUG-083: the weekly run deletes what it didn't refresh, so an empty member list would wipe the sport.
+    monkeypatch.setattr(registry, "members", lambda sport: [])
+    monkeypatch.setattr(registry, "session", lambda: pytest.fail("the database was touched"))
+    with pytest.raises(RuntimeError, match="no one in chess"):
+        registry.import_sport("chess")
+
+
+def test_a_run_that_would_remove_more_than_it_kept_removes_nothing():
+    assert registry.too_many_gone(leaving=24_319, kept=0)
+    assert registry.too_many_gone(leaving=600, kept=500)
+    assert not registry.too_many_gone(leaving=40, kept=24_279)
+
+
+def test_a_run_by_hand_takes_the_weekly_runs_lock(monkeypatch, capsys):
+    locks: dict[str, str] = {}
+
+    def try_lock(name, seconds):
+        if name in locks:
+            return None
+        locks[name] = "token"
+        return "token"
+
+    monkeypatch.setattr(bus, "try_lock", try_lock)
+    monkeypatch.setattr(bus, "release", lambda name, token=None: locks.pop(name, None))
+    held = []
+    monkeypatch.setattr(registry, "import_sport", lambda sport, new_only=False: held.append(dict(locks)) or 7)
+    registry.main(["chess"])
+    assert held == [{"registry-import": "token"}] and locks == {}  # held while importing, then let go
+    assert "{'chess': 7}" in capsys.readouterr().out
+
+    locks["registry-import"] = "the weekly run's"
+    with pytest.raises(SystemExit, match="another registry import is running"):
+        registry.main(["chess"])
+    assert len(held) == 1  # nothing imported
+    # And the weekly job skips while a run by hand holds it.
+    from sports_follow import worker
+    worker._import_registry()
+    assert len(held) == 1

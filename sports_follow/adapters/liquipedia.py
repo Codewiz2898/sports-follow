@@ -103,10 +103,17 @@ def get(datatype: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
         raise AdapterError(f"Liquipedia rejected the key (HTTP {res.status_code})")
     if res.status_code != 200:
         raise AdapterError(f"Liquipedia returned HTTP {res.status_code} for {datatype}"[:300])
-    data = res.json()
+    try:
+        data = res.json()
+    except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+        raise AdapterError(f"Liquipedia returned non-JSON for {datatype}") from exc
+    if not isinstance(data, dict):
+        raise AdapterError(f"Liquipedia returned {type(data).__name__} for {datatype}")
     if data.get("error"):
         raise AdapterError(f"Liquipedia: {data['error']}"[:300])
     rows = data.get("result") or []
+    if not isinstance(rows, list):
+        raise AdapterError(f"Liquipedia returned no rows for {datatype}")
     if ttl > 0:
         with _lock:
             _cache[key] = (time.time(), rows)

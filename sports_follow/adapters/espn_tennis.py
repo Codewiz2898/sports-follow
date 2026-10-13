@@ -22,6 +22,9 @@ WEEKS_BACK = 6  # how far back to look for results
 HISTORY_WEEKS = 52  # how far back history.py reads, once, four weeks at a time
 
 _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
+# Matches over without being played out, by ESPN's status name: a walkover (one player withdrew
+# before it) or a retirement (one stopped during it).
+_ENDINGS = {"STATUS_WALKOVER": "walkover", "STATUS_RETIRED": "retired"}
 
 
 def _time(value: str | None) -> datetime | None:
@@ -53,6 +56,14 @@ def _competitor(c: dict[str, Any]) -> dict[str, Any]:
         "winner": c.get("winner"),
         "sets": [{"games": _num(ls.get("value")), "tiebreak": ls.get("tiebreak"), "won": ls.get("winner")} for ls in c.get("linescores") or []],
     }
+
+
+def _status(kind: dict[str, Any]) -> str:
+    """A match's status from ESPN's status type. One over but not completed there (cancelled) is no
+    result: it's off, as a postponed one is."""
+    if kind.get("name") == "STATUS_CANCELED" or (kind.get("state") == "post" and kind.get("completed") is False):
+        return "postponed"
+    return _STATUS.get(kind.get("state"), "scheduled")
 
 
 def _ordered(competitors: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -88,7 +99,8 @@ def parse_scoreboard(data: dict[str, Any], tour: str, day: str) -> list[Fixture]
                 players = [_competitor(c) for c in _ordered(comp.get("competitors") or [])]
                 if len(players) != 2:
                     continue
-                status = _STATUS.get(((comp.get("status") or {}).get("type") or {}).get("state"), "scheduled")
+                kind = (comp.get("status") or {}).get("type") or {}
+                status = _status(kind)
                 venue = comp.get("venue") or {}
                 out.append(
                     Fixture(
@@ -102,7 +114,7 @@ def parse_scoreboard(data: dict[str, Any], tour: str, day: str) -> list[Fixture]
                         team_names=[p["name"] for p in players],
                         locator={"tour": tour, "tournament": str(event.get("id")), "match": str(comp["id"]), "day": day},
                         detail=(comp.get("round") or {}).get("displayName"),
-                        result={"players": players, "note": next((n.get("text") for n in comp.get("notes") or [] if n.get("text")), None)} if status == "final" else None,
+                        result={"players": players, "note": next((n.get("text") for n in comp.get("notes") or [] if n.get("text")), None), "ending": _ENDINGS.get(kind.get("name"))} if status == "final" else None,
                     )
                 )
     return out
@@ -121,7 +133,8 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
     """One match from a scoreboard -> snapshot, with each player's side of it as their line."""
     status_obj = comp.get("status") or {}
     kind = status_obj.get("type") or {}
-    status = _STATUS.get(kind.get("state"), "scheduled")
+    status = _status(kind)
+    ending = _ENDINGS.get(kind.get("name")) if status == "final" else None
     a, b = [_competitor(c) for c in _ordered(comp.get("competitors") or [])][:2]
     score = set_scores(a, b)
 
@@ -129,8 +142,12 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
     for me, other in ((a, b), (b, a)):
         won, lost = _sets_won(me), _sets_won(other)
         games = sum(s["games"] for s in me["sets"])
-        if status == "final":
-            headline = f"{'Won' if me.get('winner') else 'Lost'} in {won + lost} sets"
+        if ending == "walkover":
+            headline = "Won by walkover" if me.get("winner") else "Withdrew"
+        elif ending == "retired":
+            headline = "Won, opponent retired" if me.get("winner") else "Retired"
+        elif status == "final":
+            headline = f"{'Won' if me.get('winner') else 'Lost'} in {won + lost} set{'s' if won + lost != 1 else ''}"
         elif status == "live":
             headline = "Level in sets" if won == lost else f"{'Leads' if won > lost else 'Trails'} {won}–{lost} in sets"
             if me["serving"]:
@@ -154,6 +171,7 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
             "set": status_obj.get("period"),
             "round": (comp.get("round") or {}).get("displayName"),
             "tournament": event.get("name"),
+            "ending": ending,
         },
         lines=lines,
         source_url=next((l.get("href") for l in event.get("links") or [] if "summary" in (l.get("rel") or [])), None),
@@ -167,13 +185,18 @@ def parse_ranking(data: dict[str, Any], athlete_id: str) -> tuple[dict[str, Any]
 
 
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
-    """ "Won 6-4 7-6(5)" / "Lost 4-6 3-6", from the followed player's side."""
-    players = (fixture.result or {}).get("players") or []
+    """ "Won 6-4 7-6(5)" / "Lost 4-6 3-6", from the followed player's side; "Won (w/o)" for a walkover
+    and "Lost 4-6 0-0 ret." for a retirement."""
+    result = fixture.result or {}
+    players = result.get("players") or []
     if len(players) != 2:
         return ""
     me = next((p for p in players if p["id"] in team_ids), players[0])
     other = players[1] if me is players[0] else players[0]
-    return f"{'Won' if me.get('winner') else 'Lost'} {set_scores(me, other)}"
+    word = "Won" if me.get("winner") else "Lost"
+    if result.get("ending") == "walkover":
+        return f"{word} (w/o)"
+    return " ".join(x for x in (word, set_scores(me, other), "ret." if result.get("ending") == "retired" else None) if x)
 
 
 # ---------------------------------------------------------------- the adapter
@@ -273,7 +296,8 @@ class EspnTennis:
             prev = row.get("previous")
             if prev and prev != row.get("current"):
                 stats.append({"label": "Last week", "value": str(prev)})
-        finals = [f for f in self.fixtures(ref) if f.status == "final"]
+        # A walkover isn't a match played, so it isn't in the win–loss (as the tours count it).
+        finals = [f for f in self.fixtures(ref) if f.status == "final" and (f.result or {}).get("ending") != "walkover"]
         if finals:
             wins = sum(1 for f in finals if result_label(f, ref.team_ids).startswith("Won"))
             stats.append({"label": "Win–loss", "value": f"{wins}–{len(finals) - wins}"})

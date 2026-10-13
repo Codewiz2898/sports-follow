@@ -83,7 +83,13 @@ def _get(path: str, limited: bool) -> dict[str, Any]:
         raise NotFound(f"PUBG has nothing at {path}")
     if res.status_code != 200:
         raise AdapterError(f"PUBG returned HTTP {res.status_code} for {path}"[:300])
-    return res.json()
+    try:
+        data = res.json()
+    except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+        raise AdapterError(f"PUBG returned non-JSON for {path}") from exc
+    if not isinstance(data, dict):
+        raise AdapterError(f"PUBG returned {type(data).__name__} for {path}")
+    return data
 
 
 def _cached(key: str) -> Any:

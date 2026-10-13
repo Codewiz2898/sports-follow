@@ -49,7 +49,8 @@ def _take() -> None:
         raise RateLimited("OpenDota's free requests are spent for now")
 
 
-def _get(path: str) -> Any:
+def _get(path: str, kind: type = list) -> Any:
+    """An OpenDota document: a list (live games, pro matches, heroes, pros), or a dict (a match)."""
     if not ENABLED:
         raise AdapterError("OpenDota is turned off (SPORTS_FOLLOW_OPENDOTA=0)")
     _take()
@@ -61,7 +62,13 @@ def _get(path: str) -> Any:
         raise RateLimited("OpenDota said too many requests (429)")
     if res.status_code != 200:
         raise AdapterError(f"OpenDota returned HTTP {res.status_code} for {path}"[:300])
-    return res.json()
+    try:
+        data = res.json()
+    except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+        raise AdapterError(f"OpenDota returned non-JSON for {path}") from exc
+    if not isinstance(data, kind):
+        raise AdapterError(f"OpenDota returned {type(data).__name__} for {path}")
+    return data
 
 
 def _memoized(key: str, ttl: float, fetch: Any) -> Any:
@@ -104,7 +111,7 @@ def match(match_id: int | str) -> dict[str, Any] | None:
     """A finished match's details (each player's hero and numbers), kept once complete."""
     def fetch() -> dict[str, Any] | None:
         try:
-            return _get(f"/matches/{match_id}")
+            return _get(f"/matches/{match_id}", dict)
         except RateLimited:
             raise
         except AdapterError:

@@ -1,8 +1,9 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { BellIcon, HomeIcon, SearchIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { FollowingProvider, useFollowing } from './following'
@@ -109,9 +110,11 @@ function Sidebar() {
       <InstallButton compact />
       <span className="eyebrow" style={{ marginTop: 8 }}>Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
       <nav aria-label="Your players" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
-        {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
-          <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
-        ))}
+        <ErrorBoundary fallback={<span className="tiny muted" style={{ padding: '0 10px' }}>Your players couldn't be listed here.</span>} resetKey={cards}>
+          {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
+            <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
+          ))}
+        </ErrorBoundary>
       </nav>
       <NavLink to="/credits" className="tiny muted link" style={{ marginTop: 'auto' }}>Credits and sources</NavLink>
     </aside>
@@ -138,22 +141,42 @@ function Unread() {
   return <span className="nav-count" aria-label={`${unread} new`}>{unread > 9 ? '9+' : unread}</span>
 }
 
+/** An address that isn't a page here (an old link, a typo): say so, with the way back. */
+function NotFound() {
+  return (
+    <>
+      <h1 className="dsp page-title">Not found</h1>
+      <div className="card card-pad stack" style={{ gap: 12 }}>
+        <span className="title">There's no page at this address.</span>
+        <Link to="/" className="btn primary" style={{ alignSelf: 'flex-start' }}>Back to Today</Link>
+      </div>
+    </>
+  )
+}
+
 function App() {
+  const { pathname } = useLocation()
   return (
     <div className="shell">
       <ScrollToTop />
-      <Toasts />
+      <ErrorBoundary fallback={null} resetKey={pathname}>
+        <Toasts />
+      </ErrorBoundary>
       <Sidebar />
       <main className="main">
         <PwaNotices />
-        <Routes>
-          <Route path="/" element={<TodayPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/player/:id" element={<PlayerPage />} />
-          <Route path="/athlete/:system/:id" element={<AthletePage />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
-          <Route path="/credits" element={<CreditsPage />} />
-        </Routes>
+        {/* A page that fails to render shows a message, and the tab bar still works; another page tries again. */}
+        <ErrorBoundary resetKey={pathname}>
+          <Routes>
+            <Route path="/" element={<TodayPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/player/:id" element={<PlayerPage />} />
+            <Route path="/athlete/:system/:id" element={<AthletePage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/credits" element={<CreditsPage />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={20} height={20} />Today</NavLink>

@@ -99,7 +99,12 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         except (ValueError, AttributeError):
             pass
         raise AdapterError(f"PandaScore returned HTTP {res.status_code} for {path}: {message}"[:300])
-    data = res.json()
+    try:
+        data = res.json()
+    except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+        raise AdapterError(f"PandaScore returned non-JSON for {path}") from exc
+    if not isinstance(data, (dict, list)):
+        raise AdapterError(f"PandaScore returned {type(data).__name__} for {path}")
     if ttl <= 0:
         return data
     with _lock:

@@ -9,9 +9,12 @@ import gzip
 import json
 from pathlib import Path
 
+import httpx
+import pytest
+
 from sports_follow import moments, structured
-from sports_follow.adapters import espn, espn_cricket, espn_soccer
-from sports_follow.adapters.base import Fixture
+from sports_follow.adapters import espn, espn_cricket, espn_soccer, lichess_chess, liquipedia, opendota, pandascore, pubg, sportmonks
+from sports_follow.adapters.base import AdapterError, Fixture
 
 FIXTURES = Path(__file__).parent / "fixtures" / "espn"
 KOHLI = "253802"
@@ -58,6 +61,39 @@ def test_search_hits_are_filtered_by_sport():
         if (item.get("uid") or "").startswith(espn_cricket.SPORT_UID)
     ]
     assert any(h["uid"].endswith(f"~a:{KOHLI}") for h in hits)
+
+
+# A captive portal's sign-in page or a CDN's error page, served with a 200; then JSON of the wrong shape.
+PORTAL = "<html><body>Sign in to continue</body></html>"
+NOT_JSON = [
+    (espn, PORTAL, lambda: espn.get_json("https://site.api.espn.com/apis/x", 0)),  # as it always did
+    (pandascore, PORTAL, lambda: pandascore.get_json("/matches", 0, **{"filter[id]": "1"})),
+    (pandascore, '"maintenance"', lambda: pandascore.get_json("/matches", 0)),
+    (lichess_chess, PORTAL, lambda: lichess_chess.get_json("https://lichess.org/api/broadcast/-/-/abcdefgh", 0)),
+    (liquipedia, PORTAL, lambda: liquipedia.get("match", 0, wiki="pubgmobile")),
+    (liquipedia, "[]", lambda: liquipedia.get("match", 0, wiki="pubgmobile")),
+    (liquipedia, '{"result": "none"}', lambda: liquipedia.get("match", 0, wiki="pubgmobile")),
+    (sportmonks, PORTAL, lambda: sportmonks.get_json("/football/fixtures/1", 0)),
+    (sportmonks, "[]", lambda: sportmonks.get_json("/football/fixtures/1", 0)),
+    (pubg, PORTAL, lambda: pubg._get("/tournaments", limited=False)),
+    (pubg, "[]", lambda: pubg._get("/tournaments", limited=False)),
+    (opendota, PORTAL, opendota.live),
+    (opendota, "{}", opendota.live),
+    (opendota, "[]", lambda: opendota._get("/matches/1", dict)),
+]
+
+
+@pytest.mark.parametrize("module, body, read", NOT_JSON, ids=[f"{m.__name__.rsplit('.', 1)[1]}:{b[:6]}" for m, b, _ in NOT_JSON])
+def test_a_200_that_isnt_the_json_asked_for_is_an_adapter_error(monkeypatch, module, body, read):
+    # BUG-068: a raw JSONDecodeError (or an AttributeError, from .get on a list) got past every
+    # "except AdapterError" and stopped an esports lane or a refresh, recording no binding health.
+    monkeypatch.setattr(module, "_client", httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=body))))
+    monkeypatch.setattr(module, "token", lambda: "example", raising=False)
+    for name, value in (("_cache", {}), ("_memo", {}), ("_state", {"paused_until": 0.0, "last": 0.0}), ("_take", lambda: None), ("ENABLED", True)):
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, value)
+    with pytest.raises(AdapterError):
+        read()
 
 
 # ---------------------------------------------------------------- cricket
@@ -121,7 +157,7 @@ def test_cricket_test_lines_have_every_innings_as_the_score_stands():
     # A live Test (recorded 2026-10-13), fourth innings: the matchcards were 16 overs behind the score,
     # with Atal still on 104*; the rosters have him out for 111, and his first innings too.
     snap = espn_cricket.parse_summary(load("cricket-summary-test-live"))
-    assert snap.score_label == "BAN 346 (92.3 ov) · AFG 240 (89.1 ov) · BAN 372/7 (105.2 ov) · AFG 291/7 (122.0 ov)"
+    assert snap.score_label == "BAN 346 (92.3 ov) · AFG 240 (89.1 ov) · BAN 372/7d (105.2 ov) · AFG 291/7 (122.0 ov)"
     atal = snap.lines["1161050"]
     assert atal.headline == "17 (31) & 111 (332)"
     assert {s["label"]: s["value"] for s in atal.stats} == {"Runs": "111", "Balls": "332", "4s": "9", "6s": "3", "Strike rate": "33.4", "Out": "c Tanzid Hasan b Taijul Islam"}
@@ -136,6 +172,31 @@ def test_cricket_test_lines_have_every_innings_as_the_score_stands():
     assert snap.lines["533956"].headline == "105* (216) & 51 (124)"
     assert {s["label"]: s["value"] for s in stats} == {"Runs": "156", "Average": "156.00", "Strike rate": "45.9", "Highest": "105", "100s / 50s": "1 / 1"}
     assert note == "Last 1 match (Test), from ESPNcricinfo scorecards"
+
+
+def test_cricket_only_the_innings_on_now_is_batting_and_a_declaration_keeps_its_d():
+    # The live Test above: isBatting marks every innings a side batted in, so all four read "batting";
+    # isCurrent marks the one on now. Bangladesh declared their second innings, 372/7d.
+    data = load("cricket-summary-test-live")
+    snap = espn_cricket.parse_summary(data)
+    innings = [(i["abbr"], i["period"], i["batting"], i["declared"]) for i in snap.state["innings"]]
+    assert innings == [("BAN", 1, False, False), ("AFG", 2, False, False), ("BAN", 3, False, True), ("AFG", 4, True, False)]
+    # Between innings the one just over is still the current one: all out, nobody is batting.
+    afg = next(c for c in data["header"]["competitions"][0]["competitors"] if c["team"]["abbreviation"] == "AFG")
+    afg["linescores"][-1].update(wickets=10, description="all out")
+    assert [i["batting"] for i in espn_cricket.parse_summary(data).state["innings"]] == [False] * 4
+
+
+def test_cricket_results_read_without_html_entities():
+    # 13 Oct 2026: "Chattogram won by an inns &amp; 1 runs" in the result, the alert and the history, as
+    # every innings victory read.
+    day = {f.source_id: f for f in espn_cricket.parse_day(load("cricket-day-20261013"))}
+    assert espn_cricket.EspnCricket().result_label(day["1555672"], ["679"]) == "Chattogram won by an inns & 1 runs"
+    snap = espn_cricket.parse_summary(load("cricket-summary-innings-win"))
+    assert (snap.status, snap.clock_label) == ("final", "Chattogram won by an inns & 1 runs")
+    assert snap.state["summary"] == snap.clock_label  # the board shows the summary once, beside the clock
+    [final] = moments.detect("Cricket", "Yasir Ali", "629059", moments.Seen("live"), moments.Seen("final", snap.state, None, snap.score_label, snap.clock_label))
+    assert final.title == "Yasir Ali: Chattogram won by an inns & 1 runs"
 
 
 def test_cricket_live_score_skips_the_innings_not_yet_batted():

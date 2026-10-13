@@ -1,57 +1,87 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
-import { api, subscribe, type Card, type UpcomingEvent } from '../api'
+import { api, subscribe, type Card, type StreamEvent, type UpcomingEvent } from '../api'
+import { useNow } from '../clock'
 import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
+import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName, sportKey, sportName } from '../format'
 import { useFollowing } from '../following'
-import { AlertLevels, LEVELS } from '../notifications'
+import { AlertLevels, LEVELS, levelText } from '../notifications'
 
 type Tab = 'overview' | 'matches' | 'stats' | 'news'
 
 /**
- * One player's page. Always the full card plus the player's own stream: the Following list only
- * carries summaries (no stats, sources or results), so it can't stand in for the page.
+ * One player's page, always from the full card: the Following list only carries summaries (no stats,
+ * sources or results), so it can't stand in for the page. Its updates come over the fan's one stream
+ * for a player they follow, and over the player's own stream otherwise.
  */
 export function PlayerPage() {
   const params = useParams()
-  const playerId = Number(params.id)
+  const playerId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
   const navigate = useNavigate()
   const following = useFollowing()
   const isFollowing = following.isFollowing(playerId)
+  const { listen } = following
   const [card, setCard] = useState<Card | null>(null)
+  const [shown, setShown] = useState<number | null>(null)  // the player whose card has loaded
+  const version = useRef(0)
+  version.current = card?.version ?? 0
   const [progress, setProgress] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)  // a follow, retry or alert change the server refused
   const [tab, setTab] = useState<Tab>('overview')
   const [matches, setMatches] = useState<MatchesView | null>(null)
   const [alertsOpen, setAlertsOpen] = useState(false)
   const { muted, setMuted } = useActivity()
   const [busy, setBusy] = useState(false)
+  const now = useNow()
 
   useEffect(() => {
-    if (!Number.isFinite(playerId)) return
     setCard(null)
+    setShown(null)
     setProgress([])
     setError(null)
+    setFailure(null)
     setTab('overview')
     setMatches(null)
-    let stop = () => {}
+    if (!Number.isFinite(playerId)) {
+      setError('No such player.')
+      return
+    }
     let cancelled = false
     api.card(playerId).then((c) => {
       if (cancelled) return
       setCard(c)
-      stop = subscribe(`/api/players/${playerId}/stream`, (e) => {
-        if (e.type === 'card') {
-          setCard((prev) => (!prev || e.card.version >= prev.version ? e.card : prev))
-          if (e.card.status !== 'building') setProgress([])
-        } else if (e.type === 'progress') setProgress((p) => [...p, e.message].slice(-8))
-        else if (e.type === 'moved') navigate(`/player/${e.to}`, { replace: true })
-      })
+      setShown(playerId)
     }).catch((e: Error) => { if (!cancelled) setError(e.message) })
-    return () => { cancelled = true; stop() }
-  }, [playerId, navigate])
+    return () => { cancelled = true }
+  }, [playerId])
+
+  // Once the card is in. A followed player's updates ride the fan stream the app holds anyway: a
+  // second stream per page would let three tabs use all six of a browser's HTTP/1.1 connections.
+  // Either stream starts with how things are now, so every reconnect catches the page up.
+  useEffect(() => {
+    if (shown !== playerId) return
+    let stale = false
+    const take = (c: Card) => {
+      setCard((prev) => (!prev || c.version >= prev.version ? c : prev))
+      if (c.status !== 'building') setProgress([])
+    }
+    const onEvent = (e: StreamEvent) => {
+      if (e.type === 'following') {
+        // The fan stream (re)connected. Its cards are summaries: a newer one is fetched in full.
+        const f = e.players.find((c) => c.player_id === playerId)
+        if (f && f.version > version.current) api.card(playerId).then((c) => { if (!stale) take(c) }).catch(() => {})
+      } else if (e.type === 'card' && e.player_id === playerId) take(e.card)
+      else if (e.type === 'progress' && e.player_id === playerId) setProgress((p) => [...p, e.message].slice(-8))
+      else if (e.type === 'moved' && e.from === playerId) navigate(`/player/${e.to}`, { replace: true })
+    }
+    const stop = isFollowing ? listen(onEvent) : subscribe(`/api/players/${playerId}/stream`, onEvent)
+    return () => { stale = true; stop() }
+  }, [shown, playerId, isFollowing, listen, navigate])
 
   if (error) return <div className="error-box">{error}</div>
   if (!card) return <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
@@ -59,20 +89,21 @@ export function PlayerPage() {
   const p = card.player
   const retired = p.status === 'retired'
   const level = following.byId(playerId)?.alerts ?? card.alerts ?? 'key'
-
-  const retry = async () => {
-    const fresh = await following.follow({ player_id: playerId })
-    setCard(fresh)
+  // A follow, retry or alert change the server turns down says why, under the band.
+  const attempt = (work: () => Promise<unknown>) => {
+    setFailure(null)
+    return work().catch((e: Error) => setFailure(e.message))
   }
+
+  const retry = () => attempt(async () => setCard(await following.follow({ player_id: playerId })))
 
   const toggleFollow = async () => {
     setBusy(true)
-    try {
+    await attempt(async () => {
       if (isFollowing) { await following.unfollow(playerId); setAlertsOpen(false) }
       else await following.follow({ player_id: playerId })
-    } finally {
-      setBusy(false)
-    }
+    })
+    setBusy(false)
   }
 
   const tabs: [Tab, string][] = retired
@@ -105,13 +136,13 @@ export function PlayerPage() {
               <span className="title">Alerts for {shortName(p.name)}</span>
               <Link to="/notifications?tab=settings" className="link small">Settings</Link>
             </span>
-            <AlertLevels label={`Alerts for ${p.name}`} value={level} onChange={(l) => following.setAlerts(playerId, l)} />
-            <span className="small muted">{LEVELS.find((l) => l.value === level)?.hint}</span>
+            <AlertLevels label={`Alerts for ${p.name}`} value={level} onChange={(l) => { attempt(() => following.setAlerts(playerId, l)) }} />
+            <span className="small muted">{levelText(level, p.sport).hint}</span>
             {card.live.is_live && card.live.event_id != null && (() => {
               const eventId = card.live.event_id
               const on = muted.has(eventId)
               return (
-                <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} aria-pressed={on} onClick={() => { setMuted(eventId, !on).catch(() => {}) }}>
+                <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} aria-pressed={on} onClick={() => { attempt(() => setMuted(eventId, !on)) }}>
                   {on ? 'Unmute this game' : 'Mute this game'}
                 </button>
               )
@@ -119,6 +150,7 @@ export function PlayerPage() {
           </div>
         )}
       </PlayerBand>
+      {failure && <div className="error-box" role="alert">{failure}</div>}
 
       {card.status !== 'ready' ? (
         <BuildProgress card={card} messages={progress} onRetry={retry} />
@@ -137,13 +169,15 @@ export function PlayerPage() {
             ))}
           </div>
 
-          {tab === 'overview' && <Overview card={card} show={(t, view) => { setTab(t); setMatches(view ?? null) }} />}
-          {tab === 'matches' && <Matches card={card} view={matches} setView={setMatches} />}
-          {tab === 'stats' && <div className="section"><StatsWithForm card={card} /></div>}
-          {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
+          <ErrorBoundary fallback={<BlockError />} resetKey={`${tab}:${card.version}`}>
+            {tab === 'overview' && <Overview card={card} show={(t, view) => { setTab(t); setMatches(view ?? null) }} onError={setFailure} />}
+            {tab === 'matches' && <Matches card={card} view={matches} setView={setMatches} />}
+            {tab === 'stats' && <div className="section"><StatsWithForm card={card} /></div>}
+            {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
+          </ErrorBoundary>
 
           <p className="tiny muted">
-            Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
+            Page built {relative(card.built_at, now)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
           </p>
         </>
       )}
@@ -152,16 +186,27 @@ export function PlayerPage() {
 }
 
 /** The next game that hasn't started (a fixture with no date yet counts; one with a day but no time, all that day). */
-function nextGame(card: Card) {
-  const now = Date.now()
+function nextGame(card: Card, now: number) {
   return (card.upcoming ?? []).find((u) => !parseDate(u.start_utc) || ahead(u.start_utc, now))
 }
 
+/**
+ * When the page last looked for a game: for a player bound to a source, the newest of its schedule
+ * read (every half hour) and its live polls; otherwise the agent's live check.
+ */
+function lastChecked(card: Card): string | null {
+  const f = card.freshness ?? {}
+  const stamps = (card.provenance ? [f.live, f.fixtures, card.provenance.upcoming?.at] : [f.live]).filter((at): at is string => Boolean(parseDate(at)))
+  return stamps.sort((a, b) => parseDate(b)!.getTime() - parseDate(a)!.getTime())[0] ?? null
+}
+
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
-function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesView) => void }) {
+function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
   const p = card.player
   const retired = p.status === 'retired'
-  const next = nextGame(card)
+  const now = useNow()
+  const next = nextGame(card, now)
+  const checked = lastChecked(card)
   const results = card.recent_results ?? []
   const marks = formMarks(results, p.teams)
   const last = results[0]
@@ -179,7 +224,7 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
           {card.live.event_id != null && muted.has(card.live.event_id) && (
             <span className="row small" style={{ justifyContent: 'flex-start', gap: 8 }}>
               <span className="muted">Alerts from this game are muted.</span>
-              <button type="button" className="btn link" onClick={() => { setMuted(card.live.event_id!, false).catch(() => {}) }}>Unmute</button>
+              <button type="button" className="btn link" onClick={() => { setMuted(card.live.event_id!, false).catch((e: Error) => onError(e.message)) }}>Unmute</button>
             </span>
           )}
           <span className="row tiny muted">
@@ -198,7 +243,7 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
         <div className="card card-pad row">
           <span className="stack">
             <span className="title">Not playing right now</span>
-            <span className="small muted">{card.freshness?.live ? `Checked ${relative(card.freshness.live)}` : 'No upcoming games found'}</span>
+            <span className="small muted">{checked ? `Checked ${relative(checked, now)}` : 'No upcoming games found'}</span>
           </span>
           <RefreshButton card={card} style={{ flexShrink: 0 }} />
         </div>
@@ -289,7 +334,7 @@ function RefreshButton({ card, style }: { card: Card; style?: CSSProperties }) {
 
 /** The next game, an ink card with a countdown. */
 function NextCard({ card, next }: { card: Card; next: UpcomingEvent }) {
-  const left = countdown(next.start_utc)
+  const left = countdown(next.start_utc, useNow())
 
   return (
     <section className="next-card" data-sport={sportKey(card.player.sport)} aria-label="Next game">
@@ -311,18 +356,24 @@ function NextCard({ card, next }: { card: Card; next: UpcomingEvent }) {
 
 type MatchesView = 'upcoming' | 'results'
 
-/** Fixtures and results, one at a time; results first when there are no fixtures, or when asked for. */
+/** Fixtures and results, one at a time, results when asked for. With no fixtures, a line says so above the results. */
 function Matches({ card, view: chosen, setView }: { card: Card; view: MatchesView | null; setView: (v: MatchesView) => void }) {
   const retired = card.player.status === 'retired'
-  const view = chosen ?? (retired || !(card.upcoming ?? []).length ? 'results' : 'upcoming')
+  if (retired || !(card.upcoming ?? []).length) {
+    return (
+      <div className="section">
+        {!retired && <p className="small muted">No games scheduled.</p>}
+        <ResultsHistory card={card} />
+      </div>
+    )
+  }
+  const view = chosen ?? 'upcoming'
   return (
     <div className="section">
-      {!retired && (
-        <div className="segmented" role="group" aria-label="Which matches">
-          <button type="button" aria-pressed={view === 'upcoming'} onClick={() => setView('upcoming')}>Upcoming</button>
-          <button type="button" aria-pressed={view === 'results'} onClick={() => setView('results')}>Results</button>
-        </div>
-      )}
+      <div className="segmented" role="group" aria-label="Which matches">
+        <button type="button" aria-pressed={view === 'upcoming'} onClick={() => setView('upcoming')}>Upcoming</button>
+        <button type="button" aria-pressed={view === 'results'} onClick={() => setView('results')}>Results</button>
+      </div>
       {view === 'upcoming' ? (
         <>
           <UpcomingList items={card.upcoming ?? []} empty="No upcoming games found." />

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from sports_follow.adapters import espn_basketball, espn_tennis, lichess_chess
+from sports_follow.adapters.base import PlayerRef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CLARK, FEVER = "4433403", "5"
@@ -95,6 +96,66 @@ def test_tennis_ranking_row():
     row, updated = espn_tennis.parse_ranking(load("espn/tennis-rankings"), "3623")
     assert row["current"] == 1 and row["points"] == 11500.0
     assert updated.startswith("2026-09-17")
+
+
+DE_MINAUR, MOLCAN, MANNARINO, BASILASHVILI = "2651", "2635", "1266", "2498"
+# ESPN's status type for a cancelled match (a Lisbon doubles match, 13 Oct 2026): "post", not completed.
+CANCELED = {"id": "5", "name": "STATUS_CANCELED", "state": "post", "completed": False, "description": "Canceled", "detail": "Canceled", "shortDetail": "Canceled"}
+
+
+def test_tennis_walkovers_and_retirements_say_so():
+    # Shanghai, recorded 2026-10-13: de Minaur went through when Molcan withdrew (no sets), Mannarino when
+    # Basilashvili retired at 6-3 2-2. They read "Won " with nothing after it and "Won in 1 sets".
+    data = load("espn/tennis-scoreboard-walkover")
+    fixtures = {f.source_id: f for f in espn_tennis.parse_scoreboard(data, "atp", "20261013")}
+    walkover, retired = fixtures["184927"], fixtures["184881"]
+    assert (walkover.status, walkover.result["ending"], retired.result["ending"]) == ("final", "walkover", "retired")
+    assert [espn_tennis.result_label(walkover, [p]) for p in (DE_MINAUR, MOLCAN)] == ["Won (w/o)", "Lost (w/o)"]
+    assert [espn_tennis.result_label(retired, [p]) for p in (MANNARINO, BASILASHVILI)] == ["Won 6-3 2-2 ret.", "Lost 3-6 2-2 ret."]
+    assert espn_tennis.result_label(fixtures["184929"], [DE_MINAUR]) == "Won 7-6(6) 6-4"  # played out: as before
+
+    snap = espn_tennis.parse_match(*espn_tennis.find_match(data, "184927"))
+    assert (snap.status, snap.state["ending"]) == ("final", "walkover")
+    assert (snap.lines[DE_MINAUR].headline, snap.lines[MOLCAN].headline) == ("Won by walkover", "Withdrew")
+    assert snap.clock_label == "(9) Alex de Minaur (AUS) bt Alex Molcan (SVK) w/o"
+    snap = espn_tennis.parse_match(*espn_tennis.find_match(data, "184881"))
+    assert snap.state["ending"] == "retired" and snap.score_label == "A. Mannarino 6-3 2-2 N. Basilashvili"
+    assert (snap.lines[MANNARINO].headline, snap.lines[BASILASHVILI].headline) == ("Won, opponent retired", "Retired")
+    snap = espn_tennis.parse_match(*espn_tennis.find_match(data, "184950"))
+    assert (snap.state["ending"], snap.lines[DE_MINAUR].headline) == (None, "Won in 2 sets")
+    # One set, should a match be one: no "1 sets".
+    event, comp = espn_tennis.find_match(data, "186292")
+    comp["status"]["type"].update(name="STATUS_FINAL", description="Final")
+    comp["competitors"][0]["linescores"] = comp["competitors"][0]["linescores"][:1]
+    comp["competitors"][1]["linescores"] = comp["competitors"][1]["linescores"][:1]
+    assert {l.headline for l in espn_tennis.parse_match(event, comp).lines.values()} == {"Won in 1 set", "Lost in 1 set"}
+
+
+def test_a_cancelled_tennis_match_is_no_result():
+    data = load("espn/tennis-scoreboard-walkover")
+    event, comp = espn_tennis.find_match(data, "184954")  # de Minaur's quarterfinal, not yet played
+    comp["status"]["type"] = CANCELED
+    [qf] = [f for f in espn_tennis.parse_scoreboard(data, "atp", "20261013") if f.source_id == "184954"]
+    assert (qf.status, qf.result) == ("postponed", None)
+    snap = espn_tennis.parse_match(event, comp)
+    assert (snap.status, snap.clock_label) == ("postponed", "Canceled")
+    # Any match ESPN has over but not completed is no result either (an abandoned one, say).
+    comp["status"]["type"] = {**CANCELED, "name": "STATUS_ABANDONED", "description": "Abandoned"}
+    assert espn_tennis.parse_match(event, comp).status == "postponed"
+
+
+def test_tennis_win_loss_leaves_walkovers_out(monkeypatch):
+    # The tours count a walkover in no one's win–loss: de Minaur is 2–0, not 3–0, and Molcan 1–0, not
+    # 1–1. A retirement counts (Mannarino's win).
+    data = load("espn/tennis-scoreboard-walkover")
+    monkeypatch.setattr(espn_tennis.espn, "get_json", lambda url, ttl: data if "/scoreboard" in url else {"rankings": [{"ranks": []}]})
+    adapter = espn_tennis.EspnTennis()
+
+    def win_loss(athlete_id: str) -> str:
+        ref = PlayerRef("espn_tennis", athlete_id, "", [athlete_id], [""], league="atp")
+        return {s["label"]: s["value"] for s in adapter.stats(ref, [])[0]}["Win–loss"]
+
+    assert (win_loss(DE_MINAUR), win_loss(MOLCAN), win_loss(MANNARINO)) == ("2–0", "1–0", "1–0")
 
 
 # ---------------------------------------------------------------- chess

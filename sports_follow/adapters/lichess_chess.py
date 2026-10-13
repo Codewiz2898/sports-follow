@@ -89,7 +89,12 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
             raise AdapterError("Lichess rejected the API token (HTTP 401); check ~/.config/sports-follow/lichess-token")
         if res.status_code != 200:
             raise AdapterError(f"Lichess returned HTTP {res.status_code} for {url}")
-        data = res.text if text else res.json()
+        try:
+            data = res.text if text else res.json()
+        except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+            raise AdapterError(f"Lichess returned non-JSON for {url}") from exc
+        if not text and not isinstance(data, (dict, list)):
+            raise AdapterError(f"Lichess returned {type(data).__name__} for {url}")
         _cache[url] = (time.time(), data)
         if len(_cache) > 1000:
             for key, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:250]:

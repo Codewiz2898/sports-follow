@@ -61,8 +61,12 @@ def get_json(url: str, ttl: float) -> Any:
     return data
 
 
-# Letters Unicode doesn't decompose into a base letter plus an accent.
-_LETTERS = str.maketrans({"ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "ı": "i"})
+# Letters Unicode doesn't decompose into a base letter plus an accent. Ð (U+00D0, the Icelandic
+# capital eth) is often typed for Đ.
+_LETTERS = str.maketrans({"ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "đ": "d", "Đ": "D", "Ð": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "ı": "i"})
+# Letters with a second plain spelling: Đ is "dj" in English (Wikidata writes Novak Djokovic), and ü,
+# ö, ä are "ue", "oe", "ae" in German (Thomas Müller is Thomas Mueller).
+NATIVE = str.maketrans({"đ": "dj", "Đ": "Dj", "Ð": "Dj", "ü": "ue", "Ü": "Ue", "ö": "oe", "Ö": "Oe", "ä": "ae", "Ä": "Ae"})
 
 
 def fold(text: str) -> str:
@@ -74,6 +78,14 @@ def words(text: str) -> list[str]:
     """A name as plain lower-case ASCII words, the one form names are compared in: "A'ja Wilson" and
     "A’ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"], "M.S. Dhoni" -> ["m", "s", "dhoni"]."""
     return re.sub(r"[^a-z0-9]+", " ", fold(re.sub(r"['’`]", "", text or ""))).split()
+
+
+def spellings(text: str) -> list[list[str]]:
+    """A name's words in each of its plain spellings: words(text), then, if it has Đ, ü, ö or ä, with
+    those spelled out ("Thomas Müller" -> ["thomas", "muller"] and ["thomas", "mueller"])."""
+    plain = words(text)
+    native = words(unicodedata.normalize("NFC", text or "").translate(NATIVE))
+    return [plain] if native == plain else [plain, native]
 
 
 def team_key(name: str) -> str:

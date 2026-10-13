@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Card, LatestResult, UpcomingEvent } from '../api'
+import { useNow } from '../clock'
 import { highlight, LiveScoreboard, NextStrip, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
+import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { PlusIcon, SearchIcon } from '../components/Icons'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useFollowing } from '../following'
@@ -20,10 +22,9 @@ function liveGames(cards: Card[]) {
 
 type Next = UpcomingEvent & { players: string[]; card: Card }
 
-/** The soonest game any of your players has, with everyone of yours who plays in it. */
-function upNext(cards: Card[]): Next | null {
+/** The soonest game any of your players has, with everyone of yours who plays in it. Once it starts, the one after. */
+function upNext(cards: Card[], now: number): Next | null {
   const merged = new Map<string, Next>()
-  const now = Date.now()
   for (const c of cards) {
     for (const u of c.upcoming ?? []) {
       const start = parseDate(u.start_utc)
@@ -38,8 +39,8 @@ function upNext(cards: Card[]): Next | null {
 }
 
 /** Live first, then whoever plays soonest, then the rest in the order they were followed. */
-function tileOrder(cards: Card[]) {
-  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).filter((u) => ahead(u.start_utc)).map((u) => parseDate(u.start_utc)!.getTime()))
+function tileOrder(cards: Card[], now: number) {
+  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).filter((u) => ahead(u.start_utc, now)).map((u) => parseDate(u.start_utc)!.getTime()))
   return [...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live) || nextAt(a) - nextAt(b))
 }
 
@@ -48,11 +49,11 @@ function tileOrder(cards: Card[]) {
  * or a hundred first, then any game with the player's numbers, then the newest. Each card carries
  * its newest result, and the stream updates it the moment a game ends.
  */
-function bigMoment(cards: Card[]): { result: LatestResult; sport: string } | null {
+function bigMoment(cards: Card[], now: number): { result: LatestResult; sport: string } | null {
   const recent = cards.flatMap((c) => {
     const r = c.recent_results?.[0]
     // Today or yesterday where the fan is; a game dated tomorrow (an agent's slip) isn't today's moment.
-    const days = daysAgo(playedOn(r))
+    const days = daysAgo(playedOn(r), new Date(now))
     return r && days != null && days >= 0 && days <= 1 ? [{ result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport }] : []
   })
   const rank = (m: { result: LatestResult; sport: string }) => (highlight(m.sport, m.result.player_contribution) ? 2 : lineStats(m.result.player_contribution) ? 1 : 0)
@@ -75,7 +76,8 @@ function LoadFailed() {
 
 export function TodayPage() {
   const { cards, loaded, failed, progress } = useFollowing()
-  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
+  const now = useNow()
+  const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
 
   const header = (
     <header className="page-head">
@@ -104,8 +106,8 @@ export function TodayPage() {
   }
 
   const games = liveGames(cards)
-  const next = upNext(cards)
-  const moment = games.length ? null : bigMoment(cards)
+  const next = upNext(cards, now)
+  const moment = games.length ? null : bigMoment(cards, now)
 
   return (
     <>
@@ -119,17 +121,20 @@ export function TodayPage() {
         </Link>
       ))}
 
-      {moment && <ResultHero result={moment.result} sport={moment.sport} />}
-
-      {next && <NextStrip event={next} playerId={next.card.player_id} sport={next.card.player.sport} />}
+      <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
+        {moment && <ResultHero result={moment.result} sport={moment.sport} />}
+        {next && <NextStrip event={next} playerId={next.card.player_id} sport={next.card.player.sport} />}
+      </ErrorBoundary>
 
       {cards.length > 0 && (
         <section className="section" aria-label="Your players">
           <SectionHead title="Your players"><span className="tag muted">{cards.length}</span></SectionHead>
-          <div className="tiles">
-            {tileOrder(cards).map((c) => <PlayerTile key={c.player_id} card={c} progress={progress[c.player_id]} />)}
-            <Link to="/search" className="tile add" aria-label="Follow another player"><PlusIcon width={22} height={22} /><span className="dsp">Follow</span></Link>
-          </div>
+          <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
+            <div className="tiles">
+              {tileOrder(cards, now).map((c) => <PlayerTile key={c.player_id} card={c} progress={progress[c.player_id]} />)}
+              <Link to="/search" className="tile add" aria-label="Follow another player"><PlusIcon width={22} height={22} /><span className="dsp">Follow</span></Link>
+            </div>
+          </ErrorBoundary>
         </section>
       )}
     </>

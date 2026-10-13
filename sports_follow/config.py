@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow"
@@ -21,7 +22,17 @@ FIXTURES_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_FIXTURES_MAX_AGE", 30 * 60)
 # How long one live-poll job keeps polling before handing over to the next tick's job (seconds).
 POLL_SESSION = int(os.environ.get("SPORTS_FOLLOW_POLL_SESSION", 10 * 60))
 
+# Retention (retention.py, daily): days a finished game keeps its poll-by-poll timeline before it's cut
+# to what's still read, and days moments and the push log are kept (never fewer than the activity list's 30).
+KEEP_TIMELINE_DAYS = int(os.environ.get("SPORTS_FOLLOW_KEEP_TIMELINE_DAYS", 14))
+KEEP_MOMENTS_DAYS = int(os.environ.get("SPORTS_FOLLOW_KEEP_MOMENTS_DAYS", 90))
+
 FAN_COOKIE = "sf_fan"
+# The key fan cookies are signed with (server.fan_id): SPORTS_FOLLOW_COOKIE_SECRET, or this file, which a
+# local server makes on first use. Every API process must read the same key, and it must never change:
+# under a new key no fan's cookie verifies, and every fan starts over with nothing followed.
+COOKIE_SECRET = os.environ.get("SPORTS_FOLLOW_COOKIE_SECRET", "").strip()
+COOKIE_SECRET_FILE = Path(os.environ.get("SPORTS_FOLLOW_COOKIE_SECRET_FILE", Path.home() / ".config" / "sports-follow" / "cookie-secret"))
 
 # AI researches beyond each fan's daily three (search.RESEARCH_PER_DAY): at most this many an hour across
 # all fans, well under the gateway's daily budget (about 40 builds), and this many a UTC day from one

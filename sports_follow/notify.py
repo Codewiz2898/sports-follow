@@ -45,6 +45,10 @@ VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT", "https://github.co
 MAX_FAILURES = 5
 MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
+# A push's JSON before encryption, in bytes. Push services promise only 4,096 bytes encrypted (RFC 8030)
+# and refuse more with a 413; encryption adds about 100, so this keeps a push under 3.5 KB. A longer
+# body (then title) is cut short.
+PAYLOAD_BYTES = 3400
 
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
 _wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")  # one push to one device each
@@ -208,11 +212,14 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
 
 
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
-    """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES."""
+    """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES.
+    A message too big for the push service (413) isn't counted against the device."""
     if error is None:
         db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
     elif error in (404, 410):
         db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
+    elif error == 413:
+        return  # the message was too big for the push service: not the device's fault
     else:
         row = db.get(PushSubscription, device_id)
         if row is not None:
@@ -237,7 +244,7 @@ def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: in
     try:
         webpush(
             subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
-            data=json.dumps(payload),
+            data=_fit(payload),
             vapid_private_key=signer(),
             vapid_claims={"sub": VAPID_SUBJECT},
             ttl=ttl,
@@ -252,6 +259,22 @@ def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: in
         log.warning("push to %s… failed: %s", endpoint[:40], exc)
         return str(exc)[:100]
     return None
+
+
+def _fit(payload: dict[str, Any]) -> str:
+    """A push's JSON, at most PAYLOAD_BYTES: the body, then the title, cut short on a whole character.
+    Written as UTF-8, not escaped: escaped, a Hindi headline takes 6 bytes a letter instead of 3."""
+    data = json.dumps(payload, ensure_ascii=False)
+    for key in ("body", "title"):
+        over = len(data.encode()) - PAYLOAD_BYTES
+        if over <= 0:
+            break
+        # A character cut saves at least its UTF-8 bytes in the JSON (escaping only adds), so this is enough.
+        raw = str(payload.get(key) or "").encode()
+        keep = len(raw) - over - len("…".encode())
+        payload = {**payload, key: raw[:keep].decode(errors="ignore").rstrip() + "…" if keep > 0 else ""}
+        data = json.dumps(payload, ensure_ascii=False)
+    return data
 
 
 def send_test(fan_id: str) -> int:

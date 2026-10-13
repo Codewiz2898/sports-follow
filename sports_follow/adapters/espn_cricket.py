@@ -26,6 +26,8 @@ _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
 # Status type ids of matches that weren't played, though their state is "post": the feed's types have
 # an id and a description ("Postponed", "Abandoned"), no name.
 _POSTPONED, _ABANDONED = "113", "6"
+# An innings' description once it's over; the current one says nothing ("").
+_DONE = ("all out", "declared", "complete", "target reached")
 
 
 def _time(value: str | None) -> datetime | None:
@@ -42,6 +44,11 @@ def _int(value: Any) -> int:
         return int(float(str(value)))
     except (TypeError, ValueError):
         return 0
+
+
+def _text(value: str | None) -> str:
+    """The feed's words, which come with HTML entities: "won by an inns &amp; 1 runs"."""
+    return html.unescape(value or "")
 
 
 def _off(kind: dict[str, Any], played: bool) -> bool:
@@ -73,7 +80,7 @@ def parse_day(data: dict[str, Any]) -> list[Fixture]:
             if status == "final":
                 full = e.get("fullStatus") or {}
                 # The top-level summary is just "Result"; the real one ("India won by 8 wkts (50b rem)") is in fullStatus.
-                result = {"summary": full.get("summary") or full.get("longSummary") or e.get("summary") or "", "teams": [{"id": str(c.get("id")), "name": c.get("displayName"), "score": c.get("score") or "", "winner": c.get("winner")} for c in competitors]}
+                result = {"summary": _text(full.get("summary") or full.get("longSummary") or e.get("summary")), "teams": [{"id": str(c.get("id")), "name": c.get("displayName"), "score": c.get("score") or "", "winner": c.get("winner")} for c in competitors]}
             out.append(
                 Fixture(
                     source_id=str(e["id"]),
@@ -109,6 +116,7 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
             # ESPN repeats the match's overs on a side that hasn't batted yet: skip innings with nothing in them.
             if not ls.get("isBatting") and not _int(ls.get("runs")) and not _int(ls.get("wickets")):
                 continue
+            desc = (ls.get("description") or "").lower()
             innings.append({
                 "team": team.get("displayName"),
                 "abbr": team.get("abbreviation"),
@@ -116,7 +124,10 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
                 "runs": _int(ls.get("runs")),
                 "wickets": _int(ls.get("wickets")),
                 "overs": ls.get("overs"),
-                "batting": bool(ls.get("isBatting")) and status == "live",
+                # isBatting only says this side batted in this innings; isCurrent marks the innings
+                # on now (both sides' rows), and stays on one that's over until the next starts.
+                "batting": status == "live" and bool(ls.get("isBatting")) and bool(ls.get("isCurrent")) and desc not in _DONE,
+                "declared": desc == "declared",
                 "target": _int(ls.get("target")) or None,
             })
     innings.sort(key=lambda i: (i["period"] or 0))
@@ -124,14 +135,14 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
         status = "postponed"
 
     def fmt(i: dict[str, Any]) -> str:
-        wk = "" if i["wickets"] >= 10 else f"/{i['wickets']}"
+        wk = "" if i["wickets"] >= 10 else f"/{i['wickets']}{'d' if i['declared'] else ''}"
         return f"{i['abbr'] or i['team']} {i['runs']}{wk} ({i['overs']} ov)"
 
     score_label = " · ".join(fmt(i) for i in innings) or " v ".join(t["name"] or "" for t in teams)
     clock_bits = [status_obj.get("session"), kind.get("description") if kind.get("description") not in ("Live", "Scheduled") else None]
     clock_label = " · ".join(b for b in clock_bits if b) or kind.get("shortDetail") or ""
     if status == "final":
-        clock_label = status_obj.get("summary") or kind.get("description") or "Result"
+        clock_label = _text(status_obj.get("summary")) or kind.get("description") or "Result"
     elif status == "postponed":
         # "Postponed" or "Abandoned"; a postponed match's summary is still its old start time.
         clock_label = kind.get("description") or "Postponed"
@@ -144,7 +155,7 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
             "kind": "cricket",
             "teams": teams,
             "innings": innings,
-            "summary": status_obj.get("summary") or "",
+            "summary": _text(status_obj.get("summary")),
             "format": (comp.get("class") or {}).get("generalClassCard"),
             "player_of_match": next((f["athlete"].get("displayName") for f in status_obj.get("featuredAthletes") or [] if f.get("name") == "playerOfTheMatch" and f.get("athlete")), None),
         },

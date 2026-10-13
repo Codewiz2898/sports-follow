@@ -3,7 +3,7 @@
 #   deploy/push-secrets.sh root@<server-ip>
 # Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token and pubg-token if there are, and OPENROUTER_API_KEY from the gateway's
 # keys file (OPENROUTER_KEY_FILE=<file holding only a key> to give production its own key). The server
-# makes its own database password, gateway token and push key (install-secrets.sh). Run again to rotate
+# makes its own database password, gateway token, push key and fan cookie key (install-secrets.sh). Run again to rotate
 # a token; restart after: docker compose -f deploy/compose.yaml up -d --force-recreate
 set -euo pipefail
 TARGET="${1:?usage: deploy/push-secrets.sh root@<server-ip>}"

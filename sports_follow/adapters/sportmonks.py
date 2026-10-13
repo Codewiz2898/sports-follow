@@ -79,10 +79,15 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         message = ""
         try:
             message = res.json().get("message") or ""
-        except ValueError:
+        except (ValueError, AttributeError):
             pass
         raise AdapterError(f"Sportmonks returned HTTP {res.status_code} for {path}: {message}"[:300])
-    data = res.json()
+    try:
+        data = res.json()
+    except ValueError as exc:  # a captive portal's or a CDN's error page, with a 200
+        raise AdapterError(f"Sportmonks returned non-JSON for {path}") from exc
+    if not isinstance(data, dict):
+        raise AdapterError(f"Sportmonks returned {type(data).__name__} for {path}")
     limit = data.get("rate_limit") or {}
     if limit.get("requested_entity"):
         remaining[limit["requested_entity"]] = (int(limit.get("remaining") or 0), time.time() + int(limit.get("resets_in_seconds") or 3600))

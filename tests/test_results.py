@@ -114,3 +114,9 @@ def test_tennis_and_chess_form():
     assert {s["label"]: s["value"] for s in tennis} == {"W–L": "1–1", "Sets": "2–2"}
     chess, _ = form.summarize("Chess", [(result("Won 1–0"), None), (result("Drew ½–½"), None), (result("Won 3½–2½"), None)], [])
     assert {s["label"]: s["value"] for s in chess} == {"W–D–L": "2–1–0", "Score": "5/8", "Score %": "62%"}
+
+
+def test_a_walkover_isnt_form():
+    # BUG-040's follow-up: "Won (w/o)" wasn't played, as the season Win–loss already says.
+    tennis, _ = form.summarize("Tennis", [(result("Won (w/o)"), line("Won by walkover")), (result("Won 6-4 6-3"), line("Won in 2 sets", Sets="2–0"))], [])
+    assert {s["label"]: s["value"] for s in tennis}["W–L"] == "1–0"

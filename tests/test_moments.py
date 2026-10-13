@@ -1,9 +1,17 @@
 """Moments: what's worth a notification between two polls (moments.py), who hears about it, and
-quiet hours (notify.py)."""
+quiet hours and the push itself (notify.py)."""
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pywebpush
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from sports_follow import moments, notify
 from sports_follow.moments import Seen, detect
@@ -111,6 +119,17 @@ def test_tennis_sets_and_an_upset():
     assert found[1].title == "Upset: Carlos Alcaraz beats [1] Jannik Sinner"
 
 
+def test_no_upset_for_a_walkover_or_a_retirement():
+    # H3: a qualifier through when the top seed withdrew heard "Upset: Qualifier Q beats [1] Jannik
+    # Sinner", at priority 90, which always makes a sound. The state is espn_tennis.parse_match's.
+    players = [{"id": "77", "name": "Qualifier Q", "winner": True, "seed": None}, {"id": "9", "name": "Jannik Sinner", "winner": False, "seed": 1}]
+    for ending, headline in (("walkover", "Won by walkover"), ("retired", "Won, opponent retired")):
+        final = Seen("final", state={"kind": "tennis", "players": players, "ending": ending}, line=line(headline, Sets="1–0"))
+        assert kinds(detect("Tennis", "Qualifier Q", "77", Seen("armed"), final)) == [("final", "")]
+    played = Seen("final", state={"kind": "tennis", "players": players, "ending": None}, line=line("Won in 2 sets", Sets="2–0"))
+    assert kinds(detect("Tennis", "Qualifier Q", "77", Seen("live"), played)) == [("final", ""), ("upset", "")]
+
+
 def test_chess_game_start_and_result():
     start = detect("Chess", "Magnus Carlsen", "1503014", Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Playing White vs Gukesh D", Opponent="Gukesh D")))
     assert [(f.kind, f.title, f.body) for f in start] == [("start", "Magnus Carlsen is playing", "Round 5 · vs Gukesh D")]
@@ -154,6 +173,32 @@ def test_chess_swings_from_the_players_side():
     assert detect("Chess", "Magnus Carlsen", "1503014", Seen("live", state={"game_id": "g1"}), white_winning) == []  # first reading
 
 
+def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
+    # H4: an evaluation hovering between +2.6 and +3.4 told "Magnus Carlsen is winning" at moves 33, 37
+    # and 41, each a key push. Each reading comes twice here: a band moves once two agree.
+    def titles(colour: str, cps: list[int]) -> list[str]:
+        ev, found = None, []
+        for at, cp in enumerate(cps, 1):
+            new = moments.settle(ev, {"cp": cp, "mate": None, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"})
+            if ev is not None:
+                before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
+                found += detect("Chess", "Magnus Carlsen", "1503014", before, now)
+            ev = new
+        return [f.title for f in found]
+
+    hovering = [20, 20, 340, 340, 260, 260, 345, 345, 255, 255, 350, 350]
+    assert titles("White", hovering) == ["Magnus Carlsen is winning"]
+    assert titles("Black", hovering) == ["Magnus Carlsen is in trouble"]  # the same game, from the other side
+    # Back to level (+1.0), then winning again: that's news again.
+    assert titles("White", [*hovering, 100, 100, 340, 340]) == ["Magnus Carlsen is winning", "Magnus Carlsen's advantage is gone", "Magnus Carlsen is winning"]
+    # Turned around, and hovering on the other side: once each way.
+    turned = [*hovering, -340, -340, -260, -260, -345, -345]
+    assert titles("White", turned) == ["Magnus Carlsen is winning", "Turnaround: Magnus Carlsen is in trouble"]
+    # An evaluation stored before "told" was kept counts as nothing told yet: told once more, then kept.
+    old = {"cp": 340, "at": 0, "band": 2, "raw": 2, "move": 40}
+    assert moments.settle(old, {"cp": 260, "at": 1})["told"] == 0
+
+
 def test_levels_decide_who_hears():
     assert moments.wanted("key", "key", "goal") and not moments.wanted("key", "minor", "on")
     assert moments.wanted("everything", "minor", "on")
@@ -177,6 +222,38 @@ def test_quiet_hours_in_the_devices_timezone():
     assert notify.quiet("UTC", "13:00", "15:00", at(14)) is True
     assert notify.quiet("UTC", None, None, at(3)) is False
     assert notify.quiet("Not/AZone", "22:00", "07:00", at(23)) is False
+
+
+def test_a_long_push_is_cut_to_fit_and_written_as_utf8(monkeypatch):
+    # H3: a 1,440-character Hindi headline made a 7,732-byte push (json.dumps wrote each letter as a
+    # 6-byte escape); the push service answered 413, which counted against the device.
+    sent: list[str] = []
+    monkeypatch.setattr(pywebpush, "webpush", lambda **kwargs: sent.append(kwargs["data"]))
+    monkeypatch.setattr(notify, "signer", lambda: None)
+    headline = ("भारत ने वेस्टइंडीज को आठ विकेट से हराया, कोहली ने नाबाद शतक जड़ा। " * 30)[:1440]
+    payload = {"id": 1, "title": "विराट कोहली: injury news", "body": headline, "url": "/player/1", "tag": "p1", "event_id": None, "player_id": 1, "kind": "news", "loud": True, "quiet": False}
+    assert notify.push("https://fcm.googleapis.com/fcm/send/abc", "key", "auth", payload, 600) is None
+    data = sent[0]
+    assert len(data.encode()) <= notify.PAYLOAD_BYTES and "\\u" not in data
+    got = json.loads(data)
+    assert {**got, "body": None} == {**payload, "body": None}  # only the body is cut, on a whole letter
+    assert got["body"].endswith("…") and headline.startswith(got["body"][:-1]) and len(got["body"]) > 1000
+    # Encrypted for a real subscription, it's under 3.5 KB (push services take 4 KB).
+    receiver = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    keys = {"p256dh": base64.urlsafe_b64encode(receiver).decode(), "auth": base64.urlsafe_b64encode(os.urandom(16)).decode()}
+    assert len(pywebpush.WebPusher({"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": keys}).encode(data.encode())["body"]) <= 3584
+    # A short push goes as it is; a title too long on its own is cut after the body.
+    assert notify._fit({"title": "Goal: Salah", "body": "Liverpool 1–0"}) == '{"title": "Goal: Salah", "body": "Liverpool 1–0"}'
+    assert len(notify._fit({"title": "क" * 2000, "body": "ख" * 2000}).encode()) <= notify.PAYLOAD_BYTES
+
+
+def test_a_push_too_big_for_the_service_isnt_the_devices_fault():
+    device = SimpleNamespace(failures=0)
+    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+    notify._health(db, 7, 413)
+    assert device.failures == 0  # five of these deleted a healthy device
+    notify._health(db, 7, 500)
+    assert device.failures == 1
 
 
 def test_only_real_push_services_are_accepted():
