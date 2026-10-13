@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # From the Mac: copy the API tokens this app uses to the server, without printing any of them.
 #   deploy/push-secrets.sh root@<server-ip>
-# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token and liquipedia-token if there are, and OPENROUTER_API_KEY from the gateway's
+# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token and pubg-token if there are, and OPENROUTER_API_KEY from the gateway's
 # keys file (OPENROUTER_KEY_FILE=<file holding only a key> to give production its own key). The server
 # makes its own database password, gateway token and push key (install-secrets.sh). Run again to rotate
 # a token; restart after: docker compose -f deploy/compose.yaml up -d --force-recreate
@@ -18,7 +18,7 @@ for f in sportmonks-token lichess-token; do
   [ -s "$LOCAL/$f" ] || { echo "push-secrets: $LOCAL/$f is missing or empty" >&2; exit 1; }
   cp "$LOCAL/$f" "$stage/$f"
 done
-for f in pandascore-token liquipedia-token; do
+for f in pandascore-token liquipedia-token pubg-token; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
 if [ -n "${OPENROUTER_KEY_FILE:-}" ]; then

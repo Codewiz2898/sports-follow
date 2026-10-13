@@ -364,13 +364,14 @@ def esports_rows(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def import_esports() -> int:
     """Esports pros from each esports source that runs."""
-    return _import_pandascore() + _import_liquipedia()
+    return _import_pandascore() + _import_liquipedia() + import_pubg()
 
 
-def _drop_unseen(prefix: str, started: datetime) -> None:
-    """After a complete run of one source, its rows that run didn't see again (retired, moved on)."""
+def _drop_unseen(prefix: str, leagues: list[str], started: datetime) -> None:
+    """After a complete run of one source, its rows in the games that run read and didn't see again
+    (retired, moved on). Rows of games it didn't read are left alone, so a run of a few games is safe."""
     with session() as db:
-        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like(f"{prefix}%"), Athlete.updated_at < started)).rowcount
+        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like(f"{prefix}%"), Athlete.league.in_(leagues), Athlete.updated_at < started)).rowcount
     if gone:
         log.info("registry esports: %d %s pros no longer active removed", gone, prefix.rstrip(":"))
 
@@ -415,7 +416,7 @@ def _import_pandascore() -> int:
         page += 1
         time.sleep(ESPORTS_PACE)
     if complete:
-        _drop_unseen("pandascore:", started)
+        _drop_unseen("pandascore:", pandascore_esports.IMPORT_GAMES, started)
     return total
 
 
@@ -449,6 +450,48 @@ def liquipedia_rows(players: list[dict[str, Any]], wiki: str) -> list[dict[str, 
     return rows
 
 
+def pubg_rows(players: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Athlete rows from the PUBG players seen in recent tournaments (pure): the name without the team
+    tag, the in-game name an alias, keyed by the account."""
+    rows = []
+    for account, info in players.items():
+        if not account or not words(info.get("name") or ""):
+            continue
+        aliases = [info["in_game"]] if info.get("in_game") and words(info["in_game"]) != words(info["name"]) else []
+        rows.append({
+            "qid": f"pubg:{account.split('.', 1)[-1][:15]}",
+            "sport": ESPORTS,
+            "name": info["name"][:200],
+            "aliases": aliases,
+            "search_text": search_text(info["name"], aliases),
+            "birth_date": None,
+            "country": None,
+            "teams": [info["team"]] if info.get("team") else [],
+            "league": "pubg",
+            "title": None,
+            "ids": {"pubg_esports": account},
+            "image": None,
+            "sitelinks": 0,
+            "current": True,  # played in the last fortnight
+        })
+    return rows
+
+
+def import_pubg() -> int:
+    """The players of PUBG's recent tournaments, from the adapter's index (no requests of their own once
+    it's warm). PUBG keeps a fortnight of matches, so a player not seen for three weeks is dropped."""
+    adapter = ADAPTERS.get("pubg_esports")
+    if adapter is None:
+        log.info("registry esports: PUBG isn't running (no key); skipped")
+        return 0
+    rows = pubg_rows(adapter.players())
+    with session() as db:
+        upsert(db, rows)
+        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like("pubg:%"), Athlete.updated_at < func.now() - text("interval '21 days'"))).rowcount
+    log.info("registry esports: %d PUBG players kept%s", len(rows), f", {gone} not seen for three weeks removed" if gone else "")
+    return len(rows)
+
+
 def _import_liquipedia() -> int:
     """Import the active players of each battle royale wiki, 1,000 a request, only while the hour's
     reserve for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
@@ -480,7 +523,7 @@ def _import_liquipedia() -> int:
                 break
             offset += liquipedia.PAGE
     if complete:
-        _drop_unseen("lp:", started)
+        _drop_unseen("lp:", liquipedia_esports.IMPORT_WIKIS, started)
     return total
 
 

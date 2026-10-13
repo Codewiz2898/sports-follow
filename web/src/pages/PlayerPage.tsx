@@ -143,7 +143,7 @@ export function PlayerPage() {
           {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
 
           <p className="tiny muted">
-            Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
+            Page built {relative(card.built_at)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
           </p>
         </>
       )}
@@ -183,7 +183,7 @@ function Overview({ card, show }: { card: Card; show: (t: Tab, view?: MatchesVie
             </span>
           )}
           <span className="row tiny muted">
-            <span>{card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia every few minutes as results are recorded.' : card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.` : 'Live games refresh on their own about every minute.'}</span>
+            <span>{card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia every few minutes as results are recorded.' : card.live.source === 'PUBG' ? 'Standings update from PUBG after each match.' : card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.` : 'Live games refresh on their own about every minute.'}</span>
             <RefreshButton card={card} style={{ flexShrink: 0 }} />
           </span>
         </>

@@ -6,7 +6,7 @@ for the other sources: none of theirs are committed."""
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -109,9 +109,11 @@ def test_team_form_over_the_lobbies():
 def test_the_lane_reads_every_running_lobby_in_one_request(monkeypatch):
     calls = []
 
+    started = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")  # the lane reads the real clock
+
     def fake(datatype, ttl, **params):
         calls.append((datatype, params))
-        return [_lobby(1), {**_lobby(2), "match2id": "other_0001"}]
+        return [_lobby(1, date=started), {**_lobby(2, date=started), "match2id": "other_0001"}]
 
     monkeypatch.setattr(liquipedia, "get", fake)
     adapter = lp.LiquipediaEsports()
@@ -198,7 +200,7 @@ def test_a_liquipedia_row_is_a_search_result_keyed_by_its_page(monkeypatch):
 
 def test_the_credits_name_liquipedia_and_its_licence():
     [entry] = credits.credits({"liquipedia_esports": 1}, stockfish=False)["data"]
-    assert entry["name"] == "Liquipedia" and entry["what"].startswith("BGMI, PUBG Mobile and Free Fire: battle royale standings")
+    assert entry["name"] == "Liquipedia" and entry["what"].startswith("BGMI, PUBG Mobile, Free Fire and Apex Legends: battle royale standings")
     assert (entry["licence"], entry["licence_url"]) == ("CC BY-SA 3.0", "https://creativecommons.org/licenses/by-sa/3.0/")
 
 

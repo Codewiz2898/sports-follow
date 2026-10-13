@@ -69,6 +69,28 @@ def _import_registry() -> None:
         bus.release("registry-import")
 
 
+def _warm_sources() -> None:
+    """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date;
+    PUBG's players join the registry every six hours from it."""
+    from .adapters import ADAPTERS
+
+    for adapter in list(ADAPTERS.values()):
+        warm = getattr(adapter, "warm", None)
+        if warm is None:
+            continue
+        try:
+            log.info("warm %s: %s lobbies indexed", adapter.system, warm())
+        except Exception:
+            log.exception("warm %s failed", adapter.system)
+    if "pubg_esports" in ADAPTERS and bus.try_lock("registry-pubg", 6 * 3600):  # held, not released: at most every six hours
+        registry.import_pubg()
+
+
+async def warm_sources(ctx) -> None:
+    """Shared source indexes, every ten minutes (_warm_sources)."""
+    await asyncio.to_thread(_warm_sources)
+
+
 async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
     PandaScore; about two hours."""
@@ -103,6 +125,7 @@ class WorkerSettings:
     functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane]
     cron_jobs = [
         cron(tick, second=0, run_at_startup=True),
+        cron(warm_sources, minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
     ]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)

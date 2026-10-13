@@ -45,11 +45,18 @@ PROVIDERS: list[dict[str, Any]] = [
     {
         "name": "Liquipedia",
         "url": "https://liquipedia.net",
-        "systems": {"liquipedia_esports": "BGMI, PUBG Mobile and Free Fire"},
+        "systems": {"liquipedia_esports": "BGMI, PUBG Mobile, Free Fire and Apex Legends"},
         "what": "battle royale standings, each game's placings and finishes, and the pro players search finds.",
         "licence": "CC BY-SA 3.0",
         "licence_url": CC_BY_SA_3,
         "note": "Recorded by Liquipedia's editors during and after play; not official tournament records.",
+    },
+    {
+        "name": "PUBG",
+        "url": "https://developer.pubg.com",
+        "systems": {"pubg_esports": "PUBG"},
+        "what": "official tournament matches from PUBG's API: placings and every player's finishes, damage, assists and knocks, after each match.",
+        "note": "Standings use the standard PUBG esports points (10, 6, 5, 4, 3, 2, 1, 1 for placing, one a finish); some events score differently. PUBG, PLAYERUNKNOWN'S BATTLEGROUNDS and all related logos are trademarks of PUBG Corporation or its affiliates.",
     },
     {
         "name": "ESPN",
