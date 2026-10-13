@@ -20,6 +20,7 @@ x-app: &app
     SPORTS_FOLLOW_LICHESS_TOKEN_FILE: /run/secrets/lichess-token
     SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE: /run/secrets/pandascore-token   # optional: esports team titles
     SPORTS_FOLLOW_LIQUIPEDIA_TOKEN_FILE: /run/secrets/liquipedia-token   # optional: battle royale (needs a commercial plan)
+    SPORTS_FOLLOW_PUBG_TOKEN_FILE: /run/secrets/pubg-token   # optional: PUBG esports
     SPORTS_FOLLOW_VAPID_KEY: /run/secrets/vapid-private.pem
   volumes:
     - ${SECRETS_DIR:-/etc/sports-follow}/files:/run/secrets:ro

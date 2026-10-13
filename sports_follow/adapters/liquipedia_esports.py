@@ -1,4 +1,5 @@
-"""Battle royale esports from Liquipedia: BGMI and PUBG Mobile, and Free Fire.
+"""Battle royale esports from Liquipedia: BGMI and PUBG Mobile, Free Fire and Apex Legends. (PUBG itself
+comes from PUBG's own API, with every player's numbers: pubg_esports.)
 
 A battle royale "match" on Liquipedia is a lobby, not two teams: 12 to 24 teams play several games
 (maps) in a row, each team scoring points for its placement and its finishes (kills) in every game,
@@ -25,13 +26,14 @@ from typing import Any
 from . import espn, liquipedia
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
-# The battle royale wikis read, and what fans call a game won on each.
-WIKIS = {"pubgmobile": "PUBG Mobile", "freefire": "Free Fire"}
-WIN_WORD = {"pubgmobile": "Chicken dinner", "freefire": "Booyah"}
+# The battle royale wikis read, and what fans call a game won on each. All store lobbies the same way
+# (Lua-Modules: each wiki's MatchGroup/Input/Custom.lua hands them to standardProcessFfaMaps).
+WIKIS = {"pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "apexlegends": "Apex Legends"}
+WIN_WORD = {"pubgmobile": "Chicken dinner", "freefire": "Booyah", "apexlegends": "Champions"}
 # A match's own game field, where a wiki holds more than one ("bgmi" events on the PUBG Mobile wiki).
 GAME_NAMES = {"bgmi": "BGMI", "pubgm": "PUBG Mobile", "pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "ffmax": "Free Fire MAX"}
-SHORT = {"pubgmobile": "pubgm", "freefire": "ff"}  # registry keys: "lp:pubgm:<page id>"
-IMPORT_WIKIS = [w for w in os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_WIKIS", "pubgmobile,freefire").split(",") if w in WIKIS]
+SHORT = {"pubgmobile": "pubgm", "freefire": "ff", "apexlegends": "apex"}  # registry keys: "lp:pubgm:<page id>"
+IMPORT_WIKIS = [w for w in os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_WIKIS", ",".join(WIKIS)).split(",") if w in WIKIS]
 NO_DATE = ("1970-01-01", "0000-01-01")  # Liquipedia's placeholders for a date nobody entered
 LIVE_FOR = timedelta(hours=12)  # a lobby not marked finished this long after its start is taken as over
 
@@ -303,7 +305,7 @@ def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) ->
 
 class LiquipediaEsports:
     system = "liquipedia_esports"
-    sports = ("esports", "e-sports", "bgmi", "pubg mobile", "battlegrounds mobile india", "free fire", "free fire max")  # a pro's sport is their game
+    sports = ("esports", "e-sports", "bgmi", "pubg mobile", "battlegrounds mobile india", "free fire", "free fire max", "apex legends")  # a pro's sport is their game
     games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
     WINDOW_BACK, WINDOW_AHEAD = 45, 30  # days of lobbies a refresh reads

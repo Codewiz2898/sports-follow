@@ -30,9 +30,9 @@ GAMES = {
     "cod-mw": "Call of Duty", "lol-wild-rift": "Wild Rift", "kog": "King of Glory",
 }
 GAME_IDS = {"league-of-legends": 1, "cs-go": 3, "dota-2": 4, "ow": 14, "rl": 22, "cod-mw": 23, "r6-siege": 24, "valorant": 26, "kog": 27, "lol-wild-rift": 28, "mlbb": 34}
-# The titles whose pros the registry imports, so search finds them: the head-to-head titles with the
-# cleanest data first. Players of the other titles can still be followed once found (or researched).
-IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", "valorant,cs-go,league-of-legends,dota-2").split(",") if g in GAME_IDS]
+# The titles whose pros the registry imports, so search finds them: every team title, for fans anywhere
+# (Mobile Legends and King of Glory are among the most watched in the world, though not in India).
+IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", ",".join(GAMES)).split(",") if g in GAME_IDS]
 
 _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "canceled": "postponed", "postponed": "postponed"}
 

@@ -379,11 +379,50 @@ results ("Won 2–1"), and hear when a series ends, from a licensed source named
    - **For a public build:** a commercial Liquipedia plan (reported $49 or $199 a data type a month;
      their portal says sign-ups are paused), then add `liquipedia_esports` to `SPORTS_FOLLOW_SOURCES`.
      Data is CC BY-SA 3.0: credited on the Credits page and on every score as "Liquipedia".
-   - **PUBG PC:** PandaScore stopped covering it in September 2020; Liquipedia's PUBG wiki would fit
-     the same adapter. PUBG's own API (free key, tournaments endpoint) keeps matches 14 days.
+   - **PUBG PC: built on PUBG's own API** (`adapters/pubg.py`, `pubg_esports.py`; key in
+     `~/.config/sports-follow/pubg-token`). A lobby is a session of a tournament's matches played by
+     the same teams (a tournament day, or a group of it); standings use the standard PUBG esports
+     points (10, 6, 5, 4, 3, 2, 1, 1 and one a finish). Every player has their own line (finishes,
+     damage, assists, knocks). Teams are the tags in player names ("TWIS_Lu"); tournaments have no
+     names in the API, so they're named from known codes (PWS, PAS, PEC…) or the region. There's no
+     schedule: a lobby appears when its first match ends, then is read every 2 minutes. The worker
+     indexes recent tournaments every 10 minutes (Redis, shared; matches downloaded once; tournament
+     reads at most 9 a minute) and loads their players into search every 6 hours. The tournament
+     shard also holds exhibition matches (3 to 20 minutes, players on 40+ finishes): only matches of
+     22+ minutes, 8+ teams and at most 25 finishes for anyone count. A tournament listed under two ids
+     (`kr-26pws2f`, `kr_26pws2f`) counts once. Checked on 13 Oct 2026: 28 lobbies, 630 players.
+     PUBG's terms allow commercial apps (ads, subscriptions, no paywalled data) with the trademark
+     notice, on the Credits page.
    - **CODM next:** Call of Duty: Mobile is head-to-head (5v5 series), so it fits the team model on
      Liquipedia's Call of Duty wiki. PandaScore's Call of Duty is the PC and console league (CDL), not
      CODM. Neither Activision nor Garena has a public API.
+
+**Global as well as India** (decided 13 Oct 2026). The registry imports every PandaScore team title
+(Mobile Legends, King of Glory, Rainbow Six, Overwatch, Rocket League, Call of Duty and Wild Rift beside
+Valorant, CS2, LoL and Dota 2), and the Liquipedia adapter reads PUBG and Apex Legends beside PUBG Mobile
+and Free Fire (their wikis store lobbies the same way). 2025 hours watched, worldwide: LoL, CS2, Mobile
+Legends, Valorant, Dota 2 (Esports Charts). Activity on PandaScore's free plan, 13 Oct 2026, series in
+the last 30 days: CS2 1,567, LoL 309, Dota 2 291, R6 206, Mobile Legends 179, King of Glory 141,
+Valorant 76 (off-season), Overwatch 70, Rocket League 47; Call of Duty (between CDL seasons), Wild Rift,
+EA FC and PUBG none.
+
+**Live scores, researched 13 Oct 2026.** PandaScore's free plan is live only by the map (which map is on,
+each map's winner), and small events can lag an hour; in-game live is €1,000 a game a month (LoL, CS).
+Elsewhere:
+- **Dota 2:** OpenDota's `/live` gives pro games live with every player's numbers, free (60 a minute,
+  3,000 a day, no key); community-run, no data licence. PandaScore would still give the fixtures.
+- **LoL:** Riot's own site backend (esports-api.lolesports.com, feed.lolesports.com/livestats) gives full
+  live stats, but it's undocumented and Riot licenses official live data only to GRID: development only.
+- **Valorant:** the valorantesports.com backend has results, no live; nothing official.
+- **CS2:** GRID only (commercial, priced per deal); its free Open Access programme looks discontinued.
+- **PUBG PC:** PUBG's own API (a key is saved as `~/.config/sports-follow/pubg-token`): 1,200 official
+  tournaments across 14 regions, every player's numbers after each match (not during), 10 requests a
+  minute, matches kept 14 days. No BGMI or other mobile events.
+- **Fighting games (Tekken, Street Fighter 6):** start.gg's official API, free (80 requests a minute),
+  player brackets reported as they're played, commercial use allowed with attribution and no
+  gambling or resale; hosts Indian events (TEKKEN Nexus 2025, New Delhi). A 1v1 shape, like tennis.
+- **Dead ends:** Supercell's APIs (no pro data; no fees allowed), octane.gg (shut down), EA FC,
+  Fortnite and Apex (no esports API; Liquipedia only).
 
 **Open questions**
 - Which games first: Valorant and CS2 have the cleanest data, BGMI has the audience. (Both done:

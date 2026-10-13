@@ -34,7 +34,7 @@ OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_not
 BIND_RETRY = 6 * 3600
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore", "liquipedia_esports": "Liquipedia"}
+SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore", "liquipedia_esports": "Liquipedia", "pubg_esports": "PUBG"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
@@ -248,7 +248,8 @@ def describe(player_id: int) -> str | None:
         where = f", {', '.join(teams)}" if teams else ""
         league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
         game = pandascore_esports.game_name(loc.get("league")) or liquipedia_esports.game_name(loc.get("league"))
-        if row.adapter in ("pandascore_esports", "liquipedia_esports") and game:
+        game = game or (loc.get("game") if row.adapter == "pubg_esports" else None)
+        if row.adapter in ("pandascore_esports", "liquipedia_esports", "pubg_esports") and game:
             league = f" ({game} pro, known by this handle)"
         page = f" Their page on {SOURCE_NAMES.get(row.adapter, row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
         return f"{loc.get('name') or player.name}, {player.sport if league else player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."

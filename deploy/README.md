@@ -51,7 +51,7 @@ your own domain, point an A record at the server first and run `DOMAIN=app.examp
 ```bash
 deploy/push-secrets.sh root@<server-ip>
 ```
-Sends the Sportmonks and Lichess tokens (and the PandaScore and Liquipedia ones, if there are) from
+Sends the Sportmonks and Lichess tokens (and the PandaScore, Liquipedia and PUBG ones, if there are) from
 `~/.config/sports-follow` and the OpenRouter key from the gateway's keys file (`OPENROUTER_KEY_FILE=<file>` for a separate production key). The server makes its
 own database password, gateway token and push key; they are kept when you run this again.
 

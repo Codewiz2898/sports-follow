@@ -9,17 +9,19 @@ from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
 from .espn_tennis import EspnTennis
 from .lichess_chess import LichessChess
-from . import liquipedia, pandascore, sportmonks
+from . import liquipedia, pandascore, pubg, sportmonks
 from .liquipedia_esports import LiquipediaEsports
 from .pandascore_esports import PandascoreEsports
+from .pubg_esports import PubgEsports
 from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
 
 # Licensed sources run only with a token. for_sport() picks the first adapter for a sport, so where
 # both run (a development build) football comes from Sportmonks, while cricket stays on ESPN until the
 # Sportmonks plan covers ODIs, Tests and the IPL (the free plan has three T20 competitions). A public
-# build lists only licensed sources and gets Sportmonks for both. Esports comes from two sources side by
-# side: PandaScore for team titles (Valorant, CS2…), Liquipedia for battle royale (BGMI, Free Fire).
+# build lists only licensed sources and gets Sportmonks for both. Esports comes from three sources side by
+# side, each for its own games: PandaScore for team titles (Valorant, CS2…), Liquipedia for battle royale
+# (BGMI, Free Fire, Apex Legends), PUBG's own API for PUBG.
 _TOKEN = bool(sportmonks.token())
 ALL: tuple[Adapter, ...] = (
     *((SportmonksFootball(),) if _TOKEN else ()),
@@ -31,6 +33,7 @@ ALL: tuple[Adapter, ...] = (
     LichessChess(),
     *((PandascoreEsports(),) if pandascore.token() else ()),
     *((LiquipediaEsports(),) if liquipedia.token() else ()),
+    *((PubgEsports(),) if pubg.token() else ()),
 )
 
 

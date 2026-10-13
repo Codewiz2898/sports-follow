@@ -26,7 +26,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
                                                                               ├─▶ Lichess API (chess)
                                                                               ├─▶ PandaScore API (esports: team titles)
-                                                                              └─▶ LiquipediaDB API (esports: battle royale)
+                                                                              ├─▶ LiquipediaDB API (esports: battle royale)
+                                                                              └─▶ PUBG API (esports: PUBG)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
@@ -74,7 +75,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
   | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
   | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data) | team's series and maps won |
-  | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
+  | Esports, PUBG | PUBG's official API (PC tournaments) | the player's lobbies, found as each match ends (no schedule) | standings and every player's finishes, damage, assists and knocks, after each match | own and team form over 14 days |
+  | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
 
   Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
@@ -177,11 +179,12 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series; the history lane and the registry import pause below it |
-| `SPORTS_FOLLOW_ESPORTS_GAMES` | `valorant,cs-go,league-of-legends,dota-2` | the titles whose pros the registry imports (PandaScore slugs; `cs-go` is CS2) |
+| `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2). Naming a few imports just those, and removes only their stale players |
+| `SPORTS_FOLLOW_PUBG_TOKEN` | from `~/.config/sports-follow/pubg-token` | PUBG developer API key (PUBG esports); the worker indexes recent tournaments every 10 minutes |
 | `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |
 | `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes and never overspent (a paid plan raises it) |
 | `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fixtures; the history lane and the registry import pause below it |
-| `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` | `pubgmobile,freefire` | the battle royale wikis whose active players the registry imports |
+| `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` | `pubgmobile,freefire,apexlegends` | the battle royale wikis whose active players the registry imports |
 | `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
 
 ## Deploy

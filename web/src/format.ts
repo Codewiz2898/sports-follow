@@ -92,7 +92,7 @@ export function shortWhen(value?: string | null, now = Date.now()): string {
 export type SportKey = 'football' | 'cricket' | 'basketball' | 'tennis' | 'chess' | 'esports' | 'other'
 
 // An esports pro's sport is their game ("Valorant", "BGMI"); every game wears the esports colour.
-const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire/
+const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire|apex legends/
 
 /** Which colour a sport wears (styles.css, [data-sport]). Other codes of football, table tennis and padel wear none. */
 export function sportKey(sport?: string | null): SportKey {
