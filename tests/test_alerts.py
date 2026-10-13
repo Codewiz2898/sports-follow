@@ -41,6 +41,21 @@ def test_one_notification_per_game_led_by_the_biggest_moment():
     assert p.lines == ["Virat Kohli reaches 100", "Rohit Sharma out for 45"]
 
 
+def test_only_the_players_a_fan_follows_reach_them():
+    # One poll records every followed player in the game, and the tick's sweep mixes games: one batch, many fans.
+    batch = [
+        item(1, "hundred", "Rohit Sharma reaches 100", player=ROHIT, priority=90),
+        item(2, "final", "Virat Kohli: India won by 5 wickets", priority=80),
+        item(3, "goal", "Goal: Mohamed Salah", player=3, event=OTHER, priority=85, body="Egypt 1–0 South Africa"),
+    ]
+    assert plan([batch[0]], {KOHLI: "key"}, set(), [], NOW) == []
+    [p] = plan(batch, {KOHLI: "key"}, set(), [], NOW)
+    assert (p.tag, p.player_id, p.lines) == ("e10", KOHLI, ["Virat Kohli: India won by 5 wickets"])
+    [both] = plan(batch, {KOHLI: "key", ROHIT: "key"}, set(), [], NOW)
+    assert (both.tag, both.moment_ids) == ("e10", [1, 2])
+    assert plan(batch, {}, set(), [], NOW) == []
+
+
 def test_the_story_so_far_rides_underneath():
     earlier = [sent(GAME, "Virat Kohli reaches 50", ago=3600), sent(GAME, "Rohit Sharma out for 45", ago=1800), sent(OTHER, "Another game")]
     [p] = plan([item(1, "hundred", "Virat Kohli reaches 100", priority=90)], {KOHLI: "key"}, set(), earlier, NOW)

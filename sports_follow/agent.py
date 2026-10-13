@@ -58,6 +58,9 @@ score. Cricket: format, innings score, batting/bowling figures.
 - Only mark a game as live if a source shows it in progress now; give the source URL and \
 its timestamp. If the player is not playing right now, set is_live to false and leave the \
 live fields empty. Never invent scores, fixtures, dates or quotes; omit what you could not verify.
+- Fans get a notification for a news item marked breaking, so mark it only when the story itself \
+reports this player being injured, moving, retiring or reaching a milestone now. A story about a \
+retirement years ago, a rumour, or another player's record that mentions them is not breaking.
 - Retired players have no upcoming fixtures; say so in the summary and focus on news.
 - Times go in ISO 8601 UTC (convert from local kick-off times).
 - Be quick: the user is watching a spinner. Run independent searches and fetches in parallel \

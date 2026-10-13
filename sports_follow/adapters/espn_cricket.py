@@ -8,6 +8,8 @@ recent completed scorecards, which is exact for the matches it covers.
 
 from __future__ import annotations
 
+import html
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -118,48 +120,6 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
     if status == "final":
         clock_label = status_obj.get("summary") or kind.get("description") or "Result"
 
-    lines: dict[str, dict[str, Any]] = {}
-    for card in data.get("matchcards") or []:
-        headline = card.get("headline")
-        for p in card.get("playerDetails") or []:
-            pid = str(p.get("playerID") or "")
-            if not pid:
-                continue
-            entry = lines.setdefault(pid, {"bat": None, "bowl": None, "name": p.get("playerName")})
-            if headline == "Batting":
-                entry["bat"] = p
-            elif headline == "Bowling":
-                entry["bowl"] = p
-
-    out_lines: dict[str, Line] = {}
-    for pid, entry in lines.items():
-        stats, heads = [], []
-        bat = entry["bat"]
-        if bat and (bat.get("ballsFaced") not in (None, "", "0") or bat.get("runs") not in (None, "", "0")):
-            runs, balls = _int(bat.get("runs")), _int(bat.get("ballsFaced"))
-            not_out = (bat.get("dismissal") or "").lower() in ("", "not out", "batting", "notout")
-            heads.append(f"{runs}{'*' if not_out else ''} ({balls})")
-            stats += [
-                {"label": "Runs", "value": f"{runs}{'*' if not_out else ''}"},
-                {"label": "Balls", "value": str(balls)},
-                {"label": "4s", "value": str(_int(bat.get("fours")))},
-                {"label": "6s", "value": str(_int(bat.get("sixes")))},
-                {"label": "Strike rate", "value": f"{runs * 100 / balls:.1f}" if balls else "–"},
-            ]
-            if not not_out and bat.get("dismissal"):
-                stats.append({"label": "Out", "value": str(bat.get("dismissal"))})
-        bowl = entry["bowl"]
-        if bowl and bowl.get("overs") not in (None, "", "0"):
-            heads.append(f"{_int(bowl.get('wickets'))}/{_int(bowl.get('conceded'))} ({bowl.get('overs')} ov)")
-            stats += [
-                {"label": "Wickets", "value": str(_int(bowl.get("wickets")))},
-                {"label": "Overs", "value": str(bowl.get("overs"))},
-                {"label": "Runs conceded", "value": str(_int(bowl.get("conceded")))},
-                {"label": "Economy", "value": str(bowl.get("economyRate") or "–")},
-            ]
-        if heads:
-            out_lines[pid] = Line(headline=" · ".join(heads), stats=stats)
-
     return Snapshot(
         status=status,
         score_label=score_label,
@@ -172,10 +132,65 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
             "format": (comp.get("class") or {}).get("generalClassCard"),
             "player_of_match": next((f["athlete"].get("displayName") for f in status_obj.get("featuredAthletes") or [] if f.get("name") == "playerOfTheMatch" and f.get("athlete")), None),
         },
-        lines=out_lines,
+        lines=parse_lines(data),
         moments=[],
         source_url=f"https://www.espncricinfo.com/ci/engine/match/{header.get('id')}.html",
     )
+
+
+def _numbers(stats: dict[str, Any]) -> dict[str, str]:
+    """One innings of a roster's linescores as {name: value}: runs, ballsFaced, outs, balls, wickets…"""
+    return {s.get("name"): str(s.get("displayValue") or "") for c in stats.get("categories") or [] for s in c.get("stats") or []}
+
+
+def parse_lines(data: dict[str, Any]) -> dict[str, Line]:
+    """Each player's line, from the rosters, which hold every innings of both sides (the summary's
+    matchcards hold only the latest innings, and lag the score). The headline has every innings
+    ("103 (152) & 48* (60) · 3/45 (20 ov)"); the stats are the latest batting and bowling innings,
+    which is what the fifty, hundred, out and wicket alerts read (as Sportmonks' lines)."""
+    lines: dict[str, Line] = {}
+    for side in data.get("rosters") or []:
+        for p in side.get("roster") or []:
+            pid = str((p.get("athlete") or {}).get("id") or "")
+            bats, bowls = [], []
+            for ls in sorted(p.get("linescores") or [], key=lambda ls: _int(ls.get("period"))):
+                stats = ls.get("statistics") or {}
+                n = _numbers(stats)
+                out = _int(n.get("outs")) > 0
+                # A batter yet to face a ball isn't an innings yet, as on Sportmonks' cards.
+                if _int(n.get("batted")) and (_int(n.get("ballsFaced")) or _int(n.get("runs")) or out):
+                    # The scorecard's words, in HTML: "c &dagger;Curtis b Kerr", " b Agar".
+                    how = ((stats.get("batting") or {}).get("outDetails") or {}).get("shortText") or ""
+                    bats.append((n, out, html.unescape(how).strip() or "out"))
+                if _int(n.get("balls")):
+                    bowls.append(n)
+            if not pid or not (bats or bowls):
+                continue
+            heads, stats_out = [], []
+            if bats:
+                heads.append(" & ".join(f"{_int(n.get('runs'))}{'' if out else '*'} ({_int(n.get('ballsFaced'))})" for n, out, _ in bats))
+                n, out, how = bats[-1]
+                runs, balls = _int(n.get("runs")), _int(n.get("ballsFaced"))
+                stats_out += [
+                    {"label": "Runs", "value": f"{runs}{'' if out else '*'}"},
+                    {"label": "Balls", "value": str(balls)},
+                    {"label": "4s", "value": str(_int(n.get("fours")))},
+                    {"label": "6s", "value": str(_int(n.get("sixes")))},
+                    {"label": "Strike rate", "value": f"{runs * 100 / balls:.1f}" if balls else "–"},
+                ]
+                if out:
+                    stats_out.append({"label": "Out", "value": how})
+            if bowls:
+                heads.append(" & ".join(f"{_int(n.get('wickets'))}/{_int(n.get('conceded'))} ({n.get('overs') or '0'} ov)" for n in bowls))
+                n = bowls[-1]
+                stats_out += [
+                    {"label": "Wickets", "value": str(_int(n.get("wickets")))},
+                    {"label": "Overs", "value": n.get("overs") or "0"},
+                    {"label": "Runs conceded", "value": str(_int(n.get("conceded")))},
+                    {"label": "Economy", "value": f"{_int(n.get('conceded')) * 6 / _int(n.get('balls')):.2f}"},
+                ]
+            lines[pid] = Line(headline=" · ".join(heads), stats=stats_out)
+    return lines
 
 
 def involves_team(f: Fixture, ref: PlayerRef) -> bool:
@@ -212,7 +227,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
         line = snap.lines.get(athlete_id)
         if line is None:
             continue
-        lines.append(line.stats)
+        lines.append({"headline": line.headline, "stats": line.stats})
         if (f := match_format(fixture)) and f not in formats:
             formats.append(f)
     if not lines:
@@ -222,31 +237,52 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
     return batting_bowling(lines), note
 
 
-def batting_bowling(lines: list[list[dict[str, str]]]) -> list[dict[str, str]]:
-    """Runs, average, strike rate, highest, 100s/50s, wickets and economy over some matches' lines."""
-    runs = balls = outs = innings = hundreds = fifties = 0
+_BAT = re.compile(r"(\d+)(\*?) \((\d+)\)")
+_BOWL = re.compile(r"(\d+)/(\d+) \(([\d.]+) ov\)")
+
+
+def innings(headline: str | None) -> tuple[list[tuple[int, bool, int]], list[tuple[int, int, str]]]:
+    """Every innings in a cricket line's headline ("103 (152) & 48* (60) · 3/45 (20 ov)"): batting as
+    (runs, out, balls), bowling as (wickets, runs conceded, overs)."""
+    bats, bowls = [], []
+    for part in re.split(r" & | · ", headline or ""):
+        if m := _BAT.fullmatch(part):
+            bats.append((int(m[1]), not m[2], int(m[3])))
+        elif m := _BOWL.fullmatch(part):
+            bowls.append((int(m[1]), int(m[2]), m[3]))
+    return bats, bowls
+
+
+def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Runs, average, strike rate, highest, 100s/50s, wickets and economy over some matches' lines
+    ({"headline", "stats"}), every innings counted: a line's stats are only its latest innings, so a
+    Test's two come from the headline."""
+    runs = balls = outs = batted = hundreds = fifties = 0
     best = None
     wickets = conceded = 0
     balls_bowled = 0
-    for stats in lines:
-        values = {s["label"]: s["value"] for s in stats}
-        if "Runs" in values:
-            r = _int(values["Runs"].rstrip("*"))
-            innings += 1
+    for line in lines:
+        bats, bowls = innings(line.get("headline"))
+        values = {s["label"]: s["value"] for s in line.get("stats") or []}
+        if not bats and "Runs" in values:
+            bats = [(_int(values["Runs"].rstrip("*")), not values["Runs"].endswith("*"), _int(values.get("Balls")))]
+        if not bowls and "Wickets" in values:
+            bowls = [(_int(values["Wickets"]), _int(values.get("Runs conceded")), str(values.get("Overs", "0")))]
+        for r, out, b in bats:
+            batted += 1
             runs += r
-            balls += _int(values.get("Balls"))
-            if not values["Runs"].endswith("*"):
-                outs += 1
+            balls += b
+            outs += out
             hundreds += r >= 100
             fifties += 50 <= r < 100
             best = max(best or 0, r)
-        if "Wickets" in values:
-            wickets += _int(values["Wickets"])
-            conceded += _int(values.get("Runs conceded"))
-            whole, _, part = str(values.get("Overs", "0")).partition(".")
+        for w, c, overs in bowls:
+            wickets += w
+            conceded += c
+            whole, _, part = overs.partition(".")
             balls_bowled += _int(whole) * 6 + _int(part or 0)
     stats = []
-    if innings:
+    if batted:
         stats += [
             {"label": "Runs", "value": str(runs)},
             {"label": "Average", "value": f"{runs / outs:.2f}" if outs else "–"},

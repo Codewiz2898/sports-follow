@@ -9,7 +9,9 @@ import gzip
 import json
 from pathlib import Path
 
+from sports_follow import structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer
+from sports_follow.adapters.base import Fixture
 
 FIXTURES = Path(__file__).parent / "fixtures" / "espn"
 KOHLI = "253802"
@@ -68,6 +70,39 @@ def test_cricket_final_scorecard_gives_the_players_line():
     line = snap.lines[KOHLI]
     assert line.headline == "139* (88)"
     assert {s["label"]: s["value"] for s in line.stats} == {"Runs": "139*", "Balls": "88", "4s": "10", "6s": "9", "Strike rate": "158.0"}
+
+
+def test_cricket_lines_cover_the_side_that_batted_first():
+    # The summary's matchcards hold only India's chase; the rosters hold both innings.
+    snap = espn_cricket.parse_summary(load("cricket-summary-final"))
+    greaves, kuldeep = snap.lines["510823"], snap.lines["559235"]
+    assert greaves.headline == "101 (108)"
+    assert {"label": "Out", "value": "lbw b Kuldeep Yadav"} in greaves.stats
+    assert kuldeep.headline == "4/40 (10 ov)"  # the player of the match, bowling first
+    assert kuldeep.stats == [{"label": "Wickets", "value": "4"}, {"label": "Overs", "value": "10"}, {"label": "Runs conceded", "value": "40"}, {"label": "Economy", "value": "4.00"}]
+    assert {s["label"]: s["value"] for s in snap.lines["34102"].stats}["Out"] == "c Andrew b Joseph"
+    assert structured.contribution(snap, "510823") == "101 (108)"
+
+
+def test_cricket_test_lines_have_every_innings_as_the_score_stands():
+    # A live Test (recorded 2026-10-13), fourth innings: the matchcards were 16 overs behind the score,
+    # with Atal still on 104*; the rosters have him out for 111, and his first innings too.
+    snap = espn_cricket.parse_summary(load("cricket-summary-test-live"))
+    assert snap.score_label == "BAN 346 (92.3 ov) · AFG 240 (89.1 ov) · BAN 372/7 (105.2 ov) · AFG 291/7 (122.0 ov)"
+    atal = snap.lines["1161050"]
+    assert atal.headline == "17 (31) & 111 (332)"
+    assert {s["label"]: s["value"] for s in atal.stats} == {"Runs": "111", "Balls": "332", "4s": "9", "6s": "3", "Strike rate": "33.4", "Out": "c Tanzid Hasan b Taijul Islam"}
+    # Both innings with the bat and the ball; the stats are the latest of each, as the alerts read them.
+    hasan = snap.lines["926629"]
+    assert hasan.headline == "2 (5) & 1 (6) · 5/55 (21 ov) & 1/66 (26 ov)"
+    assert [s["value"] for s in hasan.stats if s["label"] in ("Runs", "Wickets")] == ["1", "1"]
+    assert snap.lines["440968"].headline == "0 (11) & 6* (45) · 3/79 (20.3 ov) & 2/96 (20 ov)"  # at the crease
+    # Form counts every innings, not only the latest.
+    test = Fixture("1555116", "Afghanistan v Bangladesh", "Bangladesh tour of United Arab Emirates", None, None, "final", ["40", "25"], {}, detail="Only Test")
+    stats, note = espn_cricket.recent_form("533956", [(test, snap)])
+    assert snap.lines["533956"].headline == "105* (216) & 51 (124)"
+    assert {s["label"]: s["value"] for s in stats} == {"Runs": "156", "Average": "156.00", "Strike rate": "45.9", "Highest": "105", "100s / 50s": "1 / 1"}
+    assert note == "Last 1 match (Test), from ESPNcricinfo scorecards"
 
 
 def test_cricket_live_score_skips_the_innings_not_yet_batted():

@@ -30,6 +30,31 @@ def test_cricket_fifty_hundred_wickets_and_out():
     assert kinds(bowling) == [("wickets", "w3"), ("wickets", "w4")]
 
 
+def test_a_second_innings_has_moments_of_its_own():
+    # A line's stats are the latest innings; its headline lists every innings, so says which one.
+    first = Seen("live", line=line("103 (152)", Runs="103", Balls="152", Out="c Holder b Joseph"))
+    # Back in for the second innings, and past 50 by the next poll: from nothing, not from 103.
+    second = Seen("live", line=line("103 (152) & 52* (70)", Runs="52*", Balls="70"), score="IND 120/1")
+    [fifty] = detect("Cricket", "Virat Kohli", "253802", first, second)
+    assert (fifty.kind, fifty.detail, fifty.body) == ("fifty", "i2:50", "52* (70) · 2nd innings · IND 120/1")
+    hundred = Seen("live", line=line("103 (152) & 104* (140)", Runs="104*", Balls="140"))
+    assert kinds(detect("Cricket", "Virat Kohli", "253802", second, hundred)) == [("hundred", "i2:100")]
+    out = Seen("live", line=line("103 (152) & 104 (141)", Runs="104", Balls="141", Out="lbw b Joseph"))
+    [f] = detect("Cricket", "Virat Kohli", "253802", hundred, out)
+    assert (f.detail, f.title, f.body) == ("i2:out", "Virat Kohli out for 104", "104 (141) · 2nd innings · lbw b Joseph")
+    # Out again before a poll saw him in: the first innings' dismissal isn't this one.
+    duck = Seen("live", line=line("103 (152) & 0 (1)", Runs="0", Balls="1", Out="b Starc"))
+    assert kinds(detect("Cricket", "Virat Kohli", "253802", first, duck)) == [("out", "i2:out")]
+    # A five-for in each innings.
+    five = Seen("live", line=line("5/55 (21 ov)", Wickets="5", Runs_conceded="55", Overs="21"))
+    again = Seen("live", line=line("5/55 (21 ov) & 5/40 (15 ov)", Wickets="5", Runs_conceded="40", Overs="15"))
+    assert kinds(detect("Cricket", "Hasan Mahmud", "926629", five, again)) == [("wickets", "i2:w3"), ("wickets", "i2:w4"), ("wickets", "i2:w5")]
+    # A last line that held only the latest innings isn't the innings before: no fifty an hour late.
+    assert detect("Cricket", "Virat Kohli", "253802", Seen("live", line=line("70* (90)", Runs="70*")), Seen("live", line=line("103 (152) & 71* (92)", Runs="71*"))) == []
+    # The first innings keeps the details it always had, so moments stored before still match.
+    assert kinds(detect("Cricket", "Virat Kohli", "253802", Seen("live", line=line("48* (70)", Runs="48*")), Seen("live", line=line("103* (150)", Runs="103*")))) == [("fifty", "50"), ("hundred", "100")]
+
+
 def test_a_first_look_mid_game_is_the_baseline():
     now = Seen("live", line=line("88* (70)", Runs="88*"))
     assert detect("Cricket", "Virat Kohli", "253802", None, now) == []  # no "reaches 50" an hour late
@@ -136,11 +161,12 @@ def test_levels_decide_who_hears():
     assert not moments.wanted("off", "key", "final")
 
 
-def test_news_kinds_from_free_text():
-    assert moments.news_kind("Injury") == "injury"
-    assert moments.news_kind("loan move") == "transfer"
+def test_news_kinds_are_matched_whole():
+    assert moments.news_kind(" Injury ") == "injury"
     assert moments.news_kind("Retirement") == "retirement"
-    assert moments.news_kind("report") is None
+    # By substring, "contract extension" was transfer news and "record" a milestone.
+    assert moments.news_kind("contract extension") is None and moments.news_kind("loan move") is None
+    assert moments.news_kind("record") is None and moments.news_kind("report") is None and moments.news_kind(None) is None
 
 
 def test_quiet_hours_in_the_devices_timezone():

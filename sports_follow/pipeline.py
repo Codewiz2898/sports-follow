@@ -10,6 +10,7 @@ news_item), so the card and the API don't care where a section came from.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 import re
@@ -41,6 +42,10 @@ from .models import (
 )
 
 log = logging.getLogger("sports_follow.pipeline")
+
+# A ready card whose rebuild failed is tried again after this, and twice as long after each failure in a
+# row: a slow model or a spent budget must not turn into an agent run every minute.
+BUILD_RETRY = 30 * 60
 
 _llm = None
 
@@ -181,11 +186,31 @@ def placeholder_card(player: Player) -> dict[str, Any]:
     }
 
 
+def _fold(db: Session, player: Player, into: Player) -> int:
+    """Fold a player into the one who holds their athlete: move the aliases and follows over and delete
+    this row. Returns the id folded away."""
+    for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
+        alias.player_id = into.id
+    for follow in db.scalars(select(Follow).where(Follow.player_id == player.id)):
+        already = db.scalar(select(Follow).where(Follow.fan_id == follow.fan_id, Follow.player_id == into.id))
+        if already:
+            db.delete(follow)
+        else:
+            follow.player_id = into.id
+    db.flush()
+    moved_from = player.id
+    db.delete(player)
+    db.flush()
+    return moved_from
+
+
 def _canonicalize(db: Session, player: Player, report_name: str) -> tuple[Player, int | None]:
     """After a build, converge on one player per athlete.
 
-    If the report names an athlete another player row already holds, fold this row into it:
-    move the aliases and follows over and delete this one. Otherwise take the canonical slug.
+    If the report names an athlete another player row already holds, fold this row into it (_fold).
+    Otherwise take the canonical slug. Only a typed name converges like this: a player with an identity
+    (picked in search, so the agent was told exactly who they are) is never folded into another by name,
+    because sharing a name doesn't make them the same athlete (Al Ahly's Mohamed Salah isn't Liverpool's).
     Returns the player the report belongs to and, after a merge, the id that was folded away.
     """
     canonical = slugify(report_name)
@@ -193,19 +218,9 @@ def _canonicalize(db: Session, player: Player, report_name: str) -> tuple[Player
         return player, None
     existing = db.scalar(select(Player).join(PlayerAlias, PlayerAlias.player_id == Player.id).where(PlayerAlias.alias == canonical))
     if existing and existing.id != player.id:
-        for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
-            alias.player_id = existing.id
-        for follow in db.scalars(select(Follow).where(Follow.player_id == player.id)):
-            already = db.scalar(select(Follow).where(Follow.fan_id == follow.fan_id, Follow.player_id == existing.id))
-            if already:
-                db.delete(follow)
-            else:
-                follow.player_id = existing.id
-        db.flush()
-        moved_from = player.id
-        db.delete(player)
-        db.flush()
-        return existing, moved_from
+        if db.scalar(select(PlayerIdentity.id).where(PlayerIdentity.player_id == player.id).limit(1)) is not None:
+            return player, None
+        return existing, _fold(db, player, existing)
     player.slug = canonical
     db.execute(insert(PlayerAlias).values(alias=canonical, player_id=player.id).on_conflict_do_nothing())
     return player, None
@@ -263,14 +278,19 @@ def _write_news(db: Session, player: Player, items: list[dict[str, Any]]) -> lis
 
 
 def news_moments(name: str, items: list[dict[str, Any]], now: datetime) -> list[moments.Found]:
-    """Injuries, transfers and retirements in a rebuild's new stories, published in the last three days."""
+    """Injuries, transfers, retirements and milestones in a rebuild's new stories, published in the last
+    three days.
+
+    Only a story the agent marked breaking counts: news of this player doing it now, not an opinion piece
+    on a retirement or someone else's record. The alert claims no more than the story: the player and the
+    kind of news, with the story's own headline underneath.
+    """
     found = []
     for item in items:
         kind = moments.news_kind(item.get("kind"))
         published = _parse_time(item.get("published"))
-        if kind in moments.NEWS_KINDS and published and now - published <= timedelta(days=3):
-            title = {"injury": f"Injury news: {name}", "transfer": f"Transfer news: {name}", "retirement": f"{name} retires", "milestone": f"{name}: a milestone"}[kind]
-            found.append(moments.Found("news", moments.NEWS_KINDS[kind], title, item.get("headline", ""), f"n{item['news_id']}", moments.NEWS_PRIORITY[kind]))
+        if kind and item.get("breaking") is True and published and now - published <= timedelta(days=3):
+            found.append(moments.Found("news", moments.NEWS_KINDS[kind], f"{name}: {kind} news", item.get("headline", ""), f"n{item['news_id']}", moments.NEWS_PRIORITY[kind]))
     return found
 
 
@@ -301,12 +321,15 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         if player is None:
             raise AgentError("player was removed while the report was being built")
         p = report["player"]
+        moved_from = None
+        if structured.binding(db, player.id) is None:
+            player, moved_from = _canonicalize(db, player, p["name"])
         # A bound player's games come from their source; the agent's guesses would only duplicate them.
+        # That holds for the player a typed name was just folded into, too ("Kohli" into Virat Kohli).
         bound = structured.binding(db, player.id) is not None
         player.nationality = p.get("nationality")
         player.role = p.get("role")
         player.disambiguation = p.get("disambiguation")
-        moved_from = None
         if bound:
             # The source already said exactly who this is; the agent adds to that and never renames or
             # merges them (a namesake's report must not fold the footballer Nikola Jokić into the NBA one).
@@ -316,7 +339,6 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
             player.sport = p["sport"]
             player.status = p["status"]
             player.teams = p.get("teams") or []
-            player, moved_from = _canonicalize(db, player, p["name"])
 
         if not bound:
             for u in report["upcoming"]:
@@ -407,6 +429,31 @@ def fan_message(raw: str) -> str:
     return "The research agent couldn't finish this player's page. Try again."
 
 
+def _retry_key(player_id: int) -> str:
+    return f"buildretry:{player_id}"
+
+
+def back_off(player_id: int, now: datetime) -> datetime:
+    """Note a failed rebuild. Returns when the scheduler may try again: BUILD_RETRY after the first
+    failure, twice as long after each one in a row, never longer than CARD_MAX_AGE."""
+    from .config import CARD_MAX_AGE
+
+    r = bus.sync_redis()
+    raw = r.get(_retry_key(player_id))
+    failures = (json.loads(raw)["failures"] if raw else 0) + 1
+    wait = min(BUILD_RETRY * 2 ** (failures - 1), CARD_MAX_AGE)
+    retry_at = now + timedelta(seconds=wait)
+    # Kept past retry_at, so the next failure in a row finds the count; a build that succeeds clears it.
+    r.set(_retry_key(player_id), json.dumps({"failures": failures, "retry_at": retry_at.isoformat()}), ex=2 * wait)
+    return retry_at
+
+
+def _backing_off(player_id: int, now: datetime) -> bool:
+    raw = bus.sync_redis().get(_retry_key(player_id))
+    retry_at = _parse_time(json.loads(raw).get("retry_at")) if raw else None
+    return retry_at is not None and now < retry_at
+
+
 def mark_failed(player_id: int, message: str) -> None:
     message = fan_message(message)
     with session() as db:
@@ -422,11 +469,15 @@ def mark_failed(player_id: int, message: str) -> None:
             card["status"] = "failed"
             card["error"] = message
             card_row.card = card
-        elif card.get("pending"):
-            # Published from a source before the agent ran: scores stay, the missing part says why.
-            card.pop("pending")
-            card["pending_error"] = message
-            card_row.card = card
+        else:
+            # The scheduler rebuilds a ready card: it waits before trying again, not one tick later.
+            retry_at = back_off(player_id, _now())
+            log.info("build %s: next try after %s", player_id, retry_at.isoformat(timespec="minutes"))
+            if card.get("pending"):
+                # Published from a source before the agent ran: scores stay, the missing part says why.
+                card.pop("pending")
+                card["pending_error"] = message
+                card_row.card = card
     bus.store_card(player_id, card)
 
 
@@ -470,6 +521,7 @@ def build_card(player_id: int) -> None:
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
             elif event["type"] == "result":
                 landed = apply_report(player_id, event["data"])
+                bus.sync_redis().delete(_retry_key(player_id))
                 bus.publish(landed, {"type": "progress", "player_id": landed, "message": "Linking live scores and fixtures…"})
                 if structured.bind(landed):
                     structured.refresh(landed)
@@ -498,10 +550,10 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
             return None
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder and holder.player_id != player_id:
+            # Folded into the holder by id: looking their name up again could find a namesake who has the alias.
             existing = db.get(Player, holder.player_id)
-            player, moved_from = _canonicalize(db, player, existing.name)
-            if moved_from is None:
-                return player_id  # couldn't fold it in by name; let the agent decide
+            moved_from = _fold(db, player, existing)
+            player = existing
         else:
             player.name, player.sport, player.status = ref.name, sport, "active"
             player.teams = [] if individual else [t for t in ref.team_names if t]
@@ -560,6 +612,20 @@ class Due:
     lanes: list[str] = field(default_factory=list)  # sources whose armed and live events are polled together
 
 
+def rebuild_due(card: PlayerCard, now: datetime) -> bool:
+    """Whether the research agent should build this card now: a first build nobody is running, or a ready
+    card that is stale or never got the agent's profile and news (published from a source).
+
+    A failed card is left alone: it waits for a fan to retry. A ready card whose rebuild failed waits
+    for its back_off, and none is queued again while its build is still running, so nothing loops.
+    """
+    from .config import CARD_MAX_AGE
+
+    stale = card.built_at is None or card.built_at < now - timedelta(seconds=CARD_MAX_AGE)
+    wanted = card.status == "building" or (card.status == "ready" and stale)
+    return wanted and not bus.is_locked(f"build:{card.player_id}") and not _backing_off(card.player_id, now)
+
+
 def due_work(now: datetime | None = None) -> Due:
     """What the scheduler should enqueue now. Only followed players get work.
 
@@ -569,7 +635,7 @@ def due_work(now: datetime | None = None) -> Due:
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
     (a Test match runs five).
     """
-    from .config import ARM_BEFORE_START, CARD_MAX_AGE, FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
+    from .config import ARM_BEFORE_START, FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
 
     now = now or _now()
     due = Due()
@@ -596,13 +662,8 @@ def due_work(now: datetime | None = None) -> Due:
         sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
             pid = card.player_id
-            # A failed card is left alone: it waits for a fan to retry, never loops.
-            if card.status == "building" and not bus.is_locked(f"build:{pid}"):
+            if rebuild_due(card, now):
                 due.builds.append(pid)
-            elif card.status == "ready" and card.built_at and card.built_at < now - timedelta(seconds=CARD_MAX_AGE):
-                due.builds.append(pid)
-            elif card.status == "ready" and card.built_at is None and not bus.is_locked(f"build:{pid}"):
-                due.builds.append(pid)  # published from a source; the agent's profile and news never arrived
             if card.status != "ready":
                 continue
             if pid in bound:

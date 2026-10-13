@@ -13,7 +13,9 @@ not second by second, and all running lobbies are read in one request (structure
 free key allows 60 requests an hour.
 
 Players are keyed "<wiki>:<page name>" ("pubgmobile:Jonathan"): one adapter reads every battle royale
-wiki, and a page name is unique only within its wiki. A team is its page name with underscores.
+wiki, and a page name is unique only within its wiki. A team is its page name as MediaWiki keys it
+(underscores, a capital first letter). Match records name a team as their wiki wrote it, with spaces or
+underscores, so a team's lobbies are asked for in each spelling, as Liquipedia's own MatchTicker does.
 """
 
 from __future__ import annotations
@@ -36,10 +38,22 @@ SHORT = {"pubgmobile": "pubgm", "freefire": "ff", "apexlegends": "apex"}  # regi
 IMPORT_WIKIS = [w for w in os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_WIKIS", ",".join(WIKIS)).split(",") if w in WIKIS]
 NO_DATE = ("1970-01-01", "0000-01-01")  # Liquipedia's placeholders for a date nobody entered
 LIVE_FOR = timedelta(hours=12)  # a lobby not marked finished this long after its start is taken as over
+# A lobby entered without a time is stored at midnight UTC of its day, dateexact false. Liquipedia waits
+# the whole day before taking one as over; it may be played that evening anywhere, so it gets the day too.
+LIVE_FOR_INEXACT = timedelta(days=1) + LIVE_FOR
 
 
 def team_id(name: str | None) -> str:
-    return (name or "").strip().replace(" ", "_")
+    """A team page's key, however a record spells it: "GodLike Esports" and "godLike_Esports" are GodLike_Esports."""
+    page = "_".join((name or "").replace("_", " ").split())
+    return page[:1].upper() + page[1:]
+
+
+def team_pages(team: str) -> list[str]:
+    """The ways a match record may name a team page: spaces or underscores, the first letter as the team
+    template wrote it (it may be lower case) or as MediaWiki keys it."""
+    page = team_id(team)
+    return list(dict.fromkeys(f for p in (page, page[:1].lower() + page[1:]) for f in (p.replace("_", " "), p)))
 
 
 def team_name(page: str | None) -> str:
@@ -109,16 +123,28 @@ def _finished(x: dict[str, Any]) -> bool:
     return str(x.get("finished")).lower() in ("1", "true")
 
 
+def _exact(x: dict[str, Any]) -> bool:
+    """Whether the lobby's time was entered, not only its day."""
+    return str(x.get("dateexact", 1)).lower() not in ("0", "false", "")
+
+
+def _played(x: dict[str, Any]) -> bool:
+    """Whether any result is in: a team on points."""
+    return any(r["points"] > 0 for r in standings(x))
+
+
 def _status(x: dict[str, Any], now: datetime) -> str:
-    """final when Liquipedia marks it finished (or a long time has passed); live once it has started."""
-    if _finished(x):
-        return "final"
-    if x.get("status") == "notplayed":
+    """final when Liquipedia marks it finished (or a long time has passed); live once it has started. Over
+    with no points in is postponed, as an abandoned match, not a win on 0 points: Liquipedia marks a lobby
+    finished when it wasn't played, or once its time has long passed, results or not. A lobby without a
+    time starts with its first result, not at midnight."""
+    start, exact, played = _time(x.get("date")), _exact(x), _played(x)
+    over = _finished(x) or bool(start and now >= start + (LIVE_FOR if exact else LIVE_FOR_INEXACT))
+    if x.get("status") == "notplayed" or (over and not played):
         return "postponed"
-    start = _time(x.get("date"))
-    if start and now >= start + LIVE_FOR:
+    if over:
         return "final"
-    if (start and now >= start) or any(_game_done(g) for g in _games(x)):
+    if played or (start and exact and now >= start):
         return "live"
     return "scheduled"
 
@@ -210,7 +236,8 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     """ "3rd of 16 · 87 pts" from the player's team's side."""
     r = fixture.result or {}
-    ours = next((s for s in r.get("standings") or [] if s["id"] in team_ids), None)
+    mine = {team_id(t) for t in team_ids}
+    ours = next((s for s in r.get("standings") or [] if team_id(s["id"]) in mine), None)
     if ours is None:
         return ""
     return f"{ordinal(ours['place'])} of {r.get('teams')} · {_points(ours['points'])} pts"
@@ -286,7 +313,8 @@ def parse_player(p: dict[str, Any], wiki: str) -> PlayerRef:
 
 def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) -> tuple[list[dict[str, str]], str]:
     """Lobbies played, average placement, top-three finishes, games won and finishes over these lobbies."""
-    mine = [s for f in fixtures for s in (f.result or {}).get("standings") or [] if s["id"] in team_ids]
+    ids = {team_id(t) for t in team_ids}
+    mine = [s for f in fixtures for s in (f.result or {}).get("standings") or [] if team_id(s["id"]) in ids]
     if not mine:
         return [], ""
     n = len(mine)
@@ -352,7 +380,7 @@ class LiquipediaEsports:
         return parse_player(rows[0], wiki) if rows else None
 
     def _between(self, wiki: str, team: str, start: date, end: date, ttl: float) -> list[Fixture]:
-        conditions = f"[[opponent::{team}]] AND [[date::>{start.isoformat()}]] AND [[date::<{(end + timedelta(days=1)).isoformat()}]]"
+        conditions = f"({liquipedia.any_of('opponent', team_pages(team))}) AND [[date::>{start.isoformat()}]] AND [[date::<{(end + timedelta(days=1)).isoformat()}]]"
         rows = liquipedia.get("match", ttl, wiki=wiki, conditions=conditions, order="date ASC", limit=200)
         return parse_fixtures(self._keep(rows, wiki), wiki)
 

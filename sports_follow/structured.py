@@ -722,7 +722,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             return "idle", 0, False
         people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
         # Esports moments are told from the player's team's side ("Sentinels win map 2"): no line says it.
-        sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if snap.state.get("kind") == "esports" else {}
+        sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if snap.state.get("kind") in ("esports", "battle_royale") else {}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         if snap.state.get("kind") == "chess":
             _evaluate(db, snap, latest, [w[0] for w in watchers])

@@ -65,9 +65,15 @@ class NewsItem(_Lenient):
     url: str
     published: str | None = None  # ISO 8601 date or datetime when known
     # What the story is about, so fans can be told of the big ones (an injury, a transfer) at once.
-    # Free text, normalized by moments.news_kind: a strict enum would reject a report over "Injury".
+    # Free text, matched by moments.news_kind: a strict enum would reject a report over "Injury".
     kind: str | None = Field(
-        default=None, description="injury, transfer (or loan/contract), retirement, milestone (record, award, career landmark), or other"
+        default=None, description="injury, transfer (a move or loan to another team), retirement, milestone (a record, award or career landmark), or other"
+    )
+    # Fans are only told of breaking stories: a story's topic isn't news ("Jaffer says Kohli retired out of
+    # bitterness" is about a retirement, a year after it). Optional, so a null doesn't cost a resubmission.
+    breaking: bool | None = Field(
+        default=None,
+        description="true only if the story reports that this player was just injured, moved, retired or reached the milestone themselves. false for opinion, analysis, looking back, rumours, contract talks, previews, and stories about another athlete that mention this one",
     )
 
 

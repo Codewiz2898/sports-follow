@@ -1,8 +1,9 @@
 """The noise rules: which moments reach a fan's phone, grouped how, and which of them make a sound.
 
-plan() is pure. It takes one fan's new moments with their level for each player, the games they
-muted and what they were sent lately, and returns the pushes to make (notify.py sends them). On a
-phone, notifications should feel like one sports app, not a feed of every poll:
+plan() is pure. It takes a batch of new moments, one fan's level for each player they follow (a
+moment about anyone else isn't theirs), the games they muted and what they were sent lately, and
+returns the pushes to make (notify.py sends them). On a phone, notifications should feel like one
+sports app, not a feed of every poll:
 
 - **What reaches the phone.** The fan's level for the player: key moments make a sound; everything
   adds the minor ones (a yellow card, each set) without sound; results only is the result; off is
@@ -27,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .moments import DEFAULT_LEVEL, wanted
+from .moments import wanted
 
 GAME_COOLDOWN = timedelta(minutes=3)
 LOUD_PER_HOUR = 6
@@ -100,7 +101,9 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     """One fan's pushes for a batch of new moments (see the module docstring)."""
     groups: dict[str, list[tuple[Item, bool]]] = {}
     for item in items:
-        how = tier(levels.get(item.player_id, DEFAULT_LEVEL), item)
+        if item.player_id not in levels:
+            continue  # someone else's player: a batch holds every player in the game, a sweep every game
+        how = tier(levels[item.player_id], item)
         if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
             continue
         tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"

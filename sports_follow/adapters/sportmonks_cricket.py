@@ -167,7 +167,8 @@ def _chase(x: dict[str, Any], innings: list[dict[str, Any]]) -> str | None:
 
 def parse_lines(x: dict[str, Any]) -> dict[str, Line]:
     """Each player's line: every innings in the headline ("12 (30) & 45* (60) · 3/45 (20 ov)"); the
-    stats are the latest innings, which is what the fifty, hundred, out and wicket alerts read."""
+    stats are the latest innings, which is what the fifty, hundred, out and wicket alerts read (and
+    the headline says which innings that is, so a second hundred isn't taken for the first)."""
     order = {f"S{i}": i for i in range(1, 5)}
     bats: dict[str, list[dict[str, Any]]] = {}
     for b in sorted(x.get("batting") or [], key=lambda b: (order.get(b.get("scoreboard"), 9), b.get("sort") or 0)):
@@ -293,7 +294,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
         line = snap.lines.get(athlete_id)
         if line is None:
             continue
-        lines.append(line.stats)
+        lines.append({"headline": line.headline, "stats": line.stats})
         if (f := snap.state.get("format")) and f not in formats:
             formats.append(f)
     if not lines:
