@@ -26,6 +26,8 @@ const HOUR = 3600e3
 export function PwaProvider({ children }: { children: ReactNode }) {
   const [offer, setOffer] = useState<InstallPrompt | null>(null)
   const [waiting, setWaiting] = useState<ServiceWorker | null>(null)
+  // The new version took over from another tab's Reload: this tab still runs the old app until it reloads.
+  const [replaced, setReplaced] = useState(false)
   const [online, setOnline] = useState(() => navigator.onLine)
   const updating = useRef(false)
 
@@ -50,14 +52,31 @@ export function PwaProvider({ children }: { children: ReactNode }) {
     // Not in `vite dev`: a worker caching the dev server's modules would serve stale code.
     if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
     const sw = navigator.serviceWorker
-    const onChange = () => { if (updating.current) window.location.reload() }
+    let controlled = Boolean(sw.controller)
+    const onChange = () => {
+      if (updating.current) return window.location.reload()
+      // Another tab's Reload: the worker that was waiting is the one in charge now. The very first
+      // worker taking over a fresh page isn't a new version.
+      setWaiting(null)
+      if (controlled) setReplaced(true)
+      controlled = true
+    }
     sw.addEventListener('controllerchange', onChange)
     let timer: number | undefined
     sw.register('/sw.js').then((reg) => {
-      const watch = (worker: ServiceWorker | null) => worker?.addEventListener('statechange', () => {
-        if (worker.state === 'installed' && sw.controller) setWaiting(worker)
-      })
+      const watch = (worker: ServiceWorker | null) => {
+        if (!worker) return
+        const check = () => {
+          if (worker.state === 'installed' && sw.controller) setWaiting(worker)
+          // A newer version replaced it before it was used: its Reload would do nothing.
+          if (worker.state === 'redundant') setWaiting((w) => (w === worker ? null : w))
+        }
+        check()
+        worker.addEventListener('statechange', check)
+      }
       if (reg.waiting && sw.controller) setWaiting(reg.waiting)
+      // One may already be on its way: the browser checks for a new version as the page loads.
+      watch(reg.installing)
       reg.addEventListener('updatefound', () => watch(reg.installing))
       // An installed app can stay open for days; look for a new version every hour.
       timer = window.setInterval(() => reg.update().catch(() => {}), HOUR)
@@ -73,12 +92,12 @@ export function PwaProvider({ children }: { children: ReactNode }) {
   }, [offer])
 
   const applyUpdate = useCallback(() => {
-    if (!waiting) return
+    if (!waiting) return window.location.reload()  // already in charge (another tab's Reload): just load it
     updating.current = true
     waiting.postMessage('skip-waiting')
   }, [waiting])
 
-  const value = useMemo<Pwa>(() => ({ canInstall: Boolean(offer), install, updateReady: Boolean(waiting), applyUpdate, online }), [offer, install, waiting, applyUpdate, online])
+  const value = useMemo<Pwa>(() => ({ canInstall: Boolean(offer), install, updateReady: Boolean(waiting) || replaced, applyUpdate, online }), [offer, install, waiting, replaced, applyUpdate, online])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

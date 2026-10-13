@@ -15,7 +15,9 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
     .venv/bin/python -m sports_follow.registry esports    # esports pros, from PandaScore
 
 The query service allows a client about a minute of query time a minute, so batches run one at a
-time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour.
+time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour. A
+run, by hand or the worker's weekly one, holds the "registry-import" lock, so two never overlap; a
+sport (or esports source) that fails keeps last week's rows, and the rest still run.
 
 Esports comes from its sources instead (import_esports): Wikidata has a Liquipedia id for only 2,844
 people. Team-title pros come from PandaScore, keyed "pandascore:<id>", and battle royale pros (BGMI, Free
@@ -32,12 +34,14 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable
+from urllib.parse import unquote
 
 import httpx
 from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from . import bus
 from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
 from .db import session
 from .models import Athlete, Player, PlayerIdentity
@@ -77,7 +81,21 @@ YOUTH = re.compile(r"\b(under-?\d+|u-?\d{2}|youth|olympic|academy|reserves?|b te
 # College sides ("Baylor Bears women's basketball"): college players are hidden, and a pro's college
 # team isn't their team.
 COLLEGE = re.compile(r"(men's|women's) (basketball|soccer|football|cricket)$|\b(college|university|ncaa)\b", re.I)
-NATIONAL = re.compile(r"\s+(men's |women's )?national (association )?(football|cricket|basketball|soccer) team$", re.I)
+NATIONAL = re.compile(r"\s+(men's |women's )?national (men's |women's )?(association )?(football|cricket|basketball|soccer) team$", re.I)
+# The ICC's members, whose sides Wikidata often names without "national": "Ireland cricket team", "West
+# Indies women's cricket team". A domestic side named the same way ("Tasmania cricket team") is a club.
+ICC_MEMBERS = (
+    "Afghanistan", "Australia", "Bangladesh", "England", "India", "Ireland", "New Zealand", "Pakistan", "South Africa", "Sri Lanka", "West Indies", "Zimbabwe",
+    "Argentina", "Austria", "Bahamas", "Bahrain", "Belgium", "Belize", "Bermuda", "Bhutan", "Botswana", "Brazil", "Bulgaria", "Cambodia", "Cameroon",
+    "Canada", "Cayman Islands", "Chile", "China", "Cook Islands", "Costa Rica", "Croatia", "Cyprus", "Czech Republic", "Czechia", "Denmark", "Estonia",
+    "Eswatini", "Fiji", "Finland", "France", "Gambia", "Germany", "Ghana", "Gibraltar", "Greece", "Guernsey", "Hong Kong", "Hungary", "Indonesia", "Iran",
+    "Isle of Man", "Israel", "Italy", "Ivory Coast", "Japan", "Jersey", "Kenya", "Kuwait", "Lesotho", "Luxembourg", "Malawi", "Malaysia", "Maldives",
+    "Mali", "Malta", "Mexico", "Mongolia", "Mozambique", "Myanmar", "Namibia", "Nepal", "Netherlands", "Nigeria", "Norway", "Oman", "Panama",
+    "Papua New Guinea", "Peru", "Philippines", "Portugal", "Qatar", "Romania", "Rwanda", "Saint Helena", "Samoa", "Saudi Arabia", "Scotland", "Serbia",
+    "Seychelles", "Sierra Leone", "Singapore", "Slovenia", "South Korea", "Spain", "Suriname", "Sweden", "Switzerland", "Tajikistan", "Tanzania",
+    "Thailand", "Turkey", "Turks and Caicos Islands", "Uganda", "United Arab Emirates", "United States", "Uzbekistan", "Vanuatu",
+)
+ICC_SIDE = re.compile(rf"^({'|'.join(map(re.escape, ICC_MEMBERS))})\s+(men's |women's )?cricket team$", re.I)
 # Wikidata's date precisions (wikibase:timePrecision): a date known to the year is stored as 1 January.
 DAY, MONTH, YEAR = 11, 10, 9
 
@@ -183,9 +201,14 @@ def _date(value: str | None) -> date | None:
         return None
 
 
+def is_national(label: str) -> bool:
+    return bool(NATIONAL.search(label) or ICC_SIDE.match(label))
+
+
 def team_name(label: str) -> str:
-    """"India national cricket team" -> "India"; club names stay as they are."""
-    return NATIONAL.sub("", label).strip()
+    """"India national cricket team" and "Ireland cricket team" -> the country; club names stay as they are."""
+    side = ICC_SIDE.match(label)
+    return side.group(1) if side else NATIONAL.sub("", label).strip()
 
 
 def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], today: date | None = None) -> list[dict[str, Any]]:
@@ -206,7 +229,8 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             p["birth"], p["birth_precision"] = birth, known
         p["sitelinks"] = max(p.get("sitelinks", 0), int(r.get("sitelinks") or 0))
         if r.get("image") and not p.get("image"):
-            p["image"] = r["image"].rsplit("/", 1)[-1].replace("%20", " ")
+            # The query service gives a Special:FilePath URL: the file name, percent-encoded.
+            p["image"] = unquote(r["image"].rsplit("/", 1)[-1])
         for key in ("sport_country", "citizenship"):
             country = COUNTRIES.get(r.get(key) or "", r.get(key))
             if country and country not in p["countries"]:
@@ -231,7 +255,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         label = r.get("teamLabel") or ""
         if not label or YOUTH.search(label) or COLLEGE.search(label) or (sport == "basketball" and label.lower().endswith(" football")):
             continue
-        national = bool(NATIONAL.search(label))
+        national = is_national(label)
         current_teams.setdefault(_qid(r["p"]), []).append((r.get("start") or "", team_name(label), national))
 
     rows = []
@@ -301,12 +325,21 @@ def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
     ))
 
 
+def too_many_gone(leaving: int, kept: int) -> bool:
+    """Whether a weekly run would remove more of a sport than it kept: athletes retire or merge a few at a
+    time, so that is an answer cut short."""
+    return leaving > kept
+
+
 def import_sport(sport: str, new_only: bool = False) -> int:
     """Import one sport. new_only reads just the people not in the table yet (after adding an id
     property, say), in minutes instead of an hour; the weekly run refreshes everyone."""
     started = datetime.now(timezone.utc)
     qids = members(sport)
     log.info("registry %s: %d people on Wikidata", sport, len(qids))
+    if not qids:
+        # No sport has nobody: an empty answer is a failed query, and the run below would delete the sport.
+        raise RuntimeError(f"Wikidata listed no one in {sport}; last week's rows are kept")
     if new_only:
         with session() as db:
             have = set(db.scalars(select(Athlete.qid).where(Athlete.sport == sport)))
@@ -326,17 +359,53 @@ def import_sport(sport: str, new_only: bool = False) -> int:
         total += len(rows)
         log.info("registry %s: %d/%d people read, %d athletes kept", sport, min(i + BATCH, len(qids)), len(qids), total)
     if complete and not new_only:
-        # Merged, deleted or no-longer-matching items drop out; a partial run keeps everything.
+        # Merged, deleted or no-longer-matching items drop out; a partial run keeps everything, and so does
+        # one that would remove more of the sport than it kept (a cut-short answer, not a week's churn).
         with session() as db:
-            gone = db.execute(delete(Athlete).where(Athlete.sport == sport, Athlete.updated_at < started)).rowcount
-        if gone:
-            log.info("registry %s: %d athletes no longer on Wikidata removed", sport, gone)
+            stale = (Athlete.sport == sport, Athlete.updated_at < started)
+            leaving = db.scalar(select(func.count()).select_from(Athlete).where(*stale)) or 0
+            if too_many_gone(leaving, total):
+                log.warning("registry %s: this run kept %d and would remove %d; nothing removed", sport, total, leaving)
+                leaving = 0
+            elif leaving:
+                db.execute(delete(Athlete).where(*stale))
+        if leaving:
+            log.info("registry %s: %d athletes no longer on Wikidata removed", sport, leaving)
     link_players(sport)
     return total
 
 
-def import_all(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int]:
-    return {sport: import_esports() if sport == ESPORTS else import_sport(sport, new_only) for sport in sports}
+def import_all(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int | None]:
+    """Import each sport in turn: athletes kept per sport, None for one that failed. A sport that fails
+    keeps last week's rows, and the others still run."""
+    done: dict[str, int | None] = {}
+    for sport in sports:
+        try:
+            done[sport] = import_esports() if sport == ESPORTS else import_sport(sport, new_only)
+        except Exception:
+            log.exception("registry %s: import failed; last week's rows kept", sport)
+            done[sport] = None
+    failed = [s for s, n in done.items() if n is None]
+    if failed:
+        log.warning("registry import: %s; %s failed", done, ", ".join(failed))
+    else:
+        log.info("registry import: %s", done)
+    return done
+
+
+LOCK = "registry-import"
+
+
+def import_locked(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int | None] | None:
+    """import_all under the lock every run takes, so a run by hand and the weekly one never overlap.
+    None if another run holds it."""
+    token = bus.try_lock(LOCK, 6 * 3600)
+    if token is None:
+        return None
+    try:
+        return import_all(sports, new_only)
+    finally:
+        bus.release(LOCK, token)
 
 
 # ---------------------------------------------------------------- esports, from PandaScore
@@ -378,8 +447,18 @@ def esports_rows(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def import_esports() -> int:
-    """Esports pros from each esports source that runs."""
-    return _import_pandascore() + _import_liquipedia() + import_pubg()
+    """Esports pros from each esports source that runs. A source that fails keeps its rows and the others
+    still run; then this raises, so the run reports esports as failed."""
+    total, failed = 0, []
+    for name, source in (("PandaScore", _import_pandascore), ("Liquipedia", _import_liquipedia), ("PUBG", import_pubg)):
+        try:
+            total += source()
+        except Exception:
+            log.exception("registry esports: %s failed; its rows kept", name)
+            failed.append(name)
+    if failed:
+        raise RuntimeError(f"{', '.join(failed)} failed ({total} pros imported from the rest)")
+    return total
 
 
 def _drop_unseen(prefix: str, leagues: list[str], started: datetime) -> None:
@@ -782,11 +861,21 @@ def describe(player_id: int) -> str | None:
         return f"{a.name}, {', '.join(f for f in facts if f)}. Wikidata: https://www.wikidata.org/wiki/{a.qid}. Other athletes may share the name; report only on this one."
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    new_only = "--new" in sys.argv
-    wanted = [a for a in sys.argv[1:] if a != "--new"] or [*SPORTS, ESPORTS]
+def main(argv: list[str]) -> None:
+    new_only = "--new" in argv
+    wanted = [a for a in argv if a != "--new"] or [*SPORTS, ESPORTS]
     unknown = [s for s in wanted if s not in (*SPORTS, ESPORTS)]
     if unknown:
         sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join((*SPORTS, ESPORTS))}")
-    print(import_all(wanted, new_only))
+    done = import_locked(wanted, new_only)
+    if done is None:
+        sys.exit(f"another registry import is running (the worker's weekly one, or one started by hand); try again when it's done. "
+                 f"If none is, the lock is left from one that was killed: it expires within six hours, or redis-cli del lock:{LOCK}")
+    print(done)
+    if None in done.values():
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    main(sys.argv[1:])

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs on the server, called by push-secrets.sh with a directory holding the Mac's tokens. Third-party
-# tokens are replaced; the server's own secrets (database password, gateway token, push key) are made
-# once and kept, because changing them would lock out the database or every push subscription.
+# tokens are replaced; the server's own secrets (database password, gateway token, push key, fan cookie
+# key) are made once and kept, because changing them would lock out the database, every push
+# subscription or every fan (their cookies would no longer verify, and their follows would be lost).
 set -euo pipefail
 umask 077
 in="$1"
@@ -15,6 +16,7 @@ for f in pandascore-token liquipedia-token pubg-token; do
   [ -f "$in/$f" ] && install -m 400 "$in/$f" "$D/files/$f"
 done
 [ -f "$D/files/vapid-private.pem" ] || openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$D/files/vapid-private.pem"
+[ -f "$D/files/cookie-secret" ] || openssl rand -hex 32 >"$D/files/cookie-secret"
 chmod 400 "$D/files"/*
 chown -R 10001:10001 "$D/files"   # the app containers' user
 chmod 500 "$D/files"
@@ -28,4 +30,4 @@ grep -q '^SPORTS_FOLLOW_GATEWAY_TOKEN=' "$D/app.env" || printf 'SPORTS_FOLLOW_GA
 token=$(grep '^SPORTS_FOLLOW_GATEWAY_TOKEN=' "$D/app.env" | cut -d= -f2-)
 printf 'OPENROUTER_API_KEY=%s\nSPORTS_FOLLOW_GATEWAY_TOKEN=%s\n' "$(cat "$in/openrouter")" "$token" >"$D/gateway.env"
 chmod 600 "$D"/*.env
-echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token and push key kept)"
+echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token, push key and cookie key kept)"

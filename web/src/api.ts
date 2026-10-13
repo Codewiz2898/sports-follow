@@ -16,7 +16,7 @@ export interface PlayerProfile {
 export interface FootballSide { id: string; name: string; abbr?: string | null; score: string; scorers: string[] }
 export interface FootballState { kind: 'football'; home: FootballSide; away: FootballSide; detail?: string | null }
 
-export interface CricketInnings { team: string; abbr?: string | null; period?: number | null; runs: number; wickets: number; overs?: number | string | null; batting: boolean; target?: number | null }
+export interface CricketInnings { team: string; abbr?: string | null; period?: number | null; runs: number; wickets: number; overs?: number | string | null; batting: boolean; target?: number | null; declared?: boolean }
 export interface CricketState {
   kind: 'cricket'
   teams: { id: string; name: string; abbr?: string | null; score: string; winner?: boolean | null }[]
@@ -179,6 +179,7 @@ export interface SearchResult {
   next?: { title?: string | null; start_utc?: string | null; competition?: string | null; live?: string } | null
   qid?: string | null  // the player registry's (Wikidata) id
   born?: number | null
+  aka?: string | null  // the alias it was found by, when the name doesn't start with what was typed
 }
 
 export interface Research { used: number; limit: number; left: number; resets_at: string }
@@ -191,6 +192,7 @@ export interface SearchResponse {
   namesakes: number  // how many athletes have exactly the typed name, when more than one
   partial: string[]  // sources that didn't answer in time
   research: Research
+  researchable: boolean  // false: nothing to search or research by ("--", a name in another script)
 }
 
 export interface AthletePreview {

@@ -134,15 +134,46 @@ export function sportKey(sport?: string | null): SportKey {
 const SUFFIXES = /^(jr|sr|ii|iii|iv|júnior|junior|filho|neto)\.?$/i
 const PARTICLES = new Set(['de', 'van', 'von', 'der', 'den', 'di', 'da', 'das', 'do', 'dos', 'del', 'della', 'le', 'la', 'du', 'ten', 'ter', 'bin', 'al', 'el'])
 
+// Chinese, Korean and Taiwanese names are written family name first ("Ding Liren", "Son Heung-min",
+// "Hsieh Su-wei"). A name is read that way only when it is two words, the first a common family name
+// and the second a given name of that kind: one or two pinyin syllables, or two syllables joined by a
+// hyphen. Japanese names, written given name first, rarely pass: their family names are longer.
+const PINYIN_FAMILY = new Set('li wang zhang liu chen yang zhao huang zhou wu xu sun hu zhu gao lin he guo ma luo liang song zheng xie han tang feng yu dong xiao cheng cao yuan deng fu shen zeng peng lu su jiang cai jia ding wei xue ye yan pan du dai xia zhong tian ren fan fang shi yao tan liao zou xiong jin hao kong bai cui kang mao qiu qin gu hou shao meng long wan duan lei qian yin yi bu ju qi qu ni an ai ou mei rong ruan shang niu wen geng mo lai zhan hong guan chang ji bao zhai ouyang lou miao'.split(' '))
+const HYPHEN_FAMILY = new Set('kim lee yi park pak choi choe jung jeong chung kang cho jo yoon yun jang chang lim im han oh seo suh seol shin kwon hwang ahn an song yoo yu ryu ryoo hong hyun jeon jun jon ko go moon mun yang ryang son bae baek paik heo huh nam shim noh roh ha kwak sung suk cha joo woo koo ku min na jin ji ki ri jong chong um eom yeom byun chae won bang gong pyo ma hsieh chan chen lin lu chuang huang wang wu tsai cheng hsu kuo chou chiang liu lai tseng su yeh ho tsang wong leung cheung lam ng chow tse yip kwok fung chiu mak tang lau kwan fong lo tam hui chu sim sin yeo ro'.split(' '))
+const SYLLABLE = [
+  '[bpm](?:a|o|ai|ei|ao|ou|an|en|ang|eng|i|ie|iao|iu|ian|in|ing|u)',
+  'f(?:a|o|ei|ou|an|en|ang|eng|u)',
+  '[dt](?:a|e|ai|ei|ao|ou|an|en|ang|eng|ong|i|ie|iao|iu|ian|ing|u|uo|ui|uan|un)',
+  '[nl](?:a|e|ai|ei|ao|ou|an|en|ang|eng|ong|i|ia|ie|iao|iu|ian|in|iang|ing|u|uo|uan|un|v|ve|ü|üe)',
+  '[gkh](?:a|e|ai|ei|ao|ou|an|en|ang|eng|ong|u|ua|uo|uai|ui|uan|un|uang)',
+  '[jqx](?:i|ia|ie|iao|iu|ian|in|iang|ing|iong|u|ue|uan|un)',
+  '(?:zh|ch|sh|[rzcs])(?:a|e|i|ai|ei|ao|ou|an|en|ang|eng|ong|u|ua|uo|uai|ui|uan|un|uang)',
+  'y(?:a|o|e|i|ao|ou|an|in|ang|ing|ong|u|ue|uan|un)',
+  'w(?:a|o|ai|ei|an|en|ang|eng|u)',
+].join('|')
+// A syllable with no initial ("an", "ao") starts the name; inside one, pinyin would write an apostrophe.
+const PINYIN = new RegExp(`^(?:a|o|e|ai|ei|ao|ou|an|en|ang|eng|er|${SYLLABLE})(?:${SYLLABLE})?$`)
+// Two romanized syllables, each one vowel sound ("Heung-min", "Chun-Hsin"): not a double-barrelled
+// family name ("Alexander-Arnold", "Jerray-Silver").
+const HYPHENED = /^[^aeiouy-]{0,3}[aeiouy]{1,4}(?:ng|[nmlkpthrg])?-[^aeiouy-]{0,3}[aeiouy]{1,4}(?:ng|[nmlkpthrg])?$/
+
+function familyFirst(words: string[]): boolean {
+  if (words.length !== 2) return false
+  const [family, given] = [words[0].toLowerCase(), words[1].toLowerCase()]
+  return PINYIN_FAMILY.has(family) ? PINYIN.test(given) || HYPHENED.test(given) : HYPHEN_FAMILY.has(family) && HYPHENED.test(given)
+}
+
 /**
  * The name a scoreboard calls a player: the family name with its particles ("De Bruyne", "van Dijk"),
- * without "Jr." or "III"; the given name when the last word is an initial ("Gukesh D").
+ * without "Jr." or "III"; the given name when the last word is an initial ("Gukesh D"); the first word
+ * when the family name comes first ("Ding", "Son").
  */
 export function shortName(name: string): string {
   const words = name.trim().split(/\s+/)
   while (words.length > 1 && SUFFIXES.test(words.at(-1)!)) words.pop()
   if (words.length < 2) return words[0] ?? name
   if (/^\p{Lu}\.?$/u.test(words.at(-1)!)) return words[0]
+  if (familyFirst(words)) return words[0]
   let start = words.length - 1
   while (start > 1 && PARTICLES.has(words[start - 1].toLowerCase())) start--
   return words.slice(start).join(' ')

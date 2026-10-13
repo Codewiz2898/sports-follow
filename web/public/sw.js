@@ -14,6 +14,9 @@
 // in the tray, where the platform has badges.
 
 const VERSION = 'v2'  // v2: the Matchday look; new icons and fonts, so the v1 caches go
+// This build of the app, stamped in by vite.config.ts: every deploy that changes anything changes this
+// file, so the browser installs the new worker and the app offers Reload (pwa.tsx).
+const BUILD = 'dev'
 const SHELL = `shell-${VERSION}`
 const FILES = `files-${VERSION}`
 const DATA = `data-${VERSION}`

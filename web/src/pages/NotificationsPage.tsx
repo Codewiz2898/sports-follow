@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useActivity } from '../activity'
-import type { ActivityItem } from '../api'
+import type { ActivityItem, AlertLevel } from '../api'
+import { useNow } from '../clock'
 import { Avatar } from '../components/Blocks'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
-import { AlertLevels, LEVELS, usePush } from '../notifications'
+import { AlertLevels, levelText, usePush } from '../notifications'
 
 /** Alerts: what's happened to your players (Latest), and what reaches this device (Settings). */
 export function NotificationsPage() {
@@ -34,6 +35,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
   const [seenAtOpen] = useState(activity.seen)
   const { markSeen } = activity
   useEffect(() => { markSeen() }, [markSeen])
+  const now = useNow()
   const sportOf = (id: number) => cards.find((c) => c.player_id === id)?.player.sport
 
   if (!activity.loaded) return <div className="card empty small"><span className="spinner" /></div>
@@ -47,7 +49,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
   }
   const days: [string, ActivityItem[]][] = []
   for (const item of activity.items) {
-    const label = dayLabel(item.at)
+    const label = dayLabel(item.at, new Date(now))
     if (days[days.length - 1]?.[0] === label) days[days.length - 1][1].push(item)
     else days.push([label, [item]])
   }
@@ -67,6 +69,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
 }
 
 function LatestRow({ item, sport, fresh }: { item: ActivityItem; sport?: string | null; fresh: boolean }) {
+  const now = useNow()
   const [context] = item.body.split('\n')
   return (
     <li className={`alert-row${fresh ? ' fresh' : ''}${item.level === 'minor' ? ' minor' : ''}`}>
@@ -74,7 +77,7 @@ function LatestRow({ item, sport, fresh }: { item: ActivityItem; sport?: string 
       <Link to={item.url} className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
         <span className="title">{item.title}</span>
         {context && <span className="small muted">{context}</span>}
-        <span className="tiny muted">{[!context?.startsWith(item.event ?? '\0') && item.event, relative(item.at), item.muted && 'Muted'].filter(Boolean).join(' · ')}</span>
+        <span className="tiny muted">{[!context?.startsWith(item.event ?? '\0') && item.event, relative(item.at, now), item.muted && 'Muted'].filter(Boolean).join(' · ')}</span>
       </Link>
       {fresh && <span className="fresh-dot" aria-label="New" />}
     </li>
@@ -96,6 +99,11 @@ function MoreButton({ more }: { more: () => Promise<void> }) {
 function Settings() {
   const push = usePush()
   const { cards, setAlerts } = useFollowing()
+  const [failed, setFailed] = useState<Record<number, string>>({})
+  const choose = (playerId: number, level: AlertLevel) => {
+    setFailed((f) => ({ ...f, [playerId]: '' }))
+    setAlerts(playerId, level).catch((e: Error) => setFailed((f) => ({ ...f, [playerId]: e.message })))
+  }
   const [start, setStart] = useState(push.quiet.start ?? '22:00')
   const [end, setEnd] = useState(push.quiet.end ?? '07:00')
   const quietOn = Boolean(push.quiet.start && push.quiet.end)
@@ -151,10 +159,11 @@ function Settings() {
                     <Avatar name={c.player.name} sport={c.player.sport} size="sm" />
                     <span className="stack" style={{ gap: 0 }}>
                       <Link to={`/player/${c.player_id}`} className="title">{c.player.name}</Link>
-                      <span className="tiny muted">{LEVELS.find((l) => l.value === level)?.brief}</span>
+                      <span className="tiny muted">{levelText(level, c.player.sport).brief}</span>
                     </span>
                   </span>
-                  <AlertLevels label={`Alerts for ${c.player.name}`} value={level} onChange={(l) => setAlerts(c.player_id, l)} />
+                  <AlertLevels label={`Alerts for ${c.player.name}`} value={level} onChange={(l) => choose(c.player_id, l)} />
+                  {failed[c.player_id] && <div className="error-box" role="alert">{failed[c.player_id]}</div>}
                 </li>
               )
             })}

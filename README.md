@@ -21,6 +21,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ poll_lane: every live Sportmonks football match, one request a round
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
+                                ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
@@ -44,7 +45,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pros come from their sources instead (Wikidata knows only a few thousand): the active players of
   `SPORTS_FOLLOW_ESPORTS_GAMES` from PandaScore and of `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` from
   Liquipedia, by handle and real name, with each source's key
-  (`python -m sports_follow.registry esports`, part of the weekly run).
+  (`python -m sports_follow.registry esports`, part of the weekly run). A run by hand takes the weekly
+  run's lock, so it refuses to start while that one is going; a sport (or esports source) that fails
+  keeps last week's rows and the rest still run.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
@@ -90,7 +93,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sportmonks football matches share one `poll_lane` job instead: each round fetches every armed and
   live match in one request (`fixtures/multi`, 50 matches a request), so a busy matchday costs 240
   requests an hour, not 240 per match, and one worker thread, not one per match.
-- **One stream per fan.** The app holds one SSE connection for all of a fan's players.
+- **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
+  listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -120,6 +124,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   game opens to its final score and the player's full line. A history lane (`sports_follow/history.py`)
   fills in missing scorecards and older seasons at most 20 source requests a minute system-wide, and
   the Stats tab shows form over the last 10 or 5 results from the stored lines (`sports_follow/form.py`).
+- **Only what's read is kept.** Polls append a state and a player line per change; once a game has been
+  final and quiet for 14 days, the worker's daily prune (`sports_follow/retention.py`, 02:15 UTC) keeps
+  only its latest and final states and each player's latest line. Moments and the push log go after 90
+  days, and the hot copy of a card nobody follows expires a day later (the API rebuilds it from Postgres).
+  `python -m sports_follow.retention --count` shows what a run would remove, without removing it.
 - **Chess swings from our own engine, on a fixed CPU budget.** Lichess broadcasts carry positions but
   no evaluations, so Stockfish evaluates live games of followed players (`sports_follow/engine.py`) and
   a fan hears when their player is winning, in trouble, or turns a game around (key), or is better,
@@ -169,9 +178,12 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between agent live checks during a game (sports without an adapter) |
 | `SPORTS_FOLLOW_FIXTURES_MAX_AGE` | `1800` | seconds before a bound player's fixtures and stats are re-read |
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job or lane runs before handing over |
+| `SPORTS_FOLLOW_KEEP_TIMELINE_DAYS` | `14` | days a finished game keeps every poll's state and line before the daily prune cuts it to what's read |
+| `SPORTS_FOLLOW_KEEP_MOMENTS_DAYS` | `90` | days moments and the push log are kept; never fewer than the activity list's 30 |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
+| `SPORTS_FOLLOW_COOKIE_SECRET` | from `~/.config/sports-follow/cookie-secret`, made on first start | the key fan cookies are signed with (at least 32 characters; `SPORTS_FOLLOW_COOKIE_SECRET_FILE` names another file). Every API process needs the same one, and it must never change: under a new key every fan starts over |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |
@@ -240,6 +252,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   each needs its licence and credit fetched first.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance
   and no sport filter, and Lichess allows one request at a time.
+- Search reads names in Latin letters only (accents folded; "Đoković" and "mueller" also find Djokovic
+  and Müller). A name in Devanagari, Tamil, Chinese or Cyrillic finds no one and can't be researched:
+  the standard library has no transliteration, and none is added as a dependency.
 - A fan's three AI researches are counted per anonymous cookie, so clearing cookies resets them (the
   per-address and hourly limits still hold); accounts will fix that.
 - A name typed into "Research with AI" that the sources don't recognize still waits for the agent (1–4

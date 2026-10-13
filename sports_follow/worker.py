@@ -1,5 +1,6 @@
 """The pipeline worker: arq jobs for card builds, source refreshes, live polls and agent live
-checks, plus the one-minute scheduler tick (which also sends moments no sender claimed).
+checks, plus the one-minute scheduler tick (which also sends moments no sender claimed). Cron times
+are UTC, whatever the machine's zone.
 
 Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 """
@@ -8,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timezone
 
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import bus, db, engine, history, notify, pipeline, registry, structured
+from . import bus, db, engine, history, notify, pipeline, registry, retention, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -23,6 +26,10 @@ log = logging.getLogger("sports_follow.worker")
 # 2 vCPU server, so six long jobs used to leave every other job, and the tick, waiting for one.
 MAX_JOBS = 24
 _tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
+# After a sleep or a paused VM, arq queues every run a cron job missed, one per heartbeat, from the first
+# it missed: 384 ticks in four minutes once. A run this many seconds past its time is skipped, unless no
+# other late run has gone for as long, so a busy queue that delays every tick can't stop them all.
+LATE = 50
 
 # arq's CLI configures only its own logger; show the pipeline's too (binds, polls, refresh failures).
 _handler = logging.StreamHandler()
@@ -68,12 +75,8 @@ async def history_lane(ctx) -> None:
 
 
 def _import_registry() -> None:
-    if not bus.try_lock("registry-import", 6 * 3600):
-        return  # the last week's run (or one started by hand) is still going
-    try:
-        log.info("registry import: %s", registry.import_all())
-    finally:
-        bus.release("registry-import")
+    if registry.import_locked() is None:
+        log.info("registry import: the last week's run, or one started by hand, is still going; skipped")
 
 
 def _warm_sources() -> None:
@@ -95,6 +98,8 @@ def _warm_sources() -> None:
 
 async def warm_sources(ctx) -> None:
     """Shared source indexes, every ten minutes (_warm_sources)."""
+    if await _missed(ctx, "warm_sources"):
+        return
     await asyncio.to_thread(_warm_sources)
 
 
@@ -102,6 +107,23 @@ async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
     PandaScore; about two hours."""
     await asyncio.to_thread(_import_registry)
+
+
+async def prune(ctx) -> None:
+    """Rows and hot copies nothing reads any more, once a day (retention.py)."""
+    await asyncio.to_thread(retention.prune)
+
+
+def _late(ctx) -> bool:
+    """Whether this cron run starts more than LATE seconds after its time. arq names a run by its time
+    in milliseconds ("cron:tick:1760342400123"); a job called any other way isn't late."""
+    scheduled = str(ctx.get("job_id") or "").rpartition(":")[2]
+    return scheduled.isdigit() and time.time() - int(scheduled) / 1000 > LATE
+
+
+async def _missed(ctx, name: str) -> bool:
+    """A late run of a cron job to skip: another late run of it went less than LATE seconds ago."""
+    return _late(ctx) and not await ctx["redis"].set(f"late:{name}", "1", nx=True, ex=LATE)
 
 
 async def startup(ctx) -> None:
@@ -118,6 +140,8 @@ async def _in_tick_pool(fn):
 
 
 async def tick(ctx) -> None:
+    if await _missed(ctx, "tick"):
+        return
     due = await _in_tick_pool(pipeline.due_work)
     for player_id in due.builds:
         await ctx["redis"].enqueue_job("build_card", player_id)
@@ -147,7 +171,11 @@ class WorkerSettings:
         cron(tick, second=0, run_at_startup=True),
         cron(warm_sources, minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
+        cron(prune, hour=2, minute=15, second=0, timeout=3 * 3600),
     ]
+    # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
+    # laptop in India, Sunday evening's football.
+    timezone = timezone.utc
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
     on_startup = startup
     # A poll job or lane holds its slot for up to POLL_SESSION while games are on; builds hold one for minutes.

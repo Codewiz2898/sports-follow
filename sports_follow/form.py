@@ -55,6 +55,8 @@ def _made(value: str | None) -> tuple[int, int]:
 
 
 def _outcome(result: str) -> str | None:
+    if "(w/o)" in (result or ""):
+        return None  # a walkover wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
     word = (result or "").split(" ", 1)[0]
     return {"Won": "W", "Drew": "D", "Lost": "L"}.get(word)
 

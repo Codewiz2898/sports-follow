@@ -16,6 +16,7 @@ interface FollowingState {
   moments: PlayerMoment[]  // moments to show as toasts while the app is open
   dismissMoment: (id: number) => void
   heard: number  // moments the stream has brought, any level, and its reconnects: the activity list refreshes on it
+  listen: (onEvent: (e: StreamEvent) => void) => () => void  // every event the fan stream brings, for a followed player's page
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -46,6 +47,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   cardsRef.current = cards
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
+  const listeners = useRef(new Set<(e: StreamEvent) => void>())
+  const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
 
   const reload = useCallback(() => api.following().then((r) => {
     setCards((prev) => withLocal(r.players, prev))
@@ -114,6 +117,12 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         return [...without, card]
       }))
     }
+    for (const onEvent of listeners.current) onEvent(e)
+  }, [])
+
+  const listen = useCallback((onEvent: (e: StreamEvent) => void) => {
+    listeners.current.add(onEvent)
+    return () => { listeners.current.delete(onEvent) }
   }, [])
 
   useEffect(() => {
@@ -132,9 +141,29 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     setCards((prev) => prev.filter((c) => c.player_id !== playerId))
   }, [])
 
-  const setAlerts = useCallback(async (playerId: number, level: AlertLevel) => {
-    await api.setAlerts(playerId, level)
-    setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: level } : c)))
+  // A level shows the moment it's tapped. Its PUTs go one at a time per player, and one already
+  // replaced by a newer tap isn't sent, so fast taps can't land out of order: the server ends on the
+  // last one. If that fails, the level goes back to the last one saved, and the error is the caller's.
+  const setAlerts = useCallback((playerId: number, level: AlertLevel) => {
+    const show = (value: AlertLevel) => setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: value } : c)))
+    const writes = alertWrites.current.get(playerId) ?? { latest: 0, saved: cardsRef.current.find((c) => c.player_id === playerId)?.alerts ?? 'key', queue: Promise.resolve() }
+    alertWrites.current.set(playerId, writes)
+    const n = ++writes.latest
+    show(level)
+    const done = writes.queue.then(async () => {
+      if (n !== writes.latest) return
+      try {
+        await api.setAlerts(playerId, level)
+        writes.saved = level
+      } catch (e) {
+        if (n === writes.latest) show(writes.saved)
+        throw e
+      } finally {
+        if (n === writes.latest) alertWrites.current.delete(playerId)
+      }
+    })
+    writes.queue = done.catch(() => {})
+    return done
   }, [])
 
   const dismissMoment = useCallback((id: number) => setMoments((m) => m.filter((x) => x.id !== id)), [])
@@ -153,7 +182,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     moments,
     dismissMoment,
     heard,
-  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard])
+    listen,
+  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -148,7 +148,11 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
       <Avatar name={r.name} sport={r.sport} />
       <span className="stack">
         <span className="title"><Highlight name={r.name} query={query} /></span>
-        <span className="small muted">{[r.sport, r.detail, r.followers ? `${r.followers} following` : ''].filter(Boolean).join(' · ')}</span>
+        <span className="small muted">
+          {/* Found by another name ("jonathan" is Cije's real name, Christian Jonathan): say which. */}
+          {r.aka && <><Highlight name={r.aka} query={query} />{' · '}</>}
+          {[r.sport, r.detail, r.followers ? `${r.followers} following` : ''].filter(Boolean).join(' · ')}
+        </span>
         {next && <span className="tiny" style={{ color: next.live ? 'var(--live-text)' : 'var(--text)', fontWeight: 800 }}>{next.text}</span>}
         {!r.live_scores && !r.player_id && <span className="tiny muted">AI research · no live scores yet</span>}
       </span>
@@ -200,7 +204,7 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
         <span className="dsp" style={{ fontSize: 26 }}>Research it with AI</span>
       </div>
       <p className="small muted" style={{ margin: 0 }}>Our research agent searches the web for “{q}”, works out who it is and builds the page. It takes 1 to 3 minutes and works for any sport.</p>
-      <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources, and esports series results from PandaScore. Other sports get news and results from the agent.</p>
+      <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources; esports from PandaScore (team titles; Dota 2 maps from OpenDota), PUBG's own API (PUBG) and Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends). Other sports get news and results from the agent.</p>
       <button type="button" className="btn primary" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
         {busy && <span className="spinner" />}Research “{q}”
       </button>
@@ -208,6 +212,9 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
     </div>
   )
 }
+
+// A letter of a script other than Latin (Devanagari, Tamil, Chinese, Cyrillic…), which search can't read yet.
+const OTHER_SCRIPT = /[^\P{L}\p{Script=Latin}]/u
 
 /** Everything under the search box: namesake picker, sections, did-you-mean and the AI offer. */
 export function SearchResults({ data, query, loading, actions, activeKey, idFor }: {
@@ -249,7 +256,9 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
       {data.partial.length > 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</p>
       )}
-      <ResearchOffer query={data.query} research={data.research} full={nothing} actions={actions} />
+      {data.researchable
+        ? <ResearchOffer query={data.query} research={data.research} full={nothing} actions={actions} />
+        : OTHER_SCRIPT.test(data.query) && <p className="small muted" style={{ margin: 0 }}>Search reads names in Latin letters only: type the name as it's spelled in English, like “Virat Kohli”.</p>}
     </div>
   )
 }

@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { useNow } from '../clock'
 import type { BasketballSide, BasketballState, BattleRoyaleState, Card, ChessSide, ChessState, CricketState, DotaLiveMap, EsportsState, EsportsTeam, FootballSide, FootballState, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, TennisState, UpcomingEvent } from '../api'
 import { ahead, countdown, dateOnly, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName, shortWhen, sportKey, sportName } from '../format'
+import { ErrorBoundary } from './ErrorBoundary'
 import { SportMark } from './Icons'
 
 export function Avatar({ name, sport, size }: { name: string; sport?: string | null; size?: 'sm' | 'lg' }) {
@@ -95,11 +97,12 @@ export function ResultHero({ result, sport }: { result: LatestResult; sport?: st
 
 /** The next game for one of your players, as one ink strip with a countdown. */
 export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & { players?: string[] }; playerId: number; sport?: string | null }) {
-  const left = countdown(event.start_utc)
+  const now = useNow()
+  const left = countdown(event.start_utc, now)
   return (
     <Link to={`/player/${playerId}`} className="strip" data-sport={sportKey(sport)}>
       <span className="tag">Next</span>
-      <span className="dsp when">{shortWhen(event.start_utc)}</span>
+      <span className="dsp when">{shortWhen(event.start_utc, now)}</span>
       <span className="what">{[event.players?.map(shortName).join(', '), event.title, dateOnly(event.start_utc) && 'time TBC'].filter(Boolean).join(' · ')}</span>
       {left && <span className="dsp count">{left}</span>}
     </Link>
@@ -107,19 +110,18 @@ export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & {
 }
 
 /** What a player's tile says: live, then a game this week, then the last result, then the news. */
-export function statusLine(card: Card, progress?: string[]): string {
+export function statusLine(card: Card, progress?: string[], now = Date.now()): string {
   if (card.status === 'building') return progress?.at(-1) ?? 'Building page…'
   if (card.status === 'failed') return 'Build failed, open to retry'
   if (card.live.is_live) {
     const lead = card.live.headline ?? (card.live.player_stats?.[0] && `${card.live.player_stats[0].value} ${card.live.player_stats[0].label}`)
     return [card.live.score, lead].filter(Boolean).join(' · ') || 'Live now'
   }
-  const now = Date.now()
   const next = (card.upcoming ?? []).find((u) => ahead(u.start_utc, now))
   const nextAt = parseDate(next?.start_utc)?.getTime() ?? Infinity
   const last = card.recent_results?.[0]
   const lastAt = parseDate(playedOn(last))?.getTime() ?? 0
-  if (next && nextAt - now < 7 * 864e5) return `${shortWhen(next.start_utc)} · ${next.title}`
+  if (next && nextAt - now < 7 * 864e5) return `${shortWhen(next.start_utc, now)} · ${next.title}`
   if (last && now - lastAt < 14 * 864e5) return last.result
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
   if (card.player.status === 'retired') return 'Retired · news only'
@@ -128,6 +130,7 @@ export function statusLine(card: Card, progress?: string[]): string {
 
 /** One followed player on Today: a block of their sport's colour. */
 export function PlayerTile({ card, progress }: { card: Card; progress?: string[] }) {
+  const now = useNow()
   const live = card.live.is_live
   return (
     <Link to={`/player/${card.player_id}`} className="tile" data-sport={sportKey(card.player.sport)}>
@@ -136,7 +139,7 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
         {card.status === 'building' ? <span className="spinner" /> : live ? <span className="badge-live">Live</span> : null}
       </span>
       <span className="dsp name">{shortName(card.player.name)}</span>
-      <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{statusLine(card, progress)}</span>
+      <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{statusLine(card, progress, now)}</span>
     </Link>
   )
 }
@@ -147,47 +150,52 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
  * text, shown in one generic layout.
  */
 export function LiveScoreboard({ live, playerName, sport, teams, compact }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean }) {
+  const now = useNow()
   const state = live.state
+  const plain = (
+    <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
+      {live.clock && <div className="num clock">{live.clock}</div>}
+    </div>
+  )
   return (
     <section className={`board${compact ? ' compact' : ''}`} data-sport={sportKey(sport ?? state?.kind)} aria-label="Live now">
       <div className="row">
         <span className="badge-live">Live</span>
         {live.event && <span className="eyebrow" style={{ textAlign: 'right' }}>{live.event}</span>}
       </div>
-      {state?.kind === 'football' ? (
-        <FootballBoard state={state} clock={live.clock} compact={compact} />
-      ) : state?.kind === 'cricket' ? (
-        <CricketBoard state={state} clock={live.clock} compact={compact} />
-      ) : state?.kind === 'basketball' ? (
-        <BasketballBoard state={state} clock={live.clock} compact={compact} />
-      ) : state?.kind === 'tennis' ? (
-        <TennisBoard state={state} clock={live.clock} />
-      ) : state?.kind === 'battle_royale' ? (
-        <LobbyBoard state={state} clock={live.clock} teams={teams} compact={compact} />
-      ) : state?.kind === 'esports' && state.teams.length === 2 ? (
-        <EsportsBoard state={state} clock={live.clock} compact={compact} />
-      ) : state?.kind === 'chess' && state.white && state.black ? (
-        <ChessBoard state={state} clock={live.clock} flip={(live.player_stats ?? []).some((s) => s.label === 'Colour' && s.value === 'Black')} compact={compact} />
-      ) : (
-        <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
-          {live.clock && <div className="num clock">{live.clock}</div>}
-        </div>
-      )}
-      <PlayerLine live={live} playerName={playerName} />
-      {!compact && live.moments && live.moments.length > 0 && (
-        <ul className="moments">
-          {live.moments.slice(0, 5).map((m, i) => (
-            <li key={`${m.clock}-${i}`}>
-              <span className="num" style={{ fontSize: 17, minWidth: 44 }}>{m.clock}</span>
-              <span className={`moment-kind ${m.kind.toLowerCase()}`}>{m.kind === 'GOAL' ? 'Goal' : m.kind === 'RED' ? 'Red' : 'Yellow'}</span>
-              <span className="small">{m.text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
+      <ErrorBoundary fallback={plain} resetKey={live}>
+        {state?.kind === 'football' ? (
+          <FootballBoard state={state} clock={live.clock} compact={compact} />
+        ) : state?.kind === 'cricket' ? (
+          <CricketBoard state={state} clock={live.clock} compact={compact} />
+        ) : state?.kind === 'basketball' ? (
+          <BasketballBoard state={state} clock={live.clock} compact={compact} />
+        ) : state?.kind === 'tennis' ? (
+          <TennisBoard state={state} clock={live.clock} />
+        ) : state?.kind === 'battle_royale' ? (
+          <LobbyBoard state={state} clock={live.clock} teams={teams} compact={compact} />
+        ) : state?.kind === 'esports' && state.teams.length === 2 ? (
+          <EsportsBoard state={state} clock={live.clock} compact={compact} />
+        ) : state?.kind === 'chess' && state.white && state.black ? (
+          <ChessBoard state={state} clock={live.clock} flip={(live.player_stats ?? []).some((s) => s.label === 'Colour' && s.value === 'Black')} compact={compact} />
+        ) : plain}
+        <PlayerLine live={live} playerName={playerName} />
+        {!compact && live.moments && live.moments.length > 0 && (
+          <ul className="moments">
+            {live.moments.slice(0, 5).map((m, i) => (
+              <li key={`${m.clock}-${i}`}>
+                <span className="num" style={{ fontSize: 17, minWidth: 44 }}>{m.clock}</span>
+                <span className={`moment-kind ${m.kind.toLowerCase()}`}>{m.kind === 'GOAL' ? 'Goal' : m.kind === 'RED' ? 'Red' : 'Yellow'}</span>
+                <span className="small">{m.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </ErrorBoundary>
       <div className="row tiny muted">
-        <span>{live.as_of ? `Updated ${relative(live.as_of)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</span>
+        <span>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</span>
         {/* Compact boards sit inside a link to the player's page; a link can't hold another link. */}
         {!compact && safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" className="link" style={{ color: 'var(--text)' }}>Open source</a>}
       </div>
@@ -233,7 +241,7 @@ function CricketBoard({ state, clock, compact }: { state: CricketState; clock?: 
           </span>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span className={i.batting ? 'num score' : 'num'} style={i.batting ? undefined : { fontSize: 26, color: 'var(--muted)' }}>
-              {i.runs}{i.wickets < 10 ? `/${i.wickets}` : ''}
+              {i.runs}{i.wickets < 10 ? `/${i.wickets}` : ''}{i.declared ? 'd' : ''}
             </span>
             {i.overs != null && <span className="small muted">{i.overs} ov</span>}
           </span>
@@ -487,10 +495,11 @@ function PlayerLine({ live, playerName }: { live: LiveStatus; playerName: string
 
 /** Where a section came from and when: "ESPNcricinfo · updated 4 min ago". */
 export function SourceNote({ provenance, note }: { provenance?: Provenance; note?: string }) {
+  const now = useNow()
   if (!provenance && !note) return null
   return (
     <p className="tiny muted">
-      {[note, provenance && `${provenance.source} · updated ${relative(provenance.at)}`].filter(Boolean).join(' · ')}
+      {[note, provenance && `${provenance.source} · updated ${relative(provenance.at, now)}`].filter(Boolean).join(' · ')}
       {provenance && safeHref(provenance.url) && <> · <a href={safeHref(provenance.url)} target="_blank" rel="noreferrer" className="link">Profile</a></>}
     </p>
   )
@@ -498,6 +507,7 @@ export function SourceNote({ provenance, note }: { provenance?: Provenance; note
 
 /** Fixtures, the day and time in a block on the left. */
 export function UpcomingList({ items, who, empty }: { items: (UpcomingEvent & { players?: string[] })[]; who?: boolean; empty: string }) {
+  const now = useNow()
   if (!items.length) return <div className="card empty small">{empty}</div>
   return (
     <ul className="card list">
@@ -519,7 +529,7 @@ export function UpcomingList({ items, who, empty }: { items: (UpcomingEvent & { 
             </span>
             {u.status === 'live'
               ? <span className="badge-live">Live</span>
-              : d && <span className="tag" style={{ whiteSpace: 'nowrap' }} title={dateTime(u.start_utc)}>{relative(u.start_utc)}</span>}
+              : d && <span className="tag" style={{ whiteSpace: 'nowrap' }} title={dateTime(u.start_utc)}>{relative(u.start_utc, now)}</span>}
           </li>
         )
       })}
@@ -609,6 +619,7 @@ export function BuildProgress({ card, messages, onRetry }: { card: Card; message
 
 /** A followed player in the desktop sidebar. */
 export function PlayerRow({ card, progress }: { card: Card; progress?: string[] }) {
+  const now = useNow()
   const live = card.live.is_live
   return (
     <Link to={`/player/${card.player_id}`} className="row" style={{ padding: '8px 10px', minHeight: 44, borderRadius: 12 }}>
@@ -616,7 +627,7 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
         <Avatar name={card.player.name} sport={card.player.sport} size="sm" />
         <div className="stack" style={{ gap: 1 }}>
           <span className="title" style={{ fontSize: 14 }}>{card.player.name}</span>
-          <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{statusLine(card, progress)}</span>
+          <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{statusLine(card, progress, now)}</span>
         </div>
       </div>
       {card.status === 'building' ? <span className="spinner" /> : live ? <span className="live-dot" /> : null}

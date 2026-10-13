@@ -53,7 +53,7 @@ deploy/push-secrets.sh root@<server-ip>
 ```
 Sends the Sportmonks and Lichess tokens (and the PandaScore, Liquipedia and PUBG ones, if there are) from
 `~/.config/sports-follow` and the OpenRouter key from the gateway's keys file (`OPENROUTER_KEY_FILE=<file>` for a separate production key). The server makes its
-own database password, gateway token and push key; they are kept when you run this again.
+own database password, gateway token, push key and fan cookie key; they are kept when you run this again.
 
 **4. Start it** (the first build takes a few minutes on the server):
 ```bash
@@ -75,6 +75,10 @@ ssh root@<server-ip> 'cd /opt/sports-follow && git pull && docker compose -f dep
 ```
 Migrations run first (the `migrate` service); the API starts only when they succeed. Stopping the
 worker mid-build leaves that card "building" until its lock expires (15 minutes).
+
+A server set up before fan cookies were signed has no cookie key yet: run `deploy/push-secrets.sh
+root@<server-ip>` once before this update's `up`, or the API stops at startup and says so. The key is
+kept from then on; a new one would sign every fan out of their follows.
 
 ## Operating
 
@@ -102,4 +106,4 @@ DOMAIN=localhost HTTP_PORT=8080 HTTPS_PORT=8443 SECRETS_DIR=<dir> BACKUP_DIR=<di
 curl -k https://localhost:8443/api/health
 ```
 `<dir>` needs the same files `install-secrets.sh` writes: `app.env`, `gateway.env`, `postgres.env` and
-`files/{sportmonks-token,lichess-token,vapid-private.pem}`.
+`files/{sportmonks-token,lichess-token,vapid-private.pem,cookie-secret}`.

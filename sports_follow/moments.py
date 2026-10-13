@@ -216,13 +216,23 @@ def band(ev: dict[str, Any], current: int = 0) -> int:
 
 def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
     """An evaluation with its settled band. The band moves only when two evaluations in a row agree,
-    so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing."""
+    so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing.
+
+    "told" is the winning band (2 or -2) the game last moved into, kept until it's level again or the
+    other side is better: an evaluation hovering on the winning line (+2.6, +3.4, +2.7…) moves the band
+    back and forth, and the player is winning once, not at every climb."""
     if before and before.get("at") == ev.get("at"):
         return before
     settled = before.get("band", 0) if before else 0
     raw = band(ev, settled)
     moved = before is None or raw == before.get("raw")
-    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "band": raw if moved else settled}
+    new = raw if moved else settled
+    told = before.get("told", 0) if before else 0
+    if before is not None and abs(new) == 2 and new != settled:
+        told = new
+    elif new * told <= 0:
+        told = 0
+    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "band": new, "told": told}
 
 
 def _fullmove(fen: str | None) -> int | None:
@@ -240,6 +250,8 @@ def _chess(who: str, before: Seen, now: Seen) -> list[Found]:
     old, new = was["band"] * side, got["band"] * side
     if not side or old == new:
         return []
+    if abs(new) == 2 and (was.get("told") or 0) * side == new:
+        return []  # told already, and the game hasn't been level or turned since: back over the line
     if new == 2:
         title, level = f"{who} is winning", "key"
     elif new == -2:
@@ -412,8 +424,9 @@ def _lobby_final(who: str, now: Seen) -> Found:
 
 
 def _upset(sport: str, who: str, athlete_id: str, now: Seen) -> list[Found]:
-    """A tennis win over a better-seeded player (or any seed, for an unseeded one)."""
-    if sport != "tennis":
+    """A tennis win over a better-seeded player (or any seed, for an unseeded one), in a match played
+    to the end: a walkover or a retirement isn't an upset."""
+    if sport != "tennis" or now.state.get("ending"):
         return []
     players = now.state.get("players") or []
     me = next((p for p in players if str(p.get("id")) == athlete_id), None)

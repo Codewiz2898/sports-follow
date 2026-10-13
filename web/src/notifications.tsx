@@ -3,13 +3,36 @@ import { Link } from 'react-router-dom'
 import { api, type AlertLevel, type Card, type PlayerMoment } from './api'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
+import { sportKey, type SportKey } from './format'
 
-export const LEVELS: { value: AlertLevel; label: string; short: string; brief: string; hint: string }[] = [
-  { value: 'key', label: 'Key moments', short: 'Key', brief: 'Line-ups, big moments and results', hint: 'Line-ups, goals, fifties and hundreds, big points games, wickets, a chess game turning, a chicken dinner, starts, results, injuries and transfers' },
-  { value: 'everything', label: 'Everything', short: 'All', brief: 'Plus every set, map and card, without sound', hint: 'Key moments, plus coming on, yellow cards, 20 points, each set, esports map or battle royale match, a Dota player’s numbers each map, a chess edge and milestones. Those arrive without sound' },
-  { value: 'results', label: 'Results only', short: 'Results', brief: 'Just the final result', hint: 'Just the final result' },
-  { value: 'off', label: 'Off', short: 'Off', brief: 'Nothing for this player', hint: 'No notifications for this player' },
+export const LEVELS: { value: AlertLevel; label: string; short: string }[] = [
+  { value: 'key', label: 'Key moments', short: 'Key' },
+  { value: 'everything', label: 'Everything', short: 'All' },
+  { value: 'results', label: 'Results only', short: 'Results' },
+  { value: 'off', label: 'Off', short: 'Off' },
 ]
+
+// What key moments are, and what everything adds, for each sport: only what its source tells
+// (sports_follow/moments.py). Line-ups come from football and cricket team sheets; a sport no source
+// covers has only the news.
+const MOMENTS: Record<SportKey, { key: [brief: string, hint: string]; more: [brief: string, hint: string] }> = {
+  football: { key: ['Line-ups, goals and results', 'Starting or on the bench, goals, assists, red cards, kick-off, the result, injuries and transfers'], more: ['subs and yellow cards', 'coming on, yellow cards and milestones'] },
+  cricket: { key: ['Line-ups, fifties, wickets and results', 'In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers'], more: ['milestones', 'milestones in the news'] },
+  basketball: { key: ['Big games and results', '30 points, triple-doubles, tip-off, the result, injuries and transfers'], more: ['20 points and double-doubles', '20 points, double-doubles and milestones'] },
+  tennis: { key: ['Matches, upsets and results', 'The match starting, beating a higher seed, the result and injuries'], more: ['every set', 'each set and milestones'] },
+  chess: { key: ['Games turning and results', 'A game starting, turning (winning, in trouble, a turnaround) and the result'], more: ['every edge', 'a game edging better or worse, and milestones'] },
+  esports: { key: ['Starts, wins and results', 'A series or lobby starting, winning a lobby match, going top, the result and transfers'], more: ['every map and match', 'each map or lobby match, a Dota player’s numbers each map, and milestones'] },
+  other: { key: ['Big news', 'Injuries, transfers and retirements, from the news: no live source covers this sport yet'], more: ['milestones', 'milestones in the news'] },
+}
+
+/** A level in a line (`brief`) and in full (`hint`), for a player of this sport. */
+export function levelText(level: AlertLevel, sport?: string | null): { brief: string; hint: string } {
+  const { key, more } = MOMENTS[sportKey(sport)]
+  if (level === 'key') return { brief: key[0], hint: key[1] }
+  if (level === 'everything') return { brief: `Plus ${more[0]}, without sound`, hint: `Key moments, plus ${more[1]}. Those arrive without sound` }
+  if (level === 'results') return { brief: 'Just the final result', hint: 'Just the final result' }
+  return { brief: 'Nothing for this player', hint: 'No notifications for this player' }
+}
 
 /** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
 export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | 'kind'>): boolean {

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from sports_follow import search
-from sports_follow.models import Athlete
+from sqlalchemy.dialects import postgresql
+
+from sports_follow import pipeline, search
+from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
 from sports_follow.search import Result
 
 from .test_new_adapters import load
@@ -189,11 +192,14 @@ def athlete(qid, name, sport="football", aliases=(), sitelinks=0, **extra) -> At
     return Athlete(qid=qid, sport=sport, name=name, aliases=list(aliases), teams=extra.pop("teams", []), ids=extra.pop("ids", {}), sitelinks=sitelinks, current=extra.pop("current", True), **extra)
 
 
-def searching(monkeypatch, found=(), near=(), espn=()):
+def searching(monkeypatch, found=(), near=(), espn=(), ours=False):
     """search.run against a registry that finds `found` and spells `near`, and an ESPN that answers
-    `espn`; returns the response and the queries ESPN was asked."""
+    `espn`; returns the queries ESPN was asked. Nobody is on Sports Follow yet, unless `ours`: then
+    run's session says who is (Players)."""
     asked = []
     monkeypatch.setattr(search, "local", lambda db, query, fan, sport: [])
+    if not ours:
+        monkeypatch.setattr(search, "_ours", lambda db, rows, fan: None, raising=False)
     monkeypatch.setattr(search.registry, "find", lambda db, query, sport, limit: list(found))
     monkeypatch.setattr(search.registry, "near", lambda db, query, sport=None: list(near))
     monkeypatch.setattr(search, "_espn", lambda query, limit=20: asked.append(query) or list(espn))
@@ -245,3 +251,131 @@ def test_one_person_in_two_sports_is_not_two_namesakes(monkeypatch):
     out = search.run(None, "yuzvendra chahal")
     assert sorted(r["sport"] for r in out["results"]) == ["Chess", "Cricket"]
     assert out["namesakes"] == 0  # one athlete, listed once per sport
+
+
+# ---------------------------------------------------------------- found by another name
+
+
+def test_a_result_found_by_an_alias_says_which(monkeypatch):
+    # "jonathan" listed Cije, Zame and EliGE by their real names and showed only handle, team and
+    # country, so the list looked random (BUG-007).
+    cije = athlete("pandascore:14258", "Cije", "esports", aliases=["Christian Jonathan"], teams=["Veroja"], ids={"pandascore_esports": "14258"}, league="cs-go", country="Indonesia")
+    r = search.from_athlete(cije, "jonathan")
+    assert r.matched and r.aka == "Christian Jonathan"
+    assert search.from_athlete(cije, "cije").aka is None  # the name was typed: nothing to explain
+    r9 = athlete("Q529207", "Ronaldo Nazário", aliases=["R9 Fenômeno", "R9"], sitelinks=124)
+    assert search.from_athlete(r9, "r9").aka == "R9"  # an alias typed whole before one it starts
+    searching(monkeypatch, found=[cije])
+    assert [(x["name"], x["aka"]) for x in search.run(None, "jonathan")["results"]] == [("Cije", "Christian Jonathan")]
+    # Any sport, and a player on Sports Follow found by a fan's alias shows it as the registry writes it.
+    ours = Result(key="lichess_chess:46616543", name="Gukesh D", sport="Chess", detail="", player_id=1, live_scores=True, aka="dommaraju gukesh", _rank=(1.0,))
+    gukesh = athlete("Q56026072", "Gukesh D", "chess", aliases=["Dommaraju Gukesh"], ids={"lichess_chess": "46616543"})
+    [row] = search.rank("dommaraju gukesh", [ours], [search.from_athlete(gukesh, "dommaraju gukesh")])
+    assert (row.player_id, row.aka) == (1, "Dommaraju Gukesh")
+
+
+# ---------------------------------------------------------------- nothing to search by
+
+
+def test_a_query_with_nothing_to_search_by_lists_no_one_and_offers_no_research(monkeypatch):
+    # "--" listed ESPN's default stars, and "विराट कोहली" found no one but offered an AI research that
+    # always failed: a researched player is named by the query's Latin letters (BUG-075).
+    lebron = Result(key="espn_basketball:1966", name="LeBron James", sport="Basketball", detail="", system="espn_basketball", athlete_id="1966", live_scores=True)
+    assert not search._prefix_match("--", "LeBron James")
+    for query in ["--", "..", "%%", "विराट कोहली", "விராட் கோலி", "梅西", "Лионель Месси"]:
+        asked = searching(monkeypatch, espn=[lebron])
+        out = search.run(None, query)
+        assert (out["results"], out["suggestions"], out["researchable"], asked) == ([], [], False, []), query
+    asked = searching(monkeypatch, espn=[lebron])
+    out = search.run(None, "lebron")
+    assert out["researchable"] and asked == ["lebron"]
+
+
+# ---------------------------------------------------------------- native spellings
+
+
+def test_native_spellings_find_the_star(monkeypatch):
+    # "Novak Đoković" found only a did-you-mean and "thomas mueller" no Thomas Müller: Wikidata writes
+    # Djokovic, and the registry folds Müller to "muller" (BUG-076).
+    everyone = [
+        athlete("Q5812", "Novak Djokovic", "tennis", sitelinks=153, ids={"espn_tennis": "296"}, league="atp"),
+        athlete("Q3701304", "Damjan Đoković", sitelinks=3),
+        athlete("Q43666", "Thomas Müller", sitelinks=94),
+        athlete("Q7690078", "Taylor Mueller", aliases=["Taylor Thomas Mueller"], sitelinks=5),
+        athlete("Q1", "Michal Kadlec", sitelinks=30),
+    ]
+    searching(monkeypatch)
+
+    def find(db, query, sport, limit):  # as the registry looks names up: a word of the search text starts with each typed word
+        return [a for a in everyone if all(f" {w}" in search.registry.search_text(a.name, a.aliases) for w in search.registry.words(query))]
+
+    monkeypatch.setattr(search.registry, "find", find)
+    for query in ["Novak Đoković", "Novak Ðoković", "Đoković"]:  # the second with Ð, U+00D0
+        assert [r["name"] for r in search.run(None, query)["results"]][:1] == ["Novak Djokovic"], query
+    out = search.run(None, "thomas mueller")
+    assert [(r["name"], r["exact"]) for r in out["results"]] == [("Thomas Müller", True), ("Taylor Mueller", False)]
+    assert [r["name"] for r in search.run(None, "mueller")["results"]][:1] == ["Thomas Müller"]
+    assert search.run(None, "michael")["results"] == []  # looked up as "michal" too, but Michal isn't Michael
+    assert search.registry.words("Ðoković") == ["dokovic"]
+    assert search._same("Novak Đoković", "Novak Djokovic") and search._same("thomas mueller", "Thomas Müller")
+
+
+# ---------------------------------------------------------------- players on Sports Follow
+
+
+class Players:
+    """A session that knows the players on Sports Follow by source id (and qid), their followers, and
+    `mine`, the ones this fan follows. Every player's page is ready."""
+
+    def __init__(self, ids, followers=None, mine=()):
+        self.ids, self.followers, self.mine = ids, followers or {}, set(mine)
+
+    def execute(self, stmt):
+        column = stmt.column_descriptions[0]["expr"]
+        if column is PlayerIdentity.system:
+            rows = [(system, ext, pid) for (system, ext), pid in self.ids.items()]
+        elif column is PlayerCard.player_id:
+            rows = [(pid, "ready", {}) for pid in set(self.ids.values())]
+        else:  # followers per player
+            rows = list(self.followers.items())
+        return SimpleNamespace(all=lambda: rows)
+
+    def scalars(self, stmt):
+        return list(self.mine)
+
+
+def test_a_followed_player_found_by_another_name_is_theirs(monkeypatch):
+    # "dommaraju gukesh" listed Gukesh D as a new athlete with a Follow button, though the fan follows
+    # him: it isn't an alias fans typed, so only the registry found him (BUG-080).
+    gukesh = athlete("Q56026072", "Gukesh D", "chess", aliases=["Dommaraju Gukesh"], sitelinks=40, ids={"lichess_chess": "46616543"}, title="GM", country="India")
+    db = Players({("lichess_chess", "46616543"): 1, ("wikidata", "Q56026072"): 1, ("wikidata", "Q8062264"): 3, ("espn_soccer", "173896"): 14}, followers={1: 2, 3: 1}, mine={1})
+    monkeypatch.setattr(pipeline, "registry_holder", lambda db, qid, sport: {("Q8062264", "cricket"): 3}.get((qid, sport)))
+    searching(monkeypatch, found=[gukesh], ours=True)
+    [r] = search.run(db, "dommaraju gukesh", fan="fan")["results"]
+    assert (r["key"], r["player_id"], r["following"], r["followers"], r["status"]) == ("lichess_chess:46616543", 1, True, 2, "ready")
+    # By qid only in the athlete's sport: Chahal the cricketer is player 3, Chahal the chess player isn't.
+    rows = [search.from_athlete(athlete("Q8062264", "Yuzvendra Chahal", sport), "chahal") for sport in ("cricket", "chess")]
+    search._ours(db, rows, "fan")
+    assert [(r.sport, r.player_id, r.following, r.followers) for r in rows] == [("Cricket", 3, False, 1), ("Chess", None, False, 0)]
+    # One player keyed two ways (ours by Sportmonks id, ESPN's hit by its own) is one row.
+    ours = Result(key="sportmonks_football:4125", name="Mohamed Salah", sport="Football", detail="Liverpool", player_id=14, live_scores=True, _rank=(1.0,))
+    hit = Result(key="espn_soccer:173896", name="Mohamed Salah", sport="Football", detail="Liverpool · Premier League", system="espn_soccer", athlete_id="173896", live_scores=True)
+    search._ours(db, [hit], "fan")
+    assert [(r.key, r.player_id) for r in search.rank("salah", [ours], [hit])] == [("sportmonks_football:4125", 14)]
+
+
+# ---------------------------------------------------------------- the trigram index
+
+
+def test_local_search_filters_with_what_the_trigram_index_answers():
+    # Likeness was a function of the alias in WHERE, which no index answers: a sequential scan of every
+    # alias, 311 ms a keystroke at 100k (BUG-081). It filters with % and <% at LIKENESS instead.
+    statements = []
+    db = SimpleNamespace(execute=lambda stmt: statements.append(stmt) or SimpleNamespace(all=lambda: []))
+    assert search.local(db, "kohly", None, None) == []
+    sql = [str(s.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})) for s in statements]
+    [players] = [s for s in statements if "player_alias" in str(s)]
+    where = str(players.whereclause.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "similarity" not in where
+    assert "player_alias.alias %% 'kohly'" in where and "'kohly' <%% player_alias.alias" in where
+    assert any(f"'pg_trgm.similarity_threshold', '{search.LIKENESS}'" in s and f"'pg_trgm.word_similarity_threshold', '{search.LIKENESS}'" in s for s in sql)
