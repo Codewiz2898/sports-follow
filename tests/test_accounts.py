@@ -114,7 +114,6 @@ def test_a_code_signs_in_and_the_first_sign_in_makes_the_account(api, store, out
     jar = set_cookies(answer)
     assert jar["sf_session"][0] and not jar["sf_session"][1]
     assert jar["sf_fan"][1]  # the device's anonymous cookie goes
-    del api.redis.data[f"auth-wait:{accounts.email_key('fan@example.com')}"]  # a minute later
     assert sign_in(api, outbox, email=" FAN@example.com ").status_code == 200
     assert store.emails == {1: "fan@example.com"}  # the same account
 
@@ -150,12 +149,16 @@ def test_a_new_code_waits_a_minute_and_an_address_gets_five_an_hour(api, store, 
     start = lambda: api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)  # noqa: E731
     wait = f"auth-wait:{accounts.email_key('fan@example.com')}"
     assert start().status_code == 200
-    assert start().status_code == 429  # within the minute
-    for _ in range(server.CODES_PER_EMAIL - 1):
-        del api.redis.data[wait]
+    first = outbox.pop("fan@example.com")
+    again = start()  # within the minute: the code already sent is the one
+    assert again.status_code == 200 and again.json()["resend_in"] == 42 and outbox == {}
+    assert api.call("POST", "/api/auth/email/verify", body={"email": EMAIL, "code": first}).status_code == 200
+    assert wait not in api.redis.data  # a code that was used doesn't hold up the next sign-in
+    for _ in range(server.CODES_PER_EMAIL - 1):  # the second to the fifth
+        api.redis.data.pop(wait, None)  # a minute later
         assert start().status_code == 200
-    del api.redis.data[wait]
-    assert start().status_code == 429
+    api.redis.data.pop(wait, None)
+    assert start().status_code == 429  # the sixth code this hour
 
 
 def test_one_network_gets_twenty_codes_an_hour_whichever_addresses_they_go_to(api, store, outbox):
@@ -238,7 +241,6 @@ def test_a_signed_in_request_is_the_accounts_fan_and_its_session_is_looked_up_on
 
 def test_signing_in_again_replaces_the_devices_session(api, store, outbox):
     first = set_cookies(sign_in(api, outbox))["sf_session"][0]
-    del api.redis.data[f"auth-wait:{accounts.email_key('fan@example.com')}"]
     second = set_cookies(sign_in(api, outbox, headers=cookies(session=first)))["sf_session"][0]
     assert second != first
     assert list(store.sessions) == [accounts.token_hash(second)]
@@ -268,7 +270,6 @@ def test_the_app_hears_who_it_is_signed_in_as_and_when_it_was_signed_out(api, st
 @pytest.mark.parametrize("everywhere", [False, True])
 def test_signing_out_ends_the_session_and_leaves_a_new_empty_fan(api, store, outbox, everywhere):
     token = set_cookies(sign_in(api, outbox))["sf_session"][0]
-    del api.redis.data[f"auth-wait:{accounts.email_key('fan@example.com')}"]
     other = set_cookies(sign_in(api, outbox, address="81.2.69.143"))["sf_session"][0]  # another device
     answer = api.call("POST", "/api/auth/signout", body={"everywhere": everywhere}, headers=cookies(session=token))
     jar = set_cookies(answer)

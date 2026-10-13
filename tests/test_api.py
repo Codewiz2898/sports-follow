@@ -100,6 +100,9 @@ class Redis:
     async def expire(self, key, seconds):
         return True
 
+    async def ttl(self, key):
+        return 42 if key in self.data else -2
+
 
 class Queue:
     def __init__(self):

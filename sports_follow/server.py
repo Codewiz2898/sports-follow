@@ -681,7 +681,8 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     if int(await state["redis"].get(f"auth-fails:{who}:{day}") or 0) >= FAILS_PER_DAY:
         raise HTTPException(429, "Too many wrong codes for this address today. Try again tomorrow.")
     if not await state["redis"].set(f"auth-wait:{who}", "1", nx=True, ex=RESEND_AFTER):
-        raise HTTPException(429, "A code is on its way. You can ask for another in a minute.")
+        # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
+        return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
     address = client_address(request)
     await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
     await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
@@ -718,7 +719,7 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].incr(f"auth-fails:{who}:{day}")
         await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}")
+    await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
 
