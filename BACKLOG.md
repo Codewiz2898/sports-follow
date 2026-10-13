@@ -412,8 +412,18 @@ EA FC and PUBG none.
 **Live scores, researched 13 Oct 2026.** PandaScore's free plan is live only by the map (which map is on,
 each map's winner), and small events can lag an hour; in-game live is €1,000 a game a month (LoL, CS).
 Elsewhere:
-- **Dota 2:** OpenDota's `/live` gives pro games live with every player's numbers, free (60 a minute,
-  3,000 a day, no key); community-run, no data licence. PandaScore would still give the fixtures.
+- **Dota 2: built on OpenDota** (`adapters/opendota.py`, `dota.py`), laid over PandaScore's series. While a
+  map is on: kills a side, the clock ("draft" before the horn) and the gold lead, and the heroes of both
+  rosters' players; after it, each player's hero, kills, deaths, assists, GPM and last hits, with a
+  minor alert ("Yatoro: 12/2/9 on Faceless Void"). Teams are joined by name without filler words
+  ("Spirit Academy" is "Team Spirit Academy", "Power Rangers" is "_PowerRangers"); players by Steam
+  account (OpenDota's 5,659 pros, by name and team). Each map's OpenDota match is remembered while
+  it's live (Redis, per series, first sighting wins), since OpenDota's finished list keeps only the
+  last 100 pro matches; that list is the fallback, and a game in it isn't shown live (OpenDota's live
+  list lags a minute). OpenDota's start times run 17 minutes ahead of PandaScore's. Checked 13 Oct
+  2026 on five live series (DreamLeague qualifiers and others): every series matched its game. No
+  key; 60 requests a minute and 3,000 a day, counted in Redis. Community-run with no data licence:
+  `SPORTS_FOLLOW_OPENDOTA=0` in the public build until its terms are checked.
 - **LoL:** Riot's own site backend (esports-api.lolesports.com, feed.lolesports.com/livestats) gives full
   live stats, but it's undocumented and Riot licenses official live data only to GRID: development only.
 - **Valorant:** the valorantesports.com backend has results, no live; nothing official.
