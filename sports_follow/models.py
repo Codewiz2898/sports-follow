@@ -114,6 +114,27 @@ class Athlete(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class AthleteOverride(Base):
+    """What an operator decided about one registry athlete (players.py), which every import respects.
+
+    keep: an athlete added by hand, or one pinned so an import never drops them; imports may refresh the
+    row but never delete it. remove: taken out, with their page; an import never writes the row again,
+    and search and following leave out their ids in the sources.
+    """
+
+    __tablename__ = "athlete_override"
+    __table_args__ = (UniqueConstraint("qid", "sport"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id; "player:<id>" for a page no registry row had
+    sport: Mapped[str] = mapped_column(String(20))
+    action: Mapped[str] = mapped_column(String(10))  # keep | remove
+    name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
+    ids: Mapped[dict] = mapped_column(JSONB, default=dict)  # their ids in the sources: {"espn_cricket": "253802"}
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+
+
 class Team(Base):
     __tablename__ = "team"
 

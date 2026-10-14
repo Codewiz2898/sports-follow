@@ -515,6 +515,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         adapter = ADAPTERS.get(system)
         if adapter is None or not _source_id_ok(system, athlete_id) or not _league_ok(league):
             raise HTTPException(400, "Pick an athlete from the search results.")
+        if (system, athlete_id) in await in_db(registry.blocked):
+            raise HTTPException(404, "That athlete isn't on Sports Follow.")  # removed by an operator (players.py)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
         except AdapterError as exc:
@@ -1108,7 +1110,7 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
 async def athlete_preview(system: str, athlete_id: str, league: str | None = None) -> dict[str, Any]:
     """What following a search result would show, before following. An athlete already on Sports
     Follow answers with their player id; the app opens their page instead."""
-    if system not in ADAPTERS or not _source_id_ok(system, athlete_id) or not _league_ok(league):
+    if system not in ADAPTERS or not _source_id_ok(system, athlete_id) or not _league_ok(league) or (system, athlete_id) in await in_db(registry.blocked):
         raise HTTPException(404, "No such athlete.")
     holder = await in_db(_holder, system, athlete_id)
     if holder is not None:

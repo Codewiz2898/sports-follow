@@ -141,7 +141,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 - **Adding or removing a data source** is one module and one line. A source is a module in
   `sports_follow/adapters/` with an `Adapter` subclass (`adapters/base.py`) that describes itself: its
-  `system`, the `sports` it serves, its `name` on a page, its `provider` (the Credits entry, shared with
+  `system`, the `sport` it serves, its `name` on a page, its `provider` (the Credits entry, shared with
   the provider's other adapters), what it `covers`, its athlete `id_pattern`, and `available()` (a
   licensed source needs its token). Optional capabilities are opt-in, so nothing else changes: a name
   `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
@@ -157,17 +157,26 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
   code change. `tests/test_sports.py` fails if shared code names a sport.
-- CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
-  Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
-  database and `alembic check`; and the web app's type-check and build. The web app still names sports
-  of its own; `tests/test_web_names.py` holds each file in `web/src` to the number of sport and source
-  names it has now, so a file can lose them but not gain them.
 
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
   before the first render and kept on the device. How a sport is drawn is its view,
   `web/src/sports/<sport>.tsx` (its live board, the mark behind its hero card, how its line reads),
   plus one line in `VIEWS`; a sport without one shows the plain score and mark.
+- **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
+  for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
+  and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry
+  athlete by id so no import drops them. `remove` takes a player's page out (by page id, registry id or
+  `system:id`) with everything that hangs off it, and their hot card; it shows what it will delete and
+  asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
+  rows in `athlete_override`, which every registry import respects, so they work on a running server and
+  survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
+  for following.
+- CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
+  Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
+  database and `alembic check`; and the web app's type-check and build. In `web/src`,
+  `tests/test_web_names.py` lets only a sport's view name a sport, and holds the files that still name a
+  source to how many times they do now, so they can lose those names but not gain them.
 
 ## Run it
 

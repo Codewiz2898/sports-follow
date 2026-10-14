@@ -205,6 +205,7 @@ def searching(monkeypatch, found=(), near=(), espn=(), ours=False):
     if not ours:
         monkeypatch.setattr(search, "_ours", lambda db, rows, fan: None, raising=False)
     monkeypatch.setattr(search.registry, "find", lambda db, query, sport, limit: list(found))
+    monkeypatch.setattr(search.registry, "blocked", lambda db: set())
     monkeypatch.setattr(search.registry, "near", lambda db, query, sport=None: list(near))
     live = Provider(name="ESPN", url="", what="", search=LiveSearch(find=lambda query, sport, adapters: asked.append(query) or list(espn), by_word=True))
     monkeypatch.setattr(search, "providers", lambda: [(live, ESPN)])
@@ -225,6 +226,14 @@ def test_a_loose_did_you_mean_still_asks_the_live_sources(monkeypatch):
     asked = searching(monkeypatch, near=[sabalenka])
     out = search.run(None, "sabalnka")
     assert asked == [] and [s["name"] for s in out["suggestions"]] == ["Aryna Sabalenka"]
+
+
+def test_a_removed_athletes_source_ids_arent_found(monkeypatch):
+    # players.py removed Shane Warne: ESPN still lists him, but search leaves him out.
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True, exact=True)
+    searching(monkeypatch, espn=[warne])
+    monkeypatch.setattr(search.registry, "blocked", lambda db: {("espn_cricket", "8166")})
+    assert search.run(None, "shane warne")["results"] == []
 
 
 def test_surely_the_name_meant():

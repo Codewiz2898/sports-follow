@@ -313,6 +313,11 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     _ours(db, suggestions, fan)
     if suggestions:
         results = [r for r in results if r.key not in {s.key for s in suggestions}]
+    # An athlete an operator removed (players.py) isn't found by their ids in the sources either.
+    blocked = registry.blocked(db)
+    if blocked:
+        results = [r for r in results if (r.system, r.athlete_id) not in blocked]
+        suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
     # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
     results = [r for i, r in enumerate(results) if i < LIVE_LIMIT + LOCAL_LIMIT or r.exact]
