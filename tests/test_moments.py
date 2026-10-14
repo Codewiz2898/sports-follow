@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pywebpush
@@ -223,6 +225,39 @@ def test_quiet_hours_in_the_devices_timezone():
     assert notify.quiet("UTC", "13:00", "15:00", at(14)) is True
     assert notify.quiet("UTC", None, None, at(3)) is False
     assert notify.quiet("Not/AZone", "22:00", "07:00", at(23)) is False
+
+
+def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypatch, caplog):
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    goal = SimpleNamespace(id=1, player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3))
+    answers = iter([[1], [goal]])  # the claim, then the claimed moments
+
+    @contextmanager
+    def session():
+        yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)))
+
+    devices = [(11, (1, "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
+    monkeypatch.setattr(notify, "session", session)
+    monkeypatch.setattr(notify, "_plan", lambda db, items, at: devices)
+    monkeypatch.setattr(notify, "push", lambda endpoint, *rest: None if "fcm" in endpoint else 410)
+    monkeypatch.setattr(notify, "_settle", lambda results: None)
+    monkeypatch.setattr(notify.bus, "publish", lambda *args: None)
+    caplog.set_level(logging.INFO, "sports_follow")
+    assert notify.send([1], now) == 1
+    [line] = [r for r in caplog.records if r.name == "sports_follow.notify"]
+    assert (line.moments, line.pushes, line.devices, line.delivered, line.waited_ms) == (1, 1, 2, 1, 3000)
+
+
+def test_a_failed_push_says_which_service_turned_it_down(monkeypatch, caplog):
+    def gone(**kwargs):
+        raise pywebpush.WebPushException("Push failed: 410 Gone", response=SimpleNamespace(status_code=410, text=""))
+
+    monkeypatch.setattr(pywebpush, "webpush", gone)
+    monkeypatch.setattr(notify, "signer", lambda: None)
+    caplog.set_level(logging.INFO, "sports_follow")
+    assert notify.push("https://web.push.apple.com/QGuOc3Z8", "key", "auth", {"title": "Goal"}, 600) == 410
+    [line] = [r for r in caplog.records if r.name == "sports_follow.notify"]
+    assert (line.push_service, line.status) == ("web.push.apple.com", 410)
 
 
 def test_a_long_push_is_cut_to_fit_and_written_as_utf8(monkeypatch):

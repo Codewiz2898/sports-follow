@@ -26,6 +26,7 @@ from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -168,7 +169,12 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
     _settle(results)
     sent = sum(1 for _, _, error in results if error is None)
-    log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, len({n for n, _, _ in results}), sent, len(results))
+    pushes = len({n for n, _, _ in results})
+    # The numbers as fields too, for the Notifications dashboard (deploy/grafana/): among them how long
+    # the oldest moment waited, from its poll or build finding it to its push.
+    waited = max((now - item.created_at).total_seconds() for item in items)
+    log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, pushes, sent, len(results),
+             extra={"moments": len(claimed), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
     return sent
 
 
@@ -261,10 +267,10 @@ def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: in
         )
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
-        log.warning("push to %s… failed (%s): %s", endpoint[:40], status, str(exc)[:200])
+        log.warning("push to %s… failed (%s): %s", endpoint[:40], status, str(exc)[:200], extra={"push_service": urlparse(endpoint).hostname, "status": status})
         return status or str(exc)[:100]
     except Exception as exc:  # a timeout or a refused connection is that device's failure, not the batch's
-        log.warning("push to %s… failed: %s", endpoint[:40], exc)
+        log.warning("push to %s… failed: %s", endpoint[:40], exc, extra={"push_service": urlparse(endpoint).hostname})
         return str(exc)[:100]
     return None
 

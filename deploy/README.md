@@ -473,6 +473,35 @@ Once there's much more, set `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `
 in `settings.env` to keep a share. Keeping every error and slow trace as well needs a collector that sees
 whole traces (Alloy's tail sampling) in between.
 
+## Dashboards
+
+Four dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+from the traces and log lines (above), so they need nothing more on the server:
+
+| Dashboard | Shows | From |
+|---|---|---|
+| **API** | requests, server errors and refusals, time taken (p95) by route; the failed requests and the API's warnings | each request's log line |
+| **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings | the source requests' spans |
+| **Jobs and live polls** | job runs, failures, time in the queue and time taken by job; live poll rounds and their time; the worker's warnings | each job's closing log line, the rounds' spans |
+| **Notifications** | pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines, the "opened" requests |
+
+A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
+trace** (a correlation from Tempo to Loki). The dashboards find their Loki and Tempo data sources
+themselves, so the same JSON works on another Grafana.
+
+**Putting them in** (or back, after a change): from the Mac, with the same `grafana-admin.env` as the
+alert rules:
+```bash
+deploy/grafana/apply-dashboards.sh
+```
+It replaces each dashboard with its file in `grafana/dashboards/`. To keep a change made in Grafana's UI,
+export the dashboard's JSON (**Share → Export**, without "external sharing") over its file.
+
+Not there yet, as they need the app's metrics (BHA-194): how late each live poll runs, how many games are
+live, how many jobs wait, and how much of each source's allowance is left (`python -m sports_follow.usage`
+on the server until then). Traces' panels may miss the last few minutes on a long range; a shorter
+range shows them.
+
 ## Operating
 
 On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`:
