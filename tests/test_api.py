@@ -15,6 +15,7 @@ Redis, the database and the job queue are fakes.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -726,9 +727,10 @@ def test_the_cookie_key_is_made_once_and_every_process_reads_the_same(tmp_path, 
 
 
 def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tmp_path, monkeypatch):
-    locked = tmp_path / "read-only"
-    locked.mkdir(mode=0o500)
-    monkeypatch.setattr(server, "COOKIE_SECRET_FILE", locked / "cookie-secret")
+    def read_only(path, flags, mode=0o777):
+        raise OSError(errno.EROFS, "Read-only file system", str(path))
+
+    monkeypatch.setattr(server, "COOKIE_SECRET_FILE", tmp_path / "cookie-secret")
     server.cookie_key.cache_clear()
     try:
         monkeypatch.setattr(server, "COOKIE_SECRET", "k" * 40)
@@ -738,12 +740,14 @@ def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tm
         with pytest.raises(RuntimeError, match="shorter than 32"):
             server.cookie_key()
         # A container whose secrets mount has no key: it stops, rather than sign with a key of its own.
+        # The mount is read-only, which stops root too (a 0o500 directory doesn't).
         monkeypatch.setattr(server, "COOKIE_SECRET", "")
+        monkeypatch.setattr(server.os, "open", read_only)
         with pytest.raises(RuntimeError, match="push-secrets.sh"):
             server.cookie_key()
+        assert not (tmp_path / "cookie-secret").exists()
     finally:
         server.cookie_key.cache_clear()
-        locked.chmod(0o700)
 
 
 # ---------------------------------------------------------------- the card is the fan's own (BUG-038)
