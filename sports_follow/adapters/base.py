@@ -14,7 +14,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from .budget import Budget
 
 # What most sources' athlete ids look like. An id goes into the source's URL or query as it is, so one
 # of any other shape is refused before anything is sent.
@@ -164,6 +167,7 @@ class Provider:
     # recognise(query, adapters): the (adapter, ref) a full typed name surely means; False when the name
     # is ambiguous, which ends the lookup (the agent decides); None to leave it to the next provider.
     recognise: Callable[[str, list["Adapter"]], "tuple[Adapter, PlayerRef] | bool | None"] | None = None
+    budgets: tuple[Budget, ...] = ()  # what its API key may spend (adapters/budget.py)
 
 
 class Adapter:
@@ -190,6 +194,10 @@ class Adapter:
     def available(cls) -> bool:
         """Whether this build can run it: a licensed source needs its token."""
         return True
+
+    def budgets(self) -> tuple[Budget, ...]:
+        """What its requests spend (adapters/budget.py): its provider's, and any other source's it reads."""
+        return self.provider.budgets
 
     def credits_also(self) -> list[dict[str, Any]]:
         """Others whose data comes in through this source, for the Credits page (FIDE's ratings via Lichess)."""

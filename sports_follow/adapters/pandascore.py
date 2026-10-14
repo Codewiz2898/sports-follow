@@ -37,7 +37,7 @@ HOURLY = 1000
 # Requests kept back for live series: background reads (refreshes, the registry import, history.py) stop
 # when the hour's remaining allowance falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_PANDASCORE_RESERVE", 300))
-BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE)
+BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -49,6 +49,7 @@ PROVIDER = Provider(
     url="https://pandascore.co",
     what="series schedules and results, map by map, teams, and the pro players search finds.",
     note="Collected by PandaScore; not official tournament records. Results are the team's: player stats aren't included.",
+    budgets=(BUDGET,),
 )
 
 

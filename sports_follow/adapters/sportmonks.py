@@ -38,7 +38,7 @@ MAX_PAGES = 8  # 25 rows a page; a year of one team's fixtures is two or three
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_SPORTMONKS_RESERVE", 1000))
 CRICKET_MATCH = "Cricket fixtures/{id}"  # the cricket endpoint live matches are polled on
 FIXTURES = "Fixture"  # the football entity live matches are polled on
-BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE)
+BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -50,6 +50,7 @@ PROVIDER = Provider(
     url="https://www.sportmonks.com",
     what="fixtures, live scores, line-ups, scorecards and player stats.",
     note="Collected by Sportmonks; not official league records.",
+    budgets=(BUDGET,),
 )
 
 

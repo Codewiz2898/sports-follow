@@ -30,7 +30,7 @@ SITE = "https://site.api.espn.com/apis/site/v2/sports"
 WEB = "https://site.web.api.espn.com/apis"
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=15, follow_redirects=True)
-BUDGET = budget.Budget("espn")  # no published limit: counted, by lane, never refused
+BUDGET = budget.Budget("espn", urls=("https://site.api.espn.com/", "https://site.web.api.espn.com/"))  # no published limit: counted, by lane, never refused
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
 
@@ -229,6 +229,7 @@ PROVIDER = Provider(
     licensed=False,
     search=LiveSearch(find=search, by_word=True),
     recognise=recognise,
+    budgets=(BUDGET,),
 )
 
 

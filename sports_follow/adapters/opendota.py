@@ -27,7 +27,7 @@ BASE = "https://api.opendota.com/api"
 ENABLED = os.environ.get("SPORTS_FOLLOW_OPENDOTA", "1") != "0"
 FREE_MINUTE, FREE_DAY = 60, 3000
 MARGIN_MINUTE, MARGIN_DAY = 5, 200
-BUDGET = budget.Budget("opendota", windows=(budget.Window(60, FREE_MINUTE, margin=MARGIN_MINUTE), budget.Window(86400, FREE_DAY, margin=MARGIN_DAY)))
+BUDGET = budget.Budget("opendota", windows=(budget.Window(60, FREE_MINUTE, margin=MARGIN_MINUTE), budget.Window(86400, FREE_DAY, margin=MARGIN_DAY)), urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list), per process
