@@ -276,7 +276,7 @@ class RefusingSource:
     """A source whose fixtures read fails (a team its plan doesn't cover), counting its requests."""
 
     system = "fake_source"
-    sports = ("hurling",)
+    sport = "hurling"
     live_cadence = 15
 
     def __init__(self, room: bool = True):
@@ -437,7 +437,7 @@ def test_a_typed_name_a_source_knows_lands_on_the_player_holding_that_athlete(mo
     typed = Player(id=3, slug="jokic-nikola", name="Jokic Nikola", sport="", teams=[])
     db = FakeDb(footballer, nba, typed, answers={"Player": footballer, "PlayerIdentity": SimpleNamespace(player_id=2)})
     ref = SimpleNamespace(system="espn_basketball", athlete_id="3112335", name="Nikola Jokić", team_ids=["7"], team_names=["Denver Nuggets"])
-    adapter = SimpleNamespace(sports=["basketball"])
+    adapter = SimpleNamespace(sport="basketball")
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
     assert pipeline._start_from_source(3, adapter, ref) == 2
     assert db.deleted == [typed]

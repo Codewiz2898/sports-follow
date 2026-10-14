@@ -7,7 +7,7 @@ import ast
 import re
 from pathlib import Path
 
-from sports_follow import search
+from sports_follow import search, sports
 from sports_follow.adapters import KNOWN, Provider, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
@@ -16,7 +16,7 @@ SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__ini
 
 def test_every_source_describes_itself():
     for system, adapter in KNOWN.items():
-        assert adapter.system == system and adapter.sports and adapter.live_cadence > 0, system
+        assert adapter.system == system and sports.get(adapter.sport) and adapter.live_cadence > 0, system
         assert adapter.name and adapter.covers and isinstance(adapter.provider, Provider), system
         assert not adapter.id_pattern.fullmatch(""), system
     assert {p.name for p, _ in providers(KNOWN)} == {"Sportmonks", "ESPN", "Lichess", "PandaScore", "Liquipedia", "PUBG"}
@@ -61,11 +61,9 @@ def test_no_shared_module_names_a_source():
     for path in [*PACKAGE.glob("*.py"), *(PACKAGE / "sports").glob("*.py")]:
         tree = ast.parse(path.read_text())
         skip = _docstrings(tree)
-        if path.name == "registry.py":
-            # The Wikidata ids that mark a sport's athletes, keyed by the id they hold: they move to the
-            # sports themselves (BHA-178).
-            sports = next(n for n in tree.body if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", None) == "SPORTS")
-            skip |= {id(n) for n in ast.walk(sports)}
+        # A sport's Wikidata ids are keyed by the id they hold, which may be a source's ("espn_cricket").
+        wikidata = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and [getattr(t, "id", None) for t in n.targets] == ["wikidata"]]
+        skip |= {id(n) for w in wikidata for n in ast.walk(w)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
             if isinstance(node, ast.ImportFrom) and module[-2:-1] == ["adapters"] and module[-1] in SOURCE_MODULES:
