@@ -2,8 +2,9 @@
 
 Runs only with a token: SPORTS_FOLLOW_PANDASCORE_TOKEN, or the file ~/.config/sports-follow/pandascore-token
 (kept outside the repo). The token travels in the Authorization header, never in a URL, so it can't end
-up in logs. The free plan allows 1,000 requests an hour across every endpoint; the remaining count comes
-back in each response's headers, and a 429 pauses reads for a minute, like Sportmonks.
+up in logs. The free plan allows 1,000 requests an hour across every endpoint, kept to by the source
+budget (budget.py, BUDGET); the remaining count comes back in each response's headers and corrects the
+count, and a 429 pauses every lane for a minute.
 
 Free plan (pandascore.co/pricing): schedules, results, teams and players for every title; no player
 stats (those start at €400 a game a month) and no live in-game data. Birthdays are on paid plans only,
@@ -25,6 +26,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError, Provider
 
 BASE = "https://api.pandascore.co"
@@ -32,16 +34,14 @@ TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE", Path.hom
 PAGE = 100  # rows a page, PandaScore's most
 MAX_PAGES = 5
 HOURLY = 1000
-# Requests kept back for live series: background reads (the registry import, history.py) stop when the
-# hour's remaining allowance falls this low, and start again when the hour resets.
+# Requests kept back for live series: background reads (refreshes, the registry import, history.py) stop
+# when the hour's remaining allowance falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_PANDASCORE_RESERVE", 300))
+BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
-_state = {"paused_until": 0.0}
-# (requests left this hour, when the hour resets), from the last response's headers, else counted here.
-remaining = {"left": HOURLY, "resets_at": 0.0}
 
 
 PROVIDER = Provider(
@@ -52,8 +52,7 @@ PROVIDER = Provider(
 )
 
 
-class RateLimited(AdapterError):
-    """PandaScore said the hour's requests are used up."""
+RateLimited = budget.RateLimited
 
 
 class NotFound(AdapterError):
@@ -68,12 +67,11 @@ def token() -> str | None:
     return value or None
 
 
-def _count(res: httpx.Response) -> None:
-    now = time.time()
-    if now >= remaining["resets_at"]:
-        remaining.update(left=HOURLY, resets_at=now + 3600)
+def _observe(res: httpx.Response) -> None:
+    """What PandaScore says is left of the hour, which it resets on the hour."""
     header = res.headers.get("x-rate-limit-remaining") or res.headers.get("x-ratelimit-remaining") or ""
-    remaining["left"] = int(header) if header.isdigit() else max(0, remaining["left"] - 1)
+    if header.isdigit():
+        budget.observe(BUDGET, "", int(header), 3600 - time.time() % 3600)
 
 
 def get_json(path: str, ttl: float, **params: Any) -> Any:
@@ -86,15 +84,14 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         return hit[1]
     if not token():
         raise AdapterError("no PandaScore token (~/.config/sports-follow/pandascore-token)")
-    if time.time() < _state["paused_until"]:
-        raise RateLimited("PandaScore hourly limit reached; paused for a minute")
+    budget.take(BUDGET)
     try:
         res = _client.get(f"{BASE}{path}", params=params, headers={"authorization": f"Bearer {token()}"})
     except httpx.HTTPError as exc:
         raise AdapterError(f"PandaScore unreachable: {exc}") from exc
-    _count(res)
+    _observe(res)
     if res.status_code == 429:
-        _state["paused_until"] = time.time() + 60
+        budget.pause(BUDGET)
         raise RateLimited("PandaScore hourly limit reached (429); paused for a minute")
     if res.status_code in (401, 403):
         raise AdapterError(f"PandaScore rejected the token (HTTP {res.status_code})")
@@ -137,4 +134,4 @@ def get_all(path: str, ttl: float, pages: int = MAX_PAGES, **params: Any) -> lis
 
 def spare() -> bool:
     """Whether a background read leaves the hour's live reserve intact."""
-    return remaining["left"] > LIVE_RESERVE or time.time() >= remaining["resets_at"]
+    return budget.spare(BUDGET)

@@ -14,6 +14,7 @@ import pytest
 
 from sports_follow import credits, form, moments, registry, search, structured
 from sports_follow.adapters import liquipedia, liquipedia_esports as lp
+from sports_follow.adapters import budget
 from sports_follow.adapters.base import Snapshot
 from sports_follow.sports import esports
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
@@ -361,34 +362,44 @@ def test_the_key_goes_in_a_header_and_the_hour_is_shared_and_never_overspent(mon
         seen.append(request)
         return httpx.Response(200, json={"result": [{"match2id": "a"}]})
 
-    redis = FakeRedis()
     monkeypatch.setattr(liquipedia, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=liquipedia._client.headers))
     monkeypatch.setattr(liquipedia, "token", lambda: "lp-key")
     monkeypatch.setattr(liquipedia, "_cache", {})
-    monkeypatch.setattr(liquipedia.bus, "sync_redis", lambda: redis)
-    monkeypatch.setattr(liquipedia, "HOURLY", 8)
-    assert liquipedia.get("match", 0, wiki=WIKI, conditions="[[match2id::a]]") == [{"match2id": "a"}]
+    monkeypatch.setattr(liquipedia, "BUDGET", budget.Budget("liquipedia", windows=(budget.Window(3600, 8, margin=4),), reserve=2, fan=1))
+    with budget.in_lane("live"):
+        assert liquipedia.get("match", 0, wiki=WIKI, conditions="[[match2id::a]]") == [{"match2id": "a"}]
     assert seen[0].headers["authorization"] == "Apikey lp-key" and "lp-key" not in str(seen[0].url)
     assert "sports-follow" in seen[0].headers["user-agent"]
-    assert liquipedia.spent() == 1 and not liquipedia.spare()  # 8 an hour, 4 kept back, 30 reserved: no background reads
-    for _ in range(3):
-        liquipedia.get("match", 0, wiki=WIKI)
+    assert liquipedia.spare()  # 8 an hour, 4 kept back, 2 reserved: one more background read
+    liquipedia.get("match", 0, wiki=WIKI)  # a refresh
+    assert not liquipedia.spare()
     with pytest.raises(liquipedia.RateLimited):
-        liquipedia.get("match", 0, wiki=WIKI)  # the 5th of 8: the margin is never spent
+        liquipedia.get("match", 0, wiki=WIKI)  # another refresh: into the reserve
+    with budget.in_lane("fan"):
+        liquipedia.get("match", 0, wiki=WIKI)  # a fan following a pro: their share is one an hour
+        with pytest.raises(liquipedia.RateLimited):
+            liquipedia.get("match", 0, wiki=WIKI)
+    with budget.in_lane("live"):
+        liquipedia.get("match", 0, wiki=WIKI)  # the 4th of 8: live games may use what's kept for them
+        with pytest.raises(liquipedia.RateLimited):
+            liquipedia.get("match", 0, wiki=WIKI)  # the 5th: the margin is never spent, even live
     assert len(seen) == 4
     assert liquipedia.any_of("match2id", ["a", "b"]) == "[[match2id::a]] OR [[match2id::b]]"
 
 
-def test_without_redis_nothing_is_read(monkeypatch):
+def test_without_redis_each_process_counts_its_own(monkeypatch):
+    # Redis down: the budget falls back to this process's count instead of stopping every source.
     def broken():
         raise ConnectionError("redis down")
 
-    monkeypatch.setattr(liquipedia, "token", lambda: "lp-key")
-    monkeypatch.setattr(liquipedia, "_cache", {})
-    monkeypatch.setattr(liquipedia.bus, "sync_redis", broken)
-    with pytest.raises(liquipedia.RateLimited):
-        liquipedia.get("match", 0, wiki=WIKI)
-    assert not liquipedia.spare()
+    monkeypatch.setattr(budget, "STORE", budget.RedisStore())
+    monkeypatch.setattr(budget, "_fallback", budget.MemoryStore())
+    monkeypatch.setattr(budget, "_redis", broken)
+    small = budget.Budget("liquipedia", windows=(budget.Window(3600, 6, margin=4),))
+    budget.take(small, lane_name="live")
+    budget.take(small, lane_name="live")
+    with pytest.raises(budget.RateLimited):
+        budget.take(small, lane_name="live")
 
 
 def test_snapshot_of_a_finished_lobby_needs_no_request(monkeypatch):

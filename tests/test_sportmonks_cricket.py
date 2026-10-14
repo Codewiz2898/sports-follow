@@ -8,6 +8,7 @@ from datetime import date
 
 from sports_follow import moments
 from sports_follow.adapters import sportmonks, sportmonks_cricket as sc
+from sports_follow.adapters import budget
 
 IND, AFG = 10, 46
 OPENER, KEEPER, TAILENDER, SPINNER, SEAMER = 3338, 2900, 9001, 9002, 9003
@@ -171,12 +172,12 @@ def test_form_note_names_the_formats():
     assert stats[0] == {"label": "Runs", "value": "120"}
 
 
-def test_cricket_keeps_the_match_endpoint_for_live_matches(monkeypatch):
-    monkeypatch.setattr(sportmonks, "remaining", {"Cricket fixtures": (0, 1e12)})
+def test_cricket_keeps_the_match_endpoint_for_live_matches():
+    budget.observe(sportmonks.BUDGET, "Cricket fixtures", 0, 600)
     assert sc.SportmonksCricket().spare()  # lists of fixtures are counted apart from matches
-    sportmonks.remaining[sportmonks.CRICKET_MATCH] = (sportmonks.LIVE_RESERVE, 1e12)
+    budget.observe(sportmonks.BUDGET, sportmonks.CRICKET_MATCH, sportmonks.LIVE_RESERVE, 600)
     assert not sc.SportmonksCricket().spare()
-    sportmonks.remaining[sportmonks.CRICKET_MATCH] = (sportmonks.LIVE_RESERVE + 1, 1e12)
+    budget.observe(sportmonks.BUDGET, sportmonks.CRICKET_MATCH, sportmonks.LIVE_RESERVE + 1, 600)
     assert sc.SportmonksCricket().spare()
 
 
