@@ -2,7 +2,7 @@
 
 Team titles only (Valorant, CS2, League of Legends, Dota 2, Mobile Legends and the rest in GAMES): a
 series is one event between two teams, so it fits the model every other sport uses. Battle royale
-(BGMI, PUBG) doesn't: a match there is a lobby of sixteen teams scored by placement (BACKLOG.md, item 8).
+(BGMI, PUBG) doesn't: a match there is a lobby of sixteen teams scored by placement (docs/research/esports.md).
 
 The free plan has no player numbers and no live in-game data, so a player's results, form and moments
 are their team's, and lines are empty. A running series' map results do arrive as each map ends, so
