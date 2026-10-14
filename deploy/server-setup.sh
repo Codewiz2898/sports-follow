@@ -134,9 +134,16 @@ grep -q '^github.com ' /etc/ssh/ssh_known_hosts 2>/dev/null ||
   curl -fsS https://api.github.com/meta | python3 -c 'import json, sys; [print("github.com", k) for k in json.load(sys.stdin)["ssh_keys"]]' >>/etc/ssh/ssh_known_hosts
 export GIT_SSH_COMMAND="ssh -i $REPO_KEY -o IdentitiesOnly=yes"
 if ! git ls-remote "$REPO" HEAD >/dev/null 2>&1; then
-  echo "server-setup: add this key on GitHub (Settings, Deploy keys, write access off), then run this again:" >&2
+  echo "server-setup: add this key on GitHub (Settings, Deploy keys, write access off):" >&2
   echo "  https://github.com/Codewiz2898/sports-follow/settings/keys/new" >&2
   cat "$REPO_KEY.pub" >&2
+  if [ -f "$SSHD_CONF" ]; then
+    # Root lost SSH above, so a first run started as root has to come back as deploy.
+    echo "server-setup: then run this again as $USER_NAME (root can't log in any more), with DOMAIN=… after sudo if you use one:" >&2
+    echo "  ssh $USER_NAME@<server-ip> 'sudo bash -s' < deploy/server-setup.sh" >&2
+  else
+    echo "server-setup: then run this again the same way." >&2
+  fi
   exit 1
 fi
 
