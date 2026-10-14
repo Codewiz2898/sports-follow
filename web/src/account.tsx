@@ -10,7 +10,10 @@ import { CloseIcon } from './components/Icons'
 interface AccountState {
   me: Me | null  // null until the server answers
   config: ServerConfig | null
-  /** After a code (or Google) signed this device in. */
+  /** What just happened to this device's sign-in, said once at the top of the page. */
+  notice: string | null
+  dismissNotice: () => void
+  /** After a code signed this device in. */
   signedIn: (account: Account) => void
   signOut: (everywhere?: boolean) => Promise<void>
   deleteAccount: () => Promise<void>
@@ -43,21 +46,45 @@ async function forgetCachedAnswers() {
   } catch { /* no Cache Storage here */ }
 }
 
+function welcome(added: number): string {
+  if (!added) return 'Signed in.'
+  return `Signed in. ${added === 1 ? 'The player' : `The ${added} players`} you followed on this device ${added === 1 ? 'is' : 'are'} in your account now.`
+}
+
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
   const [config, setConfig] = useState<ServerConfig | null>(null)
+  const [notice, setNotice] = useState<string | null>(() => {
+    try {
+      const said = sessionStorage.getItem(NOTICE)
+      sessionStorage.removeItem(NOTICE)
+      return said
+    } catch {
+      return null
+    }
+  })
 
   useEffect(() => {
+    // Back from Google (/account?welcome=N, server.google_callback): the server signed this device in.
+    const back = new URLSearchParams(window.location.search).get('welcome')
+    if (back !== null) {
+      forgetCachedAnswers()
+      try { localStorage.removeItem('sf-alerts-seen') } catch { /* storage blocked */ }
+      setNotice(welcome(Number(back) || 0))
+    }
     api.account().then((answer) => {
       setMe(answer)
-      if (answer.signed_in === false && answer.reason === 'signed_out') forgetCachedAnswers()
+      if (answer.signed_in === false && answer.reason === 'signed_out') {
+        forgetCachedAnswers()
+        setNotice((said) => said ?? 'This device was signed out. Sign in again to see your players.')
+      }
     }).catch(() => setMe({ signed_in: false }))
     api.config().then(setConfig).catch(() => {})
   }, [])
 
+  const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account) => {
-    const added = account.players_added ?? 0
-    startOver('/account', added ? `Signed in. ${added === 1 ? 'The player' : `The ${added} players`} you followed on this device ${added === 1 ? 'is' : 'are'} in your account now.` : 'Signed in.', false)
+    startOver('/account', welcome(account.players_added ?? 0), false)
   }, [])
   const signOut = useCallback(async (everywhere = false) => {
     await api.signOut(everywhere)
@@ -68,7 +95,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     await startOver('/', 'Your account and everything kept with it are deleted.', true)
   }, [])
 
-  const value = useMemo<AccountState>(() => ({ me, config, signedIn, signOut, deleteAccount }), [me, config, signedIn, signOut, deleteAccount])
+  const value = useMemo<AccountState>(
+    () => ({ me, config, notice, dismissNotice, signedIn, signOut, deleteAccount }),
+    [me, config, notice, dismissNotice, signedIn, signOut, deleteAccount],
+  )
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>
 }
 
@@ -80,23 +110,12 @@ export function useAccount(): AccountState {
 
 /** What happened to this device's sign-in: said once, at the top of the page. */
 export function AccountNotice() {
-  const { me } = useAccount()
-  const [flash, setFlash] = useState<string | null>(() => {
-    try {
-      const said = sessionStorage.getItem(NOTICE)
-      sessionStorage.removeItem(NOTICE)
-      return said
-    } catch {
-      return null
-    }
-  })
-  const [closed, setClosed] = useState(false)
-  const text = flash ?? (me?.signed_in === false && me.reason === 'signed_out' ?'This device was signed out. Sign in again to see your players.' : null)
-  if (!text || closed) return null
+  const { notice, dismissNotice } = useAccount()
+  if (!notice) return null
   return (
     <div className="notice" role="status">
-      <span>{text}</span>
-      <button type="button" className="btn icon" style={{ width: 32, height: 32, background: 'transparent', color: 'inherit' }} aria-label="Dismiss" onClick={() => { setFlash(null); setClosed(true) }}>
+      <span>{notice}</span>
+      <button type="button" className="btn icon" style={{ width: 32, height: 32, background: 'transparent', color: 'inherit' }} aria-label="Dismiss" onClick={dismissNotice}>
         <CloseIcon width={16} height={16} />
       </button>
     </div>

@@ -64,6 +64,26 @@ def find_or_create(db: Session, email: str) -> int:
     return db.scalar(select(Account.id).where(Account.email == email))
 
 
+def find_or_create_google(db: Session, sub: str, email: str) -> int | None:
+    """The account for this Google account: by its Google id, else the account with the address Google
+    verified (it gets the Google id), else a new one. None when that address's account is already
+    linked to a different Google account: the emailed code still signs in to it."""
+    for _ in range(2):  # a second pass if another request made the address's account in between
+        found = db.scalar(select(Account.id).where(Account.google_sub == sub))
+        if found is not None:
+            return found
+        account = db.execute(select(Account).where(Account.email == email).with_for_update()).scalar_one_or_none()
+        if account is not None:
+            if account.google_sub is not None:
+                return None
+            account.google_sub = sub
+            return account.id
+        made = db.scalar(insert(Account).values(email=email, google_sub=sub, fan_id=f"{FAN_PREFIX}{secrets.token_urlsafe(18)}").on_conflict_do_nothing().returning(Account.id))
+        if made is not None:
+            return made
+    return None
+
+
 def describe(db: Session, account_id: int) -> dict | None:
     account = db.get(Account, account_id)
     if account is None:

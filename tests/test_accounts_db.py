@@ -140,6 +140,17 @@ def test_the_device_signing_in_is_never_the_one_dropped_for_room(db):
     assert len(kept) == notify.MAX_DEVICES and "this-phone" in kept and "old-0" not in kept
 
 
+def test_google_finds_by_its_id_then_links_the_address_and_never_takes_over_another_link(db):
+    by_email, _ = account(db, "fan@gmail.com")
+    assert accounts.find_or_create_google(db, "g-1", "fan@gmail.com") == by_email  # linked
+    assert accounts.find_or_create_google(db, "g-1", "renamed@gmail.com") == by_email  # by its id from now on
+    assert accounts.find_or_create_google(db, "g-2", "fan@gmail.com") is None  # the address has another Google account
+    new = accounts.find_or_create_google(db, "g-3", "new@gmail.com")
+    db.commit()
+    assert db.get(Account, new).email == "new@gmail.com" and db.get(Account, new).google_sub == "g-3"
+    assert db.get(Account, by_email).google_sub == "g-1"
+
+
 # ---------------------------------------------------------------- sessions
 
 
