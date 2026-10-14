@@ -94,7 +94,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -110,7 +110,7 @@
         "x": 0,
         "y": 0,
         "w": 12,
-        "h": 9
+        "h": 14
       },
       "id": 1
     },
@@ -236,7 +236,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -250,9 +250,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 9,
+        "y": 14,
         "w": 8,
-        "h": 8
+        "h": 14
       },
       "id": 3
     },
@@ -296,7 +296,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -310,9 +310,9 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 9,
+        "y": 14,
         "w": 8,
-        "h": 8
+        "h": 14
       },
       "id": 4
     },
@@ -356,7 +356,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -370,9 +370,9 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 9,
+        "y": 14,
         "w": 8,
-        "h": 8
+        "h": 14
       },
       "id": 5
     },
@@ -433,7 +433,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 28,
         "w": 12,
         "h": 9
       },
@@ -470,7 +470,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 17,
+        "y": 28,
         "w": 12,
         "h": 9
       },
@@ -485,7 +485,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 37,
         "w": 24,
         "h": 3
       },

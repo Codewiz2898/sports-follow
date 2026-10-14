@@ -353,7 +353,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -369,7 +369,7 @@
         "x": 0,
         "y": 4,
         "w": 12,
-        "h": 9
+        "h": 14
       },
       "id": 5
     },
@@ -412,7 +412,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -428,7 +428,7 @@
         "x": 12,
         "y": 4,
         "w": 12,
-        "h": 9
+        "h": 14
       },
       "id": 6
     },
@@ -471,7 +471,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -485,9 +485,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 13,
+        "y": 18,
         "w": 12,
-        "h": 8
+        "h": 14
       },
       "id": 7
     },
@@ -522,7 +522,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 13,
+        "y": 18,
         "w": 12,
         "h": 8
       },
@@ -537,7 +537,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 32,
         "w": 24,
         "h": 3
       },
