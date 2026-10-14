@@ -98,7 +98,7 @@ def test_a_lobby_on_now_and_over_later():
     assert (over.status, over.score_label, over.clock_label) == ("final", "DNS win · 27 pts", "Final standings")
     f = pe.parse_fixture(lobby, T0 + timedelta(hours=5))
     assert (f.source_id, f.title, f.competition, f.status, f.locator) == ("as-pgsc4t:2026-10-13:1", "PUBG Global Series · Day 1", "PUBG Global Series", "final", {"tournament": "as-pgsc4t", "day": "2026-10-13", "n": 1})
-    assert pe._result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
+    assert pe.PubgEsports().result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
     assert len(f"pubg_esports:{f.source_id}") <= 64
 
 

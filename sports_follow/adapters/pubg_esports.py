@@ -25,9 +25,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .. import naming
+from ..sports import esports
 from . import pubg
 from .base import Fixture, Line, PlayerRef, Snapshot
-from .liquipedia_esports import ordinal, result_label as _result_label
 
 GAME = "PUBG"
 MAPS = {
@@ -210,7 +210,7 @@ def player_lines(lobby: dict[str, Any], table: list[dict[str, Any]]) -> dict[str
         lines[account] = Line(
             headline=f"{t['kills']} finish{'es' if t['kills'] != 1 else ''} · {t['damage']:,} dmg",
             stats=[
-                {"label": "Team place", "value": ordinal(team.get("place"))}, {"label": "Team points", "value": str(int(team.get("points") or 0))},
+                {"label": "Team place", "value": esports.ordinal(team.get("place"))}, {"label": "Team points", "value": str(int(team.get("points") or 0))},
                 {"label": "Assists", "value": str(t["assists"])}, {"label": "Knocks", "value": str(t["knocks"])},
                 {"label": "Finishes", "value": str(t["kills"])}, {"label": "Damage", "value": f"{t['damage']:,}"}, {"label": "Games", "value": str(t["games"])},
             ],
@@ -401,7 +401,7 @@ class PubgEsports:
         return out
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
-        return _result_label(fixture, team_ids)
+        return esports.lobby_result(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         now = datetime.now(timezone.utc)

@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .. import naming
+from ..sports import esports
 from . import liquipedia
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
@@ -61,13 +62,6 @@ def team_name(page: str | None) -> str:
     return (page or "").replace("_", " ").strip()
 
 
-def ordinal(n: int | None) -> str:
-    if not n:
-        return "?"
-    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
 def game_name(wiki: str | None, game: str | None = None) -> str | None:
     return GAME_NAMES.get((game or "").lower()) or WIKIS.get(wiki or "")
 
@@ -101,10 +95,6 @@ def _int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n > 0 else None
-
-
-def _points(value: float) -> str:
-    return str(int(value)) if value == int(value) else f"{value:.1f}"
 
 
 def _json(value: Any) -> Any:
@@ -236,12 +226,7 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
 
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     """ "3rd of 16 · 87 pts" from the player's team's side."""
-    r = fixture.result or {}
-    mine = {team_id(t) for t in team_ids}
-    ours = next((s for s in r.get("standings") or [] if team_id(s["id"]) in mine), None)
-    if ours is None:
-        return ""
-    return f"{ordinal(ours['place'])} of {r.get('teams')} · {_points(ours['points'])} pts"
+    return esports.lobby_result(fixture, team_ids, team_id)
 
 
 def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Snapshot:
@@ -262,10 +247,10 @@ def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Sn
         game_rows.append({"n": n, "map": g.get("map") or None, "status": "finished" if _game_done(g) else "not_started", "winner": ids[winner - 1] if winner and winner <= len(ids) else None})
     leader = table[0] if table else None
     if status == "final" and leader:
-        score = f"{leader['name']} win · {_points(leader['points'])} pts"
+        score = f"{leader['name']} win · {esports.points(leader['points'])} pts"
         clock = "Final standings"
     elif status == "live" and leader and done:
-        score = f"{leader['name']} lead · {_points(leader['points'])} pts"
+        score = f"{leader['name']} lead · {esports.points(leader['points'])} pts"
         clock = f"After match {done} of {total}" if total else f"After match {done}"
     elif status == "live":
         score, clock = f"{len(table)} teams", f"Match 1 of {total}" if total else "Under way"
@@ -288,8 +273,8 @@ def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Sn
             if r is None:
                 continue
             line = Line(
-                headline=f"{ordinal(r['place'])} · {_points(r['points'])} pts",
-                stats=[{"label": "Place", "value": ordinal(r["place"])}, {"label": "Points", "value": _points(r["points"])}, {"label": "Finishes", "value": str(r["kills"])}, {"label": "Games won", "value": str(r["wins"])}],
+                headline=f"{esports.ordinal(r['place'])} · {esports.points(r['points'])} pts",
+                stats=[{"label": "Place", "value": esports.ordinal(r["place"])}, {"label": "Points", "value": esports.points(r["points"])}, {"label": "Finishes", "value": str(r["kills"])}, {"label": "Games won", "value": str(r["wins"])}],
             )
             for p in o.get("match2players") or []:
                 if p.get("name"):

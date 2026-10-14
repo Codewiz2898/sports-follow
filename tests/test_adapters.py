@@ -15,6 +15,7 @@ import pytest
 from sports_follow import moments, naming, structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer, lichess_chess, liquipedia, opendota, pandascore, pubg, sportmonks
 from sports_follow.adapters.base import AdapterError, Fixture
+from sports_follow.sports import football
 
 FIXTURES = Path(__file__).parent / "fixtures" / "espn"
 KOHLI = "253802"
@@ -239,10 +240,10 @@ def test_soccer_schedule_results_and_labels():
     assert fixtures and all(f.status == "final" for f in fixtures)
     last = fixtures[-1]
     assert last.title == "Al Nassr vs Al Fateh"
-    assert espn_soccer.result_label(last, [AL_NASSR]) == "Won 3–0"
+    assert football.result_label(last, [AL_NASSR]) == "Won 3–0"
     away_win = fixtures[-2]
     assert away_win.title == "Al Riyadh vs Al Nassr"
-    assert espn_soccer.result_label(away_win, [AL_NASSR]) == "Won 4–0"
+    assert football.result_label(away_win, [AL_NASSR]) == "Won 4–0"
 
 
 def test_soccer_schedule_fixtures_carry_a_league_locator():
@@ -292,15 +293,15 @@ def test_soccer_shootouts_say_who_won_on_penalties():
     assert (snap.status, snap.score_label, snap.clock_label) == ("final", "Bradford City 0 – 0 Burnley (4–2 pens)", "FT-Pens")
     fixtures = {f.source_id: f for f in espn_soccer.parse_schedule(load("soccer-schedule-shootouts"))}
     cup = fixtures["401908136"]
-    assert espn_soccer.result_label(cup, [BURNLEY]) == "Lost 0–0 (2–4 pens)"
-    assert espn_soccer.result_label(cup, [BRADFORD]) == "Won 0–0 (4–2 pens)"
-    assert espn_soccer.result_label(cup, ["1"]) == "Bradford City 0–0 Burnley (4–2 pens)"
-    assert espn_soccer.result_label(fixtures["401880603"], [BURNLEY]) == "Won 1–1 (4–3 pens)"
-    assert espn_soccer.result_label(fixtures["401880254"], [BURNLEY]) == "Drew 1–1"  # no shootout
+    assert football.result_label(cup, [BURNLEY]) == "Lost 0–0 (2–4 pens)"
+    assert football.result_label(cup, [BRADFORD]) == "Won 0–0 (4–2 pens)"
+    assert football.result_label(cup, ["1"]) == "Bradford City 0–0 Burnley (4–2 pens)"
+    assert football.result_label(fixtures["401880603"], [BURNLEY]) == "Won 1–1 (4–3 pens)"
+    assert football.result_label(fixtures["401880254"], [BURNLEY]) == "Drew 1–1"  # no shootout
     # No winner flag: the score decides, not "Drew".
     unflagged = Fixture("1", "Burnley vs Derby County", "", None, None, "final", [BURNLEY, "374"], {}, result={
         "home": {"id": BURNLEY, "name": "Burnley", "score": "2", "winner": None}, "away": {"id": "374", "name": "Derby County", "score": "1", "winner": None}})
-    assert (espn_soccer.result_label(unflagged, [BURNLEY]), espn_soccer.result_label(unflagged, ["374"])) == ("Won 2–1", "Lost 1–2")
+    assert (football.result_label(unflagged, [BURNLEY]), football.result_label(unflagged, ["374"])) == ("Won 2–1", "Lost 1–2")
 
 
 def test_soccer_season_stats():

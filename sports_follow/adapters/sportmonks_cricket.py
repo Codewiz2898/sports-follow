@@ -20,9 +20,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .. import naming
+from ..sports import cricket
 from . import sportmonks
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
-from .espn_cricket import batting_bowling
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
@@ -301,7 +301,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
     if not lines:
         return [], ""
     kinds = " & ".join(formats)
-    return batting_bowling(lines), f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from Sportmonks scorecards"
+    return cricket.batting_bowling(lines), f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from Sportmonks scorecards"
 
 
 # ---------------------------------------------------------------- the adapter

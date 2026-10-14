@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import games
-from .adapters.espn_cricket import innings as cricket_innings
+from .sports.cricket import innings as cricket_innings
 
 LEVELS = ("everything", "key", "results", "off")
 DEFAULT_LEVEL = "key"

@@ -15,6 +15,7 @@ import pytest
 from sports_follow import credits, form, moments, registry, search, structured
 from sports_follow.adapters import liquipedia, liquipedia_esports as lp
 from sports_follow.adapters.base import Snapshot
+from sports_follow.sports import esports
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
 
 from .test_structured import FakeSource, lane
@@ -140,7 +141,7 @@ def test_players_are_keyed_by_wiki_and_page():
     assert (ref.system, ref.athlete_id, ref.name, ref.team_ids, ref.team_names, ref.league, ref.born) == (
         "liquipedia_esports", "pubgmobile:Jonathan", "JONATHAN", ["GodLike_Esports"], ["GodLike Esports"], WIKI, None)
     assert ref.profile_url == "https://liquipedia.net/pubgmobile/Jonathan"
-    assert lp.ordinal(11) == "11th" and lp.ordinal(21) == "21st" and lp.ordinal(2) == "2nd"
+    assert esports.ordinal(11) == "11th" and esports.ordinal(21) == "21st" and esports.ordinal(2) == "2nd"
 
 
 def test_team_form_over_the_lobbies():

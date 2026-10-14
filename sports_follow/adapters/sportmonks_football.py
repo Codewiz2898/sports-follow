@@ -16,9 +16,9 @@ from typing import Any
 from urllib.parse import quote
 
 from .. import naming
+from ..sports import football
 from . import sportmonks
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
-from .espn_soccer import result_label as _result_label
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type"
@@ -365,7 +365,7 @@ class SportmonksFootball:
         return {key: found[fid] for key, fid in wanted.items() if fid in found}
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
-        return _result_label(fixture, team_ids)
+        return football.result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         data = sportmonks.get_json(f"/football/players/{ref.athlete_id}", ttl=3 * 3600, include="statistics.details.type;statistics.season.league")
