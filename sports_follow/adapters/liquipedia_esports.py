@@ -21,18 +21,22 @@ underscores, so a team's lobbies are asked for in each spelling, as Liquipedia's
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .. import naming
 from ..sports import esports
 from . import liquipedia
-from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
 
 # The battle royale wikis read, and what fans call a game won on each. All store lobbies the same way
 # (Lua-Modules: each wiki's MatchGroup/Input/Custom.lua hands them to standardProcessFfaMaps).
+log = logging.getLogger("sports_follow.esports")
+
 WIKIS = {"pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "apexlegends": "Apex Legends"}
 WIN_WORD = {"pubgmobile": "Chicken dinner", "freefire": "Booyah", "apexlegends": "Champions"}
 # A match's own game field, where a wiki holds more than one ("bgmi" events on the PUBG Mobile wiki).
@@ -298,6 +302,22 @@ def parse_player(p: dict[str, Any], wiki: str) -> PlayerRef:
     )
 
 
+ROSTER_WAIT = 3600  # how long a run waits, in all, for live lobbies to leave it some of the hour
+ROSTER_FIELDS = "pageid,pagename,id,name,romanizedname,localizedname,nationality,birthdate,status,team,teampagename"
+
+
+def rostered(players: list[dict[str, Any]], wiki: str) -> list[Rostered]:
+    """Liquipedia players on one wiki for the registry (pure). The handle is the name, the real name an alias."""
+    out = []
+    for p in players:
+        if not p.get("pageid") or not p.get("pagename"):
+            continue
+        ref = parse_player(p, wiki)
+        aliases = [p.get(k) for k in ("name", "romanizedname", "localizedname")]
+        out.append(Rostered(key=f"lp:{SHORT[wiki]}:{p['pageid']}", ref=ref, aliases=[a for a in aliases if a], country=p.get("nationality") or None, current=p.get("status") == "Active" and bool(ref.team_ids)))
+    return out
+
+
 def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) -> tuple[list[dict[str, str]], str]:
     """Lobbies played, average placement, top-three finishes, games won and finishes over these lobbies."""
     ids = {team_id(t) for t in team_ids}
@@ -349,9 +369,39 @@ class LiquipediaEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
+    game_names = (*WIKIS.values(), *GAME_NAMES.values())
+    roster_prefix = "lp:"
+
     @classmethod
     def available(cls) -> bool:
         return bool(liquipedia.token())
+
+    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
+        return player_game(league, country)
+
+    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+        """The active players of each battle royale wiki, 1,000 a request, only while the hour's reserve
+        for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
+        complete = True
+        for wiki in IMPORT_WIKIS:
+            offset, waited = 0, 0
+            while True:
+                if not liquipedia.spare() and waited < ROSTER_WAIT:
+                    time.sleep(60)
+                    waited += 60
+                    continue
+                try:
+                    players = liquipedia.get("player", 0, wiki=wiki, conditions="[[status::Active]]", query=ROSTER_FIELDS, order="pageid ASC", limit=liquipedia.PAGE, offset=offset)
+                except AdapterError as exc:
+                    log.warning("registry esports: Liquipedia %s at %d failed: %s", wiki, offset, exc)
+                    complete = False
+                    break
+                total = keep(rostered(players, wiki))
+                log.info("registry esports: Liquipedia %s, %d players read, %d kept", wiki, offset + len(players), total)
+                if len(players) < liquipedia.PAGE:
+                    break
+                offset += liquipedia.PAGE
+        return Roster(complete=complete, leagues=list(IMPORT_WIKIS))
 
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         """Players whose handle is exactly this, on every battle royale wiki."""

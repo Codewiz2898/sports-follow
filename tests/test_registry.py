@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from sports_follow import bus, registry, search
-from sports_follow.adapters import PlayerRef, SearchResult
+from sports_follow.adapters import KNOWN, PlayerRef, SearchResult
 from sports_follow.models import Athlete
 
 WD = "http://www.wikidata.org/entity/"
@@ -209,9 +209,9 @@ def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):
         ran.append("pandascore")
         raise KeyError("id")
 
-    monkeypatch.setattr(registry, "_import_pandascore", pandascore)
-    monkeypatch.setattr(registry, "_import_liquipedia", lambda: ran.append("liquipedia") or 4)
-    monkeypatch.setattr(registry, "import_pubg", lambda: ran.append("pubg") or 5)
+    imports = {"pandascore_esports": pandascore, "liquipedia_esports": lambda: ran.append("liquipedia") or 4, "pubg_esports": lambda: ran.append("pubg") or 5}
+    monkeypatch.setattr(registry, "ADAPTERS", {s: KNOWN[s] for s in imports})
+    monkeypatch.setattr(registry, "import_roster", lambda adapter: imports[adapter.system]())
     with pytest.raises(RuntimeError, match="PandaScore failed"):
         registry.import_esports()
     assert ran == ["pandascore", "liquipedia", "pubg"]

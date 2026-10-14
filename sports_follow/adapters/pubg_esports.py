@@ -23,12 +23,12 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .. import naming
 from ..sports import esports
 from . import pubg
-from .base import Adapter, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
 
 GAME = "PUBG"
 MAPS = {
@@ -248,6 +248,19 @@ def players_of(lobbies: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return seen
 
 
+def rostered(players: dict[str, dict[str, Any]]) -> list[Rostered]:
+    """The players seen in recent tournaments, for the registry (pure): the name without the team tag,
+    the in-game name an alias, keyed by the account."""
+    out = []
+    for account, info in players.items():
+        if not account or not naming.words(info.get("name") or ""):
+            continue
+        team = [info["team"]] if info.get("team") else []
+        ref = PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=team, team_names=team, league="pubg", game=GAME)
+        out.append(Rostered(key=f"pubg:{account.split('.', 1)[-1][:15]}", ref=ref, aliases=[info.get("in_game") or ""], current=True))  # played in the last fortnight
+    return out
+
+
 def ref_of(account: str, info: dict[str, Any]) -> PlayerRef:
     return PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=[info["team"]], team_names=[info["team"]], league="pubg", game=GAME)
 
@@ -363,9 +376,22 @@ class PubgEsports(Adapter):
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
 
+    game_names = (GAME,)
+    roster_prefix = "pubg:"
+    roster_every = 6 * 3600  # from the index warm() keeps, so it costs no requests of its own
+
     @classmethod
     def available(cls) -> bool:
         return bool(pubg.token())
+
+    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
+        return GAME if league == "pubg" else None
+
+    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+        """The players of PUBG's recent tournaments, from the index (no requests of their own once it's
+        warm). PUBG keeps a fortnight of matches, so a player not seen for three weeks is dropped."""
+        keep(rostered(self.players()))
+        return Roster(complete=True, grace=timedelta(days=21))
 
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         wanted = naming.fold(name).strip()

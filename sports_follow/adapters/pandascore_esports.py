@@ -21,12 +21,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .. import bus, naming
 from . import dota, opendota, pandascore
-from .base import Adapter, AdapterError, Fixture, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -247,6 +248,24 @@ def full_name(p: dict[str, Any]) -> str:
     return " ".join(x.strip() for x in (p.get("first_name"), p.get("last_name")) if x and x.strip())
 
 
+ROSTER_PACE = 9.0  # seconds between pages: at most 400 requests an hour of PandaScore's 1,000
+ROSTER_WAIT = 3600  # how long a run waits, in all, for live series to leave it some of the hour
+
+
+def rostered(players: list[dict[str, Any]]) -> list[Rostered]:
+    """PandaScore players for the registry (pure). The handle is the name ("TenZ") and the full name an
+    alias, so either finds them; a pro on a team today counts as current."""
+    out = []
+    for p in players:
+        if not p.get("id") or not naming.words(p.get("name") or ""):
+            continue
+        ref = parse_player(p)
+        if ref.league not in GAMES:
+            continue  # a 1v1 or battle-royale title
+        out.append(Rostered(key=f"pandascore:{ref.athlete_id}", ref=ref, aliases=[full_name(p)], country=country(p.get("nationality")), current=bool(p.get("active")) and bool(ref.team_ids)))
+    return out
+
+
 def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) -> tuple[list[dict[str, str]], str]:
     """Series and maps won and lost over these finished series, from the team's side."""
     series, maps = [0, 0], [0, 0]
@@ -309,9 +328,48 @@ class PandascoreEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
+    game_names = tuple(GAMES.values())
+    roster_prefix = "pandascore:"
+
     @classmethod
     def available(cls) -> bool:
         return bool(pandascore.token())
+
+    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
+        return game_name(league)
+
+    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+        """The active pros of IMPORT_GAMES, a page of 100 every ROSTER_PACE seconds and only while live
+        series keep their share of the hour (pandascore.spare)."""
+        games = ",".join(str(GAME_IDS[g]) for g in IMPORT_GAMES)
+        params = {"filter[videogame_id]": games, "filter[active]": "true", "sort": "id", "page[size]": pandascore.PAGE}
+        page, waited, complete = 1, 0, True
+        while True:
+            if not pandascore.spare() and waited < ROSTER_WAIT:
+                time.sleep(60)
+                waited += 60
+                continue
+            try:
+                players = pandascore.get_json("/players", ttl=0, **params, **{"page[number]": page})
+            except pandascore.RateLimited:
+                if waited >= ROSTER_WAIT:
+                    complete = False
+                    break
+                time.sleep(60)
+                waited += 60
+                continue
+            except AdapterError as exc:
+                log.warning("registry esports: page %d failed: %s", page, exc)
+                complete = False
+                break
+            players = players if isinstance(players, list) else []
+            total = keep(rostered(players))
+            log.info("registry esports: %d pages read, %d pros kept", page, total)
+            if len(players) < pandascore.PAGE:
+                break
+            page += 1
+            time.sleep(ROSTER_PACE)
+        return Roster(complete=complete, leagues=list(IMPORT_GAMES))
 
     def credits_also(self) -> list[dict[str, Any]]:
         if not opendota.ENABLED:

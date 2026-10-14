@@ -235,7 +235,7 @@ def test_form_counts_series_and_maps():
 
 
 def test_registry_rows_from_pandascore_players():
-    rows = registry.esports_rows([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}])
+    rows = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}]))
     [row] = rows
     assert row["qid"] == f"pandascore:{TENZ}" and len(row["qid"]) <= 20
     assert (row["sport"], row["name"], row["aliases"], row["teams"], row["league"], row["country"]) == ("esports", "TenZ", ["Tyson Ngo"], ["Sentinels"], "valorant", "Canada")
@@ -245,7 +245,7 @@ def test_registry_rows_from_pandascore_players():
 
 def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatch):
     monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
-    row = registry.esports_rows([PLAYER])[0]
+    row = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER]))[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")
     assert (r.key, r.system, r.athlete_id, r.sport) == (f"pandascore_esports:{TENZ}", "pandascore_esports", str(TENZ), "Valorant")  # the game, not "Esports"
     assert r.qid is None  # following goes by the PandaScore id; the server takes only Wikidata ids as qids

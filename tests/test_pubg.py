@@ -174,7 +174,7 @@ def test_live_lobbies_are_read_once_a_tournament_a_round(index):
 
 def test_registry_rows_from_pubg_players(index):
     adapter, _ = index
-    rows = {r["name"]: r for r in registry.pubg_rows(adapter.players())}
+    rows = {r["name"]: r for r in registry.roster_rows("pubg_esports", pe.rostered(adapter.players()))}
     tgltn = rows["TGLTN"]
     assert tgltn["qid"] == "pubg:aaaaaaaaaaaaaaa" and len(tgltn["qid"]) <= 20
     assert (tgltn["aliases"], tgltn["teams"], tgltn["league"], tgltn["ids"]) == (["4AM_TGLTN"], ["4AM"], "pubg", {"pubg_esports": TGLTN})

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 # What most sources' athlete ids look like. An id goes into the source's URL or query as it is, so one
@@ -86,6 +86,28 @@ class Snapshot:
 
 
 @dataclass
+class Rostered:
+    """An athlete as a source's own list has them, for the registry: esports pros come from their
+    sources, not Wikidata (registry.import_roster)."""
+
+    key: str  # their registry id: "pandascore:123", "lp:pubgm:4567"
+    ref: PlayerRef
+    aliases: list[str] = field(default_factory=list)  # other names (a real name beside the handle)
+    country: str | None = None
+    current: bool = True  # on a team, or playing, today
+
+
+@dataclass
+class Roster:
+    """How a source's roster run went. A complete one lets the registry drop the rows of the source it
+    didn't see again (retired, moved on)."""
+
+    complete: bool
+    leagues: list[str] | None = None  # the leagues (games, wikis) it read in full; None: all of them
+    grace: timedelta = timedelta(0)  # how long a row not seen is kept anyway
+
+
+@dataclass
 class SearchResult:
     """One athlete a search found: on Sports Follow, in the registry, or in a source's own search."""
 
@@ -147,9 +169,13 @@ class Provider:
 class Adapter:
     """One source system. Subclasses set the class attributes and implement every method below.
 
-    Optional, where a source has it (asked for with getattr): search(name) -> [PlayerRef] (the
+    Optional, where a source has it (asked for with getattr): search(name, league) -> [PlayerRef] (the
     registry's name lookup), spare() (whether background reads leave live games their share),
-    snapshots(locators) (below), warm() (a shared index kept fresh), games and game_of(ref) (esports)."""
+    snapshots(locators) (below), warm() (a shared index kept fresh); for esports, games and game_of(ref),
+    game_names (every name its games go by) and game_of_league(league, country); and a roster for the
+    registry: roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep) -> Roster, which
+    hands keep() its athletes (Rostered) a page at a time, and roster_every (seconds) for a source whose
+    list is read more often than the weekly import."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     sports: tuple[str, ...]  # sport names this adapter answers for, lower case

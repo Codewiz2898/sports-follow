@@ -139,6 +139,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   half of one core. A band changes only when two evaluations agree, so a board glitch isn't a swing.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
+- **Adding or removing a data source** is one module and one line. A source is a module in
+  `sports_follow/adapters/` with an `Adapter` subclass (`adapters/base.py`) that describes itself: its
+  `system`, the `sports` it serves, its `name` on a page, its `provider` (the Credits entry, shared with
+  the provider's other adapters), what it `covers`, its athlete `id_pattern`, and `available()` (a
+  licensed source needs its token). Optional capabilities are opt-in, so nothing else changes: a name
+  `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
+  `recognise` for search as you type, `snapshots` for batched live polling, `spare` for background reads.
+  The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
+  serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
+  source never breaks another. `tests/test_sources.py` fails if shared code names a source.
 
 ## Run it
 
