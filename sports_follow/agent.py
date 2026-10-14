@@ -165,7 +165,7 @@ def _run(
                 if left < 30:  # too little for a reply worth waiting for
                     raise AgentError("The agent did not finish within its time limit.")
                 try:
-                    with tracing.span("model call", **{"gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL, "sports_follow.label": label}) as call:
+                    with tracing.span("model call", {"gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL, "sports_follow.label": label}) as call:
                         r = llm.complete(
                             model=MODEL,
                             system=SYSTEM_PROMPT,

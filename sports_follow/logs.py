@@ -97,10 +97,11 @@ def _record(*args: Any, **kwargs: Any) -> logging.LogRecord:
     """Every record, whichever handler takes it, with the context it was logged in (as it was then), and
     the trace and span it was logged in when tracing.py is on, so a line opens its trace."""
     record = _make_record(*args, **kwargs)
-    record.context = dict(_context.get() or {})
+    context = dict(_context.get() or {})
     span = trace.get_current_span().get_span_context()
     if span.is_valid:
-        record.context |= {"trace_id": format(span.trace_id, "032x"), "span_id": format(span.span_id, "016x")}
+        context |= {"trace_id": format(span.trace_id, "032x"), "span_id": format(span.span_id, "016x")}
+    record.context = context
     return record
 
 

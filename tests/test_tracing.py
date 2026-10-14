@@ -34,7 +34,7 @@ def test_off_without_an_exporter(monkeypatch):
 
     def queued():
         logs.begin(rid="ab12cd34ef56ab78")
-        with tracing.span("POST /api/follows", SpanKind.SERVER) as span:
+        with tracing.span("POST /api/follows", kind=SpanKind.SERVER) as span:
             return span.is_recording(), logs.carry()
 
     assert _alone(queued) == (False, {"rid": "ab12cd34ef56ab78"})  # spans cost nothing, and there's no trace to carry
@@ -57,7 +57,7 @@ def test_opentelemetrys_own_settings_choose_the_exporter(monkeypatch):
 def test_a_job_continues_the_trace_of_the_request_that_queued_it(spans, caplog):
     def request():
         logs.begin(rid="ab12cd34ef56ab78")
-        with tracing.span("POST /api/follows", SpanKind.SERVER):
+        with tracing.span("POST /api/follows", kind=SpanKind.SERVER):
             return logs.carry()
 
     carried = _alone(request)
@@ -65,7 +65,7 @@ def test_a_job_continues_the_trace_of_the_request_that_queued_it(spans, caplog):
 
     async def build_card(ctx, player_id: int) -> None:
         logging.getLogger("sports_follow.pipeline").info("build %s: bound", player_id)
-        with tracing.span("poll round", event_id=5):
+        with tracing.span("poll round", {"event_id": 5}):
             pass
 
     caplog.set_level(logging.INFO, "sports_follow")

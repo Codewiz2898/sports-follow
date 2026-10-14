@@ -72,7 +72,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
             })
 
         attributes = {"job.id": ctx.get("job_id"), "job.attempt": ctx.get("job_try"), "job.waited_ms": None if waited is None else round(waited * 1000), **fields}
-        with tracing.job_span(fn.__name__, trace, **attributes) as span, (nullcontext() if deep else tracing.shallow()):
+        with tracing.job_span(fn.__name__, trace, attributes) as span, (nullcontext() if deep else tracing.shallow()):
             try:
                 result = await fn(ctx, *args, **kwargs)
             except asyncio.CancelledError:

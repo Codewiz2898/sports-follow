@@ -122,9 +122,9 @@ def _outgoing(span: trace.Span, request: Any) -> None:
 
 
 @contextmanager
-def span(name: str, kind: SpanKind = SpanKind.INTERNAL, context: Context | None = None, **attributes: Any) -> Iterator[trace.Span]:
+def span(name: str, attributes: Mapping[str, Any] | None = None, *, kind: SpanKind = SpanKind.INTERNAL, context: Context | None = None) -> Iterator[trace.Span]:
     """A span around a piece of this app's work, current inside the block; attributes left None are left out."""
-    with _tracer.start_as_current_span(name, context=context, kind=kind, attributes={k: v for k, v in attributes.items() if v is not None}) as current:
+    with _tracer.start_as_current_span(name, context=context, kind=kind, attributes={k: v for k, v in (attributes or {}).items() if v is not None}) as current:
         yield current
 
 
@@ -136,7 +136,7 @@ def request_span(method: str, path: str):
         return nullcontext(None)
     if path in UNTRACED or path.endswith("/stream"):
         return shallow()
-    return span(method, SpanKind.SERVER, **{"http.request.method": method, "url.path": path})
+    return span(method, {"http.request.method": method, "url.path": path}, kind=SpanKind.SERVER)
 
 
 def answered(current: trace.Span | None, method: str, route: str | None, status: int, **attributes: Any) -> None:
@@ -153,9 +153,9 @@ def answered(current: trace.Span | None, method: str, route: str | None, status:
         current.set_status(Status(StatusCode.ERROR))
 
 
-def job_span(name: str, carried: Mapping[str, Any] | None, **attributes: Any):
+def job_span(name: str, carried: Mapping[str, Any] | None, attributes: Mapping[str, Any]):
     """A worker job's span: in the trace of the request that queued it (logs.carry), else a trace of its own."""
-    return span(f"job {name}", SpanKind.CONSUMER, context=propagate.extract(dict(carried or {})), **attributes)
+    return span(f"job {name}", attributes, kind=SpanKind.CONSUMER, context=propagate.extract(dict(carried or {})))
 
 
 def failed(current: trace.Span, reason: str) -> None:
