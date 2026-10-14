@@ -171,3 +171,31 @@ def setup() -> None:
         logger.setLevel(level)
     # server.RequestLog logs each request, with its id and how long it took; uvicorn's line has neither.
     logging.getLogger("uvicorn.access").disabled = True
+
+
+# Loggers whose lines aren't shipped: the exporter's own, and the HTTP clients it sends with. A failed
+# export logs a warning, which shipped would be exported, fail, and log again.
+UNSHIPPED = ("opentelemetry", "urllib3", "requests")
+
+
+def ship(provider: Any) -> None:
+    """Send every line over OTLP too (tracing.setup does, when an endpoint is set): the lines stdout gets,
+    each with its unit's fields (rid, fan, job, player_id…) and extras as attributes, in the trace it was
+    logged in. Replaces the shipping handler set before; setup() leaves it be."""
+    from opentelemetry.instrumentation.logging.handler import LoggingHandler
+
+    class Shipped(LoggingHandler):
+        def _get_attributes(self, record: logging.LogRecord) -> Any:
+            attributes, event = super()._get_attributes(record)
+            context = attributes.pop("context", None)
+            context = context if isinstance(context, dict) else {}
+            # The trace and span go in the record's own fields, not as attributes; None isn't a value.
+            fields = {**{k: v for k, v in context.items() if k not in ("trace_id", "span_id")}, **attributes}
+            return {k: v for k, v in fields.items() if v is not None}, event
+
+    root = logging.getLogger()
+    for old in [h for h in root.handlers if isinstance(h, LoggingHandler)]:
+        root.removeHandler(old)
+    handler = Shipped(logger_provider=provider)
+    handler.addFilter(lambda record: not record.name.startswith(UNSHIPPED))
+    root.addHandler(handler)

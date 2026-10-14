@@ -1,10 +1,12 @@
 """Traces (OpenTelemetry): a span for each API request, each worker job and each round of a live poll,
 with the source requests, database queries, Redis commands and model calls made inside it, as one
-trace from a fan's request through the jobs it queued (logs.carry takes the trace along).
+trace from a fan's request through the jobs it queued (logs.carry takes the trace along). And the log
+lines, shipped over OTLP beside them (logs.ship), each in the trace it was logged in.
 
 Off unless an exporter is set, with OpenTelemetry's own settings, so any backend takes them:
-OTEL_EXPORTER_OTLP_ENDPOINT (or _TRACES_ENDPOINT) and OTEL_EXPORTER_OTLP_HEADERS (its key: a secret)
-send them over OTLP; OTEL_TRACES_EXPORTER=console prints them, for development. OTEL_TRACES_SAMPLER and
+OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS (its key: a secret) send traces and logs over
+OTLP (_TRACES_ and _LOGS_ variants for one alone; OTEL_TRACES_EXPORTER or OTEL_LOGS_EXPORTER=none turns
+one off); OTEL_TRACES_EXPORTER=console prints spans, for development. OTEL_TRACES_SAMPLER and
 _SAMPLER_ARG keep a share of traces (all by default); OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES
 name the process. Off, nothing is instrumented, and the spans this app makes itself cost nothing.
 
@@ -24,53 +26,86 @@ from opentelemetry.context import Context
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 _tracer = trace.get_tracer("sports_follow")
-on = False
+on = False  # traces are being recorded
+_started = False
 
 # API paths with no span: the health check (every 15 s). Live streams (…/stream) have none either: one
 # stays open as long as the app does.
 UNTRACED = ("/api/health",)
 
 
-def _exporter() -> Any:
-    """The exporter OpenTelemetry's settings ask for, or None: tracing stays off."""
+def _otlp(signal: str) -> bool:
+    """Whether OpenTelemetry's settings send this signal ("TRACES", "LOGS") over OTLP."""
     if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
-        return None
-    kind = os.environ.get("OTEL_TRACES_EXPORTER", "").strip().lower()
-    if kind == "console":
+        return False
+    kind = os.environ.get(f"OTEL_{signal}_EXPORTER", "").strip().lower()
+    return kind in ("", "otlp") and bool(os.environ.get(f"OTEL_EXPORTER_OTLP_{signal}_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+
+
+def _exporter() -> Any:
+    """The span exporter OpenTelemetry's settings ask for, or None: tracing stays off."""
+    if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() != "true" and os.environ.get("OTEL_TRACES_EXPORTER", "").strip().lower() == "console":
         from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
         return ConsoleSpanExporter()
-    if kind in ("", "otlp") and (os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")):
+    if _otlp("TRACES"):
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
         return OTLPSpanExporter()
     return None
 
 
-def setup(service: str, exporter: Any = None) -> bool:
-    """Start tracing this process as `service` (unless OTEL_SERVICE_NAME names it), if an exporter is
-    set: spans for its own work, and for the source requests (httpx), Redis commands and database
-    queries. Returns whether tracing is on."""
-    global on
-    if on:
-        return True
-    exporter = exporter or _exporter()
-    if exporter is None:
-        return False
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    from opentelemetry.instrumentation.redis import RedisInstrumentor
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+def _log_exporter() -> Any:
+    """The log exporter OpenTelemetry's settings ask for (OTLP only: stdout has the lines already), or None."""
+    if _otlp("LOGS"):
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-    provider = TracerProvider(resource=Resource.create({} if os.environ.get("OTEL_SERVICE_NAME") else {"service.name": service}))
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
-    HTTPXClientInstrumentor().instrument(request_hook=_outgoing)
-    RedisInstrumentor().instrument()
-    _watch_queries()
-    on = True
-    return True
+        return OTLPLogExporter()
+    return None
+
+
+def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
+    """Start this process's telemetry as `service` (unless OTEL_SERVICE_NAME names it), as far as the
+    settings ask: traces (spans for its own work, and for the source requests (httpx), Redis commands
+    and database queries) and log lines (logs.ship). Once a process; returns whether traces are on."""
+    global on, _started
+    if _started:
+        return on
+    exporter = exporter or _exporter()
+    log_exporter = log_exporter or _log_exporter()
+    if exporter is None and log_exporter is None:
+        return False
+    from opentelemetry.sdk.resources import Resource
+
+    _started = True
+    resource = Resource.create({} if os.environ.get("OTEL_SERVICE_NAME") else {"service.name": service})
+    if log_exporter is not None:
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+        from . import logs
+
+        # Not made the global provider: FastAPI would start recording validation failures with their inputs.
+        lines = LoggerProvider(resource=resource)
+        lines.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+        logs.ship(lines)
+    if exporter is not None:
+        # The libraries' spans named as this app's own are (url.full, server.address, http.response.status_code,
+        # db.query.text): OpenTelemetry's stable conventions, which they use only when asked.
+        os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http,database")
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        provider = TracerProvider(resource=resource)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        HTTPXClientInstrumentor().instrument(request_hook=_outgoing)
+        RedisInstrumentor().instrument()
+        _watch_queries()
+        on = True
+    return on
 
 
 def _watch_queries() -> None:

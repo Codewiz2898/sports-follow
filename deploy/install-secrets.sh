@@ -43,6 +43,9 @@ if [ -f "$in/offsite.env" ]; then install -m 640 "$in/offsite.env" "$D/offsite.e
 # Grafana Cloud's metrics settings for Alloy (deploy/alloy/): kept unless a new one is sent, which (re)starts it.
 grafana_new=""
 if [ -f "$in/grafana.env" ]; then install -m 640 "$in/grafana.env" "$D/grafana.env"; grafana_new=1; fi
+# Where the app sends its traces and log lines (OTEL_EXPORTER_OTLP_*): kept unless a new one is sent. The
+# containers read it when they're next made: docker compose -f deploy/compose.yaml up -d --force-recreate api worker
+if [ -f "$in/otlp.env" ]; then install -m 640 "$in/otlp.env" "$D/otlp.env"; fi
 chown "root:$grp" "$D"/*.env
 chmod 640 "$D"/*.env
 echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token, push key and cookie key kept)"

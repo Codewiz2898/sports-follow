@@ -13,6 +13,10 @@ x-app: &app
   env_file:
     - settings.env
     - ${SECRETS_DIR:-/etc/sports-follow}/app.env   # DATABASE_URL, SPORTS_FOLLOW_GATEWAY_TOKEN
+    # Where traces and log lines go, and the key to send them (OTEL_EXPORTER_OTLP_*; README.md, "Traces
+    # and logs"). Without it, they don't leave the server.
+    - path: ${SECRETS_DIR:-/etc/sports-follow}/otlp.env
+      required: false
   environment:
     REDIS_URL: redis://redis:6379/0
     LLM_GATEWAY_URL: http://gateway:8787
