@@ -157,6 +157,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
   code change. `tests/test_sports.py` fails if shared code names a sport.
+- CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
+  Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
+  database and `alembic check`; and the web app's type-check and build. The web app still names sports
+  of its own; `tests/test_web_names.py` holds each file in `web/src` to the number of sport and source
+  names it has now, so a file can lose them but not gain them.
 
 ## Run it
 
