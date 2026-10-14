@@ -44,6 +44,9 @@ CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "")
 # client address, so a script that drops its cookie can't spend the day's research for everyone.
 RESEARCH_PER_HOUR = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_HOUR", 10))
 RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 10))
+# Searches a minute, from one fan and from one client address, that may go on to the sources' own searches
+# (adapters.base.LiveSearch): a source may take one request at a time, with its live games in the same line.
+SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_PER_MINUTE", 20))
 
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters

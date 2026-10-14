@@ -227,6 +227,32 @@ def test_a_loose_did_you_mean_still_asks_the_live_sources(monkeypatch):
     assert asked == [] and [s["name"] for s in out["suggestions"]] == ["Aryna Sabalenka"]
 
 
+def test_a_client_over_its_search_limit_is_answered_without_the_live_sources(monkeypatch):
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True, exact=True)
+    asked = searching(monkeypatch, espn=[warne])
+    out = search.run(None, "shane warne", may_ask=lambda: False)
+    assert asked == [] and out["results"] == []
+    assert out["partial"] == ["ESPN"]  # the app says some athletes may be missing
+
+
+def test_a_search_is_counted_once_and_only_when_it_asks_the_live_sources(monkeypatch):
+    counted = []
+
+    def may_ask():
+        counted.append("search")
+        return True
+
+    # Nothing in the registry: ESPN is asked for the name, then word by word for "did you mean".
+    asked = searching(monkeypatch)
+    search.run(None, "catalin clark", may_ask=may_ask)
+    assert sorted(asked) == ["catalin", "catalin clark", "clark"] and counted == ["search"]
+    # A name the registry knows well never reaches the sources, so it isn't counted.
+    counted.clear()
+    asked = searching(monkeypatch, found=[athlete("Q6167581", "Jasprit Bumrah", "cricket", sitelinks=40, ids={"espn_cricket": "625383"})])
+    search.run(None, "bumrah", may_ask=may_ask)
+    assert asked == [] and counted == []
+
+
 def test_surely_the_name_meant():
     assert search.surely("sabalnka", "Aryna Sabalenka")
     assert search.surely("mohammad salah", "Mohamed Salah")  # the surname, and the first name spelled another way
