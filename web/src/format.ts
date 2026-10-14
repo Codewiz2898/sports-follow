@@ -115,22 +115,6 @@ export function shortWhen(value?: string | null, now = Date.now()): string {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
-export type SportKey = 'football' | 'cricket' | 'basketball' | 'tennis' | 'chess' | 'esports' | 'other'
-
-// An esports pro's sport is their game ("Valorant", "BGMI"); every game wears the esports colour.
-const ESPORTS = /e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire|apex legends/
-
-/** Which colour a sport wears (styles.css, [data-sport]). Other codes of football, table tennis and padel wear none. */
-export function sportKey(sport?: string | null): SportKey {
-  const s = (sport ?? '').toLowerCase()
-  if (ESPORTS.test(s)) return 'esports'
-  if (/american|australian|gaelic|canadian|rugby|rules/.test(s)) return 'other'
-  if (s.includes('soccer') || s.includes('football')) return 'football'
-  if (/table tennis|padel|beach tennis/.test(s)) return 'other'
-  for (const k of ['cricket', 'basketball', 'tennis', 'chess'] as const) if (s.includes(k)) return k
-  return 'other'
-}
-
 const SUFFIXES = /^(jr|sr|ii|iii|iv|júnior|junior|filho|neto)\.?$/i
 const PARTICLES = new Set(['de', 'van', 'von', 'der', 'den', 'di', 'da', 'das', 'do', 'dos', 'del', 'della', 'le', 'la', 'du', 'ten', 'ter', 'bin', 'al', 'el'])
 
@@ -197,7 +181,7 @@ function teamKey(name: string): string {
  * Win, draw or loss from the player's side. Structured results say "Won…"/"Lost…"; cricket names
  * the winning side ("India won by 8 wkts", "Match tied (India won the Super Over)"), so the player's
  * teams decide by whole name ("India A" and "Mumbai Indians" aren't India), the same way the server
- * counts form (form._cricket_outcome).
+ * counts form (sports/cricket.py: winner_outcome).
  */
 export function outcome(result: string, teams: string[] = []): 'W' | 'D' | 'L' | null {
   const r = result.trim()
@@ -217,12 +201,4 @@ export function lineStats(text?: string | null): { value: string; label: string 
   const parts = text.split(' · ').map((p) => p.trim().match(/^([\d.,½*/–-]+)\s+([A-Za-z%]+(?:\s[A-Za-z%]+)?)$/))
   if (parts.length < 2 || parts.some((m) => !m)) return null
   return parts.map((m) => ({ value: m![1], label: m![2] }))
-}
-
-/** Models report the sport in whatever case they like ("cricket", "CRICKET"); show it one way. A game's
- * own name stays as written ("CS2", "League of Legends", "PUBG Mobile"). */
-export function sportName(sport?: string | null): string {
-  if (!sport) return ''
-  if (sportKey(sport) === 'esports' && /[A-Z]/.test(sport) && sport.toLowerCase() !== 'esports') return sport
-  return sport.replace(/\S+/g, (w) => (w === w.toUpperCase() && w.length <= 4 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
 }

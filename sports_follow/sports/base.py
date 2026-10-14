@@ -117,6 +117,23 @@ class Sport:
     no_line = "No stats"  # a finished game's word for a player its line-up doesn't have
     games = ("game", "games")  # a form note's word: "Last 5 games"
 
+    # ---- how the app shows it (GET /api/sports, /api/sports.css)
+
+    # Its colour, as CSS custom properties on [data-sport]: the block colour, text on it, softer text on
+    # it, and the colour itself as text on the dark ink. A sport without one wears ink.
+    colour: dict[str, str] = {}
+    # Which free-text sport names it is (a page's "Women's football", the agent's "T20 cricket"): a
+    # regular expression over the lower-case name, and one that rules a name out ("american football").
+    pattern = ""
+    exclude = ""
+    # What a fan hears about at each alert level: key moments, and what "everything" adds; a line and in full.
+    alerts = {
+        "key": ("Big news", "Injuries, transfers and retirements, from the news: no live source covers this sport yet"),
+        "more": ("milestones", "milestones in the news"),
+    }
+    stats_title = "Season"  # the Stats tab's first view: a season's numbers, or an overview (ranking, form)
+    keeps_names = False  # a player's sport is shown as written ("CS2"), not title-cased (esports' games)
+
     # ---- names
 
     def label_of(self, name: str) -> str:

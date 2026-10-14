@@ -120,6 +120,13 @@ class Cricket(Sport):
     nation_first = True  # India before Royal Challengers Bengaluru
     games = ("match", "matches")
     draws = True
+    colour = {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
+    pattern = r"cricket"
+    alerts = {
+        "key": ("Line-ups, fifties, wickets and results", "In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers"),
+        "more": ("milestones", "milestones in the news"),
+    }
+    stats_title = "Overview"
 
     def lineup_title(self, who: str, starting: bool) -> str:
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"

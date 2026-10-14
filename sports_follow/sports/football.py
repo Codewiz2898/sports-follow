@@ -99,6 +99,13 @@ class Football(Sport):
     athletes = 260_000
     no_line = "Not in the matchday squad"
     draws = True
+    colour = {"sport": "#12c46c", "on": "#0b1a10", "on_soft": "rgba(11, 26, 16, 0.8)", "ink": "#12c46c"}
+    pattern = r"soccer|football"
+    exclude = r"american|australian|gaelic|canadian|rugby|rules"  # other codes of football
+    alerts = {
+        "key": ("Line-ups, goals and results", "Starting or on the bench, goals, assists, red cards, kick-off, the result, injuries and transfers"),
+        "more": ("subs and yellow cards", "coming on, yellow cards and milestones"),
+    }
 
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]

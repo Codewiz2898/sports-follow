@@ -83,9 +83,38 @@ def label(name: str | None) -> str:
     return of(text).label_of(text)
 
 
+def shown(sport: Sport, live: bool) -> dict[str, Any]:
+    """A sport as the app knows it (GET /api/sports): what it's called, which free-text names are it, what
+    its alert levels say, and whether this build runs it and has live scores for it."""
+    return {
+        "key": sport.key or "other",
+        "label": sport.label,
+        "on": sport in ENABLED,
+        "live": live,
+        "pattern": sport.pattern,
+        "exclude": sport.exclude,
+        "alerts": {level: list(words) for level, words in sport.alerts.items()},
+        "stats_title": sport.stats_title,
+        "team_results": sport.team_moments,
+        "keeps_names": sport.keeps_names,
+    }
+
+
+def css() -> str:
+    """Each sport's colour on [data-sport] (GET /api/sports.css): the block, text on it, softer text on it,
+    and the colour as text on ink."""
+    names = {"sport": "--sport", "on": "--on-sport", "on_soft": "--on-sport-soft", "ink": "--sport-on-ink"}
+    rules = []
+    for sport in ALL:
+        if sport.colour:
+            props = "; ".join(f"{names[k]}: {v}" for k, v in sport.colour.items())
+            rules.append(f"[data-sport='{sport.key}'] {{ {props}; }}")
+    return "\n".join(rules) + "\n"
+
+
 def names_of(sport: Sport) -> list[str]:
     """Every name, lower case, that means this sport (a player's sport may be any of them)."""
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "family", "get", "label", "names_of", "of", "of_state", "on", "pick"]
+__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "pick", "shown"]

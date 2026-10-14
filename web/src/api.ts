@@ -13,59 +13,9 @@ export interface PlayerProfile {
   disambiguation?: string | null
 }
 
-export interface FootballSide { id: string; name: string; abbr?: string | null; score: string; scorers: string[] }
-export interface FootballState { kind: 'football'; home: FootballSide; away: FootballSide; detail?: string | null }
-
-export interface CricketInnings { team: string; abbr?: string | null; period?: number | null; runs: number; wickets: number; overs?: number | string | null; batting: boolean; target?: number | null; declared?: boolean }
-export interface CricketState {
-  kind: 'cricket'
-  teams: { id: string; name: string; abbr?: string | null; score: string; winner?: boolean | null }[]
-  innings: CricketInnings[]
-  summary?: string
-  format?: string | null
-  player_of_match?: string | null
-}
-
-export interface BasketballSide { id: string; name: string; abbr?: string | null; score: string; periods: string[]; winner?: boolean | null }
-export interface BasketballState { kind: 'basketball'; home: BasketballSide; away: BasketballSide; period?: number | null; clock?: string | null; detail?: string | null; note?: string | null }
-
-export interface TennisSet { games: number; tiebreak?: number | null; won?: boolean | null }
-export interface TennisPlayer { id: string; name: string; short: string; country?: string | null; seed?: number | null; serving: boolean; winner?: boolean | null; sets: TennisSet[] }
-export interface TennisState { kind: 'tennis'; players: TennisPlayer[]; set?: number | null; round?: string | null; tournament?: string | null }
-
-export interface ChessSide { id: string; name: string; title?: string | null; rating?: number | null; fed?: string | null; clock?: string | null }
-export interface ChessState {
-  kind: 'chess'
-  round?: string | null
-  tournament?: string | null
-  white?: ChessSide
-  black?: ChessSide
-  fen?: string
-  last_move?: string | null
-  turn?: 'white' | 'black'
-  move?: number | null
-  result?: string | null
-  match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
-}
-
-export interface EsportsTeam { id: string; name: string; abbr?: string | null; score: number; winner?: boolean | null }
-export interface EsportsMap { n: number; status: string; winner?: string | null }  // status: finished | running | not_started
-// Dota 2 inside the map (OpenDota): the map being played, kills a side, clock and gold lead.
-export interface DotaLiveMap { n: number; clock: string; radiant: { id: string; name: string; kills: number }; dire: { id: string; name: string; kills: number }; gold_lead: { id: string; amount: number } }
-export interface EsportsState { kind: 'esports'; game?: string | null; teams: EsportsTeam[]; maps: EsportsMap[]; format?: string | null; stage?: string | null; forfeit?: boolean; dota?: { live?: DotaLiveMap | null } }
-
-// A battle royale lobby: every team's standing, and who won each game ("chicken dinner", "Booyah").
-export interface LobbyGame { n: number; place?: number | null; kills: number; points: number }
-export interface LobbyTeam { id: string; name: string; place: number; points: number; kills: number; wins: number; games: LobbyGame[] }
-export interface BattleRoyaleState {
-  kind: 'battle_royale'
-  game?: string | null
-  win_word?: string
-  stage?: string | null
-  standings: LobbyTeam[]
-  games: { n: number; map?: string | null; status: string; winner?: string | null }[]
-  total?: number
-}
+// A live score's sport-specific state ("kind" says whose: football, cricket, battle_royale…): its fields
+// are that sport's, drawn by its view (sports/).
+export interface LiveState { kind: string; [field: string]: unknown }
 
 export interface Moment { clock: string; kind: string; text: string; athlete_ids: string[] }
 
@@ -82,7 +32,7 @@ export interface LiveStatus {
   event_id?: number
   competition?: string | null
   headline?: string | null
-  state?: FootballState | CricketState | BasketballState | TennisState | ChessState | EsportsState | BattleRoyaleState
+  state?: LiveState
   moments?: Moment[]
   source?: string
 }

@@ -170,6 +170,16 @@ class Esports(Sport):
     roster = True
     team_moments = True
     side_by_side = True
+    colour = {"sport": "#ff4fa3", "on": "#1a0010", "on_soft": "rgba(26, 0, 16, 0.8)", "ink": "#ff4fa3"}
+    # Every game wears the esports colour; eFootball is a game too.
+    pattern = (r"e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b"
+               r"|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire|apex legends")
+    alerts = {
+        "key": ("Starts, wins and results", "A series or lobby starting, winning a lobby match, going top, the result and transfers"),
+        "more": ("every map and match", "each map or lobby match, a Dota player’s numbers each map, and milestones"),
+    }
+    stats_title = "Overview"
+    keeps_names = True
 
     def label_of(self, name: str) -> str:
         """A game's own name as written ("CS2", "PUBG Mobile", "League of Legends")."""

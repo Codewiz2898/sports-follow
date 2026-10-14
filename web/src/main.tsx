@@ -17,6 +17,7 @@ import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
+import { loadSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
 import './styles.css'
 
@@ -199,7 +200,9 @@ function App() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(
+// The sports this app knows come from the server; the first render waits for them (from this device's
+// copy when there is one, so only a first visit waits on the network).
+void loadSports().then(() => createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <PwaProvider>
@@ -213,4 +216,4 @@ createRoot(document.getElementById('root')!).render(
       </PwaProvider>
     </BrowserRouter>
   </StrictMode>,
-)
+))

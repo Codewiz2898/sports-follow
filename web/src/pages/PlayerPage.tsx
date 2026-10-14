@@ -7,7 +7,8 @@ import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboa
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
-import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName, sportKey, sportName } from '../format'
+import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
+import { sportKey, sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
 

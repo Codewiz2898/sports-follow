@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type Research, type SearchResponse, type SearchResult } from '../api'
-import { relative, sportKey } from '../format'
+import { relative } from '../format'
+import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
-
-export const SPORTS: [string, string][] = [['', 'All'], ['football', 'Football'], ['cricket', 'Cricket'], ['basketball', 'Basketball'], ['tennis', 'Tennis'], ['chess', 'Chess'], ['esports', 'Esports']]
 
 /**
  * Search as you type: one request per 250 ms pause, the previous one cancelled. Keeps the last answer
@@ -204,7 +203,7 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
         <span className="dsp" style={{ fontSize: 26 }}>Research it with AI</span>
       </div>
       <p className="small muted" style={{ margin: 0 }}>Our research agent searches the web for “{q}”, works out who it is and builds the page. It takes 1 to 3 minutes and works for any sport.</p>
-      <p className="small muted" style={{ margin: 0 }}>Live scores come from football, cricket, basketball, tennis and chess sources; esports from PandaScore (team titles; Dota 2 maps from OpenDota), PUBG's own API (PUBG) and Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends). Other sports get news and results from the agent.</p>
+      <p className="small muted" style={{ margin: 0 }}>{liveNote()}</p>
       <button type="button" className="btn primary" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
         {busy && <span className="spinner" />}Research “{q}”
       </button>
@@ -263,12 +262,21 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
   )
 }
 
+/** Which sports have live scores here (each from its sources; see Credits), and what the rest get. */
+function liveNote(): string {
+  const live = runningSports().filter((s) => s.live).map((s) => s.label.toLowerCase())
+  if (!live.length) return 'Every sport gets news and results from the agent.'
+  const listed = live.length > 1 ? `${live.slice(0, -1).join(', ')} and ${live.at(-1)}` : live[0]
+  return `Live scores come from sources for ${listed} (see Credits). Other sports get news and results from the agent.`
+}
+
 export function SportChips({ sport, onChange }: { sport: string; onChange: (s: string) => void }) {
   return (
     <div className="chips" role="group" aria-label="Sport">
-      {SPORTS.map(([value, label]) => (
-        <button key={value || 'all'} type="button" className="chip" data-sport={sportKey(value)} aria-pressed={sport === value} onClick={() => onChange(value)}>
-          {value && <span className="dot" />}{label}
+      {/* The sports this build runs (GET /api/sports), after All. */}
+      {[{ key: '', label: 'All' }, ...runningSports()].map(({ key, label }) => (
+        <button key={key || 'all'} type="button" className="chip" data-sport={key ? sportInfo(key).key : 'other'} aria-pressed={sport === key} onClick={() => onChange(key)}>
+          {key && <span className="dot" />}{label}
         </button>
       ))}
     </div>

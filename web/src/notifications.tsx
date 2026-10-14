@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, type AlertLevel, type Card, type PlayerMoment } from './api'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
-import { sportKey, type SportKey } from './format'
+import { sportInfo } from './sports'
 
 export const LEVELS: { value: AlertLevel; label: string; short: string }[] = [
   { value: 'key', label: 'Key moments', short: 'Key' },
@@ -12,22 +12,10 @@ export const LEVELS: { value: AlertLevel; label: string; short: string }[] = [
   { value: 'off', label: 'Off', short: 'Off' },
 ]
 
-// What key moments are, and what everything adds, for each sport: only what its source tells
-// (sports_follow/moments.py). Line-ups come from football and cricket team sheets; a sport no source
-// covers has only the news.
-const MOMENTS: Record<SportKey, { key: [brief: string, hint: string]; more: [brief: string, hint: string] }> = {
-  football: { key: ['Line-ups, goals and results', 'Starting or on the bench, goals, assists, red cards, kick-off, the result, injuries and transfers'], more: ['subs and yellow cards', 'coming on, yellow cards and milestones'] },
-  cricket: { key: ['Line-ups, fifties, wickets and results', 'In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers'], more: ['milestones', 'milestones in the news'] },
-  basketball: { key: ['Big games and results', '30 points, triple-doubles, tip-off, the result, injuries and transfers'], more: ['20 points and double-doubles', '20 points, double-doubles and milestones'] },
-  tennis: { key: ['Matches, upsets and results', 'The match starting, beating a higher seed, the result and injuries'], more: ['every set', 'each set and milestones'] },
-  chess: { key: ['Games turning and results', 'A game starting, turning (winning, in trouble, a turnaround) and the result'], more: ['every edge', 'a game edging better or worse, and milestones'] },
-  esports: { key: ['Starts, wins and results', 'A series or lobby starting, winning a lobby match, going top, the result and transfers'], more: ['every map and match', 'each map or lobby match, a Dota player’s numbers each map, and milestones'] },
-  other: { key: ['Big news', 'Injuries, transfers and retirements, from the news: no live source covers this sport yet'], more: ['milestones', 'milestones in the news'] },
-}
-
-/** A level in a line (`brief`) and in full (`hint`), for a player of this sport. */
+/** A level in a line (`brief`) and in full (`hint`), for a player of this sport: what key moments are, and
+ * what everything adds, as the sport says (its alerts, from GET /api/sports; sports_follow/sports/). */
 export function levelText(level: AlertLevel, sport?: string | null): { brief: string; hint: string } {
-  const { key, more } = MOMENTS[sportKey(sport)]
+  const { key, more } = sportInfo(sport).alerts
   if (level === 'key') return { brief: key[0], hint: key[1] }
   if (level === 'everything') return { brief: `Plus ${more[0]}, without sound`, hint: `Key moments, plus ${more[1]}. Those arrive without sound` }
   if (level === 'results') return { brief: 'Just the final result', hint: 'Just the final result' }

@@ -19,6 +19,14 @@ class Tennis(Sport):
     retire_age = 40
     leagues = ("atp", "wta")
     source_line_first = True
+    colour = {"sport": "#d7f03c", "on": "#141600", "on_soft": "rgba(20, 22, 0, 0.8)", "ink": "#d7f03c"}
+    pattern = r"tennis"
+    exclude = r"table tennis|padel|beach tennis"
+    alerts = {
+        "key": ("Matches, upsets and results", "The match starting, beating a higher seed, the result and injuries"),
+        "more": ("every set", "each set and milestones"),
+    }
+    stats_title = "Overview"
     games = ("match", "matches")
 
     def league_of(self, ids: dict[str, str]) -> str | None:

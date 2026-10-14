@@ -1,0 +1,13 @@
+/* Chess: a board drawn from the FEN. */
+.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+.chessboard.sm { width: min(100%, 176px); }
+.chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
+.chessboard.sm .sq { font-size: min(5vw, 19px); }
+.chessboard .light { background: #ece6d6; }
+.chessboard .dark { background: #8b6fd6; }
+.chessboard .moved.light { background: #f3e38a; }
+.chessboard .moved.dark { background: #c9b34a; }
+.chessboard .piece.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
+.chessboard .piece.b { color: #141414; }
+.chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: #26272a; color: var(--muted); }
+.chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }

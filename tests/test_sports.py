@@ -4,11 +4,13 @@ turns sports off (CLAUDE.md, "Code organization")."""
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from sports_follow import adapters, moments, registry, search, sports
 from sports_follow.adapters import ALL, KNOWN, pick
 
+from .test_api import api  # noqa: F401  (the fixture)
 from .test_search import athlete, searching
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
@@ -80,3 +82,42 @@ def test_no_shared_module_branches_on_a_sport():
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip and node.value.lower() in names:
                 found.append(f"{path.name}:{node.lineno} names {node.value!r}")
     assert not found, "\n".join(found)
+
+
+# ---------------------------------------------------------------- the app takes the sports from the server
+
+
+def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch):
+    monkeypatch.setattr(sports, "ENABLED", sports.pick(sports.ALL, {"football", "chess"}))
+    body = api.call("GET", "/api/sports").json()
+    assert [s["key"] for s in body["sports"]] == [s.key for s in sports.ALL]  # the off ones too: their players' pages keep their colour
+    assert [s["key"] for s in body["sports"] if s["on"]] == ["football", "chess"]
+    football = body["sports"][0]
+    assert football["label"] == "Football" and football["pattern"] and football["alerts"]["key"][0] == "Line-ups, goals and results"
+    assert body["other"]["key"] == "other" and body["other"]["alerts"]["key"][0] == "Big news"
+    esports = next(s for s in body["sports"] if s["key"] == "esports")
+    assert esports["team_results"] and esports["keeps_names"] and esports["stats_title"] == "Overview"
+
+
+def test_each_sport_brings_its_colour(api):
+    res = api.call("GET", "/api/sports.css")
+    assert res.headers["content-type"].startswith("text/css")
+    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; }" in res.text
+    assert all(f"[data-sport='{s.key}']" in res.text for s in sports.ALL)
+
+
+WEB = PACKAGE.parent / "web" / "src"
+
+
+def test_the_web_app_keeps_no_list_of_sports():
+    # Outside web/src/sports/ (each sport's view: its board and mark), the app knows sports only from the server.
+    named = re.compile(r"""['"](%s)['"]""" % "|".join(sorted({n for s in sports.ALL for n in (s.key, *s.kinds)})))
+    found = [f"{p.relative_to(WEB)}:{i}" for p in WEB.rglob("*.ts*") if "sports" not in p.relative_to(WEB).parts[:1] for i, line in enumerate(p.read_text().splitlines(), 1) if named.search(line)]
+    assert not found, "\n".join(found)
+
+
+def test_every_web_view_is_of_a_sport_the_server_knows():
+    views = {m.group(1): p.name for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
+    assert views and set(views) <= set(sports.BY_KEY), views
+    kinds = {k for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  kinds: \[(.*)\],$", p.read_text(), re.M) for k in re.findall(r"'(\w+)'", m.group(1))}
+    assert kinds <= {k for s in sports.ALL for k in s.kinds}
