@@ -10,7 +10,7 @@ Free plan (pandascore.co/pricing): schedules, results, teams and players for eve
 stats (those start at €400 a game a month) and no live in-game data. Birthdays are on paid plans only,
 so a player is known by their PandaScore id, never by name and birth date. Stats plans are for
 non-betting use only; whether a commercial app may use the free plan is still to be confirmed in writing
-(BACKLOG.md, item 8).
+(docs/research/esports.md).
 """
 
 from __future__ import annotations

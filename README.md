@@ -24,7 +24,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
-                              llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
+                              llm-providers gateway ──▶ LLM         adapters/ ──▶ Sportmonks API (football, cricket)
+                                                                              ├─▶ ESPN JSON (basketball, tennis; football and cricket in development)
                                                                               ├─▶ Lichess API (chess)
                                                                               ├─▶ PandaScore API (esports: team titles)
                                                                               ├─▶ LiquipediaDB API (esports: battle royale)
@@ -53,8 +54,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
   matches. Two athletes with the typed name get a picker with birth years.
 - **Following binds the exact athlete.** A registry athlete is looked up in their live source by the id
-  Wikidata has, or, for most footballers (Wikidata has their Transfermarkt id, rarely ESPN's), by name
-  accepted only if ESPN's birth date matches; the id found is written back, so it's by id from then on.
+  Wikidata has, or, where Wikidata lacks it (most footballers), by name, accepted only if the source's
+  birth date matches; the id found is written back, so it's by id from then on.
   The page is live in about a second and the agent, told exactly who it is, adds the profile and news.
   An athlete no live source has gets an agent-built page (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following.
@@ -76,8 +77,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 
   | Sport | Source | Fixtures | Live | Stats |
   |---|---|---|---|---|
-  | Football | ESPN | club + national team schedules | score, scorers, cards, player line | season totals |
-  | Cricket | ESPN (ESPNcricinfo ids) | day-by-day calendar, filtered by squad | innings, player's batting/bowling | recent form from scorecards |
+  | Football | Sportmonks (Starter: 5 leagues); ESPN in development | the player's teams in the plan's leagues | score, goals, cards, line-ups, every player's line | season stats |
+  | Cricket | Sportmonks (Major: 27 competitions, no men's ODIs or Tests); ESPN in development | team fixtures kept where the player is in the XI (or the season's squad before it's out) | scorecard with every player's line and dismissal, and the chase ("need 42 from 28 balls") | form from scorecards |
   | Basketball | ESPN (NBA, WNBA; NCAA if researched) | team schedule, every phase | score, quarters, box-score line | season averages |
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
   | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
@@ -85,6 +86,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Esports, PUBG | PUBG's official API (PC tournaments) | the player's lobbies, found as each match ends (no schedule) | standings and every player's finishes, damage, assists and knocks, after each match | own and team form over 14 days |
   | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
 
+  Sportmonks ids are found by its search: footballers by name and birth date, cricketers by surname and
+  then birth date (its 1 January placeholder dates count as unknown). Followed footballers bound to ESPN
+  move to Sportmonks on their next refresh, with their ESPN games unlinked so nothing is polled twice.
   Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
   30 minutes before one starts it is armed; one `poll_event` job then polls it (every minute before
@@ -272,7 +276,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
-| `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
+| `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, both come from Sportmonks ahead of ESPN (`adapters.KNOWN`), and followed footballers move over on their next refresh |
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2). Naming a few imports just those, and removes only their stale players |
