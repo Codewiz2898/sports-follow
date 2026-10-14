@@ -41,3 +41,9 @@ fi
 chown "root:$grp" "$D"/*.env
 chmod 640 "$D"/*.env
 echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token, push key and cookie key kept)"
+
+# A sealed copy of all of it, for the password manager and the off-site backups (seal-secrets.sh). Exit 3
+# means secrets-recipients.txt has no key yet, which it has said.
+if [ -f "$in/seal-secrets.sh" ]; then
+  bash "$in/seal-secrets.sh" seal "$in/secrets-recipients.txt" || [ $? -eq 3 ]
+fi

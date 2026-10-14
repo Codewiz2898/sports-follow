@@ -26,6 +26,8 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | `settings.env` | Non-secret settings for the public build. |
 | `server-setup.sh` | Server setup: updates, firewall, swap, Docker, the `deploy` user, SSH keys only, fail2ban, the timers, this repo in `/opt/sports-follow`. Safe to run again. |
 | `push-secrets.sh` | From the Mac: copies the API tokens to the server without printing them (runs `install-secrets.sh` there). |
+| `seal-secrets.sh`, `secrets-recipients.txt` | On the server: seals every secret into `secrets.age` for the age keys listed, or puts a sealed copy back. |
+| `backup-secrets.sh`, `restore-secrets.sh` | From any machine: download the sealed copy for the password manager, or put it back on a new server. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
 | `../.github/workflows/deploy.yml` | Checks that CI passed, then runs `deploy.sh` over SSH, then a health check from outside. |
 | `server-check.sh`, `systemd/` | The server checks and their alerts; the weekly Docker clean-up. |
@@ -49,6 +51,14 @@ ssh-keygen -t ed25519 -C sports-follow-recovery -f ~/sports-follow-recovery
 Save `~/sports-follow-recovery` (the private half) in the password manager, keep the `.pub` file for
 step 2, then delete the private half from the Mac.
 
+**0b. Make a secrets key** (you), so the server's secrets can be kept off the Mac and the server (see
+[Secrets](#secrets)). With the Mac's Docker, nothing installed:
+```bash
+docker run --rm alpine:3.20 sh -c 'apk add -q age >/dev/null && age-keygen'
+```
+Save the `AGE-SECRET-KEY-1…` line in the password manager. Add the `age1…` public key as a line of
+`deploy/secrets-recipients.txt` and commit it.
+
 **1. Create the server** (you): Ubuntu 24.04, 2 vCPU / 4 GB, with your Mac's SSH key
 (`~/.ssh/id_ed25519.pub`) and weekly backups on. Note its IP address.
 
@@ -70,8 +80,14 @@ your own domain, point an A record at the server first and add `DOMAIN=app.examp
 deploy/push-secrets.sh deploy@<server-ip>
 ```
 Sends the Sportmonks and Lichess tokens (and the PandaScore, Liquipedia and PUBG ones, if there are) from
-`~/.config/sports-follow` and the OpenRouter key from the gateway's keys file (`OPENROUTER_KEY_FILE=<file>` for a separate production key). The server makes its
-own database password, gateway token, push key and fan cookie key; they are kept when you run this again.
+`~/.config/sports-follow`, and production's OpenRouter key from `~/.config/sports-follow/openrouter-key`
+(see [Secrets](#secrets); without it, the Mac's development key, with a warning). The server makes its own
+database password, gateway token, push key and fan cookie key; they are kept when you run this again.
+Then it seals all of them in `/var/backups/sports-follow/secrets.age`. Download that sealed copy into the
+password manager:
+```bash
+deploy/backup-secrets.sh deploy@<server-ip>
+```
 
 **4. Start it** (the first build takes a few minutes on the server):
 ```bash
@@ -109,6 +125,54 @@ get in from there: wait, use another network, or the console (`sudo fail2ban-cli
 ```bash
 ssh deploy@<server-ip> "sudo RECOVERY_KEY='$(cat <new key>.pub)' bash -s" < deploy/server-setup.sh
 ```
+
+## Secrets
+
+Everything secret lives in `/etc/sports-follow` on the server. Some of it can't be made again: a new
+**fan cookie key** signs every fan out of their follows, and a new **push key** stops notifications on
+every device until each one subscribes again. So all of it is also kept, sealed, off both the Mac and the
+server:
+
+| | Where |
+|---|---|
+| The API tokens (Sportmonks, Lichess, Resend, Google, …) | `~/.config/sports-follow` on the Mac, sent by `push-secrets.sh` |
+| The database password, gateway token, push key and fan cookie key | made by the server, once |
+| All of the above, sealed | `/var/backups/sports-follow/secrets.age` on the server, and a copy in the password manager (`backup-secrets.sh`); next to the off-site dumps once they exist |
+| The age secret key that opens it | the password manager only |
+
+`seal-secrets.sh` seals for every `age1…` key in `secrets-recipients.txt`. The server only ever has the
+public half. `push-secrets.sh` seals again after each change. Download a new copy for the password manager
+after any change (`deploy/backup-secrets.sh deploy@<server-ip>`). The file is text, so a secure note
+works. Neither script needs `age` on your machine, only `ssh`.
+
+**Production's own OpenRouter key** (you): make a separate key in OpenRouter with its own credit limit,
+then save it on the Mac and send it:
+```bash
+pbpaste > ~/.config/sports-follow/openrouter-key && chmod 600 ~/.config/sports-follow/openrouter-key
+deploy/push-secrets.sh deploy@<server-ip>
+```
+After that, the Mac's development key can be revoked without taking the app down.
+
+**On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
+instead of running `push-secrets.sh`:
+```bash
+deploy/restore-secrets.sh deploy@<server-ip> sports-follow-secrets-<date>.age
+```
+It asks for the age secret key, or reads it from a password manager's command line piped in. The key goes
+over SSH into the server's memory and is never written to a disk here or there. The secrets go back with
+the same owners and modes, and the sealed copy becomes the server's own.
+
+If the new server was deployed before the restore, its database was made with another password, and the
+restore says so. With no data in it yet, start that database again (on the server, as `deploy`, in
+`/opt/sports-follow`):
+```bash
+docker compose -f deploy/compose.yaml down && docker volume rm sports-follow_pgdata && deploy/deploy.sh deploy
+```
+
+**Keys:** add a line to `secrets-recipients.txt` (a second person, or a spare key), then seal again
+(`backup-secrets.sh`). Removing a line doesn't unseal copies made before. If an age secret key leaks,
+replace the tokens it could open: `push-secrets.sh` for the API tokens; the server's own secrets are
+harder, see the warnings above.
 
 ## Deploying
 
@@ -218,7 +282,8 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | Restore a backup | `c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists < /var/backups/sports-follow/<file>.dump && c start api worker` |
 
 Backups stay on the server; the provider's weekly server backup is the copy elsewhere. Off-site dumps
-(object storage) are a later step.
+(object storage) are a later step. They should take the sealed secrets (`secrets.age`, next to the
+dumps) with them.
 
 A server set up before fan cookies were signed has no cookie key yet: run `deploy/push-secrets.sh
 deploy@<server-ip>` once before deploying, or the API stops at startup and says so. The key is kept from
@@ -240,3 +305,10 @@ SSH and a stand-in for ntfy: the setup and its lockdown, a fail2ban ban, deploys
 key, a failed migration, a version that doesn't start, rollback, and the alerts. Two weren't possible
 there: OrbStack's kernel has no memory pressure figures (the check fell back to free memory, which
 these kernels use), and a localhost certificate is never trusted (the expiry test ran against a real one).
+
+The sealed secrets were rehearsed on two fresh machines, each with a `deploy` user and the folders
+`server-setup.sh` makes. One server sealed its secrets. A copy went down with `backup-secrets.sh`, and
+`restore-secrets.sh` put it on the second server, which had already made its own secrets and database.
+Afterwards every file on the second server matched the first in content, mode and owner. The restore
+warned about the database, and `docker compose config` read the files as `deploy`. A wrong key changed
+nothing and left nothing behind.
