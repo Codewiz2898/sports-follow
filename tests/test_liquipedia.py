@@ -15,6 +15,7 @@ import pytest
 from sports_follow import credits, form, moments, registry, search, structured
 from sports_follow.adapters import liquipedia, liquipedia_esports as lp
 from sports_follow.adapters.base import Snapshot
+from sports_follow.sports import esports
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
 
 from .test_structured import FakeSource, lane
@@ -140,7 +141,7 @@ def test_players_are_keyed_by_wiki_and_page():
     assert (ref.system, ref.athlete_id, ref.name, ref.team_ids, ref.team_names, ref.league, ref.born) == (
         "liquipedia_esports", "pubgmobile:Jonathan", "JONATHAN", ["GodLike_Esports"], ["GodLike Esports"], WIKI, None)
     assert ref.profile_url == "https://liquipedia.net/pubgmobile/Jonathan"
-    assert lp.ordinal(11) == "11th" and lp.ordinal(21) == "21st" and lp.ordinal(2) == "2nd"
+    assert esports.ordinal(11) == "11th" and esports.ordinal(21) == "21st" and esports.ordinal(2) == "2nd"
 
 
 def test_team_form_over_the_lobbies():
@@ -297,7 +298,7 @@ PLAYER = {"pageid": 123456, "pagename": "Jonathan", "id": "JONATHAN", "name": "J
 
 
 def test_registry_rows_from_liquipedia_players():
-    rows = registry.liquipedia_rows([PLAYER, {**PLAYER, "pageid": None}, {**PLAYER, "pageid": 2, "pagename": "Retired", "id": "Ghost", "status": "Retired", "team": None, "teampagename": None}], WIKI)
+    rows = registry.roster_rows("liquipedia_esports", lp.rostered([PLAYER, {**PLAYER, "pageid": None}, {**PLAYER, "pageid": 2, "pagename": "Retired", "id": "Ghost", "status": "Retired", "team": None, "teampagename": None}], WIKI))
     one, ghost = rows
     assert one["qid"] == "lp:pubgm:123456" and len(one["qid"]) <= 20
     assert (one["sport"], one["name"], one["aliases"], one["teams"], one["league"], one["country"], one["current"]) == ("esports", "JONATHAN", ["Jonathan Amaral"], ["GodLike Esports"], WIKI, "India", True)
@@ -307,7 +308,7 @@ def test_registry_rows_from_liquipedia_players():
 
 def test_a_liquipedia_row_is_a_search_result_keyed_by_its_page(monkeypatch):
     monkeypatch.setitem(search.ADAPTERS, "liquipedia_esports", lp.LiquipediaEsports())
-    row = registry.liquipedia_rows([PLAYER], WIKI)[0]
+    row = registry.roster_rows("liquipedia_esports", lp.rostered([PLAYER], WIKI))[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "jonathan")
     assert (r.key, r.system, r.athlete_id, r.qid) == ("liquipedia_esports:pubgmobile:Jonathan", "liquipedia_esports", "pubgmobile:Jonathan", None)
     assert r.sport == "BGMI" and r.detail == "GodLike Esports · India" and r.live_scores  # India plays PUBG Mobile as BGMI

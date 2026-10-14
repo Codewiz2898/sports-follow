@@ -11,61 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from . import engine
-from .adapters import ADAPTERS, opendota
+from .adapters import ADAPTERS, KNOWN, providers
 from .agent import MODEL
-
-CC_BY_SA = "https://creativecommons.org/licenses/by-sa/4.0/"
-CC_BY_SA_3 = "https://creativecommons.org/licenses/by-sa/3.0/"
-
-# One entry per provider; "systems" are the adapters that read from it, "sports" what each covers.
-PROVIDERS: list[dict[str, Any]] = [
-    {
-        "name": "Sportmonks",
-        "url": "https://www.sportmonks.com",
-        "systems": {"sportmonks_football": "Football", "sportmonks_cricket": "Cricket"},
-        "what": "fixtures, live scores, line-ups, scorecards and player stats.",
-        "note": "Collected by Sportmonks; not official league records.",
-    },
-    {
-        "name": "Lichess",
-        "url": "https://lichess.org",
-        "systems": {"lichess_chess": "Chess"},
-        "what": "broadcasts of over-the-board events (games, moves and clocks), shown with each organiser's delay.",
-        "licence": "Broadcast games: CC BY-SA 4.0",
-        "licence_url": CC_BY_SA,
-        "note": "The games are shown unchanged; the evaluations beside them are ours.",
-    },
-    {
-        "name": "PandaScore",
-        "url": "https://pandascore.co",
-        "systems": {"pandascore_esports": "Valorant, CS2, League of Legends, Dota 2 and other team games"},
-        "what": "series schedules and results, map by map, teams, and the pro players search finds.",
-        "note": "Collected by PandaScore; not official tournament records. Results are the team's: player stats aren't included.",
-    },
-    {
-        "name": "Liquipedia",
-        "url": "https://liquipedia.net",
-        "systems": {"liquipedia_esports": "BGMI, PUBG Mobile, Free Fire and Apex Legends"},
-        "what": "battle royale standings, each game's placings and finishes, and the pro players search finds.",
-        "licence": "CC BY-SA 3.0",
-        "licence_url": CC_BY_SA_3,
-        "note": "Recorded by Liquipedia's editors during and after play; not official tournament records.",
-    },
-    {
-        "name": "PUBG",
-        "url": "https://developer.pubg.com",
-        "systems": {"pubg_esports": "PUBG"},
-        "what": "official tournament matches from PUBG's API: placings and every player's finishes, damage, assists and knocks, after each match.",
-        "note": "Standings use the standard PUBG esports points (10, 6, 5, 4, 3, 2, 1, 1 for placing, one a finish); some events score differently. PUBG, PLAYERUNKNOWN'S BATTLEGROUNDS and all related logos are trademarks of PUBG Corporation or its affiliates.",
-    },
-    {
-        "name": "ESPN",
-        "url": "https://www.espn.com",
-        "systems": {"espn_soccer": "Football", "espn_cricket": "Cricket (ESPNcricinfo)", "espn_basketball": "Basketball", "espn_tennis": "Tennis"},
-        "what": "schedules, live scores and player stats.",
-        "note": "Development builds only; a public build uses licensed sources.",
-    },
-]
 
 # Server, web app and services, with the licence each is used under (tests check the Python ones
 # against the installed packages).
@@ -116,15 +63,14 @@ def _model() -> str:
 
 
 def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None) -> dict[str, Any]:
-    """The Credits page for this build: the data providers it runs, the rest it relies on, the software."""
+    """The Credits page for this build: the data providers it runs, the rest it relies on, the software.
+    Each source describes its provider and what it covers (adapters.base.Provider); licensed ones come first."""
     running = ADAPTERS if running is None else running
+    adapters = {system: adapter for system, adapter in KNOWN.items() if system in running}
     data = []
-    for p in PROVIDERS:
-        sports = [sport for system, sport in p["systems"].items() if system in running]
-        if not sports:
-            continue
-        entry = {k: v for k, v in p.items() if k != "systems"}
-        entry["what"] = f"{_listed(sports)}: {p['what']}"
+    for provider, theirs in sorted(providers(adapters), key=lambda pa: not pa[0].licensed):
+        entry = {"name": provider.name, "url": provider.url, "what": f"{_listed([a.covers for a in theirs])}: {provider.what}"}
+        entry |= {k: v for k in ("licence", "licence_url", "note") if (v := getattr(provider, k))}
         data.append(entry)
 
     also: list[dict[str, Any]] = [{
@@ -134,20 +80,8 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
         "licence": "CC0 1.0",
         "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
     }]
-    if "lichess_chess" in running:
-        also.append({
-            "name": "FIDE",
-            "url": "https://ratings.fide.com",
-            "what": "Chess titles and ratings, looked up player by player through Lichess.",
-            "note": "Ratings are FIDE's.",
-        })
-    if "pandascore_esports" in running and opendota.ENABLED:
-        also.append({
-            "name": "OpenDota",
-            "url": "https://www.opendota.com",
-            "what": "Dota 2 inside the map: kills, the clock and the gold lead while a map is on, and each player's hero, kills, deaths, assists, gold a minute and last hits after it, from Valve's match data.",
-            "note": "Run by the OpenDota community, best effort.",
-        })
+    for adapter in adapters.values():
+        also += adapter.credits_also()
     if engine.enabled() if stockfish is None else stockfish:
         also.append({
             "name": "Stockfish",

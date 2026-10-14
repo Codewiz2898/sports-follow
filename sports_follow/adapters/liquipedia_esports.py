@@ -21,15 +21,22 @@ underscores, so a team's lobbies are asked for in each spelling, as Liquipedia's
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
-from . import espn, liquipedia
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .. import naming
+from ..sports import esports
+from . import liquipedia
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
 
 # The battle royale wikis read, and what fans call a game won on each. All store lobbies the same way
 # (Lua-Modules: each wiki's MatchGroup/Input/Custom.lua hands them to standardProcessFfaMaps).
+log = logging.getLogger("sports_follow.esports")
+
 WIKIS = {"pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "apexlegends": "Apex Legends"}
 WIN_WORD = {"pubgmobile": "Chicken dinner", "freefire": "Booyah", "apexlegends": "Champions"}
 # A match's own game field, where a wiki holds more than one ("bgmi" events on the PUBG Mobile wiki).
@@ -58,13 +65,6 @@ def team_pages(team: str) -> list[str]:
 
 def team_name(page: str | None) -> str:
     return (page or "").replace("_", " ").strip()
-
-
-def ordinal(n: int | None) -> str:
-    if not n:
-        return "?"
-    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
 
 
 def game_name(wiki: str | None, game: str | None = None) -> str | None:
@@ -100,10 +100,6 @@ def _int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n > 0 else None
-
-
-def _points(value: float) -> str:
-    return str(int(value)) if value == int(value) else f"{value:.1f}"
 
 
 def _json(value: Any) -> Any:
@@ -235,12 +231,7 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
 
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     """ "3rd of 16 · 87 pts" from the player's team's side."""
-    r = fixture.result or {}
-    mine = {team_id(t) for t in team_ids}
-    ours = next((s for s in r.get("standings") or [] if team_id(s["id"]) in mine), None)
-    if ours is None:
-        return ""
-    return f"{ordinal(ours['place'])} of {r.get('teams')} · {_points(ours['points'])} pts"
+    return esports.lobby_result(fixture, team_ids, team_id)
 
 
 def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Snapshot:
@@ -261,10 +252,10 @@ def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Sn
         game_rows.append({"n": n, "map": g.get("map") or None, "status": "finished" if _game_done(g) else "not_started", "winner": ids[winner - 1] if winner and winner <= len(ids) else None})
     leader = table[0] if table else None
     if status == "final" and leader:
-        score = f"{leader['name']} win · {_points(leader['points'])} pts"
+        score = f"{leader['name']} win · {esports.points(leader['points'])} pts"
         clock = "Final standings"
     elif status == "live" and leader and done:
-        score = f"{leader['name']} lead · {_points(leader['points'])} pts"
+        score = f"{leader['name']} lead · {esports.points(leader['points'])} pts"
         clock = f"After match {done} of {total}" if total else f"After match {done}"
     elif status == "live":
         score, clock = f"{len(table)} teams", f"Match 1 of {total}" if total else "Under way"
@@ -287,8 +278,8 @@ def parse_match(x: dict[str, Any], wiki: str, now: datetime | None = None) -> Sn
             if r is None:
                 continue
             line = Line(
-                headline=f"{ordinal(r['place'])} · {_points(r['points'])} pts",
-                stats=[{"label": "Place", "value": ordinal(r["place"])}, {"label": "Points", "value": _points(r["points"])}, {"label": "Finishes", "value": str(r["kills"])}, {"label": "Games won", "value": str(r["wins"])}],
+                headline=f"{esports.ordinal(r['place'])} · {esports.points(r['points'])} pts",
+                stats=[{"label": "Place", "value": esports.ordinal(r["place"])}, {"label": "Points", "value": esports.points(r["points"])}, {"label": "Finishes", "value": str(r["kills"])}, {"label": "Games won", "value": str(r["wins"])}],
             )
             for p in o.get("match2players") or []:
                 if p.get("name"):
@@ -311,6 +302,22 @@ def parse_player(p: dict[str, Any], wiki: str) -> PlayerRef:
     )
 
 
+ROSTER_WAIT = 3600  # how long a run waits, in all, for live lobbies to leave it some of the hour
+ROSTER_FIELDS = "pageid,pagename,id,name,romanizedname,localizedname,nationality,birthdate,status,team,teampagename"
+
+
+def rostered(players: list[dict[str, Any]], wiki: str) -> list[Rostered]:
+    """Liquipedia players on one wiki for the registry (pure). The handle is the name, the real name an alias."""
+    out = []
+    for p in players:
+        if not p.get("pageid") or not p.get("pagename"):
+            continue
+        ref = parse_player(p, wiki)
+        aliases = [p.get(k) for k in ("name", "romanizedname", "localizedname")]
+        out.append(Rostered(key=f"lp:{SHORT[wiki]}:{p['pageid']}", ref=ref, aliases=[a for a in aliases if a], country=p.get("nationality") or None, current=p.get("status") == "Active" and bool(ref.team_ids)))
+    return out
+
+
 def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) -> tuple[list[dict[str, str]], str]:
     """Lobbies played, average placement, top-three finishes, games won and finishes over these lobbies."""
     ids = {team_id(t) for t in team_ids}
@@ -331,8 +338,12 @@ def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) ->
 # ---------------------------------------------------------------- the adapter
 
 
-class LiquipediaEsports:
+class LiquipediaEsports(Adapter):
     system = "liquipedia_esports"
+    name = "Liquipedia"
+    provider = liquipedia.PROVIDER
+    covers = "BGMI, PUBG Mobile, Free Fire and Apex Legends"
+    id_pattern = re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}")  # wiki:Page_name
     sports = ("esports", "e-sports", "bgmi", "pubg mobile", "battlegrounds mobile india", "free fire", "free fire max", "apex legends")  # a pro's sport is their game
     games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
@@ -358,7 +369,41 @@ class LiquipediaEsports:
                 self._seen.pop(key, None)
         return rows
 
-    def search(self, name: str) -> list[PlayerRef]:
+    game_names = (*WIKIS.values(), *GAME_NAMES.values())
+    roster_prefix = "lp:"
+
+    @classmethod
+    def available(cls) -> bool:
+        return bool(liquipedia.token())
+
+    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
+        return player_game(league, country)
+
+    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+        """The active players of each battle royale wiki, 1,000 a request, only while the hour's reserve
+        for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
+        complete = True
+        for wiki in IMPORT_WIKIS:
+            offset, waited = 0, 0
+            while True:
+                if not liquipedia.spare() and waited < ROSTER_WAIT:
+                    time.sleep(60)
+                    waited += 60
+                    continue
+                try:
+                    players = liquipedia.get("player", 0, wiki=wiki, conditions="[[status::Active]]", query=ROSTER_FIELDS, order="pageid ASC", limit=liquipedia.PAGE, offset=offset)
+                except AdapterError as exc:
+                    log.warning("registry esports: Liquipedia %s at %d failed: %s", wiki, offset, exc)
+                    complete = False
+                    break
+                total = keep(rostered(players, wiki))
+                log.info("registry esports: Liquipedia %s, %d players read, %d kept", wiki, offset + len(players), total)
+                if len(players) < liquipedia.PAGE:
+                    break
+                offset += liquipedia.PAGE
+        return Roster(complete=complete, leagues=list(IMPORT_WIKIS))
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         """Players whose handle is exactly this, on every battle royale wiki."""
         found = []
         for wiki in WIKIS:
@@ -367,7 +412,7 @@ class LiquipediaEsports:
         return found
 
     def find_player(self, name: str) -> PlayerRef | None:
-        hits = [r for r in self.search(name) if espn.fold(r.name) == espn.fold(name)]
+        hits = [r for r in self.search(name) if naming.fold(r.name) == naming.fold(name)]
         on_teams = [r for r in hits if r.team_ids]
         pick = hits if len(hits) == 1 else on_teams
         return pick[0] if len(pick) == 1 else None

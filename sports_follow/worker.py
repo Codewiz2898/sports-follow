@@ -80,8 +80,9 @@ def _import_registry() -> None:
 
 
 def _warm_sources() -> None:
-    """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date;
-    PUBG's players join the registry every six hours from it."""
+    """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date,
+    and a source whose roster is read more often than the weekly import (PUBG's, from that index, every
+    six hours: roster_every) adds its players to the registry."""
     from .adapters import ADAPTERS
 
     for adapter in list(ADAPTERS.values()):
@@ -92,8 +93,10 @@ def _warm_sources() -> None:
             log.info("warm %s: %s lobbies indexed", adapter.system, warm())
         except Exception:
             log.exception("warm %s failed", adapter.system)
-    if "pubg_esports" in ADAPTERS and bus.try_lock("registry-pubg", 6 * 3600):  # held, not released: at most every six hours
-        registry.import_pubg()
+    for adapter in list(ADAPTERS.values()):
+        every = getattr(adapter, "roster_every", None)
+        if every and bus.try_lock(f"registry-{adapter.system}", every):  # held, not released: at most every `every` seconds
+            registry.import_roster(adapter)
 
 
 async def warm_sources(ctx) -> None:

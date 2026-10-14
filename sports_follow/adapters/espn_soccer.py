@@ -5,9 +5,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
+from .. import naming
+from ..sports import football
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:600~"
 
@@ -232,43 +235,20 @@ def parse_season_stats(data: dict[str, Any]) -> tuple[list[dict[str, str]], str]
     return stats, note
 
 
-def _tally(side: dict[str, Any]) -> tuple[int, int] | None:
-    """A side's goals, then its shootout penalties, to compare; None if the score isn't a number."""
-    score = str(side.get("score") or "")
-    return (int(score), side.get("pens") or 0) if score.isdigit() else None
-
-
-def result_label(fixture: Fixture, team_ids: list[str]) -> str:
-    """ "Won 2–1" / "Lost 0–1" / "Drew 1–1" from the player's team's side, else the plain score; a
-    shootout adds its score ("Lost 0–0 (2–4 pens)")."""
-    r = fixture.result
-    if not r:
-        return ""
-    home, away = r["home"], r["away"]
-    ours, theirs = (home, away) if str(home["id"]) in team_ids else (away, home) if str(away["id"]) in team_ids else (None, None)
-    if ours is None:
-        return f"{home['name']} {home['score']}–{away['score']} {away['name']}{_pens(home.get('pens'), away.get('pens'))}"
-    score = f"{ours['score']}–{theirs['score']}{_pens(ours.get('pens'), theirs.get('pens'))}"
-    if ours.get("winner") or theirs.get("winner"):
-        return f"{'Won' if ours.get('winner') else 'Lost'} {score}"
-    # No winner flag: the score decides.
-    mine, other = _tally(ours), _tally(theirs)
-    if mine and other and mine != other:
-        return f"{'Won' if mine > other else 'Lost'} {score}"
-    return f"Drew {score}"
-
-
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnSoccer:
+class EspnSoccer(espn.EspnAdapter, Adapter):
     system = "espn_soccer"
     sports = ("football", "soccer", "association football")
     live_cadence = 10
+    name = "ESPN"
+    covers = "Football"
+    espn_uid = SPORT_UID
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
-            if espn.names_match(name, hit["name"]):
+            if naming.names_match(name, hit["name"]):
                 return self.player(hit["athlete_id"])
         return None
 
@@ -295,13 +275,13 @@ class EspnSoccer:
         """Find a men's national team by country name via search; None when it isn't unambiguous."""
         if not country:
             return None
-        data = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(country)}&limit=10", ttl=24 * 3600)
+        data = espn.get_json(f"{espn.WEB}/search/v2?query={quote(country)}&limit=10", ttl=24 * 3600)
         for group in data.get("results", []):
             if group.get("type") != "team":
                 continue
             for item in group.get("contents", []):
                 uid = item.get("uid") or ""
-                if uid.startswith(SPORT_UID) and espn.fold(item.get("displayName", "")) == espn.fold(country):
+                if uid.startswith(SPORT_UID) and naming.fold(item.get("displayName", "")) == naming.fold(country):
                     return uid.split("~t:")[1], item["displayName"]
         return None
 
@@ -344,7 +324,7 @@ class EspnSoccer:
         return parse_summary(data, league)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
-        return result_label(fixture, team_ids)
+        return football.result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         data = espn.get_json(f"{espn.WEB}/common/v3/sports/soccer/athletes/{ref.athlete_id}/stats", ttl=3 * 3600)

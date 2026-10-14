@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import httpx
 
 from sports_follow import credits, form, games, moments, registry, search, structured
-from sports_follow.adapters import pandascore, pandascore_esports as ps
+from sports_follow.adapters import SearchResult, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
 
@@ -235,7 +235,7 @@ def test_form_counts_series_and_maps():
 
 
 def test_registry_rows_from_pandascore_players():
-    rows = registry.esports_rows([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}])
+    rows = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}]))
     [row] = rows
     assert row["qid"] == f"pandascore:{TENZ}" and len(row["qid"]) <= 20
     assert (row["sport"], row["name"], row["aliases"], row["teams"], row["league"], row["country"]) == ("esports", "TenZ", ["Tyson Ngo"], ["Sentinels"], "valorant", "Canada")
@@ -245,7 +245,7 @@ def test_registry_rows_from_pandascore_players():
 
 def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatch):
     monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
-    row = registry.esports_rows([PLAYER])[0]
+    row = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER]))[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")
     assert (r.key, r.system, r.athlete_id, r.sport) == (f"pandascore_esports:{TENZ}", "pandascore_esports", str(TENZ), "Valorant")  # the game, not "Esports"
     assert r.qid is None  # following goes by the PandaScore id; the server takes only Wikidata ids as qids
@@ -254,8 +254,8 @@ def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatc
 
 def test_a_pro_on_a_team_ranks_before_a_teamless_namesake():
     # PandaScore gives no popularity, and calls long-retired players active: being on a team decides.
-    veteran = search.Result(key="pandascore_esports:7", name="Move", sport="Esports", detail="League of Legends", live_scores=True, inactive=True)
-    pro = search.Result(key="pandascore_esports:9001", name="Move", sport="Esports", detail="T1 · League of Legends", live_scores=True)
+    veteran = SearchResult(key="pandascore_esports:7", name="Move", sport="Esports", detail="League of Legends", live_scores=True, inactive=True)
+    pro = SearchResult(key="pandascore_esports:9001", name="Move", sport="Esports", detail="T1 · League of Legends", live_scores=True)
     assert [r.key for r in search.rank("move", [], [veteran, pro])] == ["pandascore_esports:9001", "pandascore_esports:7"]
 
 

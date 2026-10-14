@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from . import espn
+from .. import naming
 from .base import Line
 
 FILLER = {"team", "esports", "esport", "gaming", "club", "the", "gg"}
@@ -22,8 +22,8 @@ FILLER = {"team", "esports", "esport", "gaming", "club", "the", "gg"}
 
 def team_words(name: str | None) -> str:
     """ "Team Spirit" -> "spirit", "Tundra Esports" -> "tundra"; for comparing names, never shown."""
-    words = [w for w in espn.team_key(name or "").split() if w not in FILLER]
-    return " ".join(words) or espn.team_key(name or "")
+    words = [w for w in naming.team_key(name or "").split() if w not in FILLER]
+    return " ".join(words) or naming.team_key(name or "")
 
 
 def same_team(a: str | None, b: str | None) -> bool:
@@ -37,10 +37,10 @@ def accounts(roster: list[dict[str, Any]], team_names: list[str], pros: list[dic
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for p in [*pros, *live_players]:
         if p.get("name") and p.get("account_id"):
-            by_name[espn.fold(p["name"])].append(p)
+            by_name[naming.fold(p["name"])].append(p)
     found: dict[int, str] = {}
     for player in roster:
-        candidates = by_name.get(espn.fold(player.get("name") or ""), [])
+        candidates = by_name.get(naming.fold(player.get("name") or ""), [])
         on_team = [c for c in candidates if any(same_team(c.get("team_name"), t) for t in team_names)]
         pick = {c["account_id"] for c in (on_team or candidates)}
         if len(pick) == 1:

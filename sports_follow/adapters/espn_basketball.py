@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
+from .. import naming
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:40~"
 # ESPN's league ids (from search uids) -> the slug its URLs use.
@@ -171,15 +172,19 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnBasketball:
+class EspnBasketball(espn.EspnAdapter, Adapter):
     system = "espn_basketball"
     sports = ("basketball",)
     live_cadence = 10
+    name = "ESPN"
+    covers = "Basketball"
+    espn_uid = SPORT_UID
+    espn_leagues = LEAGUES
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
             league = LEAGUES.get(hit.get("league_id") or "")
-            if league is not None and espn.names_match(name, hit["name"]):
+            if league is not None and naming.names_match(name, hit["name"]):
                 return self.player(hit["athlete_id"], league)
         return None
 

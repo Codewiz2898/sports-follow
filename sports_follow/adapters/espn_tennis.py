@@ -13,8 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .. import naming
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:850~"
 TOURS = {"851": "atp", "900": "wta"}
@@ -202,15 +203,22 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnTennis:
+class EspnTennis(espn.EspnAdapter, Adapter):
     system = "espn_tennis"
     sports = ("tennis",)
     live_cadence = 10
+    name = "ESPN"
+    covers = "Tennis"
+    espn_uid = SPORT_UID
+    espn_leagues = TOURS
+
+    def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
+        return (league or description).upper()  # "ATP"
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
             tour = TOURS.get(hit.get("league_id") or "")
-            if tour is not None and espn.names_match(name, hit["name"]):
+            if tour is not None and naming.names_match(name, hit["name"]):
                 # Individual sport: the player is their own "team", so result labels and titles work as for teams.
                 return PlayerRef(self.system, hit["athlete_id"], hit["name"], [hit["athlete_id"]], [hit["name"]], hit.get("url"), league=tour)
         return None
