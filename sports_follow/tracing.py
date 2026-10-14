@@ -23,6 +23,7 @@ from typing import Any
 
 from opentelemetry import propagate, trace
 from opentelemetry.context import Context
+from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 _tracer = trace.get_tracer("sports_follow")
@@ -98,7 +99,9 @@ def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        provider = TracerProvider(resource=resource)
+        # The sampler OpenTelemetry's settings ask for (OTEL_TRACES_SAMPLER), behind _FromWork.
+        configured = TracerProvider(shutdown_on_exit=False).sampler
+        provider = TracerProvider(resource=resource, sampler=_FromWork(configured))
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
         HTTPXClientInstrumentor().instrument(request_hook=_outgoing)
@@ -106,6 +109,24 @@ def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
         _watch_queries()
         on = True
     return on
+
+
+class _FromWork(Sampler):
+    """Traces start at this app's own work: a request, a job, a poll round. A library's span with no parent
+    starts none: the worker asking Redis for jobs twice a second, a query at startup. Everything else is
+    the configured sampler's to decide."""
+
+    def __init__(self, inner: Sampler) -> None:
+        self.inner = inner
+
+    def should_sample(self, parent_context: Context | None, trace_id: int, name: str, kind: SpanKind | None = None,
+                      attributes: Any = None, links: Any = None, trace_state: Any = None) -> SamplingResult:
+        if kind == SpanKind.CLIENT and not trace.get_current_span(parent_context).get_span_context().is_valid:
+            return SamplingResult(Decision.DROP)
+        return self.inner.should_sample(parent_context, trace_id, name, kind, attributes, links, trace_state)
+
+    def get_description(self) -> str:
+        return f"FromWork{{{self.inner.get_description()}}}"
 
 
 def _watch_queries() -> None:

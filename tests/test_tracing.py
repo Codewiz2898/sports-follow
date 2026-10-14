@@ -126,6 +126,30 @@ def test_a_job_continues_the_trace_of_the_request_that_queued_it(spans, caplog):
     assert built.context["rid"] == "ab12cd34ef56ab78" and built.context["trace_id"] == format(server.context.trace_id, "032x")
 
 
+def test_a_trace_starts_at_this_apps_work_not_at_a_librarys_call():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(sampler=tracing._FromWork(ALWAYS_ON))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    def work():
+        with tracer.start_as_current_span("ZRANGEBYSCORE", kind=SpanKind.CLIENT):  # arq asking Redis for jobs
+            pass
+        with tracer.start_as_current_span("job poll_event", kind=SpanKind.CONSUMER):
+            with tracer.start_as_current_span("GET api.sportmonks.com", kind=SpanKind.CLIENT):
+                pass
+        with tracer.start_as_current_span("GET /api/search", kind=SpanKind.SERVER):
+            pass
+
+    _alone(work)
+    assert [s.name for s in exporter.get_finished_spans()] == ["GET api.sportmonks.com", "job poll_event", "GET /api/search"]
+
+
 def test_a_failed_or_cancelled_job_is_an_error_span_of_its_own(spans):
     async def poll_lane(ctx, system: str) -> None:
         raise ValueError("no such round")
