@@ -11,7 +11,7 @@ import httpx
 
 from sports_follow import credits, form, moments, registry, search, sports, structured
 from sports_follow.sports.esports import game_of_league
-from sports_follow.adapters import SearchResult, pandascore, pandascore_esports as ps
+from sports_follow.adapters import ADAPTERS, KNOWN, SearchResult, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
 
@@ -245,6 +245,7 @@ def test_registry_rows_from_pandascore_players():
 
 
 def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatch):
+    monkeypatch.setitem(ADAPTERS, "pandascore_esports", KNOWN["pandascore_esports"])  # it runs only with its token
     monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
     row = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER]))[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")
