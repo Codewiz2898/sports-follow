@@ -57,7 +57,7 @@ def test_no_token_means_anonymous_requests(monkeypatch, tmp_path):
         lichess_chess.token.cache_clear()
 
 
-def test_sources_and_push_services_are_told_the_site_never_the_private_repo():
+def test_sources_and_push_services_are_told_the_site_never_the_repo():
     assert user_agent("https://app.example.com", "hello@example.com") == "sports-follow/0.1 (https://app.example.com; hello@example.com)"
     assert user_agent("", "hello@example.com") == "sports-follow/0.1 (hello@example.com)"
     assert user_agent("", "") == "sports-follow/0.1"
