@@ -37,10 +37,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import bus, credits as credits_page, games, moments, notify, pipeline, registry, results, search as player_search, structured
+from . import accounts, bus, credits as credits_page, games, mail, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -131,6 +131,7 @@ COOKIE_DAYS = 5 * 365
 # Chrome caps any cookie at).
 REFRESH_DAYS = 7
 NEW_ID = re.compile(r"[A-Za-z0-9_-]{32}")  # what secrets.token_urlsafe(24) mints: never taken unsigned
+SESSION_CACHE = 600  # seconds a signed-in session's lookup is kept in Redis; ending a session deletes it at once
 
 
 @lru_cache(maxsize=1)
@@ -193,14 +194,62 @@ def _owns_anything(db: Session, fan: str) -> bool:
 
 def _unsigned_fan(value: str) -> bool:
     """Is this a bare id from before cookies were signed, of a fan with something here? Ids minted since
-    are never taken unsigned: seeing one in the database isn't enough to be that fan."""
-    if not 0 < len(value) <= 64 or not value.isprintable() or NEW_ID.fullmatch(value):
+    are never taken unsigned: seeing one in the database isn't enough to be that fan. Nor is an account's
+    fan id ever a cookie's (accounts.py): a signed-in device holds a session instead."""
+    if not 0 < len(value) <= 64 or not value.isprintable() or NEW_ID.fullmatch(value) or value.startswith(accounts.FAN_PREFIX):
         return False
     with session() as db:
         return _owns_anything(db, value)
 
 
-def fan_id(request: Request, response: Response) -> str:
+def _secure(request: Request) -> bool:
+    # Behind the proxy, uvicorn --proxy-headers sets the scheme.
+    return request.url.scheme == "https"
+
+
+def _set_fan(request: Request, response: Response, fan: str) -> None:
+    response.set_cookie(FAN_COOKIE, sign_fan(fan), max_age=COOKIE_DAYS * 24 * 3600, httponly=True, samesite="lax", secure=_secure(request))
+
+
+def _set_session(request: Request, response: Response, token: str) -> None:
+    response.set_cookie(accounts.SESSION_COOKIE, token, max_age=accounts.COOKIE_MAX_AGE, httponly=True, samesite="lax", secure=_secure(request))
+
+
+def mac(purpose: str, value: str) -> str:
+    """A MAC of `value` under the cookie key, for one purpose (a sign-in code, Google's sign-in cookie):
+    it can't stand in for a fan cookie's, nor one purpose's for another's."""
+    digest = hmac.new(cookie_key(), f"{purpose}:{value}".encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def _cookie_fan(request: Request) -> str | None:
+    """The anonymous fan in this device's cookie (signed here, or from before signing), without making one."""
+    value = request.cookies.get(FAN_COOKIE) or ""
+    signed = _signed(value)
+    if signed:
+        return signed[0]
+    return value if _unsigned_fan(value) else None
+
+
+async def account_of(request: Request) -> accounts.Signed | None:
+    """The account this device is signed in to, from its session cookie (looked up once a few minutes)."""
+    token = request.cookies.get(accounts.SESSION_COOKIE) or ""
+    if not token or len(token) > 100:
+        return None
+    key = f"session:{accounts.token_hash(token)}"
+    cached = await state["redis"].get(key)
+    if cached is not None:
+        return accounts.Signed(**json.loads(cached)) if cached else None
+    signed = await in_db(accounts.session_for, accounts.token_hash(token))
+    await state["redis"].set(key, json.dumps(signed.__dict__) if signed else "", ex=SESSION_CACHE)
+    return signed
+
+
+def fan_id(request: Request, response: Response, signed_in: accounts.Signed | None = Depends(account_of)) -> str:
+    """Whose follows, levels, mutes and devices a request reads and writes: the signed-in account's, else
+    the anonymous fan in the cookie this server signed, else a new anonymous fan."""
+    if signed_in is not None:
+        return signed_in.fan_id
     value = request.cookies.get(FAN_COOKIE) or ""
     signed = _signed(value)
     if signed:
@@ -209,8 +258,7 @@ def fan_id(request: Request, response: Response) -> str:
             return fan
     else:
         fan = value if _unsigned_fan(value) else secrets.token_urlsafe(24)
-    # Secure once served over HTTPS (behind the proxy, uvicorn --proxy-headers sets the scheme).
-    response.set_cookie(FAN_COOKIE, sign_fan(fan), max_age=COOKIE_DAYS * 24 * 3600, httponly=True, samesite="lax", secure=request.url.scheme == "https")
+    _set_fan(request, response, fan)
     return fan
 
 
@@ -259,8 +307,9 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/config")
-def config() -> dict[str, Any]:
-    return {"model": MODEL}
+def config(request: Request) -> dict[str, Any]:
+    """What this server offers the app: the model, the ways to sign in, who to write to about privacy."""
+    return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/credits")
@@ -549,6 +598,159 @@ def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_
     return {"player_id": player_id, "alerts": level}
 
 
+# ---------------------------------------------------------------- accounts (accounts.py)
+
+CODE_LIFE = 600  # seconds an emailed code works
+CODE_TRIES = 5  # wrong codes before it stops working
+RESEND_AFTER = 60  # seconds before another code to the same address
+CODES_PER_EMAIL = 5  # an hour
+CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
+CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
+CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
+FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
+
+
+async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
+    """Count one against a limit; over it, a 429 (the count stays: the limit is on attempts)."""
+    used = await state["redis"].incr(key)
+    await state["redis"].expire(key, ttl)
+    if used > limit:
+        raise HTTPException(429, refusal)
+
+
+def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
+    """After signing out or deleting the account: this device is a new, empty anonymous fan."""
+    response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
+    _set_fan(request, response, secrets.token_urlsafe(24))
+
+
+async def _forget_sessions(token_hashes: list[str]) -> None:
+    if token_hashes:
+        await state["redis"].delete(*[f"session:{h}" for h in token_hashes])
+
+
+async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
+    """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
+    session this device already had (signing in again, or as someone else) ends."""
+    anon = await asyncio.to_thread(_cookie_fan, request)
+    done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
+    if signed:
+        await _forget_sessions([accounts.token_hash(request.cookies[accounts.SESSION_COOKIE])])
+    if anon:
+        # Today's AI researches stay counted: signing in doesn't give three more.
+        mine, theirs = player_search.research_key(anon), player_search.research_key(done.fan_id)
+        used = int(await state["redis"].get(mine) or 0)
+        if used > 0:
+            await state["redis"].incrby(theirs, used)
+            await state["redis"].expire(theirs, 2 * DAY)
+        await state["redis"].delete(mine)
+        # A follow or a device sent just before this, still under way, lands on the anonymous fan: move it too.
+        await arq().enqueue_job("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
+    _set_session(request, response, done.token)
+    response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players}
+
+
+@app.get("/api/me/account")
+async def my_account(request: Request, response: Response, signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """Who this device is signed in as. The app asks each time it starts, which also renews the session."""
+    if signed is None:
+        if request.cookies.get(accounts.SESSION_COOKIE):
+            # Signed out elsewhere, deleted, or unused for a year: say so, and drop the cookie.
+            response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
+            return {"signed_in": False, "reason": "signed_out"}
+        return {"signed_in": False}
+    about = await in_db(accounts.describe, signed.account_id)
+    if about is None:
+        return {"signed_in": False, "reason": "signed_out"}
+    if await in_db(accounts.bump, signed.session_id):
+        _set_session(request, response, request.cookies[accounts.SESSION_COOKIE])
+    return about
+
+
+@app.post("/api/auth/email/start")
+async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
+    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account."""
+    if not mail.configured(_secure(request)):
+        raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
+    email = accounts.normal_email(body.get("email"))
+    if email is None:
+        raise HTTPException(400, "That doesn't look like an email address.")
+    who, now = accounts.email_key(email), datetime.now(timezone.utc)
+    hour, day = now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d")
+    if int(await state["redis"].get(f"auth-fails:{who}:{day}") or 0) >= FAILS_PER_DAY:
+        raise HTTPException(429, "Too many wrong codes for this address today. Try again tomorrow.")
+    if not await state["redis"].set(f"auth-wait:{who}", "1", nx=True, ex=RESEND_AFTER):
+        raise HTTPException(429, "A code is on its way. You can ask for another in a minute.")
+    address = client_address(request)
+    await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
+    await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
+    await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, "Sports Follow is sending a lot of codes right now. Try again in a few minutes.")
+    code = f"{secrets.randbelow(10**6):06d}"
+    await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
+    await state["redis"].delete(f"auth-tries:{who}")
+    try:
+        await asyncio.to_thread(mail.send_code, email, code)
+    except mail.MailError:
+        await state["redis"].delete(f"auth-code:{who}", f"auth-wait:{who}")
+        raise HTTPException(502, "Couldn't send the email just now. Try again in a moment.")
+    return {"ok": True, "resend_in": RESEND_AFTER}
+
+
+@app.post("/api/auth/email/verify")
+async def email_verify(request: Request, response: Response, body: dict = Body(...), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """Sign in with the emailed code. The first sign-in with an address makes its account."""
+    email = accounts.normal_email(body.get("email"))
+    code = str(body.get("code") or "").strip()
+    if email is None or not re.fullmatch(r"\d{6}", code):
+        raise HTTPException(400, "Enter the 6-digit code from the email.")
+    who, day = accounts.email_key(email), datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expected = await state["redis"].get(f"auth-code:{who}")
+    if not expected:
+        raise HTTPException(400, "That code has run out. Ask for a new one.")
+    # Counted before it's checked, so tries sent at once can't all get in under the limit.
+    tries = await state["redis"].incr(f"auth-tries:{who}")
+    await state["redis"].expire(f"auth-tries:{who}", CODE_LIFE)
+    if tries > CODE_TRIES:
+        await state["redis"].delete(f"auth-code:{who}")
+        raise HTTPException(429, "Too many wrong codes. Ask for a new one.")
+    if not hmac.compare_digest(expected, mac("code", f"{email}:{code}")):
+        await state["redis"].incr(f"auth-fails:{who}:{day}")
+        await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
+        raise HTTPException(400, "That code isn't right. Check the email and try again.")
+    await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}")
+    account_id = await in_db(accounts.find_or_create, email)
+    return await _sign_in(request, response, account_id, signed)
+
+
+@app.post("/api/auth/signout")
+async def sign_out(request: Request, response: Response, body: dict | None = Body(None), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """Sign this device out, or every device ({"everywhere": true}). Their alerts stop; this device
+    becomes a new, empty anonymous fan."""
+    if signed is not None:
+        everywhere = bool((body or {}).get("everywhere"))
+        await _forget_sessions(await in_db(accounts.end_sessions, signed.account_id, None if everywhere else signed.session_id))
+    _clear_cookies_for_anonymous(request, response)
+    return {"signed_in": False}
+
+
+@app.delete("/api/me/account")
+async def delete_account(request: Request, response: Response, body: dict = Body(...), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """Delete the account and everything kept under it: follows, alert levels, muted games, the push log
+    and every device's alerts. Players' pages are everyone's and stay."""
+    if signed is None:
+        raise HTTPException(401, "Sign in to delete your account.")
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Confirm to delete your account.")
+    gone = await in_db(accounts.delete_account, signed.account_id)
+    if gone is not None:
+        await _forget_sessions(gone.token_hashes)
+        who = accounts.email_key(gone.email)
+        await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
+    _clear_cookies_for_anonymous(request, response)
+    return {"deleted": True}
+
+
 # ---------------------------------------------------------------- push notifications
 
 # Browsers hand us the address their push service delivers to. Only real push services are accepted,
@@ -575,8 +777,9 @@ def _sent_text(value: Any, longest: int) -> str | None:
 
 
 @app.post("/api/push/subscriptions")
-def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Turn notifications on for this device (or update its quiet hours)."""
+def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Turn notifications on for this device (or update its quiet hours). Signed in, the device belongs
+    to this session: signing out turns it off."""
     sub = body.get("subscription")
     keys = sub.get("keys") if isinstance(sub, dict) else None
     endpoint = _sent_text(sub.get("endpoint"), 999) if isinstance(sub, dict) else None
@@ -600,22 +803,21 @@ def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = 
         if old is not None:
             start, end = old.quiet_start, old.quiet_end
             db.delete(old)
-    stmt = insert(PushSubscription).values(fan_id=fan, endpoint=endpoint, p256dh=p256dh, auth=auth, timezone=tz, quiet_start=start, quiet_end=end)
+    session_id = signed.session_id if signed else None
+    stmt = insert(PushSubscription).values(fan_id=fan, endpoint=endpoint, p256dh=p256dh, auth=auth, timezone=tz, quiet_start=start, quiet_end=end, session_id=session_id)
     # A device already here moves to another fan only with its own keys: a browser subscribing again sends
     # the ones it has, while someone who learned just the endpoint would take the device's alerts away.
     same_keys = (PushSubscription.p256dh == stmt.excluded.p256dh) & (PushSubscription.auth == stmt.excluded.auth)
     stmt = stmt.on_conflict_do_update(
         index_elements=["endpoint"],
-        set_={"fan_id": fan, "p256dh": p256dh, "auth": auth, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0},
+        set_={"fan_id": fan, "p256dh": p256dh, "auth": auth, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id},
         where=(PushSubscription.fan_id == fan) | same_keys,
     )
     if db.execute(stmt.returning(PushSubscription.id)).first() is None:
         raise HTTPException(409, "That device's notifications belong to someone else.")
     # This device and the fan's newest others, up to notify.MAX_DEVICES: every push goes to each of them,
     # so piled-up subscriptions mustn't turn one alert into hundreds of sends.
-    others = PushSubscription.fan_id == fan, PushSubscription.endpoint != endpoint
-    newest = select(PushSubscription.id).where(*others).order_by(PushSubscription.id.desc()).limit(notify.MAX_DEVICES - 1)
-    db.execute(delete(PushSubscription).where(*others, PushSubscription.id.not_in(newest)))
+    notify.trim_devices(db, fan, PushSubscription.endpoint == endpoint, notify.MAX_DEVICES - 1)
     db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
 

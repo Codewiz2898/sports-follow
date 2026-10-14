@@ -12,7 +12,7 @@ chmod 700 "$D"
 
 install -m 400 "$in/sportmonks-token" "$D/files/sportmonks-token"
 install -m 400 "$in/lichess-token" "$D/files/lichess-token"
-for f in pandascore-token liquipedia-token pubg-token; do
+for f in pandascore-token liquipedia-token pubg-token resend-key; do
   [ -f "$in/$f" ] && install -m 400 "$in/$f" "$D/files/$f"
 done
 [ -f "$D/files/vapid-private.pem" ] || openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$D/files/vapid-private.pem"

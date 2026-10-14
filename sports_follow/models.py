@@ -339,3 +339,32 @@ class PushSubscription(Base):
     created_at: Mapped[datetime] = _now()
     last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failures: Mapped[int] = mapped_column(Integer, default=0)
+    # The signed-in session that turned it on: signing that device out removes it (accounts.py).
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("account_session.id", ondelete="CASCADE"), index=True)
+
+
+class Account(Base):
+    """A fan who signed in (accounts.py). Their follows, levels, mutes and devices are kept under
+    `fan_id`, as an anonymous fan's are under their cookie's, so every route works the same for both."""
+
+    __tablename__ = "account"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), unique=True)  # "acct-…", never in a cookie
+    email: Mapped[str] = mapped_column(String(254), unique=True)  # lowercased
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = _now()
+    last_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AccountSession(Base):
+    """One signed-in device. Its cookie holds a random token; only the token's hash is kept here."""
+
+    __tablename__ = "account_session"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = _now()
+    last_seen_at: Mapped[datetime] = _now()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

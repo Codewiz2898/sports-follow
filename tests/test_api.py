@@ -90,6 +90,12 @@ class Redis:
         if int(self.data.get(keys[0]) or 0) > 0:
             return await self.decr(keys[0])
         return 0
+    async def incrby(self, key, amount):
+        self.data[key] = int(self.data.get(key, 0)) + amount
+        return self.data[key]
+
+    async def delete(self, *keys):
+        return sum(self.data.pop(k, None) is not None for k in keys)
 
     async def expire(self, key, seconds):
         return True
@@ -99,8 +105,9 @@ class Queue:
     def __init__(self):
         self.jobs: list[tuple] = []
 
-    async def enqueue_job(self, name, *args):
+    async def enqueue_job(self, name, *args, **options):
         self.jobs.append((name, *args))
+        self.options = options
 
 
 class Db:
