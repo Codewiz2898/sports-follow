@@ -2,8 +2,8 @@
 # From the Mac: copy the API tokens this app uses to the server, without printing any of them.
 #   deploy/push-secrets.sh deploy@<server-ip>
 # Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token,
-# resend-key and google-client-secret (signing in), and alert-url and heartbeat-url (the server checks, see
-# README.md) if there are, and production's OpenRouter key from ~/.config/sports-follow/openrouter-key
+# resend-key and google-client-secret (signing in), alert-url and heartbeat-url (the server checks, see
+# README.md) and offsite.env (the off-site backups) if there are, and production's OpenRouter key from ~/.config/sports-follow/openrouter-key
 # (or OPENROUTER_KEY_FILE=<file holding only a key>), falling back to the development key in the gateway's
 # keys file. The server makes its own database password, gateway token, push key and fan cookie key
 # (install-secrets.sh), then seals all of it for the password manager (seal-secrets.sh). Run again to rotate
@@ -21,7 +21,7 @@ for f in sportmonks-token lichess-token; do
   [ -s "$LOCAL/$f" ] || { echo "push-secrets: $LOCAL/$f is missing or empty" >&2; exit 1; }
   cp "$LOCAL/$f" "$stage/$f"
 done
-for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret alert-url heartbeat-url; do
+for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret alert-url heartbeat-url offsite.env; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
 PROD_KEY="${OPENROUTER_KEY_FILE:-$LOCAL/openrouter-key}"

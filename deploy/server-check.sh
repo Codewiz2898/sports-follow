@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The server checks, every 5 minutes as deploy (systemd/sports-follow-check.timer): disk, memory, the
-# out-of-memory killer, the nightly backup, the containers and the HTTPS certificate. A problem is sent to
-# ALERT_URL when it starts, again every REPEAT_HOURS while it lasts, and once more when it clears.
+# out-of-memory killer, the nightly backup and its off-site copy, the containers and the HTTPS certificate.
+# A problem is sent to ALERT_URL when it starts, again every REPEAT_HOURS while it lasts, and once more when
+# it clears.
 # ALERT_URL takes a plain-text POST: an ntfy.sh topic (a push to your phone) or a Healthchecks.io /fail URL.
 # HEARTBEAT_URL, if set, gets a GET on every run, so a service like Healthchecks.io can tell you when the
 # checks stop (the server is down). Both come from /etc/sports-follow/alerts.env (push-secrets.sh).
@@ -15,6 +16,8 @@ PROJECT="${COMPOSE_PROJECT:-sports-follow}"
 SERVICES="${SERVICES:-caddy api worker gateway postgres redis backup}"
 DISK_MAX_PCT="${DISK_MAX_PCT:-80}"
 BACKUP_MAX_HOURS="${BACKUP_MAX_HOURS:-26}"
+OFFSITE_CONF="${OFFSITE_CONF:-/etc/sports-follow/offsite.env}"
+OFFSITE_STATE="${OFFSITE_STATE:-/var/lib/sports-follow-offsite}"
 MEMORY_PRESSURE_MAX="${MEMORY_PRESSURE_MAX:-10}"   # % of the last 5 minutes that tasks waited for memory
 MEMORY_FREE_MIN_PCT="${MEMORY_FREE_MIN_PCT:-5}"    # where the kernel doesn't report that
 RESTARTS_MAX="${RESTARTS_MAX:-3}"                  # per container, per hour
@@ -70,6 +73,20 @@ check_backup() {
   [ "$age" -ge "$BACKUP_MAX_HOURS" ] && problem backup "The newest database backup is $age hours old (docker compose -f deploy/compose.yaml logs backup)"
 }
 
+check_offsite() {
+  local since hours
+  # Only once it's set up (offsite.env); until then the README's first deploy says to.
+  [ -f "$OFFSITE_CONF" ] || return 0
+  # The last hourly run that got everything off-site, or (none yet) when it was set up, with 2 hours' grace.
+  if [ -s "$OFFSITE_STATE/last-ok" ]; then
+    since=$(cat "$OFFSITE_STATE/last-ok")
+    hours=$(( (now - since) / 3600 ))
+    [ "$hours" -ge "$BACKUP_MAX_HOURS" ] && problem offsite "Off-site backups last worked $hours hours ago (sudo journalctl -u sports-follow-offsite)"
+  elif [ $(( now - $(stat -c %Y "$OFFSITE_CONF") )) -ge 7200 ]; then
+    problem offsite "Off-site backups haven't worked yet (sudo journalctl -u sports-follow-offsite)"
+  fi
+}
+
 check_containers() {
   local seen service status count health ids
   ids=$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null) || { problem docker "Docker isn't answering"; return; }
@@ -118,6 +135,7 @@ check_certificate() {
 check_disk
 check_memory
 check_backup
+check_offsite
 check_containers
 check_certificate
 
