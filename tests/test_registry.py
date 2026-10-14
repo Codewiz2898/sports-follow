@@ -196,10 +196,10 @@ def test_one_failed_sport_doesnt_stop_the_others(monkeypatch, caplog):
         return 10
 
     monkeypatch.setattr(registry, "import_sport", import_sport)
-    monkeypatch.setattr(registry, "import_esports", lambda: asked.append("esports") or 3)
+    monkeypatch.setattr(registry, "import_rosters", lambda sport: asked.append(sport) or 3)
     done = registry.import_all()
-    assert asked == [*registry.SPORTS, registry.ESPORTS]
-    assert done == {"chess": 10, "basketball": None, "tennis": 10, "cricket": 10, "football": 10, "esports": 3}
+    assert asked == ["basketball", "tennis", "cricket", "chess", "football", "esports"]  # smallest first, football last of Wikidata's
+    assert done == {"basketball": None, "tennis": 10, "cricket": 10, "chess": 10, "football": 10, "esports": 3}
     assert "basketball failed" in caplog.text
 
 
@@ -214,7 +214,7 @@ def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):
     monkeypatch.setattr(registry, "ADAPTERS", {s: KNOWN[s] for s in imports})
     monkeypatch.setattr(registry, "import_roster", lambda adapter: imports[adapter.system]())
     with pytest.raises(RuntimeError, match="PandaScore failed"):
-        registry.import_esports()
+        registry.import_rosters("esports")
     assert ran == ["pandascore", "liquipedia", "pubg"]
 
 

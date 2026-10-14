@@ -477,7 +477,7 @@ PROVIDER = Provider(
 
 class LichessChess(Adapter):
     system = "lichess_chess"
-    sports = ("chess",)
+    sport = "chess"
     live_cadence = 15  # moves come slower than goals; Lichess prefers light polling
     name = "Lichess"
     provider = PROVIDER

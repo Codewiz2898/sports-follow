@@ -6,6 +6,7 @@ describes itself (base.Adapter), so the rest of the app asks it rather than nami
 
 from __future__ import annotations
 
+from .. import sports
 from ..config import SOURCES
 from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot
 from .espn_basketball import EspnBasketball
@@ -40,18 +41,28 @@ KNOWN: dict[str, Adapter] = {a.system: a for a in (
 ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
 
 
-def pick(adapters: tuple[Adapter, ...], sources: set[str]) -> dict[str, Adapter]:
-    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names."""
-    return {a.system: a for a in adapters if not sources or a.system in sources}
+def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: tuple[sports.Sport, ...] = sports.ALL) -> dict[str, Adapter]:
+    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names, of the sports that run."""
+    keys = {s.key for s in enabled}
+    return {a.system: a for a in adapters if (not sources or a.system in sources) and a.sport in keys}
 
 
-ADAPTERS: dict[str, Adapter] = pick(ALL, SOURCES)
+ADAPTERS: dict[str, Adapter] = pick(ALL, SOURCES, sports.ENABLED)
 
 
-def for_sport(sport: str | None) -> Adapter | None:
-    """The adapter for a sport as the research agent names it ("Cricket", "Football", "Basketball", "Chess")."""
-    wanted = (sport or "").strip().lower()
-    return next((a for a in ADAPTERS.values() if wanted in a.sports), None)
+def for_sport(name: str | None) -> Adapter | None:
+    """The adapter for a sport as the research agent names it ("Cricket", "Soccer", "Chess"): its first
+    running source, or for a game, the source that covers that game ("Valorant", "BGMI"). A name of a game
+    no source covers ("LoL") has none."""
+    sport = sports.get(name)
+    if sport is None:
+        return None
+    wanted = (name or "").strip().lower()
+    theirs = [a for a in ADAPTERS.values() if a.sport == sport.key]
+    claimed = next((a for a in theirs if wanted in {g.lower() for g in getattr(a, "game_names", ())}), None)
+    if claimed or wanted not in (sport.key, sport.label.lower(), *sport.names):
+        return claimed
+    return theirs[0] if theirs else None
 
 
 def providers(adapters: dict[str, Adapter] | None = None) -> list[tuple[Provider, list[Adapter]]]:

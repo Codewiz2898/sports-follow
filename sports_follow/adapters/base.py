@@ -178,7 +178,7 @@ class Adapter:
     list is read more often than the weekly import."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
-    sports: tuple[str, ...]  # sport names this adapter answers for, lower case
+    sport: str  # the sport it serves (sports.Sport.key): "cricket"
     live_cadence: int  # seconds between polls while an event is live
     name: str  # the source as a player's page names it: "ESPNcricinfo"
     provider: Provider

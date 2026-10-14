@@ -73,7 +73,7 @@ class FakeSource:
     """Three older pages per player; pages and scorecards fail as told, and every request is counted."""
 
     system = "fake_src"
-    sports = ("hurling",)
+    sport = "hurling"
     live_cadence = 10
 
     def __init__(self, page_error=None, scorecard_error=None):
