@@ -1,0 +1,10 @@
+[Unit]
+Description=Sports Follow: remove untagged Docker images and build cache older than a week
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+# Untagged images only: deploy.sh keeps the live and previous app images tagged and removes older ones.
+ExecStart=/usr/bin/docker image prune --force
+ExecStart=/usr/bin/docker builder prune --force --filter until=168h
