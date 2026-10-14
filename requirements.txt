@@ -1,14 +1,21 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-python-dotenv>=1.0
-ddgs>=9
-trafilatura>=2
-sqlalchemy>=2.0
-psycopg[binary]>=3.2
-alembic>=1.13
-arq>=0.26
-redis>=5
-pywebpush>=2.0
-httpx>=0.27
-# Client for the llm-providers gateway. From a checkout: pip install -e ~/repos/llm-providers/python
-llm-providers @ git+https://github.com/Codewiz2898/llm-providers.git#subdirectory=python
+# Exact versions, so every build installs what the tests ran against: an update is a change to this file,
+# through CI. Each package the code imports is listed, whether or not another one brings it in.
+fastapi==0.143.0
+starlette==1.8.0
+pydantic==2.14.1
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
+ddgs==9.16.0
+trafilatura==2.3.1
+lxml==6.1.3
+sqlalchemy==2.1.4
+psycopg[binary]==3.3.6
+alembic==1.20.0
+arq==0.28.0
+redis==5.3.1
+pywebpush==2.5.0
+httpx==0.28.1
+# tools.py gives httpx's connection pool its own network backend: check it when either moves.
+httpcore==1.0.9
+# Client for the llm-providers gateway, at a commit. From a checkout: pip install -e ~/repos/llm-providers/python
+llm-providers @ git+https://github.com/Codewiz2898/llm-providers.git@7f0f3bc75d55b0b8d72538548467f94c47b70fb4#subdirectory=python
