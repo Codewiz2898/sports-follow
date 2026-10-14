@@ -1,0 +1,6 @@
+/* Tennis: one row per player, one column per set, the server marked. */
+.linescore.tennis td { font-family: var(--display); font-size: 26px; color: var(--muted); }
+.linescore.tennis td.who { font-family: var(--body); font-size: 15px; width: 100%; }
+.linescore.tennis td.set-won, .linescore.tennis tr.won .who .title { color: var(--text); }
+.linescore.tennis sup { font-size: 12px; margin-left: 1px; }
+.serve { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--live); margin-left: 8px; vertical-align: middle; }

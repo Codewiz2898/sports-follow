@@ -323,6 +323,22 @@ def config(request: Request) -> dict[str, Any]:
     return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
+@app.get("/api/sports")
+def sports_list(response: Response) -> dict[str, Any]:
+    """The sports this app knows, in the order it lists them (sports.ALL): each one's name, the free-text
+    names that are it, what its alerts say, and whether this build runs it and has live scores for it.
+    "other" is any sport no module knows."""
+    response.headers["cache-control"] = "public, max-age=300"
+    live = {a.sport for a in ADAPTERS.values()}
+    return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False)}
+
+
+@app.get("/api/sports.css")
+def sports_css() -> Response:
+    """Each sport's colour, for [data-sport] (index.html links it, so a page never shows the wrong colour)."""
+    return Response(sports.css(), media_type="text/css", headers={"cache-control": "public, max-age=300"})
+
+
 @app.get("/api/credits")
 def credits() -> dict[str, Any]:
     """Where this build's scores, ratings, evaluations, words and code come from."""

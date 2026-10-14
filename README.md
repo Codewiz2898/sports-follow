@@ -163,6 +163,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   of its own; `tests/test_web_names.py` holds each file in `web/src` to the number of sport and source
   names it has now, so a file can lose them but not gain them.
 
+  The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
+  free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
+  before the first render and kept on the device. How a sport is drawn is its view,
+  `web/src/sports/<sport>.tsx` (its live board, the mark behind its hero card, how its line reads),
+  plus one line in `VIEWS`; a sport without one shows the plain score and mark.
+
 ## Run it
 
 Needs Docker, Python 3.11+, Node 20.18+, and the [llm-providers](https://github.com/Codewiz2898/llm-providers)

@@ -1,8 +1,9 @@
 """The web app takes the list of sports from the API rather than keeping its own, and names no source
 (CLAUDE.md, "Code organization"). tests/test_sports.py and tests/test_sources.py hold shared Python to
-none; much of web/src predates the rule, so each of its files has a limit instead: how many times it
-names a sport, or a source, now. A file over its limit has gained a name it should take from the API; a
-file under it should have its limit lowered here, so code moved toward the rule can't drift back.
+none. In web/src only a sport's view (web/src/sports/<sport>.tsx: its live board and mark) names a sport,
+and only its own. Where a file still names something it should take from the API (a source, today), it
+has a limit instead: how many times it names it now. A file over its limit has gained a name; a file
+under it should have its limit lowered here, so code moved toward the rule can't drift back.
 
 A name is a quoted string equal, in any case, to a sport's key, label, alias or scoreboard kind, or to a
 source's system ("espn_cricket"). Strings inside comments don't count."""
@@ -22,14 +23,8 @@ WEB = Path(__file__).resolve().parent.parent / "web" / "src"
 # inside them are skipped.
 TOKENS = re.compile(r"""//[^\n]*|/\*.*?\*/|(["'`])((?:\\.|(?!\1)[^\\\n])*)\1""", re.S)
 
-SPORT_LIMITS = {
-    "api.ts": 7,
-    "components/Blocks.tsx": 12,
-    "components/Icons.tsx": 3,
-    "components/Results.tsx": 4,
-    "components/Search.tsx": 12,
-    "format.ts": 16,
-}
+SPORT_LIMITS: dict[str, int] = {}
+VIEWS = "sports/"  # web/src/sports/<sport>.tsx: each sport's own view
 
 SOURCE_LIMITS = {
     "pages/AthletePage.tsx": 2,
@@ -65,8 +60,23 @@ def held(found: dict[str, list[tuple[int, str]]], limits: dict[str, int], what: 
         pytest.fail("\n".join(problems), pytrace=False)
 
 
+def names_of(sport: sports.Sport) -> set[str]:
+    return {n.lower() for n in (sport.key, sport.label, *sport.names, *sport.kinds)}
+
+
 def test_the_web_app_names_no_more_sports_than_before():
-    held(named({n.lower() for s in sports.ALL for n in (s.key, s.label, *s.names, *s.kinds)}), SPORT_LIMITS, "sport")
+    found = named(set().union(*(names_of(s) for s in sports.ALL)))
+    held({rel: hits for rel, hits in found.items() if not rel.startswith(VIEWS)}, SPORT_LIMITS, "sport")
+
+
+def test_a_sports_view_names_only_its_own_sport():
+    found = named(set().union(*(names_of(s) for s in sports.ALL)))
+    wrong = []
+    for rel, hits in found.items():
+        if rel.startswith(VIEWS):
+            own = sports.BY_KEY.get(Path(rel).stem)
+            wrong += [f"web/src/{rel}:{line} names {s!r}" for line, s in hits if own is None or s.lower() not in names_of(own)]
+    assert not wrong, "\n".join(wrong)
 
 
 def test_the_web_app_names_no_more_sources_than_before():

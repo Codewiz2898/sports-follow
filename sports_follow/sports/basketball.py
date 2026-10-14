@@ -35,6 +35,12 @@ class Basketball(Sport):
     athletes = 9_612
     no_line = "Not on the game's roster"
     leagues = ("nba", "wnba")
+    colour = {"sport": "#ff7a1a", "on": "#170a00", "on_soft": "rgba(23, 10, 0, 0.8)", "ink": "#ff7a1a"}
+    pattern = r"basketball"
+    alerts = {
+        "key": ("Big games and results", "30 points, triple-doubles, tip-off, the result, injuries and transfers"),
+        "more": ("20 points and double-doubles", "20 points, double-doubles and milestones"),
+    }
 
     def team_ok(self, label: str) -> bool:
         return not label.lower().endswith(" football")  # a club's football side (Real Madrid's)

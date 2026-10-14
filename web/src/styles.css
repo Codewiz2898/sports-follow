@@ -19,14 +19,10 @@
 }
 
 /* A sport's block colour, the ink that reads on it, that ink for secondary text (still 4.5:1 or better),
-   and the sport's colour when it is text on an ink surface. */
-[data-sport] { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; }
-[data-sport='football'] { --sport: #12c46c; --on-sport: #0b1a10; --on-sport-soft: rgba(11, 26, 16, 0.8); --sport-on-ink: #12c46c; }
-[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; }
-[data-sport='basketball'] { --sport: #ff7a1a; --on-sport: #170a00; --on-sport-soft: rgba(23, 10, 0, 0.8); --sport-on-ink: #ff7a1a; }
-[data-sport='tennis'] { --sport: #d7f03c; --on-sport: #141600; --on-sport-soft: rgba(20, 22, 0, 0.8); --sport-on-ink: #d7f03c; }
-[data-sport='chess'] { --sport: #7c3aed; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #a98bff; }
-[data-sport='esports'] { --sport: #ff4fa3; --on-sport: #1a0010; --on-sport-soft: rgba(26, 0, 16, 0.8); --sport-on-ink: #ff4fa3; }
+   and the sport's colour when it is text on an ink surface. Each sport's own come from the server
+   (/api/sports.css, linked in index.html, before this file: so this default has no specificity); a sport without
+   one wears ink. */
+:where([data-sport]) { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; }
 .soft { color: var(--on-sport-soft); }
 
 * { box-sizing: border-box; }
@@ -266,43 +262,12 @@ p { margin: 0; }
 .moment-kind.yellow { background: #f2c94c; color: #1a1400; }
 .moment-kind.red { background: #ef5a5a; color: #1a0000; }
 
-/* Line scores: basketball quarters, tennis sets. */
+/* Line scores (basketball quarters; a sport's own board styles are in sports/<sport>.css). */
 .linescore { border-collapse: collapse; font-size: 13px; width: 100%; }
 .linescore th, .linescore td { padding: 4px 6px; text-align: center; color: var(--muted); }
 .linescore th { font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 .linescore td:first-child, .linescore th:first-child { text-align: left; }
 .linescore td.total { color: var(--text); font-weight: 800; }
-.linescore.tennis td { font-family: var(--display); font-size: 26px; color: var(--muted); }
-.linescore.tennis td.who { font-family: var(--body); font-size: 15px; width: 100%; }
-.linescore.tennis td.set-won, .linescore.tennis tr.won .who .title { color: var(--text); }
-.linescore.tennis sup { font-size: 12px; margin-left: 1px; }
-.serve { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--live); margin-left: 8px; vertical-align: middle; }
-
-/* Esports: one chip a map, the winner's tag in it; the map being played is happening now. */
-.maps { display: flex; gap: 6px; flex-wrap: wrap; }
-.map { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 9px; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 800; }
-.map .num { font-size: 15px; color: var(--text); }
-.map.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
-
-/* Battle royale: the lobby's standings, the followed player's team marked. */
-.linescore.lobby td, .linescore.lobby th { text-align: right; }
-.linescore.lobby td:first-child, .linescore.lobby th:first-child, .linescore.lobby td.who, .linescore.lobby th:nth-child(2) { text-align: left; }
-.linescore.lobby td.who { width: 100%; color: var(--text); overflow-wrap: anywhere; }
-.linescore.lobby tr.ours td { color: var(--sport-on-ink); font-weight: 800; }
-
-/* Chess: a board drawn from the FEN. */
-.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
-.chessboard.sm { width: min(100%, 176px); }
-.chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
-.chessboard.sm .sq { font-size: min(5vw, 19px); }
-.chessboard .light { background: #ece6d6; }
-.chessboard .dark { background: #8b6fd6; }
-.chessboard .moved.light { background: #f3e38a; }
-.chessboard .moved.dark { background: #c9b34a; }
-.chessboard .piece.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
-.chessboard .piece.b { color: #141414; }
-.chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: #26272a; color: var(--muted); }
-.chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 
 /* ---------------------------------------------------------------- lists */
 /* Fixtures: the day and time in a block on the left. */

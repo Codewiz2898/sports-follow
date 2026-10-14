@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
-import { day, hostname, outcome, playedOn, safeHref, sportKey } from '../format'
+import { day, hostname, outcome, playedOn, safeHref } from '../format'
+import { sportInfo } from '../sports'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
 
@@ -97,7 +98,7 @@ export function ResultsHistory({ card }: { card: Card }) {
   return (
     <>
       <ul className="card list">
-        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} teams={card.player.teams} teamOnly={sportKey(card.player.sport) === 'esports'} />)}
+        {items.map((r) => <GameRow key={r.event_id ?? `${r.title}-${r.date ?? ''}`} r={r} playerId={card.player_id} teams={card.player.teams} teamOnly={sportInfo(card.player.sport).team_results} />)}
       </ul>
       {page?.next && (
         <button type="button" className="btn" style={{ alignSelf: 'flex-start' }} onClick={more} disabled={loading}>
@@ -120,8 +121,7 @@ type View = 'overview' | 10 | 5
 export function StatsWithForm({ card }: { card: Card }) {
   const [view, setView] = useState<View>('overview')
   const [form, setForm] = useState<Partial<Record<10 | 5, Form>>>({})
-  const sport = (card.player.sport || '').toLowerCase()
-  const overview = sport === 'cricket' || sport === 'tennis' || sportKey(sport) === 'esports' ? 'Overview' : 'Season'
+  const overview = sportInfo(card.player.sport).stats_title
 
   useEffect(() => {
     if (view === 'overview' || form[view]) return
