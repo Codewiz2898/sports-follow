@@ -1,0 +1,24 @@
+# Settings for the checks CI runs. The app itself installs from requirements.txt.
+
+# Lint: rules that find bugs, not style. No formatter yet: it would rewrap most files and clash with
+# every open branch.
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B"]
+ignore = ["B904", "B905", "E741"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Body", "fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+# A test imports a fixture from another test module, then names it as an argument.
+"tests/*" = ["F811"]
+
+# Types. .basedpyright/baseline.json holds the errors from before CI checked types, so CI fails only
+# on new ones. After fixing some, `basedpyright --writebaseline` shrinks it.
+[tool.basedpyright]
+include = ["sports_follow"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"

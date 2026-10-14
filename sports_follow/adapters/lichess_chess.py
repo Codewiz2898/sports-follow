@@ -194,6 +194,12 @@ def ref_for(record: dict[str, Any]) -> PlayerRef:
 _TAG = r'\[(\w+) "((?:[^"\\]|\\.)*)"\]'
 
 
+def _pgn_player(tags: dict[str, str], colour: str) -> dict[str, Any]:
+    rating = tags.get(f"{colour}Elo")
+    return {"name": tags.get(colour, ""), "fideId": int(tags[f"{colour}FideId"]) if (tags.get(f"{colour}FideId") or "").isdigit() else None,
+            "rating": int(rating) if (rating or "").isdigit() else None, "title": tags.get(f"{colour}Title")}
+
+
 def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
     """A tournament's PGN export -> its games grouped by round id, shaped like the round JSON's games.
 
@@ -207,13 +213,8 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
         if len(parts) < 2:
             continue
         round_id, game_id = parts[-2], parts[-1]
-
-        def player(colour: str) -> dict[str, Any]:
-            rating = tags.get(f"{colour}Elo")
-            return {"name": tags.get(colour, ""), "fideId": int(tags[f"{colour}FideId"]) if (tags.get(f"{colour}FideId") or "").isdigit() else None,
-                    "rating": int(rating) if (rating or "").isdigit() else None, "title": tags.get(f"{colour}Title")}
-
-        rounds.setdefault(round_id, []).append({"id": game_id, "players": [player("White"), player("Black")], "status": tags.get("Result", "*"), "fen": ""})
+        players = [_pgn_player(tags, "White"), _pgn_player(tags, "Black")]
+        rounds.setdefault(round_id, []).append({"id": game_id, "players": players, "status": tags.get("Result", "*"), "fen": ""})
     return rounds
 
 

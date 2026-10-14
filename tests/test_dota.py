@@ -126,7 +126,7 @@ def opendota_up(monkeypatch):
     monkeypatch.setattr(opendota, "pro_players", lambda: PROS)
     rosters = {f"/teams/{SPIRIT}": {"players": ROSTER[:2]}, f"/teams/{LIQUID}": {"players": ROSTER[2:]}}
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: rosters[path])
-    monkeypatch.setattr(ps.bus, "sync_redis", lambda redis=FakeRedis(): redis)  # the series' remembered maps
+    monkeypatch.setattr(ps.bus, "sync_redis", lambda redis=FakeRedis(): redis)  # noqa: B008  one FakeRedis for every call: the series' remembered maps
     return calls
 
 
