@@ -18,6 +18,7 @@ class Tennis(Sport):
     athletes = 10_781
     retire_age = 40
     leagues = ("atp", "wta")
+    source_line_first = True
     games = ("match", "matches")
 
     def league_of(self, ids: dict[str, str]) -> str | None:

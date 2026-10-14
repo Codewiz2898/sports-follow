@@ -156,6 +156,10 @@ class Sport:
 
     # ---- search: a registry athlete as a result
 
+    # A search result's line comes from its source rather than the page's (chess, tennis: an agent may
+    # call a league side an individual's team).
+    source_line_first = False
+
     def search_detail(self, athlete: Athlete) -> list[str]:
         """What a result says under the name: teams and country ("Al Nassr · Portugal")."""
         return [*list(athlete.teams or [])[:2], athlete.country or ""]

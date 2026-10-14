@@ -149,6 +149,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
   serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source.
+- **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
+  `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
+  kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
+  line-up, what happens during a game), its form summary and how search shows its athletes. Shared code
+  asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
+  rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
+  its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
+  code change. `tests/test_sports.py` fails if shared code names a sport.
 
 ## Run it
 
@@ -206,6 +214,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
 | `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
+| `SPORTS_FOLLOW_SPORTS` | every sport | the sports that run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are |
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |

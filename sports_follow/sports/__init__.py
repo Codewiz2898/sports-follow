@@ -13,6 +13,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+from ..config import SPORTS
 from . import basketball, chess, cricket, esports, football, tennis
 from .base import Found, Seen, Sport
 
@@ -20,6 +21,22 @@ from .base import Found, Seen, Sport
 ALL: tuple[Sport, ...] = (football.SPORT, cricket.SPORT, basketball.SPORT, tennis.SPORT, chess.SPORT, esports.SPORT)
 BY_KEY: dict[str, Sport] = {s.key: s for s in ALL}
 OTHER = Sport()
+
+
+def pick(every: tuple[Sport, ...], keys: set[str]) -> tuple[Sport, ...]:
+    """The sports that run: all of them, or only those SPORTS_FOLLOW_SPORTS names (unknown names are ignored)."""
+    return tuple(s for s in every if not keys or s.key in keys)
+
+
+# The sports this build runs.
+ENABLED: tuple[Sport, ...] = pick(ALL, SPORTS)
+
+
+def on(name: str | None) -> bool:
+    """Whether a sport runs in this build. A sport no module knows (golf) isn't one that can be turned off:
+    its players' pages come from the agent either way."""
+    sport = get(name)
+    return sport is None or sport in ENABLED
 
 
 @lru_cache(maxsize=1)
@@ -71,4 +88,4 @@ def names_of(sport: Sport) -> list[str]:
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "BY_KEY", "OTHER", "Found", "Seen", "Sport", "family", "get", "label", "names_of", "of", "of_state"]
+__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "family", "get", "label", "names_of", "of", "of_state", "on", "pick"]

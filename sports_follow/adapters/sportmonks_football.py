@@ -205,7 +205,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
             text += f", assist {e['related_player_name']}"
         moments.append({
             "clock": minute(e), "kind": tag, "text": text, "athlete_ids": [str(i) for i in (e.get("player_id"), e.get("related_player_id")) if i],
-            # For a goal's notification: whose goal it was, who set it up (moments._goal).
+            # For a goal's notification: whose goal it was, who set it up (sports.football._goal).
             "team_id": str(e.get("participant_id")), "assist": e.get("related_player_name") if tag == "GOAL" and kind != "OWNGOAL" else None, "own_goal": kind == "OWNGOAL",
         })
 

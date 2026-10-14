@@ -412,7 +412,7 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     qid, sport = str(body.get("qid") or ""), str(body.get("sport") or "").lower()
-    if not re.fullmatch(r"Q[0-9]{1,12}", qid) or len(sport) > 60 or not sport.isprintable():
+    if not re.fullmatch(r"Q[0-9]{1,12}", qid) or len(sport) > 60 or not sport.isprintable() or not sports.on(sport):
         return None
     athlete = registry.get(db, qid, sport or None)
     return registry.Person.of(athlete) if athlete else None

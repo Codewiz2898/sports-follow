@@ -56,11 +56,11 @@ NAMESAKES = 40  # athletes with exactly the typed name that search lists, all fo
 LABEL_LANGS = ("en", "mul", "es", "pt", "fr", "de", "it", "nl")
 MAX_ALIASES = 8
 
-# The sports imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
+# The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
 # then those whose athletes come from their sources' own lists (sports.Sport.roster: esports).
 def importable() -> list[str]:
-    on = [s for s in sports.ALL if s.wikidata or s.roster]
+    on = [s for s in sports.ENABLED if s.wikidata or s.roster]
     return [s.key for s in sorted(on, key=lambda s: (s.roster, s.athletes))]
 
 
@@ -478,6 +478,13 @@ def score():
     return Athlete.sitelinks * case((Athlete.current, 2), else_=1)
 
 
+def running(stmt: Any) -> Any:
+    """Only athletes of the sports this build runs (every sport, unless SPORTS_FOLLOW_SPORTS names some)."""
+    if len(sports.ENABLED) == len(sports.ALL):
+        return stmt
+    return stmt.where(Athlete.sport.in_([s.key for s in sports.ENABLED]))
+
+
 def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> list[Athlete]:
     """Athletes whose name or an alias has a word starting with every typed word: every one with the
     whole name typed (up to NAMESAKES), then the rest by popularity (score), players of today first
@@ -487,7 +494,7 @@ def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> 
     if not typed or len(" ".join(typed)) < 2:
         return []
     starts = [Athlete.search_text.like(f"% {w}%") for w in typed]
-    base = select(Athlete).where(*starts)
+    base = running(select(Athlete).where(*starts))
     if sport:
         base = base.where(Athlete.sport == sport)
     exact = db.scalars(base.where(named(" ".join(typed))).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(NAMESAKES)).all()
@@ -501,7 +508,7 @@ def near(db: Session, query: str, sport: str | None = None, limit: int = 10) -> 
     if len(folded) < 4:
         return []
     db.execute(text("SET LOCAL pg_trgm.word_similarity_threshold = 0.5"))
-    stmt = select(Athlete).where(literal(folded).op("<%")(Athlete.search_text))
+    stmt = running(select(Athlete).where(literal(folded).op("<%")(Athlete.search_text)))
     if sport:
         stmt = stmt.where(Athlete.sport == sport)
     return list(db.scalars(stmt.order_by(func.word_similarity(folded, Athlete.search_text).desc(), Athlete.sitelinks.desc()).limit(limit)))

@@ -41,12 +41,13 @@ KNOWN: dict[str, Adapter] = {a.system: a for a in (
 ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
 
 
-def pick(adapters: tuple[Adapter, ...], sources: set[str]) -> dict[str, Adapter]:
-    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names."""
-    return {a.system: a for a in adapters if not sources or a.system in sources}
+def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: tuple[sports.Sport, ...] = sports.ALL) -> dict[str, Adapter]:
+    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names, of the sports that run."""
+    keys = {s.key for s in enabled}
+    return {a.system: a for a in adapters if (not sources or a.system in sources) and a.sport in keys}
 
 
-ADAPTERS: dict[str, Adapter] = pick(ALL, SOURCES)
+ADAPTERS: dict[str, Adapter] = pick(ALL, SOURCES, sports.ENABLED)
 
 
 def for_sport(name: str | None) -> Adapter | None:

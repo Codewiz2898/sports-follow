@@ -794,9 +794,11 @@ def due_work(now: datetime | None = None) -> Due:
             bindings.setdefault(pid, (adapter, health))
         room = {name: structured.spare(structured.ADAPTERS[name]) for name, _ in bindings.values()}
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
-        sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
+        sport_of = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
             pid = card.player_id
+            if not sports.on(sport_of.get(pid)):
+                continue  # a sport this build doesn't run: the page stays as it is
             if rebuild_due(card, now):
                 due.builds.append(pid)
             if card.status != "ready":
@@ -809,7 +811,7 @@ def due_work(now: datetime | None = None) -> Due:
                     due.refreshes.append(pid)
                 continue
             # Followed before their sport had an adapter: the refresh binds them first.
-            preferred = structured.for_sport(sports.get(pid))
+            preferred = structured.for_sport(sport_of.get(pid))
             if preferred and structured.spare(preferred) and not bus.is_locked(f"bindtry:{pid}") and not bus.is_locked(f"structured:{pid}"):
                 due.refreshes.append(pid)
             if card.is_live:
@@ -826,7 +828,7 @@ def due_work(now: datetime | None = None) -> Due:
                 lanes.add(live_binding["adapter"])
             elif live_binding:
                 polls.add(event_id)
-            elif pid not in bindings:
+            elif pid not in bindings and sports.on(sport_of.get(pid)):
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]

@@ -43,7 +43,7 @@ SUGGEST_MIN = 0.78  # how close a spelling must be to be offered as "did you mea
 SURELY = 0.9  # a "did you mean" this close is the name, misspelled: the live sources aren't asked as well
 LIKENESS = 0.4  # trigram likeness of a fan's alias to the query that makes a player a "did you mean"
 
-SPORTS = tuple(s.key for s in sports.ALL)  # the filters a search takes
+SPORTS = tuple(s.key for s in sports.ENABLED)  # the filters a search takes: the sports this build runs
 
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="search")
 
@@ -241,7 +241,7 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
         if r.player_id and not held.player_id:
             held.player_id, held.following, held.followers, held.status, held.next = r.player_id, r.following, r.followers, r.status, r.next
             by_player[r.player_id] = held
-        if r.detail and (held.sport in ("Chess", "Tennis") or len(r.detail) > len(held.detail)):
+        if r.detail and (sports.of(held.sport).source_line_first or len(r.detail) > len(held.detail)):
             # The source's line is current ("GM · Norway"); ours is whatever the agent last called
             # their teams, which for a chess player can be a league side.
             held.detail = r.detail
@@ -282,8 +282,8 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # Nothing to search by ("--", "विराट कोहली"), nor to research: a researched player is named by
         # the query's letters (pipeline.slugify).
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
-    mine = local(db, query, fan, sport)
-    listed = _registry(db, query, sport)
+    mine = [r for r in local(db, query, fan, sport) if sports.on(r.sport)]
+    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport)]
     found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
@@ -303,7 +303,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # registry's row, confirmed by birth date when followed, stands for both.
         named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
         for hits in answers:
-            hits = [r for r in hits if (not sport or r.sport.lower() == sport) and (tuple(_key(r.name)), r.sport) not in named]
+            hits = [r for r in hits if (not sport or r.sport.lower() == sport) and sports.on(r.sport) and (tuple(_key(r.name)), r.sport) not in named]
             found += hits[: LIVE_LIMIT + 4]
     sources = [*matched, *found]
     _ours(db, sources, fan)
@@ -423,6 +423,8 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     pool: dict[str, SearchResult] = {r.key: r for r in mine}
     for a in registry.near(db, query, sport):
         r = from_athlete(a, query)
+        if not sports.on(r.sport):
+            continue
         held = pool.setdefault(r.key, r)
         held.popularity = max(held.popularity, r.popularity)  # a followed player keeps the registry's fame
     # Close enough spellings, the famous first: "kohly" means Virat Kohli before Marius Köhl.
@@ -433,7 +435,7 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     jobs = {f"{provider.name}:{w}": _pool.submit(provider.search.find, w, sport, adapters) for provider, adapters in _live(query, sport, by_word=True) for w in words[:3]}
     answers, _ = _collect(jobs)
     for r in (r for hits in answers for r in hits):
-        if (not sport or r.sport.lower() == sport) and r.live_scores:
+        if (not sport or r.sport.lower() == sport) and r.live_scores and sports.on(r.sport):
             pool.setdefault(r.key, r)
     scored = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -x[0])
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]

@@ -49,6 +49,10 @@ RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters
 # read unofficial endpoints whose terms forbid automated and commercial use.
 SOURCES = {s.strip() for s in os.environ.get("SPORTS_FOLLOW_SOURCES", "").split(",") if s.strip()}
+# Which sports run, by key ("football,cricket,chess"). Empty means every sport (sports.ALL). A sport left
+# out isn't searched, imported, polled or researched: its sources don't run, it's not a search filter,
+# and the pages of its players already followed stay as they are, without updates.
+SPORTS = {s.strip().lower() for s in os.environ.get("SPORTS_FOLLOW_SPORTS", "").split(",") if s.strip()}
 # Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
 # pages come from the agent without live scores or alerts, and no model calls go to watching games.
 AGENT_LIVE = os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"

@@ -323,7 +323,7 @@ made-up responses in PandaScore's shapes, as for Sportmonks, rather than committ
 An armed series the schedule moves hours later is now disarmed (any sport), so it isn't polled all
 that time or closed unplayed after six days. A pro's sport is their game ("Valorant", "CS2", "BGMI",
 "Free Fire"), shown wherever other players show their sport; "esports" is the family the rules, the
-search filter and the colour share (`sports_follow/games.py`), and pros followed as "Esports" move to
+search filter and the colour share (`sports_follow/sports/esports.py`), and pros followed as "Esports" move to
 their game on their next refresh.
 
 **To finish step 1**

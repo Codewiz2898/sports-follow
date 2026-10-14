@@ -90,6 +90,7 @@ class Chess(Sport):
     wikidata_title = "P2962"
     engine = True
     draws = True
+    source_line_first = True
 
     def title_of(self, label: str) -> str | None:
         return TITLES.get(label)
