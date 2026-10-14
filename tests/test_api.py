@@ -15,6 +15,7 @@ Redis, the database and the job queue are fakes.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -97,7 +98,7 @@ class Redis:
     async def delete(self, *keys):
         return sum(self.data.pop(k, None) is not None for k in keys)
 
-    async def expire(self, key, seconds):
+    async def expire(self, key, seconds, nx=False):
         return True
 
     async def ttl(self, key):
@@ -284,6 +285,27 @@ def test_a_research_that_fails_to_start_is_given_back(api, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"qid": "Q99", "sport": "football"}).status_code == 500
     counts = {k: v for k, v in api.redis.data.items() if k.startswith("research")}
     assert len(counts) == 3 and set(counts.values()) == {0}
+
+
+def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_address(api, monkeypatch):
+    monkeypatch.setattr(server, "SOURCE_SEARCHES_PER_MINUTE", 3)
+    allowed = []
+
+    def run(db, q, sport, fan, may_ask):
+        allowed.append(may_ask())  # search.run asks only when it would go on to the sources
+        return {"query": q, "results": [], "partial": []}
+
+    monkeypatch.setattr(server.player_search, "run", run)
+
+    def searching(fan, address):
+        return api.call("GET", "/api/search?q=someone", fan=fan, address=address).status_code
+
+    assert [searching("script", PUBLIC) for _ in range(4)] == [200] * 4  # still answered, from the registry
+    assert allowed == [True, True, True, False]
+    # A new cookie from the same address is over that address's limit; another address isn't held up.
+    searching("new-cookie", PUBLIC)
+    searching("someone-else", "81.2.69.143")
+    assert allowed[4:] == [False, True]
 
 
 def test_limits_count_the_public_address_a_client_comes_from():
@@ -705,9 +727,10 @@ def test_the_cookie_key_is_made_once_and_every_process_reads_the_same(tmp_path, 
 
 
 def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tmp_path, monkeypatch):
-    locked = tmp_path / "read-only"
-    locked.mkdir(mode=0o500)
-    monkeypatch.setattr(server, "COOKIE_SECRET_FILE", locked / "cookie-secret")
+    def read_only(path, flags, mode=0o777):
+        raise OSError(errno.EROFS, "Read-only file system", str(path))
+
+    monkeypatch.setattr(server, "COOKIE_SECRET_FILE", tmp_path / "cookie-secret")
     server.cookie_key.cache_clear()
     try:
         monkeypatch.setattr(server, "COOKIE_SECRET", "k" * 40)
@@ -717,12 +740,14 @@ def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tm
         with pytest.raises(RuntimeError, match="shorter than 32"):
             server.cookie_key()
         # A container whose secrets mount has no key: it stops, rather than sign with a key of its own.
+        # The mount is read-only, which stops root too (a 0o500 directory doesn't).
         monkeypatch.setattr(server, "COOKIE_SECRET", "")
+        monkeypatch.setattr(server.os, "open", read_only)
         with pytest.raises(RuntimeError, match="push-secrets.sh"):
             server.cookie_key()
+        assert not (tmp_path / "cookie-secret").exists()
     finally:
         server.cookie_key.cache_clear()
-        locked.chmod(0o700)
 
 
 # ---------------------------------------------------------------- the card is the fan's own (BUG-038)

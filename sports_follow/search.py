@@ -13,6 +13,7 @@ The live sources are cached and cut off after SOURCE_TIMEOUT, so a slow one only
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import re
@@ -21,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
@@ -274,10 +275,13 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
 
 
-def run(db: Session, query: str, sport: str | None = None, fan: str | None = None) -> dict[str, Any]:
-    """Search every source in parallel and merge. sport narrows to one of SPORTS."""
+def run(db: Session, query: str, sport: str | None = None, fan: str | None = None, may_ask: Callable[[], bool] = lambda: True) -> dict[str, Any]:
+    """Search every source in parallel and merge. sport narrows to one of SPORTS. may_ask is asked once,
+    just before the first of the sources' own searches would go out: False leaves them out (a client over
+    its limit, server.search) and the answer comes from Sports Follow and the registry."""
     query = " ".join(query.split())[:80]
     sport = sport if sport in SPORTS else None
+    ask = functools.cache(may_ask)
     if len(query) < 2 or not searchable(query):
         # Nothing to search by ("--", "विराट कोहली"), nor to research: a researched player is named by
         # the query's letters (pipeline.slugify).
@@ -292,13 +296,16 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     if not matched and not ours:
         # Nothing starts with that: a spelling the registry can place. Only one that is surely the name
         # ("sabalnka") spares the live sources; "shane warne" is offered Shane Watson, and ESPN is asked.
-        suggestions = suggest(db, query, mine, sport, live=False)
+        suggestions = suggest(db, query, mine, sport)
     sure = any(surely(query, s.name) for s in suggestions)
     if len(matched) < FILL_BELOW and not sure and not any(r.exact or r.popularity >= NOTABLE for r in matched):
         # Too new or too obscure for Wikidata: ask the sources' own searches (adapters.base.LiveSearch).
         # A name the registry knows well ("bumrah") doesn't need them.
-        jobs = {provider.name: _pool.submit(provider.search.find, query, sport, adapters) for provider, adapters in _live(query, sport)}
+        live = _live(query, sport)
+        jobs = {provider.name: _pool.submit(provider.search.find, query, sport, adapters) for provider, adapters in live} if live and ask() else {}
         answers, partial = _collect(jobs)
+        if live and not jobs:
+            partial = [provider.name for provider, _ in live]
         # A live hit with the name of a registry athlete in the same sport is that athlete: the
         # registry's row, confirmed by birth date when followed, stands for both.
         named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
@@ -309,7 +316,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     _ours(db, sources, fan)
     results = rank(query, mine, sources)
     if not suggestions and not any(r.exact or naming.prefix_match(query, r.name) for r in results):
-        suggestions = suggest(db, query, mine, sport)
+        suggestions = suggest(db, query, mine, sport, live=ask)
     _ours(db, suggestions, fan)
     if suggestions:
         results = [r for r in results if r.key not in {s.key for s in suggestions}]
@@ -420,11 +427,11 @@ def _live(query: str, sport: str | None, by_word: bool = False) -> list[tuple[Pr
     return out
 
 
-def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None, live: bool = True) -> list[SearchResult]:
+def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None, live: Callable[[], bool] | None = None) -> list[SearchResult]:
     """Did you mean: names a few letters away from the query, from our players and the registry's
-    trigram index. Only if neither has one are the sources' searches with no typo tolerance asked (ESPN's),
-    each longer word on its own ("catalin clark" -> "clark" finds Caitlin Clark), keeping hits whose
-    whole name is close to what was typed."""
+    trigram index. Only if neither has one, and live says yes (None: never), are the sources' searches
+    with no typo tolerance asked (ESPN's), each longer word on its own ("catalin clark" -> "clark" finds
+    Caitlin Clark), keeping hits whose whole name is close to what was typed."""
     pool: dict[str, SearchResult] = {r.key: r for r in mine}
     for a in registry.near(db, query, sport):
         r = from_athlete(a, query)
@@ -434,10 +441,11 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
         held.popularity = max(held.popularity, r.popularity)  # a followed player keeps the registry's fame
     # Close enough spellings, the famous first: "kohly" means Virat Kohli before Marius Köhl.
     close = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -(x[0] + 0.1 * math.log10(1 + x[1].popularity)))
-    if any(score >= SUGGEST_MIN for score, _ in close) or not live:
+    words = [w for w in _key(query) if len(w) >= 3][:3]
+    by_word = _live(query, sport, by_word=True) if words else []
+    if any(score >= SUGGEST_MIN for score, _ in close) or not by_word or live is None or not live():
         return [r for score, r in close if score >= SUGGEST_MIN][:3]
-    words = [w for w in _key(query) if len(w) >= 3]
-    jobs = {f"{provider.name}:{w}": _pool.submit(provider.search.find, w, sport, adapters) for provider, adapters in _live(query, sport, by_word=True) for w in words[:3]}
+    jobs = {f"{provider.name}:{w}": _pool.submit(provider.search.find, w, sport, adapters) for provider, adapters in by_word for w in words}
     answers, _ = _collect(jobs)
     for r in (r for hits in answers for r in hits):
         if (not sport or r.sport.lower() == sport) and r.live_scores and sports.on(r.sport):

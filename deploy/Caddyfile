@@ -2,6 +2,11 @@
 # (a real domain, or <server-ip>.sslip.io to try it out). The API serves the web app too, so there is
 # one origin for pages, API, live streams, the service worker and the Android app's asset links.
 {$DOMAIN} {
+	# The API reads a request's whole body; the largest the app sends is a push subscription, about 1 KB.
+	request_body {
+		max_size 64KB
+	}
+
 	# Live updates are server-sent events: pass them through as they come, never compressed or buffered.
 	@stream path /api/me/stream /api/players/*/stream
 	handle @stream {
@@ -19,6 +24,11 @@
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
+		# What the app's pages may load: everything from here, except Google Fonts' stylesheet and fonts.
+		# No other site may put them in a frame (until there's a real domain, every *.sslip.io server is
+		# the same site, so SameSite cookies alone don't stop a sibling from framing the app).
+		Content-Security-Policy "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		X-Frame-Options "DENY"
 		-Server
 	}
 	log

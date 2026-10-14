@@ -12,6 +12,7 @@ import socket
 from typing import Any
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 import lxml.html
 import trafilatura
@@ -81,28 +82,49 @@ def web_search(query: str, kind: str = "web", max_results: int = 6) -> str:
     return json.dumps(results, ensure_ascii=False) if results else "No results."
 
 
-def _check_public(url: httpx.URL) -> None:
-    """Refuse loopback/private targets: the model picks the URLs, and local services live on this machine."""
-    host = url.host
+def _public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped  # ::ffff:127.0.0.1 is this machine
+    return ip.is_global and not ip.is_multicast
+
+
+def _public_address(host: str, port: int) -> str:
+    """The address to connect to for host, if every address it resolves to is public: the model picks
+    the URLs, and local services (and a cloud server's metadata) are reachable from this machine."""
     try:
-        infos = socket.getaddrinfo(host, url.port or (443 if url.scheme == "https" else 80))
-    except socket.gaierror as exc:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+    except (socket.gaierror, ValueError) as exc:
         raise ToolError(f"cannot resolve {host}") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ToolError(f"refusing to fetch non-public address {host}")
+    if not addresses or not all(_public(ip) for ip in addresses):
+        raise ToolError(f"refusing to fetch non-public address {host}")
+    return str(addresses[0])
 
 
-def _on_request(request: httpx.Request) -> None:
-    _check_public(request.url)  # runs for the first request and every redirect hop
+class _PublicOnly(httpcore.SyncBackend):
+    """Connects to the very address that was checked. Checking a name and then letting the connection look
+    it up again lets a name answer twice (DNS rebinding): a public address when checked, this machine when
+    connected to. TLS still checks the certificate against the hostname. Every connection comes through
+    here, so every redirect hop is checked too."""
+
+    def connect_tcp(self, host: str, port: int, timeout: float | None = None, local_address: str | None = None, socket_options: Any = None) -> httpcore.NetworkStream:
+        return super().connect_tcp(_public_address(host, port), port, timeout, local_address, socket_options)
+
+
+def _transport() -> httpx.HTTPTransport:
+    transport = httpx.HTTPTransport()
+    # httpx takes no network backend of its own; its connection pool does (here with httpx's default limits).
+    transport._pool = httpcore.ConnectionPool(
+        ssl_context=httpx.create_ssl_context(), max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0, network_backend=_PublicOnly()
+    )
+    return transport
 
 
 _http = httpx.Client(
     headers={"user-agent": USER_AGENT, "accept-language": "en"},
     timeout=20,
     follow_redirects=True,
-    event_hooks={"request": [_on_request]},
+    transport=_transport(),
 )
 
 
