@@ -1,0 +1,10 @@
+[Unit]
+Description=Sports Follow Docker clean-up, weekly
+
+[Timer]
+# Early Sunday, a day before the weekly registry import (Mondays 03:30 UTC).
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

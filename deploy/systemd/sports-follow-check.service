@@ -1,0 +1,11 @@
+[Unit]
+Description=Sports Follow server checks: disk, memory, backups, containers, certificate (deploy/server-check.sh)
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+# ALERT_URL and HEARTBEAT_URL, written by push-secrets.sh.
+EnvironmentFile=-/etc/sports-follow/alerts.env
+StateDirectory=sports-follow-check
+ExecStart=/opt/sports-follow/deploy/server-check.sh
