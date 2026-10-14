@@ -33,7 +33,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import alerts, bus, logs
+from . import alerts, bus, logs, metrics
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
@@ -120,6 +120,7 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
         )
         if new_id:
             ids.append(new_id)
+            metrics.moment(f.kind)
     return ids
 
 
@@ -173,6 +174,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     # The numbers as fields too, for the Notifications dashboard (deploy/grafana/): among them how long
     # the oldest moment waited, from its poll or build finding it to its push.
     waited = max((now - item.created_at).total_seconds() for item in items)
+    metrics.pushes([(urlparse(device[1]).hostname, error) for (_, device, _), (_, _, error) in zip(futures, results)], waited)
     log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, pushes, sent, len(results),
              extra={"moments": len(claimed), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
     return sent

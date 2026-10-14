@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, moments, notify, sports, structured
+from . import bus, metrics, moments, notify, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -574,6 +574,7 @@ def _backing_off(player_id: int, now: datetime) -> bool:
 
 
 def mark_failed(player_id: int, message: str) -> None:
+    metrics.card("build", "failed")
     message = fan_message(message)
     with session() as db:
         card_row = db.get(PlayerCard, player_id)
@@ -642,6 +643,7 @@ def build_card(player_id: int) -> None:
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
             elif event["type"] == "result":
                 landed = apply_report(player_id, event["data"])
+                metrics.card("build", "ok")
                 bus.sync_redis().delete(_retry_key(player_id))
                 bus.publish(landed, {"type": "progress", "player_id": landed, "message": "Linking live scores and fixtures…"})
                 if structured.bind(landed):

@@ -1,7 +1,7 @@
 {
   "uid": "sports-follow-jobs",
   "title": "Sports Follow · Jobs and live polls",
-  "description": "The worker: its jobs (runs, failures, time in the queue, time taken) and its live poll rounds, from each job's closing log line and the rounds' spans.",
+  "description": "The worker: live games and how recently each was polled, the job queue, jobs (runs, failures, time in the queue, time taken), live poll rounds and cards; from the worker's metrics, each job's closing log line and the rounds' spans.",
   "tags": [
     "sports-follow"
   ],
@@ -35,6 +35,16 @@
         "hide": 0,
         "current": {},
         "refresh": 1
+      },
+      {
+        "name": "prom",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "/^(?!.*usage).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
       }
     ]
   },
@@ -54,6 +64,502 @@
     }
   ],
   "panels": [
+    {
+      "type": "stat",
+      "title": "Live games now",
+      "description": "Armed and live games with a followed player, polled by the worker.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_live_games{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Games behind",
+      "description": "Live games not polled for 3 minutes. Every game is polled at least once a minute.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_live_games_behind{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Jobs waiting for a slot",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_jobs{job=\"sports-follow-worker\", state=\"ready\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Oldest waiting job",
+      "description": "How long the job first in line has waited to start: long means the worker's slots are all busy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max(sports_follow_jobs_oldest_wait_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Since each source's games were last polled, at the worst",
+      "description": "Seconds since the least recently polled live game of each source was polled. Over 180 s, a game is behind.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max by (source) (sports_follow_live_poll_age_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 14
+      },
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Live games, by source",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum by (source, status) (sports_follow_live_games{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}} {{status}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 14
+      },
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "The job queue",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum by (state) (sports_follow_jobs{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{state}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 14
+      },
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest waiting job",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max(sports_follow_jobs_oldest_wait_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "oldest",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 14
+      },
+      "id": 8
+    },
     {
       "type": "stat",
       "title": "Job runs",
@@ -108,11 +614,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 32,
         "w": 6,
         "h": 4
       },
-      "id": 1
+      "id": 9
     },
     {
       "type": "stat",
@@ -172,11 +678,11 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 0,
+        "y": 32,
         "w": 6,
         "h": 4
       },
-      "id": 2
+      "id": 10
     },
     {
       "type": "stat",
@@ -236,11 +742,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 32,
         "w": 6,
         "h": 4
       },
-      "id": 3
+      "id": 11
     },
     {
       "type": "stat",
@@ -296,11 +802,11 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 0,
+        "y": 32,
         "w": 6,
         "h": 4
       },
-      "id": 4
+      "id": 12
     },
     {
       "type": "timeseries",
@@ -341,7 +847,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -355,11 +861,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 36,
         "w": 12,
-        "h": 9
+        "h": 14
       },
-      "id": 5
+      "id": 13
     },
     {
       "type": "timeseries",
@@ -400,7 +906,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -414,11 +920,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 4,
+        "y": 36,
         "w": 12,
-        "h": 9
+        "h": 14
       },
-      "id": 6
+      "id": 14
     },
     {
       "type": "timeseries",
@@ -459,7 +965,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -473,11 +979,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 13,
+        "y": 50,
         "w": 12,
-        "h": 8
+        "h": 14
       },
-      "id": 7
+      "id": 15
     },
     {
       "type": "timeseries",
@@ -518,7 +1024,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -532,11 +1038,11 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 13,
+        "y": 50,
         "w": 12,
-        "h": 8
+        "h": 14
       },
-      "id": 8
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -578,7 +1084,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -592,11 +1098,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 64,
         "w": 12,
-        "h": 8
+        "h": 14
       },
-      "id": 9
+      "id": 17
     },
     {
       "type": "bargauge",
@@ -674,11 +1180,322 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 21,
+        "y": 64,
         "w": 12,
         "h": 8
       },
-      "id": 10
+      "id": 18
+    },
+    {
+      "type": "stat",
+      "title": "Failed cards",
+      "description": "Followed players whose page couldn't be built: fans see an error on it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_cards{job=\"sports-follow-worker\", status=\"failed\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 6,
+        "h": 4
+      },
+      "id": 19
+    },
+    {
+      "type": "stat",
+      "title": "Cards still building",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_cards{job=\"sports-follow-worker\", status=\"building\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 78,
+        "w": 6,
+        "h": 4
+      },
+      "id": 20
+    },
+    {
+      "type": "stat",
+      "title": "Oldest live score on a live card",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max(sports_follow_cards_live_data_age_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 78,
+        "w": 12,
+        "h": 4
+      },
+      "id": 21
+    },
+    {
+      "type": "timeseries",
+      "title": "Live score age on live cards, at the worst by sport",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max by (sport) (sports_follow_cards_live_data_age_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{sport}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 82,
+        "w": 12,
+        "h": 14
+      },
+      "id": 22
+    },
+    {
+      "type": "timeseries",
+      "title": "Card builds and refreshes, by result",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum by (step, result) (increase(sports_follow_cards_updates_total{job=~\"sports-follow-(api|worker)\"}[$__rate_interval]))",
+          "legendFormat": "{{step}} {{result}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 82,
+        "w": 12,
+        "h": 14
+      },
+      "id": 23
     },
     {
       "type": "logs",
@@ -711,26 +1528,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 29,
+        "y": 96,
         "w": 24,
         "h": 10
       },
-      "id": 11
-    },
-    {
-      "type": "text",
-      "title": "Coming with metrics",
-      "options": {
-        "mode": "markdown",
-        "content": "How late each live poll runs, how many games are live and how many jobs wait in the queue come with the app's metrics (BHA-194)."
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 39,
-        "w": 24,
-        "h": 3
-      },
-      "id": 12
+      "id": 24
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "uid": "sports-follow-notifications",
   "title": "Sports Follow · Notifications",
-  "description": "Pushes to fans' devices: delivered, failed by push service, opened, and how long a moment waited for its push, from notify.py's log lines.",
+  "description": "Moments found, and pushes to fans' devices: delivered, failed by push service, opened, and how long a moment waited for its push; from notify.py's log lines and metrics.",
   "tags": [
     "sports-follow"
   ],
@@ -22,6 +22,16 @@
         "type": "datasource",
         "query": "loki",
         "regex": "/^(?!.*(alert-state-history|usage)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      },
+      {
+        "name": "prom",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "/^(?!.*usage).*$/",
         "hide": 0,
         "current": {},
         "refresh": 1
@@ -353,7 +363,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -369,7 +379,7 @@
         "x": 0,
         "y": 4,
         "w": 12,
-        "h": 9
+        "h": 14
       },
       "id": 5
     },
@@ -412,7 +422,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -428,7 +438,7 @@
         "x": 12,
         "y": 4,
         "w": 12,
-        "h": 9
+        "h": 14
       },
       "id": 6
     },
@@ -471,7 +481,7 @@
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "calcs": [
             "mean",
             "max"
@@ -485,9 +495,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 13,
+        "y": 18,
         "w": 12,
-        "h": 8
+        "h": 14
       },
       "id": 7
     },
@@ -522,11 +532,71 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 13,
+        "y": 18,
         "w": 12,
         "h": 8
       },
       "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Moments found, by kind",
+      "description": "Goals, wickets, results… as polls and builds find them (notify.record).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum by (kind) (increase(sports_follow_moments_total{job=~\"sports-follow-(api|worker)\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 14
+      },
+      "id": 9
     },
     {
       "type": "text",
@@ -537,11 +607,11 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 46,
         "w": 24,
         "h": 3
       },
-      "id": 9
+      "id": 10
     }
   ]
 }

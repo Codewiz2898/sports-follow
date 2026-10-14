@@ -38,7 +38,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -68,9 +68,9 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
-# RequestLog's span stands for each request instead (tracing.request_span). Nor does it log validation
-# failures, which carry what a client sent.
-app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False})
+# RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
+# Nor does it log validation failures, which carry what a client sent.
+app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -153,8 +153,10 @@ class RequestLog:
             finally:
                 route = getattr(scope.get("route"), "path", None)
                 tracing.answered(span, method, route, status, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
+                ms = (time.perf_counter() - started) * 1000
+                if tracing.measured(path):
+                    metrics.request(method, route, status, ms / 1000)
                 if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
-                    ms = (time.perf_counter() - started) * 1000
                     request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", method, path, status, ms,
                                     extra={"method": method, "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
 

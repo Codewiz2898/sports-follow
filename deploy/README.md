@@ -458,6 +458,11 @@ over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it th
 - **Log lines:** every line the app writes to stdout, with its fields as attributes: `rid`, the fan's
   hash, `job`, `player_id`, `route`, `status`, `duration_ms`. A line logged inside a trace carries its
   trace id, so Grafana links the line to the trace and the trace to its lines.
+- **Metrics:** every minute, the API's requests by route, the worker's jobs, pushes, moments, card
+  builds and refreshes, and source requests by host; and what the worker reads each minute: live games
+  and how long since each was polled, the job queue, cards by status, each source's allowance used and
+  left. They land in the stack's Prometheus as `sports_follow_…`, `http_server_request_duration_seconds_…`
+  and `http_client_request_duration_seconds_…`, with `job="sports-follow-api"` or `"sports-follow-worker"`.
 - **Never sent:** query strings (a fan's search words), fan ids (a hash instead), query or Redis values.
 - **Settings:** OpenTelemetry's own (`OTEL_*`, README.md's settings table), so another backend, or a
   collector on another server, is a change to `otlp.env` alone.
@@ -499,14 +504,14 @@ whole traces (Alloy's tail sampling) in between.
 ## Dashboards
 
 Four dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
-from the traces and log lines (above), so they need nothing more on the server:
+from the traces, log lines and metrics (above), so they need nothing more on the server:
 
 | Dashboard | Shows | From |
 |---|---|---|
 | **API** | requests, server errors and refusals, time taken (p95) by route; the failed requests and the API's warnings | each request's log line |
-| **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings | the source requests' spans |
-| **Jobs and live polls** | job runs, failures, time in the queue and time taken by job; live poll rounds and their time; the worker's warnings | each job's closing log line, the rounds' spans |
-| **Notifications** | pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines, the "opened" requests |
+| **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
+| **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
+| **Notifications** | moments found by kind; pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines and metrics, the "opened" requests |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
 trace** (a correlation from Tempo to Loki). The dashboards find their Loki and Tempo data sources
@@ -520,10 +525,7 @@ deploy/grafana/apply-dashboards.sh
 It replaces each dashboard with its file in `grafana/dashboards/`. To keep a change made in Grafana's UI,
 export the dashboard's JSON (**Share → Export**, without "external sharing") over its file.
 
-Not there yet, as they need the app's metrics (BHA-194): how late each live poll runs, how many games are
-live, how many jobs wait, and how much of each source's allowance is left (`python -m sports_follow.usage`
-on the server until then). Traces' panels may miss the last few minutes on a long range; a shorter
-range shows them.
+Traces' panels may miss the last few minutes on a long range; a shorter range shows them.
 
 ## Operating
 

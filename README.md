@@ -253,6 +253,8 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_EXPORTER_OTLP_HEADERS` | none | the backend's key, e.g. `Authorization=Basic%20…`: a secret, so in the server's `otlp.env`, never `settings.env` |
 | `OTEL_TRACES_EXPORTER` | `otlp` | `console` prints spans instead, for development; `none` turns traces off |
 | `OTEL_LOGS_EXPORTER` | `otlp` | `none` keeps log lines on stdout only, while traces still go |
+| `OTEL_METRICS_EXPORTER` | `otlp` | `none` sends no metrics, while traces and logs still go. Metrics: API requests by route, worker jobs, pushes, moments, card builds and refreshes, source requests by host; and from the worker, every minute, live games and how long since each was polled, the job queue, cards by status, each source's allowance (`metrics.py`) |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | milliseconds between metric exports |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
