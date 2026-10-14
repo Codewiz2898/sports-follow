@@ -9,12 +9,15 @@ from sqlalchemy.dialects import postgresql
 
 from sports_follow import naming, pipeline, search
 from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
-from sports_follow.search import Result
+from sports_follow.adapters import KNOWN, LiveSearch, Provider, SearchResult, espn, lichess_chess
 
 from .test_new_adapters import load
 
 
-def keys(results: list[Result]) -> list[str]:
+ESPN = [a for a in KNOWN.values() if a.provider is espn.PROVIDER]
+
+
+def keys(results: list[SearchResult]) -> list[str]:
     return [r.key for r in results]
 
 
@@ -22,7 +25,7 @@ def keys(results: list[Result]) -> list[str]:
 
 
 def test_espn_hits_leave_out_college_athletes():
-    results = search.parse_espn(load("espn/search-caitl"), "caitl")
+    results = espn.parse_search(load("espn/search-caitl"), "caitl", ESPN)
     names = [r.name for r in results]
     assert "Caitlin Clark" in names and "Caitlin Foord" in names
     # ESPN lists a dozen NCAA players for "caitl" (Caitlyn Clark of Bridgewater State among them).
@@ -33,17 +36,17 @@ def test_espn_hits_leave_out_college_athletes():
 
 
 def test_espn_hits_in_sports_without_an_adapter_are_ai_only():
-    carlsen = {r.name: r for r in search.parse_espn(load("espn/search-carlsen"), "carlsen")}
+    carlsen = {r.name: r for r in espn.parse_search(load("espn/search-carlsen"), "carlsen", ESPN)}
     simon = carlsen["Simon Carlsen"]
     assert (simon.sport, simon.system, simon.live_scores) == ("MMA", None, False)
     assert carlsen["Morris Carlsén"].system == "espn_soccer"
     assert "Lexi Carlsen" not in carlsen  # Drake Bulldogs, NCAAW
-    [max_v] = search.parse_espn(load("espn/search-max-verstappen"), "max verstappen")
+    [max_v] = espn.parse_search(load("espn/search-max-verstappen"), "max verstappen", ESPN)
     assert (max_v.sport, max_v.detail, max_v.live_scores, max_v.exact) == ("Motor racing", "F1", False, True)
 
 
 def test_two_athletes_with_one_name_are_both_exact():
-    results = search.parse_espn(load("espn/search-nikola-jokic"), "Nikola Jokić")
+    results = espn.parse_search(load("espn/search-nikola-jokic"), "Nikola Jokić", ESPN)
     assert [(r.sport, r.exact) for r in results] == [("Basketball", True), ("Football", True)]
 
 
@@ -52,12 +55,12 @@ def test_two_athletes_with_one_name_are_both_exact():
 
 def test_fide_hits_notable_first_and_amateurs_only_when_asked():
     records = load("lichess/fide-search-carlsen")
-    among_all = search.parse_fide(records, "carlsen", search.CHESS_LIMIT)
+    among_all = lichess_chess.parse_fide(records, "carlsen", lichess_chess.CHESS_LIMIT)
     # Titled or 2000+ only, active before inactive: Henrik (2063, inactive) after Christian (2048).
     assert [r.name for r in among_all] == ["Magnus Carlsen", "Christian Heen Carlsen", "Henrik Carlsen"]
     assert among_all[0].detail == "GM · Norway · 2823 classical"
     assert among_all[2].detail == "Norway · 2063 classical · inactive"
-    chess_only = search.parse_fide(records, "carlsen", 10)
+    chess_only = lichess_chess.parse_fide(records, "carlsen", 10)
     assert len(chess_only) == 10 and chess_only[0].name == "Magnus Carlsen"
     flags = [r.inactive for r in chess_only]
     assert flags == sorted(flags)  # no inactive player above an active one
@@ -65,23 +68,23 @@ def test_fide_hits_notable_first_and_amateurs_only_when_asked():
 
 def test_fide_hits_must_match_every_word():
     records = load("lichess/fide-search-carlsen")
-    assert search.parse_fide(records, "magnus carlsen", 10)[0].name == "Magnus Carlsen"
-    assert search.parse_fide(records, "max carlsen", 10) == []
+    assert lichess_chess.parse_fide(records, "magnus carlsen", 10)[0].name == "Magnus Carlsen"
+    assert lichess_chess.parse_fide(records, "max carlsen", 10) == []
 
 
 # ---------------------------------------------------------------- merging and ranking
 
 
 def test_rank_puts_players_on_sports_follow_first_and_merges_by_athlete():
-    espn_hits = search.parse_espn(load("espn/search-caitl"), "caitl")
-    ours = Result(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever", system="espn_basketball", athlete_id="4433403", player_id=8, followers=2, live_scores=True, _rank=(0.4,))
+    espn_hits = espn.parse_search(load("espn/search-caitl"), "caitl", ESPN)
+    ours = SearchResult(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever", system="espn_basketball", athlete_id="4433403", player_id=8, followers=2, live_scores=True, _rank=(0.4,))
     ranked = search.rank("caitl", [ours], espn_hits)
     assert ranked[0] is ours and keys(ranked).count("espn_basketball:4433403") == 1
     assert ranked[0].detail == "Indiana Fever · WNBA"  # the source's line, when it says more
 
 
 def test_rank_orders_live_sources_before_ai_only_sports():
-    hits = [*search.parse_espn(load("espn/search-carlsen"), "carlsen"), *search.parse_fide(load("lichess/fide-search-carlsen"), "carlsen", search.CHESS_LIMIT)]
+    hits = [*espn.parse_search(load("espn/search-carlsen"), "carlsen", ESPN), *lichess_chess.parse_fide(load("lichess/fide-search-carlsen"), "carlsen", lichess_chess.CHESS_LIMIT)]
     ranked = search.rank("carlsen", [], hits)
     assert ranked[0].name == "Magnus Carlsen"  # a GM before unpictured namesakes
     live = [r.live_scores for r in ranked]
@@ -90,7 +93,7 @@ def test_rank_orders_live_sources_before_ai_only_sports():
 
 
 def test_a_typo_is_a_suggestion_not_a_result():
-    near = Result(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="", player_id=8, matched=False, _rank=(0.62,))
+    near = SearchResult(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="", player_id=8, matched=False, _rank=(0.62,))
     assert search.rank("catalin clark", [near], []) == []
     assert search.closeness("catalin clark", "Caitlin Clark") >= search.SUGGEST_MIN
     assert search.closeness("catalin clark", "Catalin Carp") < search.SUGGEST_MIN
@@ -121,9 +124,9 @@ def test_closeness_matches_the_words_that_were_typed():
 
 
 def test_popularity_counts_double_for_players_of_today():
-    novak = Result(key="espn_tennis:296", name="Novak Djokovic", sport="Tennis", detail="", live_scores=True, inactive=True, popularity=152)
-    marko = Result(key="espn_tennis:1482", name="Marko Djokovic", sport="Tennis", detail="", live_scores=True, popularity=11)
-    carlos = Result(key="espn_tennis:3782", name="Carlos Djokovic", sport="Tennis", detail="", live_scores=True, popularity=90)
+    novak = SearchResult(key="espn_tennis:296", name="Novak Djokovic", sport="Tennis", detail="", live_scores=True, inactive=True, popularity=152)
+    marko = SearchResult(key="espn_tennis:1482", name="Marko Djokovic", sport="Tennis", detail="", live_scores=True, popularity=11)
+    carlos = SearchResult(key="espn_tennis:3782", name="Carlos Djokovic", sport="Tennis", detail="", live_scores=True, popularity=90)
     assert [r.name for r in search.rank("djok", [], [marko, novak, carlos])] == ["Carlos Djokovic", "Novak Djokovic", "Marko Djokovic"]
 
 
@@ -159,7 +162,7 @@ def test_an_athlete_in_two_sports_is_two_results():
     ranked = search.rank("maldini", [], [search.from_athlete(tennis, "maldini"), search.from_athlete(football, "maldini")])
     assert sorted((r.key, r.sport) for r in ranked) == [("wikidata:Q483027:football", "Football"), ("wikidata:Q483027:tennis", "Tennis")]
     # A player on Sports Follow is the row of their own sport only.
-    ours = Result(key="player:3", name="Yuzvendra Chahal", sport="Cricket", detail="India", player_id=3, qid="Q8062264", live_scores=True, _rank=(1.0,))
+    ours = SearchResult(key="player:3", name="Yuzvendra Chahal", sport="Cricket", detail="India", player_id=3, qid="Q8062264", live_scores=True, _rank=(1.0,))
     ranked = search.rank("chahal", [ours], [search.from_athlete(cricket, "chahal"), search.from_athlete(chess, "chahal")])
     assert [(r.player_id, r.sport) for r in ranked] == [(3, "Cricket"), (None, "Chess")]
 
@@ -171,7 +174,7 @@ def test_an_exact_handle_without_popularity_beats_partial_matches():
     # Esports rows have no popularity, and exactness only multiplied it: "tenz" listed four footballers
     # above TenZ (BUG-073).
     def row(key, name, popularity, exact=False, inactive=False, sport="Football"):
-        return Result(key=key, name=name, sport=sport, detail="", live_scores=True, exact=exact, inactive=inactive, popularity=popularity)
+        return SearchResult(key=key, name=name, sport=sport, detail="", live_scores=True, exact=exact, inactive=inactive, popularity=popularity)
 
     tenzin = [row("wikidata:Q1753405:football", "Sonam Tenzing", 9, inactive=True), row("wikidata:Q27662793:football", "Tenzin Dorji", 4)]
     tenz = row("pandascore_esports:20401", "TenZ", 0, exact=True, sport="Valorant")
@@ -202,14 +205,15 @@ def searching(monkeypatch, found=(), near=(), espn=(), ours=False):
         monkeypatch.setattr(search, "_ours", lambda db, rows, fan: None, raising=False)
     monkeypatch.setattr(search.registry, "find", lambda db, query, sport, limit: list(found))
     monkeypatch.setattr(search.registry, "near", lambda db, query, sport=None: list(near))
-    monkeypatch.setattr(search, "_espn", lambda query, limit=20: asked.append(query) or list(espn))
+    live = Provider(name="ESPN", url="", what="", search=LiveSearch(find=lambda query, sport, adapters: asked.append(query) or list(espn), by_word=True))
+    monkeypatch.setattr(search, "providers", lambda: [(live, ESPN)])
     return asked
 
 
 def test_a_loose_did_you_mean_still_asks_the_live_sources(monkeypatch):
     # "shane warne" suggested Shane Watson and never asked ESPN (BUG-072).
     watson = athlete("Q311", "Shane Watson", "cricket", sitelinks=30, ids={"espn_cricket": "8180"})
-    warne = Result(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True, exact=True)
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True, exact=True)
     asked = searching(monkeypatch, near=[watson], espn=[warne])
     out = search.run(None, "shane warne")
     assert asked == ["shane warne"]
@@ -241,7 +245,7 @@ def test_the_picker_lists_and_counts_every_namesake(monkeypatch):
     listed = sorted(r["name"] for r in out["results"] if r["exact"])
     assert out["namesakes"] == len(listed) == 4
     assert listed == ["Ronaldo", "Ronaldo", "Ronaldo da Silva Souza", "Ronaldo de Oliveira Strada"]  # the LoL pro too
-    assert len(out["results"]) <= search.ESPN_LIMIT + search.LOCAL_LIMIT + 4
+    assert len(out["results"]) <= search.LIVE_LIMIT + search.LOCAL_LIMIT + 4
 
 
 def test_one_person_in_two_sports_is_not_two_namesakes(monkeypatch):
@@ -268,7 +272,7 @@ def test_a_result_found_by_an_alias_says_which(monkeypatch):
     searching(monkeypatch, found=[cije])
     assert [(x["name"], x["aka"]) for x in search.run(None, "jonathan")["results"]] == [("Cije", "Christian Jonathan")]
     # Any sport, and a player on Sports Follow found by a fan's alias shows it as the registry writes it.
-    ours = Result(key="lichess_chess:46616543", name="Gukesh D", sport="Chess", detail="", player_id=1, live_scores=True, aka="dommaraju gukesh", _rank=(1.0,))
+    ours = SearchResult(key="lichess_chess:46616543", name="Gukesh D", sport="Chess", detail="", player_id=1, live_scores=True, aka="dommaraju gukesh", _rank=(1.0,))
     gukesh = athlete("Q56026072", "Gukesh D", "chess", aliases=["Dommaraju Gukesh"], ids={"lichess_chess": "46616543"})
     [row] = search.rank("dommaraju gukesh", [ours], [search.from_athlete(gukesh, "dommaraju gukesh")])
     assert (row.player_id, row.aka) == (1, "Dommaraju Gukesh")
@@ -280,7 +284,7 @@ def test_a_result_found_by_an_alias_says_which(monkeypatch):
 def test_a_query_with_nothing_to_search_by_lists_no_one_and_offers_no_research(monkeypatch):
     # "--" listed ESPN's default stars, and "विराट कोहली" found no one but offered an AI research that
     # always failed: a researched player is named by the query's Latin letters (BUG-075).
-    lebron = Result(key="espn_basketball:1966", name="LeBron James", sport="Basketball", detail="", system="espn_basketball", athlete_id="1966", live_scores=True)
+    lebron = SearchResult(key="espn_basketball:1966", name="LeBron James", sport="Basketball", detail="", system="espn_basketball", athlete_id="1966", live_scores=True)
     assert not naming.prefix_match("--", "LeBron James")
     for query in ["--", "..", "%%", "विराट कोहली", "விராட் கோலி", "梅西", "Лионель Месси"]:
         asked = searching(monkeypatch, espn=[lebron])
@@ -358,8 +362,8 @@ def test_a_followed_player_found_by_another_name_is_theirs(monkeypatch):
     search._ours(db, rows, "fan")
     assert [(r.sport, r.player_id, r.following, r.followers) for r in rows] == [("Cricket", 3, False, 1), ("Chess", None, False, 0)]
     # One player keyed two ways (ours by Sportmonks id, ESPN's hit by its own) is one row.
-    ours = Result(key="sportmonks_football:4125", name="Mohamed Salah", sport="Football", detail="Liverpool", player_id=14, live_scores=True, _rank=(1.0,))
-    hit = Result(key="espn_soccer:173896", name="Mohamed Salah", sport="Football", detail="Liverpool · Premier League", system="espn_soccer", athlete_id="173896", live_scores=True)
+    ours = SearchResult(key="sportmonks_football:4125", name="Mohamed Salah", sport="Football", detail="Liverpool", player_id=14, live_scores=True, _rank=(1.0,))
+    hit = SearchResult(key="espn_soccer:173896", name="Mohamed Salah", sport="Football", detail="Liverpool · Premier League", system="espn_soccer", athlete_id="173896", live_scores=True)
     search._ours(db, [hit], "fan")
     assert [(r.key, r.player_id) for r in search.rank("salah", [ours], [hit])] == [("sportmonks_football:4125", 14)]
 

@@ -22,7 +22,7 @@ from typing import Any
 from .. import naming
 from ..sports import cricket
 from . import sportmonks
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
@@ -307,9 +307,12 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
 # ---------------------------------------------------------------- the adapter
 
 
-class SportmonksCricket:
+class SportmonksCricket(Adapter):
     system = "sportmonks_cricket"
     sports = ("cricket",)
+    name = "Sportmonks"
+    provider = sportmonks.PROVIDER
+    covers = "Cricket"
     live_cadence = 10  # 6 requests a minute per live match, of 180
     WINDOW_BACK, WINDOW_AHEAD = 120, 90  # days of fixtures a refresh reads (two requests per team)
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
@@ -325,7 +328,11 @@ class SportmonksCricket:
         teams = current_teams(p, self._seasons(), datetime.now(timezone.utc).date())
         return PlayerRef(self.system, str(p["id"]), p.get("fullname") or "", [t for t, _ in teams], [n for _, n in teams], born=born(p.get("dateofbirth")))
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(sportmonks.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         """Players with this surname whose first name matches too, each read with their teams."""
         words = naming.fold(name).split()
         if not words:

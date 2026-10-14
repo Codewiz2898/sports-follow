@@ -25,7 +25,7 @@ import httpx
 
 from .. import bus
 from ..config import USER_AGENT
-from .base import AdapterError
+from .base import AdapterError, Provider
 
 BASE = "https://api.liquipedia.net/api/v3"
 TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_TOKEN_FILE", Path.home() / ".config" / "sports-follow" / "liquipedia-token"))
@@ -39,6 +39,16 @@ PAGE = 1000  # rows a request, the API's most
 _client = httpx.Client(headers={"user-agent": f"{USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
+
+
+PROVIDER = Provider(
+    name="Liquipedia",
+    url="https://liquipedia.net",
+    what="battle royale standings, each game's placings and finishes, and the pro players search finds.",
+    licence="CC BY-SA 3.0",
+    licence_url="https://creativecommons.org/licenses/by-sa/3.0/",
+    note="Recorded by Liquipedia's editors during and after play; not official tournament records.",
+)
 
 
 class RateLimited(AdapterError):

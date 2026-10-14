@@ -42,7 +42,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, naming
-from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
 from .config import USER_AGENT
 from .db import session
 from .models import Athlete, Player, PlayerIdentity
@@ -67,8 +67,6 @@ SPORTS: dict[str, dict[str, str]] = {
 }
 # Imported from PandaScore rather than Wikidata (import_esports).
 ESPORTS = "esports"
-# ESPN's search keeps each sport's athletes under one uid prefix.
-ESPN_UIDS = {"espn_soccer": "s:600", "espn_cricket": "s:200", "espn_basketball": "s:40", "espn_tennis": "s:850"}
 TEAM_SPORTS = ("basketball", "cricket", "football")
 CHESS_TITLES = {
     "Grandmaster": "GM", "International Master": "IM", "FIDE Master": "FM", "Candidate Master": "CM",
@@ -748,27 +746,14 @@ def sport_of(system: str) -> str | None:
 
 
 def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]) -> Iterable[PlayerRef]:
-    """Source athletes a name could mean, surname first: the source's own search where it has one
-    (Sportmonks), else ESPN's search read back through the adapter."""
+    """Source athletes a name could mean, from the source's own search by name (Sportmonks', or ESPN's
+    read back through the adapter). A source without one (Lichess) is found by the id Wikidata has."""
     search = getattr(adapter, "search", None)
-    if search is not None:
-        for ref in search(name)[:6]:
-            if ref.athlete_id not in tried and naming.names_match(name, ref.name):
-                tried.add(ref.athlete_id)
-                yield ref
+    if search is None:
         return
-    uid = ESPN_UIDS.get(adapter.system)
-    if uid is None:
-        return  # Lichess is found by the FIDE id Wikidata has
-    for hit in espn.search_athletes(name, uid)[:6]:
-        if hit["athlete_id"] in tried or not naming.names_match(name, hit["name"]):
-            continue
-        tried.add(hit["athlete_id"])
-        try:
-            ref = adapter.player(hit["athlete_id"], league)
-        except AdapterError:
-            continue
-        if ref:
+    for ref in search(name, league)[:6]:
+        if ref.athlete_id not in tried and naming.names_match(name, ref.name):
+            tried.add(ref.athlete_id)
             yield ref
 
 

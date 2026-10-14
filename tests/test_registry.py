@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from sports_follow import bus, registry, search
-from sports_follow.adapters import PlayerRef
+from sports_follow.adapters import PlayerRef, SearchResult
 from sports_follow.models import Athlete
 
 WD = "http://www.wikidata.org/entity/"
@@ -92,9 +92,9 @@ def test_registry_rows_as_search_results():
 
 
 def test_a_followed_player_and_their_registry_row_are_one_result():
-    ours = search.Result(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever", system="espn_basketball", athlete_id="4433403", player_id=8, followers=1, live_scores=True, qid="Q9", _rank=(1.0,))
-    theirs = search.Result(key="wikidata:Q9", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever · WNBA", qid="Q9", live_scores=True, popularity=40)
-    other = search.Result(key="wikidata:Q10", name="Caitlin Foord", sport="Football", detail="Arsenal", qid="Q10", live_scores=True, popularity=20)
+    ours = SearchResult(key="espn_basketball:4433403", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever", system="espn_basketball", athlete_id="4433403", player_id=8, followers=1, live_scores=True, qid="Q9", _rank=(1.0,))
+    theirs = SearchResult(key="wikidata:Q9", name="Caitlin Clark", sport="Basketball", detail="Indiana Fever · WNBA", qid="Q9", live_scores=True, popularity=40)
+    other = SearchResult(key="wikidata:Q10", name="Caitlin Foord", sport="Football", detail="Arsenal", qid="Q10", live_scores=True, popularity=20)
     ranked = search.rank("caitl", [ours], [theirs, other])
     assert [r.key for r in ranked] == ["espn_basketball:4433403", "wikidata:Q10"]
     assert ranked[0].detail == "Indiana Fever · WNBA"

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import httpx
 
 from sports_follow import credits, form, games, moments, registry, search, structured
-from sports_follow.adapters import pandascore, pandascore_esports as ps
+from sports_follow.adapters import SearchResult, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
 
@@ -254,8 +254,8 @@ def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatc
 
 def test_a_pro_on_a_team_ranks_before_a_teamless_namesake():
     # PandaScore gives no popularity, and calls long-retired players active: being on a team decides.
-    veteran = search.Result(key="pandascore_esports:7", name="Move", sport="Esports", detail="League of Legends", live_scores=True, inactive=True)
-    pro = search.Result(key="pandascore_esports:9001", name="Move", sport="Esports", detail="T1 · League of Legends", live_scores=True)
+    veteran = SearchResult(key="pandascore_esports:7", name="Move", sport="Esports", detail="League of Legends", live_scores=True, inactive=True)
+    pro = SearchResult(key="pandascore_esports:9001", name="Move", sport="Esports", detail="T1 · League of Legends", live_scores=True)
     assert [r.key for r in search.rank("move", [], [veteran, pro])] == ["pandascore_esports:9001", "pandascore_esports:7"]
 
 

@@ -16,14 +16,13 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import quote
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, moments, naming, notify, registry
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport, liquipedia_esports, pandascore_esports
+from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -47,7 +46,6 @@ PRE_MATCH = ("scheduled", "armed", "postponed")
 UNDER_WAY = 10  # minutes on a football clock: a game first seen live this late was missed, not just started
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-SOURCE_NAMES = {"espn_soccer": "ESPN", "espn_cricket": "ESPNcricinfo", "espn_basketball": "ESPN", "espn_tennis": "ESPN", "lichess_chess": "Lichess", "sportmonks_football": "Sportmonks", "sportmonks_cricket": "Sportmonks", "pandascore_esports": "PandaScore", "liquipedia_esports": "Liquipedia", "pubg_esports": "PUBG"}
 NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
@@ -78,10 +76,6 @@ def _teams_overlap(found: list[str], known: list[str]) -> bool:
 
 # ---------------------------------------------------------------- recognizing a name without the agent
 
-# FIDE's list holds about a million players, most of them amateurs; a typed name is only taken to
-# mean a chess player straight away if they're titled or rated 2200+.
-CHESS_TITLES = {"GM", "IM", "WGM", "WIM", "FM", "WFM"}
-
 
 def _name_key(name: str) -> list[str]:
     """A name's words in any order, folded as the registry folds them ("N’Golo Kanté" == "ngolo kante")."""
@@ -94,57 +88,18 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
     Only a full name that exactly one source claims counts: "Caitlin Clark" yes; "Clark", a typo,
     or a name two sports share go to the research agent, which decides as before.
     """
-    wanted = _name_key(query)
-    if len(wanted) < 2:
+    if len(_name_key(query)) < 2:
         return None
-    # Two athletes anywhere on ESPN with this exact name (any sport, supported or not) is a question
-    # for the agent: "John Smith" is dozens of people, and the first one found is rarely the one meant.
-    # Without ESPN (a licensed-only build), namesakes can't be ruled out across sports, so only chess
-    # is recognised here and every other name goes to the agent.
-    if espn_enabled():
-        try:
-            search = espn.get_json(f"{espn.WEB}/search/v2?query={quote(query)}&limit=10", ttl=3600)
-        except AdapterError:
+    # Each provider that can recognise a name is asked in turn (adapters.base.Provider.recognise): ESPN
+    # first, as it knows namesakes in every sport, then Lichess's FIDE list.
+    for provider, adapters in providers():
+        if provider.recognise is None:
+            continue
+        found = provider.recognise(query, adapters)
+        if found is False:
             return None
-        namesakes = [item for group in search.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if _name_key(item.get("displayName", "")) == wanted]
-        if len(namesakes) > 1:
-            # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
-            # star). One professional among college namesakes is the one a fan means.
-            pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
-            if len(pros) != 1:
-                log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
-                return None
-            namesakes = pros
-        found = []
-        for adapter in ADAPTERS.values():
-            if adapter.system in ("lichess_chess", "pandascore_esports"):
-                continue  # not on ESPN, so never the one ESPN athlete below; asking would only spend a request
-            try:
-                ref = adapter.find_player(query)
-            except AdapterError:
-                continue
-            # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
-            # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
-            # the adapter's own lookup happened to reach.
-            if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
-                found.append((adapter, ref))
-        if len(found) == 1:
-            return found[0]
-        if found or namesakes:
-            # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
-            log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
-            return None
-    chess = ADAPTERS.get("lichess_chess")
-    try:
-        ref = chess.find_player(query) if chess else None
-        if ref:
-            from .adapters import lichess_chess
-
-            record = lichess_chess.get_json(f"{lichess_chess.API}/fide/player/{ref.athlete_id}", ttl=12 * 3600)
-            if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
-                return chess, ref
-    except AdapterError:
-        pass
+        if found:
+            return found
     return None
 
 
@@ -265,11 +220,11 @@ def describe(player_id: int) -> str | None:
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
         league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
-        game = pandascore_esports.game_name(loc.get("league")) or liquipedia_esports.game_name(loc.get("league"))
-        game = game or (loc.get("game") if row.adapter == "pubg_esports" else None)
-        if row.adapter in ("pandascore_esports", "liquipedia_esports", "pubg_esports") and game:
+        adapter = ADAPTERS.get(row.adapter)
+        game = adapter.game_of(PlayerRef(**loc)) if getattr(adapter, "games", None) else None
+        if game:
             league = f" ({game} pro, known by this handle)"
-        page = f" Their page on {SOURCE_NAMES.get(row.adapter, row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
+        page = f" Their page on {source_name(row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
         return f"{loc.get('name') or player.name}, {player.sport if league else player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
 
@@ -404,7 +359,7 @@ def _refresh(player_id: int) -> None:
         _record_health(player_id, ok=True, db=db)
         if card_row.status != "ready":
             return  # nothing to show yet; the build that follows reads the same events
-        source = SOURCE_NAMES.get(adapter.system, adapter.system)
+        source = source_name(adapter.system)
         stamp = now.isoformat()
         card = copy.deepcopy(card_row.card)
         card["player"] = {**card.get("player", {}), "sport": player.sport}
@@ -906,7 +861,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "state": snap.state,
             "moments": snap.moments[:10],
             # The inside of a Dota 2 map comes from OpenDota: credit both.
-            "source": SOURCE_NAMES.get(adapter.system, adapter.system) + (" and OpenDota" if snap.state.get("dota") else ""),
+            "source": source_name(adapter.system) + (" and OpenDota" if snap.state.get("dota") else ""),
             "source_url": snap.source_url,
             "as_of": stamp,
         }

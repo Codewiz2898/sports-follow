@@ -18,7 +18,7 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import sportmonks
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type"
@@ -282,9 +282,12 @@ def parse_season_stats(p: dict[str, Any], team_ids: list[str]) -> tuple[list[dic
 # ---------------------------------------------------------------- the adapter
 
 
-class SportmonksFootball:
+class SportmonksFootball(Adapter):
     system = "sportmonks_football"
     sports = ("football", "soccer", "association football")
+    name = "Sportmonks"
+    provider = sportmonks.PROVIDER
+    covers = "Football"
     live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,500
     MULTI_MAX = 50  # fixture ids fixtures/multi takes in one request
     WINDOW_BACK, WINDOW_AHEAD = 120, 60  # days of fixtures a refresh reads; older ones come from history_pages
@@ -295,7 +298,11 @@ class SportmonksFootball:
         need the hour's last LIVE_RESERVE of them."""
         return sportmonks.spare("Fixture")
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(sportmonks.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         data = sportmonks.get_json(f"/football/players/search/{quote(name)}", ttl=24 * 3600, include=PLAYER_INCLUDE)
         return [parse_player(p) for p in (data.get("data") or [])[:8] if p.get("id")]
 

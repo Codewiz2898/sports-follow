@@ -24,7 +24,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
-from .base import AdapterError
+from .base import AdapterError, Provider
 
 BASE = "https://api.sportmonks.com/v3"
 CRICKET = "https://cricket.sportmonks.com/api/v2.0"
@@ -41,6 +41,14 @@ _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
 _state = {"paused_until": 0.0}
 remaining: dict[str, tuple[int, float]] = {}  # entity -> (requests left this hour, when the hour resets), from the last response
+
+
+PROVIDER = Provider(
+    name="Sportmonks",
+    url="https://www.sportmonks.com",
+    what="fixtures, live scores, line-ups, scorecards and player stats.",
+    note="Collected by Sportmonks; not official league records.",
+)
 
 
 class RateLimited(AdapterError):

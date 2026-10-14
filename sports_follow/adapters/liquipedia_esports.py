@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .. import naming
 from ..sports import esports
 from . import liquipedia
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 # The battle royale wikis read, and what fans call a game won on each. All store lobbies the same way
 # (Lua-Modules: each wiki's MatchGroup/Input/Custom.lua hands them to standardProcessFfaMaps).
@@ -317,8 +318,12 @@ def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) ->
 # ---------------------------------------------------------------- the adapter
 
 
-class LiquipediaEsports:
+class LiquipediaEsports(Adapter):
     system = "liquipedia_esports"
+    name = "Liquipedia"
+    provider = liquipedia.PROVIDER
+    covers = "BGMI, PUBG Mobile, Free Fire and Apex Legends"
+    id_pattern = re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}")  # wiki:Page_name
     sports = ("esports", "e-sports", "bgmi", "pubg mobile", "battlegrounds mobile india", "free fire", "free fire max", "apex legends")  # a pro's sport is their game
     games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
@@ -344,7 +349,11 @@ class LiquipediaEsports:
                 self._seen.pop(key, None)
         return rows
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(liquipedia.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         """Players whose handle is exactly this, on every battle royale wiki."""
         found = []
         for wiki in WIKIS:

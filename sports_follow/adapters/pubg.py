@@ -26,7 +26,7 @@ import httpx
 
 from .. import bus
 from ..config import USER_AGENT
-from .base import AdapterError
+from .base import AdapterError, Provider
 
 BASE = "https://api.pubg.com"
 TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_PUBG_TOKEN_FILE", Path.home() / ".config" / "sports-follow" / "pubg-token"))
@@ -35,6 +35,14 @@ MARGIN = 1
 KEEP = 15 * 24 * 3600  # PUBG keeps matches 14 days
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/vnd.api+json"}, timeout=30)
+
+
+PROVIDER = Provider(
+    name="PUBG",
+    url="https://developer.pubg.com",
+    what="official tournament matches from PUBG's API: placings and every player's finishes, damage, assists and knocks, after each match.",
+    note="Standings use the standard PUBG esports points (10, 6, 5, 4, 3, 2, 1, 1 for placing, one a finish); some events score differently. PUBG, PLAYERUNKNOWN'S BATTLEGROUNDS and all related logos are trademarks of PUBG Corporation or its affiliates.",
+)
 
 
 class RateLimited(AdapterError):

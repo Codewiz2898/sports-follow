@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
-from .base import AdapterError
+from .base import AdapterError, Provider
 
 BASE = "https://api.pandascore.co"
 TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE", Path.home() / ".config" / "sports-follow" / "pandascore-token"))
@@ -42,6 +42,14 @@ _lock = threading.Lock()
 _state = {"paused_until": 0.0}
 # (requests left this hour, when the hour resets), from the last response's headers, else counted here.
 remaining = {"left": HOURLY, "resets_at": 0.0}
+
+
+PROVIDER = Provider(
+    name="PandaScore",
+    url="https://pandascore.co",
+    what="series schedules and results, map by map, teams, and the pro players search finds.",
+    note="Collected by PandaScore; not official tournament records. Results are the team's: player stats aren't included.",
+)
 
 
 class RateLimited(AdapterError):

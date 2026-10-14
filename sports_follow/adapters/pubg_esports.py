@@ -20,6 +20,7 @@ reads Redis, not PUBG.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -27,7 +28,7 @@ from typing import Any
 from .. import naming
 from ..sports import esports
 from . import pubg
-from .base import Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, Fixture, Line, PlayerRef, Snapshot
 
 GAME = "PUBG"
 MAPS = {
@@ -278,8 +279,12 @@ def player_form(lobbies: list[dict[str, Any]], account: str) -> tuple[list[dict[
 # ---------------------------------------------------------------- the adapter
 
 
-class PubgEsports:
+class PubgEsports(Adapter):
     system = "pubg_esports"
+    name = "PUBG"
+    provider = pubg.PROVIDER
+    covers = "PUBG"
+    id_pattern = re.compile(r"account\.[0-9a-f]{32}")
     sports = ("pubg", "pubg: battlegrounds", "playerunknown's battlegrounds", "esports", "e-sports")
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
@@ -358,7 +363,11 @@ class PubgEsports:
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(pubg.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         wanted = naming.fold(name).strip()
         return [ref_of(acc, info) for acc, info in self.players().items() if wanted in (naming.fold(info["name"]), naming.fold(info.get("in_game") or ""))]
 

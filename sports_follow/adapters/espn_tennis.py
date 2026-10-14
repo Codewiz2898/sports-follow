@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import naming
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:850~"
 TOURS = {"851": "atp", "900": "wta"}
@@ -203,10 +203,17 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnTennis:
+class EspnTennis(espn.EspnAdapter, Adapter):
     system = "espn_tennis"
     sports = ("tennis",)
     live_cadence = 10
+    name = "ESPN"
+    covers = "Tennis"
+    espn_uid = SPORT_UID
+    espn_leagues = TOURS
+
+    def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
+        return (league or description).upper()  # "ATP"
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):

@@ -10,7 +10,7 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:600~"
 
@@ -238,10 +238,13 @@ def parse_season_stats(data: dict[str, Any]) -> tuple[list[dict[str, str]], str]
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnSoccer:
+class EspnSoccer(espn.EspnAdapter, Adapter):
     system = "espn_soccer"
     sports = ("football", "soccer", "association football")
     live_cadence = 10
+    name = "ESPN"
+    covers = "Football"
+    espn_uid = SPORT_UID
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):

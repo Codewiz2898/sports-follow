@@ -16,7 +16,7 @@ from typing import Any
 from .. import naming
 from ..sports import cricket
 from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:200~"
 DAYS_AHEAD = 14
@@ -268,10 +268,16 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
 # ---------------------------------------------------------------- the adapter
 
 
-class EspnCricket:
+class EspnCricket(espn.EspnAdapter, Adapter):
     system = "espn_cricket"
     sports = ("cricket",)
     live_cadence = 8
+    name = "ESPNcricinfo"
+    covers = "Cricket (ESPNcricinfo)"
+    espn_uid = SPORT_UID
+
+    def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
+        return subtitle  # "India": ESPNcricinfo's description is just "Cricket"
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):

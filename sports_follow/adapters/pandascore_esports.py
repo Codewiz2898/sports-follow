@@ -26,7 +26,7 @@ from typing import Any
 
 from .. import bus, naming
 from . import dota, opendota, pandascore
-from .base import AdapterError, Fixture, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, PlayerRef, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -275,8 +275,11 @@ def team_form(fixtures: list[Fixture], team_ids: list[str], team: str | None) ->
 # ---------------------------------------------------------------- the adapter
 
 
-class PandascoreEsports:
+class PandascoreEsports(Adapter):
     system = "pandascore_esports"
+    name = "PandaScore"
+    provider = pandascore.PROVIDER
+    covers = "Valorant, CS2, League of Legends, Dota 2 and other team games"
     # Its games by name too: a pro's sport is their game ("CS2"), and for_sport() finds the source by it.
     sports = ("esports", "e-sports", "electronic sports", *(g.lower() for g in GAMES.values()), "counter-strike", "cs:go")
     games = tuple(GAMES)  # covers these games of the sport, beside Liquipedia's: players never move between them
@@ -306,7 +309,21 @@ class PandascoreEsports:
                 self._seen.pop(key, None)
         return rows
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(pandascore.token())
+
+    def credits_also(self) -> list[dict[str, Any]]:
+        if not opendota.ENABLED:
+            return []
+        return [{
+            "name": "OpenDota",
+            "url": "https://www.opendota.com",
+            "what": "Dota 2 inside the map: kills, the clock and the gold lead while a map is on, and each player's hero, kills, deaths, assists, gold a minute and last hits after it, from Valve's match data.",
+            "note": "Run by the OpenDota community, best effort.",
+        }]
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         params = {"search[name]": name, "filter[videogame_id]": ",".join(str(i) for i in GAME_IDS.values()), "page[size]": 10}
         rows = pandascore.get_json("/players", ttl=24 * 3600, **params)
         return [parse_player(p) for p in rows if p.get("id")] if isinstance(rows, list) else []
