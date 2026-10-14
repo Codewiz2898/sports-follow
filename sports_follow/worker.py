@@ -103,7 +103,7 @@ async def build_card(ctx, player_id: int) -> None:
 
 
 async def refresh_live(ctx, player_id: int) -> None:
-    await asyncio.to_thread(pipeline.refresh_live, player_id)
+    await in_lane('live', pipeline.refresh_live, player_id)
 
 
 async def refresh_structured(ctx, player_id: int) -> None:

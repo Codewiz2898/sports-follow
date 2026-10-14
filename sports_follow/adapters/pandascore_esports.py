@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .. import bus, naming
-from . import dota, opendota, pandascore
+from . import budget, dota, opendota, pandascore
 from .base import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
@@ -305,6 +305,9 @@ class PandascoreEsports(Adapter):
     MULTI_MAX = 100  # match ids one request takes (a page)
     WINDOW_BACK, WINDOW_AHEAD = 60, 45  # days of series a refresh reads; older ones come from history_pages
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
+
+    def budgets(self) -> tuple[budget.Budget, ...]:
+        return (*super().budgets(), opendota.BUDGET)  # Dota 2 maps come from OpenDota
 
     def __init__(self) -> None:
         # Matches as the last list returned them, so a finished series' snapshot needs no request of its own.

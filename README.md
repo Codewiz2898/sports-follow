@@ -151,8 +151,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   source never breaks another. `tests/test_sources.py` fails if shared code names a source.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
   declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
-  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Before each request it
+  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Its provider lists it
+  (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
+  The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history` and `import`. The background lanes stop at the reserve; a fan loop on
@@ -272,15 +274,15 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
-| `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series; the history lane and the registry import pause below it |
+| `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2). Naming a few imports just those, and removes only their stale players |
 | `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
 | `SPORTS_FOLLOW_PUBG_TOKEN` | from `~/.config/sports-follow/pubg-token` | PUBG developer API key (PUBG esports); the worker indexes recent tournaments every 10 minutes |
 | `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |
-| `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes and never overspent (a paid plan raises it) |
-| `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fixtures; the history lane and the registry import pause below it |
+| `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes (each counts its own while Redis is down) and never overspent (a paid plan raises it) |
+| `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` | `pubgmobile,freefire,apexlegends` | the battle royale wikis whose active players the registry imports |
-| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks requests an hour kept for live matches, of the 2,000 that football allows per entity and cricket per endpoint; the history lane pauses below it |
+| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks requests an hour kept for live matches, of the 2,000 that football allows per entity and cricket per endpoint, and for fans; refreshes and the history lane stop below it |
 
 ## Deploy
 
