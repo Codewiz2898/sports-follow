@@ -114,8 +114,8 @@ ssh deploy@<server-ip> "sudo RECOVERY_KEY='$(cat <new key>.pub)' bash -s" < depl
 
 **From GitHub:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`. A deploy
 goes ahead only if the CI workflow passed for that commit; then it runs `deploy.sh` on the server and
-fetches `/api/health` from outside. It never runs for pull requests: the repository is public, and a
-fork's PR must not reach the deploy key. Once it's trusted, uncomment `workflow_run` in the workflow so
+fetches `/api/health` from outside. It never runs for pull requests: a fork's PR must not reach the deploy
+key. Once it's trusted, uncomment `workflow_run` in the workflow so
 every commit on main that CI passes deploys by itself.
 
 **By hand:** `ssh deploy@<server-ip> /opt/sports-follow/deploy/deploy.sh deploy` (or `deploy <commit>`,
