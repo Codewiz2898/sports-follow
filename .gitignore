@@ -4,6 +4,9 @@ __pycache__/
 web/node_modules/
 web/dist/
 
+# A bug sweep's board (the bug-bounty skill): it can describe open security holes, and the repo is public.
+BUGBOARD*.md
+
 # Android (the project is generated from android/twa-manifest.json by android/generate.mjs)
 android/node_modules/
 android/app/

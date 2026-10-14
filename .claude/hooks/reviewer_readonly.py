@@ -58,9 +58,9 @@ def refusal(simple: Simple) -> str | None:
         return None
     args = words[1:]
     if name == "git":
-        return _git(args)
+        return git_refusal(args)
     if name == "gh":
-        return _gh(args)
+        return gh_refusal(args)
     if name.startswith("python"):
         module = args[args.index("-m") + 1] if "-m" in args[:-1] else ""
         after = args[args.index("-m") + 2:] if module else []
@@ -121,7 +121,8 @@ def _positional(args: list[str], with_value: set[str]) -> list[str]:
     return out
 
 
-def _git(args: list[str]) -> str | None:
+def git_refusal(args: list[str]) -> str | None:
+    """Why a git command (its arguments) may change the repository, or None when it only reads."""
     i = 0
     while i < len(args) and args[i].startswith("-"):
         i += 2 if args[i] in GIT_OPTIONS_WITH_VALUE else 1
@@ -162,7 +163,8 @@ def _git(args: list[str]) -> str | None:
     return f"`git {verb}` changes the repository"
 
 
-def _gh(args: list[str]) -> str | None:
+def gh_refusal(args: list[str]) -> str | None:
+    """Why a gh command (its arguments) may change GitHub, or None when it only reads."""
     group = args[0] if args else ""
     if group == "api":
         method = next((args[j + 1] for j, a in enumerate(args[:-1]) if a in ("-X", "--method")), "GET")
