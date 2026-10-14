@@ -9,8 +9,9 @@ is this year's or last year's (Sportmonks' "current teams" misses franchise side
 different squads (India's T20I, ODI and Test sides), so a match counts only if the player is in its
 XI, or in the team's squad for that season before the XI is out.
 
-Which competitions answer depends on the plan: the free plan has T20 internationals, the Big Bash
-and the CSA T20 Challenge; World adds ODIs, Tests, the IPL and the rest.
+Which competitions answer depends on the plan. Ours is Major: the IPL, T20 internationals, the T20
+World Cups, the Big Bash, the PSL, the T20 Blast and the other T20 leagues, women's ODIs, but not men's
+ODIs or Tests (World adds those), so a player who plays only those has no matches here.
 """
 
 from __future__ import annotations
@@ -309,13 +310,14 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
 class SportmonksCricket:
     system = "sportmonks_cricket"
     sports = ("cricket",)
-    live_cadence = 10  # 6 requests a minute per live match, of 180
+    live_cadence = 10  # 360 requests an hour per live match, of the 2,000 a match endpoint allows
     WINDOW_BACK, WINDOW_AHEAD = 120, 90  # days of fixtures a refresh reads (two requests per team)
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
 
     def spare(self) -> bool:
-        """Whether history.py may read now, leaving the minute's last CRICKET_RESERVE requests to live matches."""
-        return sportmonks.spare("Cricket")
+        """Whether history.py may read now: the scorecards it reads come from the endpoint live matches
+        are polled on, and they need the hour's last LIVE_RESERVE of it."""
+        return sportmonks.spare(sportmonks.CRICKET_MATCH)
 
     def _seasons(self) -> dict[int, dict[str, Any]]:
         return {s["id"]: s for s in sportmonks.get_json(f"{API}/seasons", ttl=24 * 3600).get("data") or []}
