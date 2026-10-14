@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, metrics, moments, notify, sports, structured
+from . import bus, metrics, moments, notify, shutdown, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -638,6 +638,8 @@ def build_card(player_id: int) -> None:
                 name = found[1].name
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
         for event in follow_player(llm(), name, structured.describe(player_id)):
+            if shutdown.stopping.is_set():
+                return  # the worker is stopping; the build starts over on the next one (arq queues it again)
             bus.extend(lock, BUILD_LOCK, token)  # held while the agent is working, however long that takes
             if event["type"] == "progress":
                 bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": event["message"]})
@@ -715,6 +717,8 @@ def refresh_live(player_id: int) -> None:
             name, sport, teams = player.name, player.sport, list(player.teams or [])
         bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Checking the live score…"})
         for event in live_update(llm(), name, sport, teams):
+            if shutdown.stopping.is_set():
+                return
             if event["type"] == "result":
                 apply_live(player_id, event["data"])
     except Exception as exc:

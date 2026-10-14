@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from typing import Any
 
 import redis
 
+from . import shutdown
 from .config import REDIS_URL
 
 _sync: redis.Redis | None = None
@@ -45,19 +47,61 @@ _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del
 _EXTEND = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) end return 0"
 
 
+# The locks this process holds and hasn't released, by name: what a stopping worker frees (release_held).
+_held: dict[str, str] = {}
+_held_guard = threading.Lock()
+
+
 def try_lock(name: str, seconds: int) -> str | None:
     """A lock so two workers never run the same player's job at once. Returns the holder's token, or
-    None if someone else holds it; release and extend with the token."""
+    None if someone else holds it, or if this worker is stopping (its locks may already have been freed,
+    and one taken now would outlive it); release and extend with the token. For a mark that only spaces
+    something out and is never released, use cooldown."""
+    if shutdown.stopping.is_set():
+        return None
     token = uuid.uuid4().hex
-    return token if sync_redis().set(f"lock:{name}", token, nx=True, ex=seconds) else None
+    if not sync_redis().set(f"lock:{name}", token, nx=True, ex=seconds):
+        return None
+    with _held_guard:
+        _held[name] = token
+    if shutdown.stopping.is_set():  # it began stopping meanwhile, and may have freed its locks already
+        release(name, token)
+        return None
+    return token
+
+
+def cooldown(name: str, seconds: int) -> bool:
+    """True at most once every `seconds` for `name`, across processes: a mark that expires by itself and
+    isn't released, not even when the worker stops. is_locked(name) sees it as a lock."""
+    return bool(sync_redis().set(f"lock:{name}", uuid.uuid4().hex, nx=True, ex=seconds))
 
 
 def release(name: str, token: str | None = None) -> None:
     """Free a lock: with its token, only if the caller still holds it."""
+    with _held_guard:
+        if token is None or _held.get(name) == token:
+            _held.pop(name, None)
     if token is None:
         sync_redis().delete(f"lock:{name}")
     else:
         sync_redis().eval(_RELEASE, 1, f"lock:{name}", token)
+
+
+def held() -> list[str]:
+    """The locks this process holds."""
+    with _held_guard:
+        return list(_held)
+
+
+def release_held() -> list[str]:
+    """Free every lock this process still holds (each only if it's still this process's), for a worker
+    that's stopping: the next one can take the work at once. Returns their names."""
+    with _held_guard:
+        locks = list(_held.items())
+        _held.clear()
+    for name, token in locks:
+        sync_redis().eval(_RELEASE, 1, f"lock:{name}", token)
+    return [name for name, _ in locks]
 
 
 def is_locked(name: str) -> bool:

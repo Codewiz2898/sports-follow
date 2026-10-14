@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, metrics, moments, naming, notify, registry, sports, tracing
+from . import bus, engine, metrics, moments, naming, notify, registry, shutdown, sports, tracing
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -253,7 +253,7 @@ def refresh(player_id: int) -> None:
             log.info("refresh %s: %s is down to what live games need; next tick", player_id, reading.system)
             return
         if rebind(current, preferred):
-            rebound = bus.try_lock(f"bindtry:{player_id}", BIND_RETRY) and bind(player_id)
+            rebound = bus.cooldown(f"bindtry:{player_id}", BIND_RETRY) and bind(player_id)
             if not rebound and current is None:
                 return
         _refresh(player_id)
@@ -608,7 +608,8 @@ def poll_event(event_id: int) -> None:
             elif time.monotonic() - quiet_since > 60:
                 wait = max(wait, 60)
             bus.extend(lock, wait + 120, token)
-            time.sleep(wait)
+            if not shutdown.sleep(wait):
+                return  # the worker is stopping: the next one polls on
     except Exception:
         log.exception("poll %s crashed", event_id)
     finally:
@@ -655,7 +656,8 @@ def poll_lane(system: str) -> None:
             if wait is None or time.monotonic() + wait > deadline:
                 return
             bus.extend(lock, wait + 120, token)
-            time.sleep(wait)
+            if not shutdown.sleep(wait):
+                return  # the worker is stopping: the next one polls on
     except Exception:
         log.exception("poll lane %s crashed", system)
     finally:
