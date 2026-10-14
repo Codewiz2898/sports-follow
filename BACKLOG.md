@@ -16,22 +16,27 @@ for cricket, football and chess first; about $150–350 a month.
 - [x] Sportmonks Football adapter: fixtures, live matches with every player's line, goal and card
   moments, season stats, a year of history. Runs whenever a token is saved and comes before ESPN;
   followed footballers move over on their next refresh (ESPN games unlinked, so nothing is polled or
-  listed twice). The history lane keeps 1,000 of the 2,500 hourly fixture requests for live games.
-- [ ] Sportmonks dashboard: pick the Growth plan's leagues. National teams (Egypt, India…), the
-  Champions League, ISL, Saudi Pro League and MLS aren't on it yet, so a player's country has no
-  fixtures. The trial ends 2026-10-14; check whether it converts to paid.
+  listed twice). The history lane keeps 1,000 of the 2,000 hourly fixture requests for live games.
+- [ ] Sportmonks dashboard: pick the Starter plan's 5 football leagues (any 5 worldwide, swappable a
+  few times a month; more from €4 a month each). From 2026-10-14 the account is on Starter, and until
+  leagues are picked every football request comes back empty, player search included. A player whose
+  club and country are outside the 5 can't be found and gets an AI-built page without live scores.
 - [x] Live polling at scale (football): every armed and live Sportmonks football match is polled by
   one lane (`structured.poll_lane`), one `fixtures/multi` request a round for up to 50 matches. A busy
   matchday costs 240 requests an hour instead of 240 per match, and one worker thread instead of one
-  per match. Cricket keeps a poll job per match (6 requests a minute each, of 180); its `livescores`
+  per match. Cricket keeps a poll job per match (360 requests an hour each, of 2,000); its `livescores`
   endpoint could batch it the same way once checked against a real response.
 - [x] Sportmonks Cricket adapter: team fixtures kept only where the player is in the XI (or the
   season's squad before it's out), live scorecards with every player's line and dismissal, the chase
   ("need 42 from 28 balls"), fifty, hundred, out and wicket alerts, form from scorecards, a year of
   history. Built on the free plan (T20 internationals, Big Bash, CSA T20 Challenge).
-- [ ] Start the Sportmonks Cricket World trial (€75/month after 14 days): ODIs, Tests, IPL and the
-  rest. Then move cricket ahead of ESPN in `adapters/__init__.py` so a development build uses it too.
-  Until then Kohli and Rohit (no T20Is since 2024) have no sides on Sportmonks.
+- [x] Sportmonks Cricket on the Major plan (from 2026-10-14) and ahead of ESPN in
+  `adapters/__init__.py`, so a development build uses it too. 27 competitions: the IPL, T20
+  internationals, both T20 World Cups, the Big Bash, PSL, BPL, T20 Blast, Super Smash, the CSA
+  T20 Challenge, the Ashes, women's ODIs and T20Is and smaller T20 leagues. 2,000 requests an hour
+  per endpoint, so live polls (one endpoint) and fixture lists (another) don't compete.
+- [ ] Men's ODIs and Tests need Sportmonks Cricket World (€75 a month). Until then Kohli and Rohit
+  (no T20Is or Tests now) show only their IPL matches, and India's Test and ODI series are missing.
 - [x] Player ids for football: registry athletes resolve by Sportmonks search, name and birth date.
 - [x] Player ids for cricket: Sportmonks search by surname, then birth date (its 1 January
   placeholder dates count as unknown).

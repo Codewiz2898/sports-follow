@@ -82,9 +82,10 @@ def test_same_person_trusts_the_birth_date_over_the_name():
 
 
 def test_registry_rows_as_search_results():
-    kohli = Athlete(qid="Q213854", sport="cricket", name="Virat Kohli", aliases=[], teams=["India", "Royal Challengers Bengaluru"], ids={"espn_cricket": "253802"}, sitelinks=67, current=True, birth_date=date(1988, 11, 5))
+    live = registry.live_system("cricket")  # Sportmonks with a token, else ESPN
+    kohli = Athlete(qid="Q213854", sport="cricket", name="Virat Kohli", aliases=[], teams=["India", "Royal Challengers Bengaluru"], ids={live: "253802"}, sitelinks=67, current=True, birth_date=date(1988, 11, 5))
     r = search.from_athlete(kohli, "kohli")
-    assert (r.key, r.system, r.athlete_id, r.qid, r.detail) == ("espn_cricket:253802", "espn_cricket", "253802", "Q213854", "India · Royal Challengers Bengaluru")
+    assert (r.key, r.system, r.athlete_id, r.qid, r.detail) == (f"{live}:253802", live, "253802", "Q213854", "India · Royal Challengers Bengaluru")
     foord = Athlete(qid="Q5", sport="football", name="Caitlin Foord", aliases=[], teams=["Arsenal"], country="Australia", ids={"transfermarkt": "1"}, sitelinks=20, current=True)
     r = search.from_athlete(foord, "caitl")
     # No ESPN id yet: followed by registry id, and found in ESPN by name and birth date then.

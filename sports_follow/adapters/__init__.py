@@ -20,17 +20,15 @@ from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
 
 # Every source, in order of preference where two serve a sport: for_sport() picks the first that runs.
-# Licensed sources run only with a token, so where both run (a development build) football comes from
-# Sportmonks, while cricket stays on ESPN until the Sportmonks plan covers ODIs, Tests and the IPL (the
-# free plan has three T20 competitions). A public build lists only licensed sources and gets Sportmonks
-# for both. Esports comes from three sources side by side, each for its own games: PandaScore for team
-# titles (Valorant, CS2…), Liquipedia for battle royale (BGMI, Free Fire, Apex Legends), PUBG's own API
-# for PUBG.
+# Licensed sources run only with a token, so where both run (a development build) football and cricket
+# come from Sportmonks, as in a public build, which lists only licensed sources. Esports comes from three
+# sources side by side, each for its own games: PandaScore for team titles (Valorant, CS2…), Liquipedia
+# for battle royale (BGMI, Free Fire, Apex Legends), PUBG's own API for PUBG.
 KNOWN: dict[str, Adapter] = {a.system: a for a in (
     SportmonksFootball(),
     EspnSoccer(),
-    EspnCricket(),
     SportmonksCricket(),
+    EspnCricket(),
     EspnBasketball(),
     EspnTennis(),
     LichessChess(),

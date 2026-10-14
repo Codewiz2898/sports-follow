@@ -221,7 +221,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes and never overspent (a paid plan raises it) |
 | `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fixtures; the history lane and the registry import pause below it |
 | `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` | `pubgmobile,freefire,apexlegends` | the battle royale wikis whose active players the registry imports |
-| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks football requests an hour (per entity) kept for live matches; the history lane pauses below it (cricket keeps 60 of its 180 a minute) |
+| `SPORTS_FOLLOW_SPORTMONKS_RESERVE` | `1000` | Sportmonks requests an hour kept for live matches, of the 2,000 that football allows per entity and cricket per endpoint; the history lane pauses below it |
 
 ## Deploy
 

@@ -288,7 +288,7 @@ class SportmonksFootball(Adapter):
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Football"
-    live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,500
+    live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,000
     MULTI_MAX = 50  # fixture ids fixtures/multi takes in one request
     WINDOW_BACK, WINDOW_AHEAD = 120, 60  # days of fixtures a refresh reads; older ones come from history_pages
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
