@@ -3,9 +3,10 @@
 #   deploy/push-secrets.sh deploy@<server-ip>
 # Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token,
 # resend-key and google-client-secret (signing in), and alert-url and heartbeat-url (the server checks, see
-# README.md) if there are, and OPENROUTER_API_KEY from the gateway's
-# keys file (OPENROUTER_KEY_FILE=<file holding only a key> to give production its own key). The server
-# makes its own database password, gateway token, push key and fan cookie key (install-secrets.sh). Run again to rotate
+# README.md) if there are, and production's OpenRouter key from ~/.config/sports-follow/openrouter-key
+# (or OPENROUTER_KEY_FILE=<file holding only a key>), falling back to the development key in the gateway's
+# keys file. The server makes its own database password, gateway token, push key and fan cookie key
+# (install-secrets.sh), then seals all of it for the password manager (seal-secrets.sh). Run again to rotate
 # a token; restart after: docker compose -f deploy/compose.yaml up -d --force-recreate
 set -euo pipefail
 TARGET="${1:?usage: deploy/push-secrets.sh deploy@<server-ip>}"
@@ -23,12 +24,14 @@ done
 for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret alert-url heartbeat-url; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
-if [ -n "${OPENROUTER_KEY_FILE:-}" ]; then
-  tr -d '[:space:]' <"$OPENROUTER_KEY_FILE" >"$stage/openrouter"
+PROD_KEY="${OPENROUTER_KEY_FILE:-$LOCAL/openrouter-key}"
+if [ -s "$PROD_KEY" ]; then
+  tr -d '[:space:]' <"$PROD_KEY" >"$stage/openrouter"
 else
   sed -n 's/^OPENROUTER_API_KEY=//p' "$KEYS" | head -1 | tr -d "\"'[:space:]" >"$stage/openrouter"
+  echo "push-secrets: using the Mac's development OpenRouter key; give production its own in $PROD_KEY (deploy/README.md, \"Secrets\")" >&2
 fi
 [ -s "$stage/openrouter" ] || { echo "push-secrets: no OpenRouter key found" >&2; exit 1; }
-cp "$HERE/install-secrets.sh" "$stage/"
+cp "$HERE/install-secrets.sh" "$HERE/seal-secrets.sh" "$HERE/secrets-recipients.txt" "$stage/"
 
 tar --no-xattrs -C "$stage" -cf - . | ssh "$TARGET" 'tmp=$(mktemp -d) && tar -xf - -C "$tmp" && sudo bash "$tmp/install-secrets.sh" "$tmp"; status=$?; rm -rf "$tmp"; exit $status'
