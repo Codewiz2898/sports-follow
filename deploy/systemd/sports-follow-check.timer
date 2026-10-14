@@ -1,0 +1,9 @@
+[Unit]
+Description=Sports Follow server checks, every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

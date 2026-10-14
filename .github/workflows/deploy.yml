@@ -1,0 +1,91 @@
+# Deploys main to the production server: a commit the CI workflow passed, through
+# `ssh deploy@<server> deploy <commit>`, which the server's deploy/deploy.sh carries out, then a look at
+# https://<domain>/api/health from outside. The deploy key can run only deploy.sh (deploy/server-setup.sh,
+# DEPLOY_KEY), and deploy.sh deploys only commits on main. Setup and rollback: deploy/README.md.
+#
+# By hand for now (Actions → Deploy → Run workflow). Once trusted, uncomment workflow_run to deploy every
+# commit on main that CI passes. Never on pull_request: the repository is public, and a fork's PR must
+# not reach the deploy key.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: deploy main, or roll back to the previous deploy
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+  # workflow_run:
+  #   workflows: [CI]
+  #   types: [completed]
+  #   branches: [main]
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # to see CI's runs
+
+jobs:
+  deploy:
+    # After CI: only a push to main that passed (a fork's PR can carry a branch named main too).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The secrets live in this environment, which only main may use (Settings → Environments → production).
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    env:
+      ACTION: ${{ inputs.action || 'deploy' }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: CI passed for this commit
+        if: env.ACTION == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq .total_count)
+          if [ "$passed" -eq 0 ]; then
+            echo "::error::CI hasn't passed for ${SHA:0:7} (yet?). Deploy once it has."
+            exit 1
+          fi
+      - name: SSH key and the server's host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_SSH_KEY or DEPLOY_KNOWN_HOSTS isn't set in the production environment"
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          (umask 077; printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/deploy_key; printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >~/.ssh/known_hosts)
+      - name: ${{ env.ACTION == 'rollback' && 'Roll back' || 'Deploy' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          command="deploy $SHA"
+          [ "$ACTION" != rollback ] || command=rollback
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
+            "deploy@$DEPLOY_HOST" "$command"
+      - name: Health from outside
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          [ -n "$APP_URL" ] || { echo "::warning::APP_URL isn't set, so the outside check was skipped"; exit 0; }
+          for _ in $(seq 12); do
+            if out=$(curl -fsS -m 10 "$APP_URL/api/health"); then echo "$out"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::$APP_URL/api/health didn't answer, though the server found the API healthy inside: look at Caddy and DNS"
+          exit 1
+      - name: Forget the key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

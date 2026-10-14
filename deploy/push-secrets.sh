@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # From the Mac: copy the API tokens this app uses to the server, without printing any of them.
-#   deploy/push-secrets.sh root@<server-ip>
-# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token and
-# resend-key and google-client-secret (signing in) if there are, and OPENROUTER_API_KEY from the gateway's
+#   deploy/push-secrets.sh deploy@<server-ip>
+# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token,
+# resend-key and google-client-secret (signing in), and alert-url and heartbeat-url (the server checks, see
+# README.md) if there are, and OPENROUTER_API_KEY from the gateway's
 # keys file (OPENROUTER_KEY_FILE=<file holding only a key> to give production its own key). The server
 # makes its own database password, gateway token, push key and fan cookie key (install-secrets.sh). Run again to rotate
 # a token; restart after: docker compose -f deploy/compose.yaml up -d --force-recreate
 set -euo pipefail
-TARGET="${1:?usage: deploy/push-secrets.sh root@<server-ip>}"
+TARGET="${1:?usage: deploy/push-secrets.sh deploy@<server-ip>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOCAL="${SPORTS_FOLLOW_CONFIG:-$HOME/.config/sports-follow}"
 KEYS="${LLM_PROVIDERS_KEYS_FILE:-$HOME/.config/llm-providers/keys.env}"
@@ -19,7 +20,7 @@ for f in sportmonks-token lichess-token; do
   [ -s "$LOCAL/$f" ] || { echo "push-secrets: $LOCAL/$f is missing or empty" >&2; exit 1; }
   cp "$LOCAL/$f" "$stage/$f"
 done
-for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret; do
+for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret alert-url heartbeat-url; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
 if [ -n "${OPENROUTER_KEY_FILE:-}" ]; then
@@ -30,4 +31,4 @@ fi
 [ -s "$stage/openrouter" ] || { echo "push-secrets: no OpenRouter key found" >&2; exit 1; }
 cp "$HERE/install-secrets.sh" "$stage/"
 
-tar -C "$stage" -cf - . | ssh "$TARGET" 'tmp=$(mktemp -d) && tar -xf - -C "$tmp" && bash "$tmp/install-secrets.sh" "$tmp"; status=$?; rm -rf "$tmp"; exit $status'
+tar --no-xattrs -C "$stage" -cf - . | ssh "$TARGET" 'tmp=$(mktemp -d) && tar -xf - -C "$tmp" && sudo bash "$tmp/install-secrets.sh" "$tmp"; status=$?; rm -rf "$tmp"; exit $status'
