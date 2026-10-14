@@ -20,13 +20,15 @@ reads Redis, not PUBG.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
-from . import espn, pubg
-from .base import Fixture, Line, PlayerRef, Snapshot
-from .liquipedia_esports import ordinal, result_label as _result_label
+from .. import naming
+from ..sports import esports
+from . import pubg
+from .base import Adapter, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
 
 GAME = "PUBG"
 MAPS = {
@@ -209,7 +211,7 @@ def player_lines(lobby: dict[str, Any], table: list[dict[str, Any]]) -> dict[str
         lines[account] = Line(
             headline=f"{t['kills']} finish{'es' if t['kills'] != 1 else ''} · {t['damage']:,} dmg",
             stats=[
-                {"label": "Team place", "value": ordinal(team.get("place"))}, {"label": "Team points", "value": str(int(team.get("points") or 0))},
+                {"label": "Team place", "value": esports.ordinal(team.get("place"))}, {"label": "Team points", "value": str(int(team.get("points") or 0))},
                 {"label": "Assists", "value": str(t["assists"])}, {"label": "Knocks", "value": str(t["knocks"])},
                 {"label": "Finishes", "value": str(t["kills"])}, {"label": "Damage", "value": f"{t['damage']:,}"}, {"label": "Games", "value": str(t["games"])},
             ],
@@ -246,6 +248,19 @@ def players_of(lobbies: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return seen
 
 
+def rostered(players: dict[str, dict[str, Any]]) -> list[Rostered]:
+    """The players seen in recent tournaments, for the registry (pure): the name without the team tag,
+    the in-game name an alias, keyed by the account."""
+    out = []
+    for account, info in players.items():
+        if not account or not naming.words(info.get("name") or ""):
+            continue
+        team = [info["team"]] if info.get("team") else []
+        ref = PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=team, team_names=team, league="pubg", game=GAME)
+        out.append(Rostered(key=f"pubg:{account.split('.', 1)[-1][:15]}", ref=ref, aliases=[info.get("in_game") or ""], current=True))  # played in the last fortnight
+    return out
+
+
 def ref_of(account: str, info: dict[str, Any]) -> PlayerRef:
     return PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=[info["team"]], team_names=[info["team"]], league="pubg", game=GAME)
 
@@ -277,8 +292,12 @@ def player_form(lobbies: list[dict[str, Any]], account: str) -> tuple[list[dict[
 # ---------------------------------------------------------------- the adapter
 
 
-class PubgEsports:
+class PubgEsports(Adapter):
     system = "pubg_esports"
+    name = "PUBG"
+    provider = pubg.PROVIDER
+    covers = "PUBG"
+    id_pattern = re.compile(r"account\.[0-9a-f]{32}")
     sports = ("pubg", "pubg: battlegrounds", "playerunknown's battlegrounds", "esports", "e-sports")
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
@@ -357,9 +376,26 @@ class PubgEsports:
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
 
-    def search(self, name: str) -> list[PlayerRef]:
-        wanted = espn.fold(name).strip()
-        return [ref_of(acc, info) for acc, info in self.players().items() if wanted in (espn.fold(info["name"]), espn.fold(info.get("in_game") or ""))]
+    game_names = (GAME,)
+    roster_prefix = "pubg:"
+    roster_every = 6 * 3600  # from the index warm() keeps, so it costs no requests of its own
+
+    @classmethod
+    def available(cls) -> bool:
+        return bool(pubg.token())
+
+    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
+        return GAME if league == "pubg" else None
+
+    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+        """The players of PUBG's recent tournaments, from the index (no requests of their own once it's
+        warm). PUBG keeps a fortnight of matches, so a player not seen for three weeks is dropped."""
+        keep(rostered(self.players()))
+        return Roster(complete=True, grace=timedelta(days=21))
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
+        wanted = naming.fold(name).strip()
+        return [ref_of(acc, info) for acc, info in self.players().items() if wanted in (naming.fold(info["name"]), naming.fold(info.get("in_game") or ""))]
 
     def find_player(self, name: str) -> PlayerRef | None:
         hits = self.search(name)
@@ -400,7 +436,7 @@ class PubgEsports:
         return out
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
-        return _result_label(fixture, team_ids)
+        return esports.lobby_result(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         now = datetime.now(timezone.utc)

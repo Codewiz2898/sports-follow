@@ -20,9 +20,10 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import espn, sportmonks
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
-from .espn_cricket import batting_bowling
+from .. import naming
+from ..sports import cricket
+from . import sportmonks
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
@@ -301,15 +302,18 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
     if not lines:
         return [], ""
     kinds = " & ".join(formats)
-    return batting_bowling(lines), f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from Sportmonks scorecards"
+    return cricket.batting_bowling(lines), f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from Sportmonks scorecards"
 
 
 # ---------------------------------------------------------------- the adapter
 
 
-class SportmonksCricket:
+class SportmonksCricket(Adapter):
     system = "sportmonks_cricket"
     sports = ("cricket",)
+    name = "Sportmonks"
+    provider = sportmonks.PROVIDER
+    covers = "Cricket"
     live_cadence = 10  # 360 requests an hour per live match, of the 2,000 a match endpoint allows
     WINDOW_BACK, WINDOW_AHEAD = 120, 90  # days of fixtures a refresh reads (two requests per team)
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
@@ -326,13 +330,17 @@ class SportmonksCricket:
         teams = current_teams(p, self._seasons(), datetime.now(timezone.utc).date())
         return PlayerRef(self.system, str(p["id"]), p.get("fullname") or "", [t for t, _ in teams], [n for _, n in teams], born=born(p.get("dateofbirth")))
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(sportmonks.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         """Players with this surname whose first name matches too, each read with their teams."""
-        words = espn.fold(name).split()
+        words = naming.fold(name).split()
         if not words:
             return []
         rows = sportmonks.get_json(f"{API}/players", ttl=24 * 3600, **{"filter[lastname]": words[-1]}).get("data") or []
-        hits = [r for r in rows if (w := espn.fold(r.get("fullname") or "").split()) and w[0] == words[0] and w[-1] == words[-1]]
+        hits = [r for r in rows if (w := naming.fold(r.get("fullname") or "").split()) and w[0] == words[0] and w[-1] == words[-1]]
         return [ref for ref in (self.player(str(r["id"])) for r in hits[:4]) if ref]
 
     def find_player(self, name: str) -> PlayerRef | None:

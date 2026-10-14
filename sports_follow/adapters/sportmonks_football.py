@@ -15,9 +15,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
-from . import espn, sportmonks
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
-from .espn_soccer import result_label as _result_label
+from .. import naming
+from ..sports import football
+from . import sportmonks
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type"
@@ -281,9 +282,12 @@ def parse_season_stats(p: dict[str, Any], team_ids: list[str]) -> tuple[list[dic
 # ---------------------------------------------------------------- the adapter
 
 
-class SportmonksFootball:
+class SportmonksFootball(Adapter):
     system = "sportmonks_football"
     sports = ("football", "soccer", "association football")
+    name = "Sportmonks"
+    provider = sportmonks.PROVIDER
+    covers = "Football"
     live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,000
     MULTI_MAX = 50  # fixture ids fixtures/multi takes in one request
     WINDOW_BACK, WINDOW_AHEAD = 120, 60  # days of fixtures a refresh reads; older ones come from history_pages
@@ -294,12 +298,16 @@ class SportmonksFootball:
         need the hour's last LIVE_RESERVE of them."""
         return sportmonks.spare("Fixture")
 
-    def search(self, name: str) -> list[PlayerRef]:
+    @classmethod
+    def available(cls) -> bool:
+        return bool(sportmonks.token())
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         data = sportmonks.get_json(f"/football/players/search/{quote(name)}", ttl=24 * 3600, include=PLAYER_INCLUDE)
         return [parse_player(p) for p in (data.get("data") or [])[:8] if p.get("id")]
 
     def find_player(self, name: str) -> PlayerRef | None:
-        hits = [r for r in self.search(name) if espn.names_match(name, r.name)]
+        hits = [r for r in self.search(name) if naming.names_match(name, r.name)]
         return hits[0] if len(hits) == 1 else None  # two namesakes: the agent decides who is meant
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
@@ -364,7 +372,7 @@ class SportmonksFootball:
         return {key: found[fid] for key, fid in wanted.items() if fid in found}
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
-        return _result_label(fixture, team_ids)
+        return football.result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         data = sportmonks.get_json(f"/football/players/{ref.athlete_id}", ttl=3 * 3600, include="statistics.details.type;statistics.season.league")

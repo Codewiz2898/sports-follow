@@ -2,8 +2,9 @@
 
 One request per pause in typing, answered from Postgres: players already on Sports Follow, then
 the player registry (registry.py: every athlete Wikidata knows in the five sports, ranked by how many
-Wikipedias write about them, and the esports pros PandaScore knows). ESPN's search and Lichess's FIDE search are asked only to fill gaps,
-when the registry has fewer than FILL_BELOW matches (someone too new or too obscure for Wikidata).
+Wikipedias write about them, and the esports pros their sources know). The sources' own searches (ESPN's,
+Lichess's FIDE list) are asked only to fill gaps, when the registry has fewer than FILL_BELOW matches
+(someone too new or too obscure for Wikidata).
 Every result names an exact athlete, by registry id or source id, so following one never guesses
 from the name. College athletes are left out.
 
@@ -15,10 +16,9 @@ from __future__ import annotations
 import logging
 import math
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
@@ -26,67 +26,26 @@ from typing import Any
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import games, pipeline, registry, structured
-from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess
+from . import games, naming, pipeline, registry, structured
+from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
 log = logging.getLogger("sports_follow.search")
 
 SOURCE_TIMEOUT = 2.5  # seconds a source gets before its results are left out of this answer
-ESPN_LIMIT = 8
-CHESS_LIMIT = 4  # FIDE rows among all sports; a chess-only search shows more
+LIVE_LIMIT = 8  # results from the sources' own searches (each source's list is cut at LIVE_LIMIT + 4)
 LOCAL_LIMIT = 6
 REGISTRY_LIMIT = 12
-FILL_BELOW = 3  # registry matches under which ESPN and Lichess are asked too
+FILL_BELOW = 3  # registry matches under which the sources' own searches are asked too
 NOTABLE = 10  # Wikipedia editions that make one registry match enough
 SUGGEST_MIN = 0.78  # how close a spelling must be to be offered as "did you mean"
 SURELY = 0.9  # a "did you mean" this close is the name, misspelled: the live sources aren't asked as well
 LIKENESS = 0.4  # trigram likeness of a fan's alias to the query that makes a player a "did you mean"
 
-# ESPN uid prefix -> (our sport, adapter). Leagues an adapter can't follow come back as "AI only".
-ESPN_SPORTS = {"s:600": ("football", "espn_soccer"), "s:200": ("cricket", "espn_cricket"), "s:40": ("basketball", "espn_basketball"), "s:850": ("tennis", "espn_tennis")}
-ADAPTER_LEAGUES = {"espn_basketball": {"46": "nba", "59": "wnba"}, "espn_tennis": {"851": "atp", "900": "wta"}}
-COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
-OTHER_SPORTS = {"football": "American football", "racing": "Motor racing", "mma": "MMA", "hockey": "Ice hockey", "baseball": "Baseball", "golf": "Golf", "soccer": "Football", "boxing": "Boxing", "rugby": "Rugby"}
 SPORTS = ("football", "cricket", "basketball", "tennis", "chess", "esports")
-NOT_ON_ESPN = ("chess", "esports")  # filtering to these never asks ESPN's search
-
-# FIDE federation codes for the countries most players come from; others show as the code.
-FEDERATIONS = {
-    "NOR": "Norway", "IND": "India", "USA": "United States", "CHN": "China", "RUS": "Russia", "FID": "FIDE", "NED": "Netherlands",
-    "GER": "Germany", "FRA": "France", "ESP": "Spain", "ENG": "England", "ITA": "Italy", "POL": "Poland", "UKR": "Ukraine",
-    "ARM": "Armenia", "AZE": "Azerbaijan", "HUN": "Hungary", "UZB": "Uzbekistan", "IRI": "Iran", "DEN": "Denmark", "SWE": "Sweden",
-    "CZE": "Czechia", "ROU": "Romania", "SRB": "Serbia", "TUR": "Türkiye", "ISR": "Israel", "CAN": "Canada", "BRA": "Brazil",
-    "ARG": "Argentina", "PER": "Peru", "VIE": "Vietnam", "PHI": "Philippines", "GEO": "Georgia", "KAZ": "Kazakhstan", "AUS": "Australia",
-}
 
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="search")
-
-
-@dataclass
-class Result:
-    key: str  # "espn_basketball:4433403"; "player:12" for a player no source knows
-    name: str
-    sport: str  # "Basketball", "MMA"
-    detail: str  # "Indiana Fever · WNBA", "GM · Norway · 2823 classical"
-    system: str | None = None
-    athlete_id: str | None = None
-    league: str | None = None
-    player_id: int | None = None  # set when the athlete is already on Sports Follow
-    following: bool = False
-    followers: int = 0
-    live_scores: bool = False  # a source we follow live covers them; otherwise the agent builds the page
-    inactive: bool = False
-    exact: bool = False  # the name is exactly what was typed
-    aka: str | None = None  # the alias it was found by, when the name doesn't start with what was typed
-    status: str | None = None  # the card's status, for players on Sports Follow
-    next: dict[str, Any] | None = None  # {"title", "start_utc", "competition"} or {"live": "headline"}
-    qid: str | None = None  # the athlete's Wikidata id, when the registry knows them
-    born: int | None = None  # birth year, shown to tell namesakes apart
-    matched: bool = True  # False: only alike ("catalin clark" ~ Caitlin Clark), offered as "did you mean"
-    popularity: int = 0  # Wikipedia editions for registry athletes; a headshot or title for live hits
-    _rank: tuple = ()
 
 
 def _key(name: str) -> list[str]:
@@ -94,25 +53,12 @@ def _key(name: str) -> list[str]:
     return structured._name_key(name)
 
 
-def _same(query: str, name: str) -> bool:
-    """The name is exactly what was typed, in any order and either spelling ("thomas mueller" is Thomas Müller)."""
-    names = [sorted(n) for n in espn.spellings(name)]
-    return any(q and sorted(q) in names for q in espn.spellings(query))
-
-
-def _prefix_match(query: str, name: str) -> bool:
-    """Every typed word starts some word of the name, in either spelling: "caitl" -> Caitlin Clark,
-    "v kohli" -> Virat Kohli, "Đoković" -> Djokovic. Never when nothing searchable was typed ("--")."""
-    names = espn.spellings(name)
-    return any(typed and all(any(w.startswith(q) for w in n) for q in typed) for typed in espn.spellings(query) for n in names)
-
-
 def _aka(query: str, name: str, aliases: list[str]) -> str | None:
     """The alias a result was found by when its name doesn't start with what was typed: "jonathan"
     finds Cije as Christian Jonathan. An alias typed whole comes before one it only starts."""
-    if _prefix_match(query, name):
+    if naming.prefix_match(query, name):
         return None
-    return next((x for x in aliases if x and _same(query, x)), None) or next((x for x in aliases if x and _prefix_match(query, x)), None)
+    return next((x for x in aliases if x and naming.same(query, x)), None) or next((x for x in aliases if x and naming.prefix_match(query, x)), None)
 
 
 def searchable(query: str) -> bool:
@@ -142,120 +88,7 @@ def surely(query: str, name: str) -> bool:
     return len(q) >= 2 and len(n) >= 2 and q[-1] == n[-1] and q[0][0] == n[0][0]
 
 
-# ---------------------------------------------------------------- sources
-
-
-def parse_espn(data: dict[str, Any], query: str) -> list[Result]:
-    """ESPN search hits as results, college athletes left out, in ESPN's order."""
-    out = []
-    for group in data.get("results", []):
-        if group.get("type") != "player":
-            continue
-        for item in group.get("contents", []):
-            uid = item.get("uid") or ""
-            if "~a:" not in uid:
-                continue
-            parts = dict(p.split(":", 1) for p in uid.split("~") if ":" in p)
-            league_id = parts.get("l")
-            description = item.get("description") or ""
-            if league_id in COLLEGE_LEAGUES or description.upper().startswith("NCAA"):
-                continue
-            name = (item.get("displayName") or "").strip()
-            subtitle = (item.get("subtitle") or "").strip()
-            sport_uid = f"s:{parts.get('s')}"
-            covered = ESPN_SPORTS.get(sport_uid)
-            system, league = (covered[1], None) if covered else (None, None)
-            if system in ADAPTER_LEAGUES:
-                league = ADAPTER_LEAGUES[system].get(league_id or "")
-                if league is None:
-                    system = None  # a league the adapter doesn't read (EuroLeague, ITF): the agent covers them
-            if covered:
-                sport = covered[0].title()
-            else:
-                sport = OTHER_SPORTS.get(item.get("sport") or "", (item.get("sport") or description or "Other").title())
-            if covered and covered[0] == "cricket":
-                detail = subtitle  # "India": ESPNcricinfo's description is just "Cricket"
-            elif covered and covered[0] == "tennis":
-                detail = (league or description).upper()
-            else:
-                detail = " · ".join(x for x in (subtitle, description if description.lower() != sport.lower() else "") if x)
-            out.append(Result(
-                key=f"{system}:{parts['a']}" if system else f"espn:{uid}",
-                name=name,
-                sport=sport,
-                detail=detail,
-                system=system,
-                athlete_id=parts["a"] if system else None,
-                league=league,
-                live_scores=system is not None,
-                exact=_same(query, name),
-                popularity=5 if item.get("image") else 0,
-            ))
-    return out
-
-
-def parse_fide(records: list[dict[str, Any]], query: str, limit: int) -> list[Result]:
-    """FIDE records as results: active, titled and higher-rated players first. Amateurs only show
-    up when the name is exactly what was typed or the search is chess only (limit > CHESS_LIMIT)."""
-    out = []
-    for r in records:
-        if not r.get("id") or not r.get("name"):
-            continue
-        name = lichess_chess.display_name(r["name"])
-        if not _prefix_match(query, name):
-            continue  # FIDE search matches any one word: "max verstappen" returns every titled Max
-        exact = _same(query, name)
-        notable = bool(r.get("title")) or (r.get("standard") or 0) >= 2000
-        if not (notable or exact or limit > CHESS_LIMIT):
-            continue
-        fed = FEDERATIONS.get(r.get("federation") or "", r.get("federation") or "")
-        rating = f"{r['standard']} classical" if r.get("standard") else ""
-        detail = " · ".join(x for x in (r.get("title") or "", fed, rating, "inactive" if r.get("inactive") else "") if x)
-        out.append(Result(
-            key=f"lichess_chess:{r['id']}",
-            name=name,
-            sport="Chess",
-            detail=detail,
-            system="lichess_chess",
-            athlete_id=str(r["id"]),
-            live_scores=True,
-            inactive=bool(r.get("inactive")),
-            exact=exact,
-            popularity=5 if r.get("title") and not r.get("inactive") else 0,
-            _rank=(bool(r.get("title")) and not r.get("inactive"), r.get("standard") or 0),
-        ))
-    out.sort(key=lambda x: (x.inactive, -x._rank[1]))
-    return out[:limit]
-
-
-def _espn(query: str, limit: int = 20) -> list[Result]:
-    if not espn_enabled():
-        return []
-    data = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit={limit}", ttl=3600)
-    return parse_espn(data, query)
-
-
-_fide_lock = threading.Lock()
-
-
-def _fide(query: str, limit: int) -> list[Result]:
-    # Lichess asks for one request at a time; a burst of keystrokes shouldn't queue up behind each
-    # other, so a search that can't get the line within a second gives up on chess this time.
-    if "lichess_chess" not in ADAPTERS:
-        return []
-    url = f"{lichess_chess.API}/fide/player?q={espn.quote(query)}"
-    records = lichess_chess.peek(url, ttl=24 * 3600)
-    if records is None:
-        if not _fide_lock.acquire(timeout=1.0):
-            raise AdapterError("chess search busy")
-        try:
-            records = lichess_chess.get_json(url, ttl=24 * 3600)
-        finally:
-            _fide_lock.release()
-    return parse_fide(records if isinstance(records, list) else [], query, limit)
-
-
-def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[Result]:
+def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[SearchResult]:
     """Players on Sports Follow whose name or any alias fans typed is like the query (typos allowed)."""
     needle = slugify(query)
     if len(needle) < 2:
@@ -298,7 +131,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
             row = structured.binding(db, player.id)
             league = (row.locator or {}).get("league") if row else None
         qid = qids.get(player.id)
-        out.append(Result(
+        out.append(SearchResult(
             key=f"{system}:{ext}" if system else (f"wikidata:{qid}:{player.sport.lower()}" if qid else f"player:{player.id}"),
             name=player.name,
             sport=games.label(player.sport) or "Sport not known yet",
@@ -311,12 +144,12 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
             followers=int(followers.get(player.id, 0)),
             live_scores=system is not None,
             inactive=player.status == "retired",
-            exact=_same(query, player.name),
-            aka=alias.replace("-", " ") if alias and not _prefix_match(query, player.name) else None,
+            exact=naming.same(query, player.name),
+            aka=alias.replace("-", " ") if alias and not naming.prefix_match(query, player.name) else None,
             status=status,
             next=_next(card or {}),
             qid=qid,
-            matched=bool(alias) or _prefix_match(query, player.name),
+            matched=bool(alias) or naming.prefix_match(query, player.name),
             _rank=(float(similarity or 0),),
         ))
     return out
@@ -329,7 +162,7 @@ def _fans(db: Session, ids: list[int], fan: str | None) -> tuple[dict[int, int],
     return followers, mine
 
 
-def from_athlete(a: Athlete, query: str) -> Result:
+def from_athlete(a: Athlete, query: str) -> SearchResult:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
     system = registry.live_system(a.sport)
@@ -349,7 +182,7 @@ def from_athlete(a: Athlete, query: str) -> Result:
     else:
         parts = [*teams[:2], a.country or ""]
     aka = _aka(query, a.name, list(a.aliases or []))
-    return Result(
+    return SearchResult(
         # A person in two sports is two rows (Chahal plays cricket and chess), so the sport is in the key.
         key=f"{system}:{live_id}" if live_id else f"wikidata:{a.qid}:{a.sport}",
         name=a.name,
@@ -360,11 +193,11 @@ def from_athlete(a: Athlete, query: str) -> Result:
         league=a.league,
         live_scores=system is not None,  # a running source; an athlete it can't find goes to the agent
         inactive=not a.current,
-        exact=_same(query, a.name) or any(_same(query, x) for x in a.aliases or []),
+        exact=naming.same(query, a.name) or any(naming.same(query, x) for x in a.aliases or []),
         aka=aka,
         qid=a.qid if a.qid.startswith("Q") else None,  # esports rows are keyed by their PandaScore id instead
         born=a.birth_date.year if a.birth_date else None,
-        matched=aka is not None or _prefix_match(query, a.name),
+        matched=aka is not None or naming.prefix_match(query, a.name),
         popularity=a.sitelinks or 0,
     )
 
@@ -383,18 +216,18 @@ def _next(card: dict[str, Any]) -> dict[str, Any] | None:
 # ---------------------------------------------------------------- merge and rank
 
 
-def rank(query: str, local_results: list[Result], source_results: list[Result]) -> list[Result]:
+def rank(query: str, local_results: list[SearchResult], source_results: list[SearchResult]) -> list[SearchResult]:
     """One list: players on Sports Follow first (the fan's own, then by followers), then athletes the
     live sources know, then athletes in sports only the agent covers. Within a group, exact names,
     then names that start with what was typed, then notable ones (a headshot on ESPN, a title in
     chess), in the source's own order."""
-    seen: dict[str, Result] = {}
+    seen: dict[str, SearchResult] = {}
     # One person in one sport: Chahal the cricketer and Chahal the chess player share a Wikidata id.
-    by_qid: dict[tuple[str, str], Result] = {}
+    by_qid: dict[tuple[str, str], SearchResult] = {}
     # A player on Sports Follow, however each source keys them (_ours found who they are).
-    by_player: dict[int, Result] = {}
+    by_player: dict[int, SearchResult] = {}
 
-    def hold(r: Result) -> None:
+    def hold(r: SearchResult) -> None:
         seen[r.key] = r
         if r.qid:
             by_qid[(r.qid, r.sport)] = r
@@ -422,14 +255,14 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
             # The source's line is current ("GM · Norway"); ours is whatever the agent last called
             # their teams, which for a chess player can be a league side.
             held.detail = r.detail
-        if not _prefix_match(query, held.name):
+        if not naming.prefix_match(query, held.name):
             # Found by another name: as a source writes it ("Dommaraju Gukesh"), before a fan's slug.
-            held.aka = r.aka or (r.name if _prefix_match(query, r.name) else None) or held.aka
+            held.aka = r.aka or (r.name if naming.prefix_match(query, r.name) else None) or held.aka
 
-    def group(r: Result) -> int:
+    def group(r: SearchResult) -> int:
         return 0 if r.player_id else (1 if r.live_scores else 2)
 
-    def score(r: Result) -> float:
+    def score(r: SearchResult) -> float:
         # Popularity counts double for players of today (registry.score), and triple for the exact
         # name: "djok" is still Djokovic, and "ronaldo" is Cristiano before the Brazilian Ronaldo.
         return r.popularity * (1 if r.inactive else 2) * (3 if r.exact else 1)
@@ -442,10 +275,10 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
         if r.exact and r.popularity:
             floor[group(r)] = min(floor.get(group(r), math.inf), score(r))
 
-    def order(pair: tuple[int, Result]) -> tuple:
+    def order(pair: tuple[int, SearchResult]) -> tuple:
         i, r = pair
         popularity = floor.get(group(r), math.inf) - 0.5 if r.exact and not r.popularity else score(r)
-        starts = r.exact or _prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
+        starts = r.exact or naming.prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
         return (group(r), not r.following, -r.followers if r.player_id else 0, not starts, -popularity, not r.exact, r.inactive, i)
 
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
@@ -461,45 +294,38 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
     mine = local(db, query, fan, sport)
     listed = _registry(db, query, sport)
-    found: list[Result] = []
+    found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
     ours = [r for r in mine if r.matched]
-    suggestions: list[Result] = []
+    suggestions: list[SearchResult] = []
     if not matched and not ours:
         # Nothing starts with that: a spelling the registry can place. Only one that is surely the name
         # ("sabalnka") spares the live sources; "shane warne" is offered Shane Watson, and ESPN is asked.
         suggestions = suggest(db, query, mine, sport, live=False)
     sure = any(surely(query, s.name) for s in suggestions)
     if len(matched) < FILL_BELOW and not sure and not any(r.exact or r.popularity >= NOTABLE for r in matched):
-        # Too new or too obscure for Wikidata: ask the live sources. A name the registry knows well
-        # ("bumrah") doesn't need them.
-        jobs: dict[str, Any] = {}
-        if sport not in NOT_ON_ESPN:
-            # ESPN's search has no sport filter; one sport's athletes are a few of every fifty hits.
-            jobs["ESPN"] = _pool.submit(_espn, query, 50 if sport else 20)
-        if sport == "chess" and len(query) >= 3:
-            # The registry has the titled players; Lichess's FIDE search finds the other 1.9 million.
-            jobs["Lichess"] = _pool.submit(_fide, query, 10)
-        found, partial = _collect(jobs)
-        if sport:
-            found = [r for r in found if r.sport.lower() == sport]
+        # Too new or too obscure for Wikidata: ask the sources' own searches (adapters.base.LiveSearch).
+        # A name the registry knows well ("bumrah") doesn't need them.
+        jobs = {provider.name: _pool.submit(provider.search.find, query, sport, adapters) for provider, adapters in _live(query, sport)}
+        answers, partial = _collect(jobs)
         # A live hit with the name of a registry athlete in the same sport is that athlete: the
         # registry's row, confirmed by birth date when followed, stands for both.
         named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
-        found = [r for r in found if (tuple(_key(r.name)), r.sport) not in named]
-    espn_hits = [r for r in found if r.system != "lichess_chess"][: ESPN_LIMIT + 4]
-    sources = [*matched, *espn_hits, *[r for r in found if r.system == "lichess_chess"]]
+        for hits in answers:
+            hits = [r for r in hits if (not sport or r.sport.lower() == sport) and (tuple(_key(r.name)), r.sport) not in named]
+            found += hits[: LIVE_LIMIT + 4]
+    sources = [*matched, *found]
     _ours(db, sources, fan)
     results = rank(query, mine, sources)
-    if not suggestions and not any(r.exact or _prefix_match(query, r.name) for r in results):
+    if not suggestions and not any(r.exact or naming.prefix_match(query, r.name) for r in results):
         suggestions = suggest(db, query, mine, sport)
     _ours(db, suggestions, fan)
     if suggestions:
         results = [r for r in results if r.key not in {s.key for s in suggestions}]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
     # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
-    results = [r for i, r in enumerate(results) if i < ESPN_LIMIT + LOCAL_LIMIT or r.exact]
+    results = [r for i, r in enumerate(results) if i < LIVE_LIMIT + LOCAL_LIMIT or r.exact]
     namesakes = len({r.qid or r.key for r in results if r.exact})
     for r in results:
         if namesakes > 1 and r.exact and r.born and str(r.born) not in r.detail:
@@ -518,13 +344,13 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
 def _respellings(query: str) -> list[str]:
     """Other spellings the registry may have the name meant under: Đ as "dj" (Wikidata writes Novak
     Djokovic), and "ue", "oe", "ae" as the umlauts they spell (Thomas Müller is indexed "muller")."""
-    typed = " ".join(espn.words(query))
-    out = [" ".join(espn.words(query.translate(espn.NATIVE)))] if re.search("[đĐÐ]", query) else []
+    typed = " ".join(naming.words(query))
+    out = [" ".join(naming.words(query.translate(naming.NATIVE)))] if re.search("[đĐÐ]", query) else []
     out.append(re.sub(r"([aou])e", r"\1", typed))
     return [x for x in dict.fromkeys(out) if x != typed]
 
 
-def _registry(db: Session, query: str, sport: str | None) -> list[Result]:
+def _registry(db: Session, query: str, sport: str | None) -> list[SearchResult]:
     """Registry athletes for a query, in the spelling typed and its respellings. An athlete found by a
     respelling is kept only if their own name or an alias matches what was typed: "michael" looked up
     as "michal" keeps no Michal."""
@@ -537,7 +363,7 @@ def _registry(db: Session, query: str, sport: str | None) -> list[Result]:
     return list(out.values())
 
 
-def _ours(db: Session, rows: list[Result], fan: str | None) -> None:
+def _ours(db: Session, rows: list[SearchResult], fan: str | None) -> None:
     """Fill in the rows from the registry and the live sources that are players on Sports Follow: by
     the source id a player is bound to, or the registry athlete a player holds in that sport
     (pipeline.registry_holder). Gukesh D is followed however he was found ("dommaraju gukesh" isn't an
@@ -570,27 +396,41 @@ def _ours(db: Session, rows: list[Result], fan: str | None) -> None:
             r.player_id, r.following, r.followers, r.status, r.next = pid, pid in mine, int(followers.get(pid, 0)), status, _next(card or {})
 
 
-def _collect(jobs: dict[str, Any]) -> tuple[list[Result], list[str]]:
-    found: list[Result] = []
+def _collect(jobs: dict[str, Any]) -> tuple[list[list[SearchResult]], list[str]]:
+    """Each job's results, in the jobs' order, and the names of those that didn't answer in time."""
+    answers: list[list[SearchResult]] = []
     partial: list[str] = []
     deadline = time.monotonic() + SOURCE_TIMEOUT
     for name, job in jobs.items():
         try:
-            found.extend(job.result(timeout=max(0.05, deadline - time.monotonic())))
+            answers.append(job.result(timeout=max(0.05, deadline - time.monotonic())))
         except FutureTimeout:
             partial.append(name)
         except AdapterError as exc:
             log.info("search: %s left out: %s", name, exc)
             partial.append(name)
-    return found, partial
+    return answers, partial
 
 
-def suggest(db: Session, query: str, mine: list[Result], sport: str | None, live: bool = True) -> list[Result]:
+def _live(query: str, sport: str | None, by_word: bool = False) -> list[tuple[Provider, list[Adapter]]]:
+    """The providers whose own search is asked for this query: under a sport filter their sources serve,
+    or with no filter if they take unfiltered searches. by_word: asked a word at a time for "did you mean"."""
+    out = []
+    for provider, adapters in providers():
+        live = provider.search
+        if live is None or len(query) < live.min_length or (by_word and not live.by_word):
+            continue
+        if (sport in {s for a in adapters for s in a.sports}) if sport else live.unfiltered:
+            out.append((provider, adapters))
+    return out
+
+
+def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None, live: bool = True) -> list[SearchResult]:
     """Did you mean: names a few letters away from the query, from our players and the registry's
-    trigram index. Only if neither has one is ESPN asked, each longer word on its own (its search has
-    no typo tolerance: "catalin clark" -> "clark" finds Caitlin Clark), keeping hits whose whole name
-    is close to what was typed."""
-    pool: dict[str, Result] = {r.key: r for r in mine}
+    trigram index. Only if neither has one are the sources' searches with no typo tolerance asked (ESPN's),
+    each longer word on its own ("catalin clark" -> "clark" finds Caitlin Clark), keeping hits whose
+    whole name is close to what was typed."""
+    pool: dict[str, SearchResult] = {r.key: r for r in mine}
     for a in registry.near(db, query, sport):
         r = from_athlete(a, query)
         held = pool.setdefault(r.key, r)
@@ -600,16 +440,16 @@ def suggest(db: Session, query: str, mine: list[Result], sport: str | None, live
     if any(score >= SUGGEST_MIN for score, _ in close) or not live:
         return [r for score, r in close if score >= SUGGEST_MIN][:3]
     words = [w for w in _key(query) if len(w) >= 3]
-    jobs = {f"ESPN:{w}": _pool.submit(_espn, w, 50 if sport else 20) for w in words[:3]} if sport not in NOT_ON_ESPN else {}
-    found, _ = _collect(jobs)
-    for r in found:
+    jobs = {f"{provider.name}:{w}": _pool.submit(provider.search.find, w, sport, adapters) for provider, adapters in _live(query, sport, by_word=True) for w in words[:3]}
+    answers, _ = _collect(jobs)
+    for r in (r for hits in answers for r in hits):
         if (not sport or r.sport.lower() == sport) and r.live_scores:
             pool.setdefault(r.key, r)
     scored = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -x[0])
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]
 
 
-def _public(r: Result) -> dict[str, Any]:
+def _public(r: SearchResult) -> dict[str, Any]:
     out = asdict(r)
     for hidden in ("_rank", "matched", "popularity"):
         out.pop(hidden, None)
@@ -671,7 +511,7 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
         "name": ref.name,
         "sport": structured.sport_name(adapter, ref),
         "teams": [t for t in ref.team_names if t and t != ref.name],
-        "source": structured.SOURCE_NAMES.get(system, system),
+        "source": source_name(system),
         "source_url": ref.profile_url,
         "next": None,
         "last": None,
@@ -679,9 +519,7 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
         "stats_note": "",
     }
     recent = []
-    if system != "lichess_chess":
-        # A chess player's tournaments take a dozen rate-limited Lichess reads to find; the preview
-        # shows ratings only and the page finds the tournaments once followed.
+    if adapter.preview_fixtures:
         now = datetime.now(timezone.utc)
         fixtures = adapter.fixtures(ref)
         ahead = [f for f in fixtures if f.status in ("scheduled", "live") and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))]

@@ -8,18 +8,23 @@ notice; that is what binding health and the agent fallback are for (design secti
 
 from __future__ import annotations
 
-import re
+import logging
 import threading
 import time
-import unicodedata
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
 
-from .base import AdapterError
+from .. import naming
+from ..config import USER_AGENT
+from .base import AdapterError, LiveSearch, PlayerRef, Provider, SearchResult
 
-USER_AGENT = "sports-follow/0.1 (+https://github.com/Codewiz2898/sports-follow)"
+if TYPE_CHECKING:
+    from .base import Adapter
+
+log = logging.getLogger("sports_follow.espn")
+
 SITE = "https://site.api.espn.com/apis/site/v2/sports"
 WEB = "https://site.web.api.espn.com/apis"
 
@@ -61,49 +66,6 @@ def get_json(url: str, ttl: float) -> Any:
     return data
 
 
-# Letters Unicode doesn't decompose into a base letter plus an accent. Ð (U+00D0, the Icelandic
-# capital eth) is often typed for Đ.
-_LETTERS = str.maketrans({"ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "đ": "d", "Đ": "D", "Ð": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "ı": "i"})
-# Letters with a second plain spelling: Đ is "dj" in English (Wikidata writes Novak Djokovic), and ü,
-# ö, ä are "ue", "oe", "ae" in German (Thomas Müller is Thomas Mueller).
-NATIVE = str.maketrans({"đ": "dj", "Đ": "Dj", "Ð": "Dj", "ü": "ue", "Ü": "Ue", "ö": "oe", "Ö": "Oe", "ä": "ae", "Ä": "Ae"})
-
-
-def fold(text: str) -> str:
-    """Case- and accent-insensitive form for comparing names ("Jokić" == "jokic", "Øen" == "oen")."""
-    return unicodedata.normalize("NFKD", text.translate(_LETTERS)).encode("ascii", "ignore").decode().lower().strip()
-
-
-def words(text: str) -> list[str]:
-    """A name as plain lower-case ASCII words, the one form names are compared in: "A'ja Wilson" and
-    "A’ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"], "M.S. Dhoni" -> ["m", "s", "dhoni"]."""
-    return re.sub(r"[^a-z0-9]+", " ", fold(re.sub(r"['’`]", "", text or ""))).split()
-
-
-def spellings(text: str) -> list[list[str]]:
-    """A name's words in each of its plain spellings: words(text), then, if it has Đ, ü, ö or ä, with
-    those spelled out ("Thomas Müller" -> ["thomas", "muller"] and ["thomas", "mueller"])."""
-    plain = words(text)
-    native = words(unicodedata.normalize("NFC", text or "").translate(NATIVE))
-    return [plain] if native == plain else [plain, native]
-
-
-def team_key(name: str) -> str:
-    """A team name reduced for exact comparison: "Australia 'A'" == "australia a"; never a substring match."""
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", fold(name)).split())
-
-
-def names_match(wanted: str, found: str) -> bool:
-    """Accept a search hit only if the surnames agree and every word of the shorter name is in the
-    longer one (an initial stands for its word): "Ronaldo" is Cristiano Ronaldo and "Jasprit Bumrah" is
-    "Jasprit Jasbirsingh Bumrah", but "Ahmed Salah" isn't Mohamed Salah."""
-    w, f = words(wanted), words(found)
-    if not (w and f) or not (w[-1] == f[-1] or w[-1] in f):
-        return False
-    short, long = (w, f) if len(w) <= len(f) else (f, w)
-    return all(any(a == b or (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b)) for b in long) for a in short)
-
-
 def birth_date(athlete: dict[str, Any]) -> str | None:
     """An athlete record's birth date as ISO. ESPN writes it day/month/year ("5/11/1988" is 5 November)."""
     parts = (athlete.get("displayDOB") or "").split("/")
@@ -131,3 +93,152 @@ def search_athletes(name: str, sport_uid: str) -> list[dict[str, Any]]:
                 league = next((part[2:] for part in uid.split("~") if part.startswith("l:")), None)  # "s:40~l:46~a:1966" -> "46"
                 hits.append({"athlete_id": uid.split("~a:")[1], "league_id": league, "name": item.get("displayName", ""), "subtitle": item.get("subtitle"), "url": (item.get("link") or {}).get("web")})
     return hits
+
+
+def athletes(adapter: Adapter, name: str, league: str | None = None) -> list[PlayerRef]:
+    """The athletes ESPN's search finds by this name in an ESPN adapter's sport, read through the adapter:
+    an ESPN adapter's search(), the registry's lookup of an athlete Wikidata has no ESPN id for."""
+    refs = []
+    for hit in search_athletes(name, adapter.espn_uid)[:6]:
+        if not naming.names_match(name, hit["name"]):
+            continue
+        try:
+            ref = adapter.player(hit["athlete_id"], league)
+        except AdapterError:
+            continue
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+# ---------------------------------------------------------------- what the four ESPN adapters share
+
+COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
+# ESPN's names for sports no source here covers, as fans say them.
+OTHER_SPORTS = {"football": "American football", "racing": "Motor racing", "mma": "MMA", "hockey": "Ice hockey", "baseball": "Baseball", "golf": "Golf", "soccer": "Football", "boxing": "Boxing", "rugby": "Rugby"}
+
+
+def parse_search(data: dict[str, Any], query: str, adapters: list[Adapter]) -> list[SearchResult]:
+    """ESPN search hits as results. A hit in the sport of one of the ESPN adapters given can be followed
+    live; one in a league that adapter doesn't read (EuroLeague, ITF), or in another sport, is AI only.
+    College athletes are left out."""
+    by_uid = {a.espn_uid: a for a in adapters}
+    out = []
+    for group in data.get("results", []):
+        if group.get("type") != "player":
+            continue
+        for item in group.get("contents", []):
+            uid = item.get("uid") or ""
+            if "~a:" not in uid:
+                continue
+            parts = dict(p.split(":", 1) for p in uid.split("~") if ":" in p)
+            league_id = parts.get("l")
+            description = item.get("description") or ""
+            if league_id in COLLEGE_LEAGUES or description.upper().startswith("NCAA"):
+                continue
+            name = (item.get("displayName") or "").strip()
+            subtitle = (item.get("subtitle") or "").strip()
+            adapter = by_uid.get(f"s:{parts.get('s')}~")
+            system, league = (adapter.system, None) if adapter else (None, None)
+            leagues = getattr(adapter, "espn_leagues", None)
+            if leagues is not None:
+                league = leagues.get(league_id or "")
+                if league is None:
+                    system = None  # a league the adapter doesn't read (EuroLeague, ITF): the agent covers them
+            if adapter:
+                sport = adapter.sports[0].title()
+                detail = adapter.search_detail(subtitle, description, league)
+            else:
+                sport = OTHER_SPORTS.get(item.get("sport") or "", (item.get("sport") or description or "Other").title())
+                detail = search_detail(subtitle, description, sport)
+            out.append(SearchResult(
+                key=f"{system}:{parts['a']}" if system else f"espn:{uid}",
+                name=name,
+                sport=sport,
+                detail=detail,
+                system=system,
+                athlete_id=parts["a"] if system else None,
+                league=league,
+                live_scores=system is not None,
+                exact=naming.same(query, name),
+                popularity=5 if item.get("image") else 0,
+            ))
+    return out
+
+
+def search_detail(subtitle: str, description: str, sport: str) -> str:
+    """A search hit's line: its team and its league ("Indiana Fever · WNBA"), without repeating the sport."""
+    return " · ".join(x for x in (subtitle, description if description.lower() != sport.lower() else "") if x)
+
+
+def search(query: str, sport: str | None, adapters: list[Adapter]) -> list[SearchResult]:
+    # ESPN's search has no sport filter; one sport's athletes are a few of every fifty hits.
+    data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit={50 if sport else 20}", ttl=3600)
+    return parse_search(data, query, adapters)
+
+
+def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] | bool | None:
+    """The one ESPN athlete with exactly this name, if one of these adapters has them.
+
+    ESPN knows athletes in every sport, so it can rule out namesakes: two with the typed name anywhere
+    (any sport, covered or not) is a question for the agent, since "John Smith" is dozens of people and
+    the first one found is rarely the one meant (False). So is an athlete in a sport we don't cover (Max
+    Verstappen). No athlete by that name leaves it to the next provider (None)."""
+    wanted = sorted(naming.words(query))
+    try:
+        data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit=10", ttl=3600)
+    except AdapterError:
+        return False
+    namesakes = [item for group in data.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if sorted(naming.words(item.get("displayName", ""))) == wanted]
+    if len(namesakes) > 1:
+        # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
+        # star). One professional among college namesakes is the one a fan means.
+        pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
+        if len(pros) != 1:
+            log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
+            return False
+        namesakes = pros
+    found = []
+    for adapter in adapters:
+        try:
+            ref = adapter.find_player(query)
+        except AdapterError:
+            continue
+        # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
+        # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
+        # the adapter's own lookup happened to reach.
+        if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
+            found.append((adapter, ref))
+    if len(found) == 1:
+        return found[0]
+    if found or namesakes:
+        # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
+        log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
+        return False
+    return None
+
+
+PROVIDER = Provider(
+    name="ESPN",
+    url="https://www.espn.com",
+    what="schedules, live scores and player stats.",
+    note="Development builds only; a public build uses licensed sources.",
+    licensed=False,
+    search=LiveSearch(find=search, by_word=True),
+    recognise=recognise,
+)
+
+
+class EspnAdapter:
+    """What the four ESPN adapters share (mixed in before base.Adapter)."""
+
+    espn_uid: str  # the sport's prefix in ESPN's uids: "s:600~" football, "s:200~" cricket
+    espn_leagues: dict[str, str] | None = None  # ESPN league id -> the league the adapter reads, where it reads only some
+    provider = PROVIDER
+
+    def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
+        return athletes(self, name, league)
+
+    def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
+        """This sport's line for a search hit."""
+        return search_detail(subtitle, description, self.sports[0])

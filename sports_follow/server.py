@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
 from . import accounts, bus, credits as credits_page, games, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, structured
-from .adapters import ADAPTERS, AdapterError
+from .adapters import ADAPTERS, KNOWN, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
 from .db import get_db, session
@@ -418,18 +418,14 @@ def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     return registry.Person.of(athlete) if athlete else None
 
 
-# What each source's athlete ids look like: digits, unless listed here. An id goes into the source's URL
-# or query as it is, so one of any other shape is refused before anything is sent.
-SOURCE_IDS = {
-    "liquipedia_esports": re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}"),  # wiki:Page_name
-    "pubg_esports": re.compile(r"account\.[0-9a-f]{32}"),
-}
-DIGITS = re.compile(r"[0-9]{1,12}")
 LEAGUE = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")  # "nba", "wta", "cs-go", "pubgmobile"
 
 
 def _source_id_ok(system: str, athlete_id: str) -> bool:
-    return athlete_id.isprintable() and bool(SOURCE_IDS.get(system, DIGITS).fullmatch(athlete_id))
+    """An id goes into the source's URL or query as it is, so one of any other shape than the source's
+    (adapters.base.Adapter.id_pattern) is refused before anything is sent."""
+    adapter = KNOWN.get(system)
+    return adapter is not None and athlete_id.isprintable() and bool(adapter.id_pattern.fullmatch(athlete_id))
 
 
 def _league_ok(league: Any) -> bool:

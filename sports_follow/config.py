@@ -10,6 +10,9 @@ DATABASE_URL = os.environ.get(
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
 
+# How every source and Wikidata see this app: honestly, as itself (ESPN refuses browser-like agents).
+USER_AGENT = "sports-follow/0.1 (+https://github.com/Codewiz2898/sports-follow)"
+
 # How long a full card stays fresh before the scheduler rebuilds it (seconds).
 CARD_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_CARD_MAX_AGE", 6 * 3600))
 # How often a live (or about-to-start) player gets a live check (seconds).

@@ -12,7 +12,7 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
     .venv/bin/python -m sports_follow.registry --new      # only people not imported yet
-    .venv/bin/python -m sports_follow.registry esports    # esports pros, from PandaScore
+    .venv/bin/python -m sports_follow.registry esports    # esports pros, from their sources
 
 The query service allows a client about a minute of query time a minute, so batches run one at a
 time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour. A
@@ -20,9 +20,10 @@ run, by hand or the worker's weekly one, holds the "registry-import" lock, so tw
 sport (or esports source) that fails keeps last week's rows, and the rest still run.
 
 Esports comes from its sources instead (import_esports): Wikidata has a Liquipedia id for only 2,844
-people. Team-title pros come from PandaScore, keyed "pandascore:<id>", and battle royale pros (BGMI, Free
-Fire) from Liquipedia, keyed "lp:<wiki>:<page id>", where the others hold a Wikidata id. Each carries
-its source's id, so following one binds that source by id like any other.
+people. Each esports source with a roster lists its pros (team titles from PandaScore, battle royale
+from Liquipedia and PUBG), keyed by the source ("pandascore:<id>", "lp:<wiki>:<page id>") where the
+others hold a Wikidata id. Each carries its source's id, so following one binds that source by id like
+any other.
 """
 
 from __future__ import annotations
@@ -41,8 +42,9 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus
-from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
+from . import bus, naming
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, for_sport
+from .config import USER_AGENT
 from .db import session
 from .models import Athlete, Player, PlayerIdentity
 
@@ -66,8 +68,6 @@ SPORTS: dict[str, dict[str, str]] = {
 }
 # Imported from PandaScore rather than Wikidata (import_esports).
 ESPORTS = "esports"
-# ESPN's search keeps each sport's athletes under one uid prefix.
-ESPN_UIDS = {"espn_soccer": "s:600", "espn_cricket": "s:200", "espn_basketball": "s:40", "espn_tennis": "s:850"}
 TEAM_SPORTS = ("basketball", "cricket", "football")
 CHESS_TITLES = {
     "Grandmaster": "GM", "International Master": "IM", "FIDE Master": "FM", "Candidate Master": "CM",
@@ -99,7 +99,7 @@ ICC_SIDE = re.compile(rf"^({'|'.join(map(re.escape, ICC_MEMBERS))})\s+(men's |wo
 # Wikidata's date precisions (wikibase:timePrecision): a date known to the year is stored as 1 January.
 DAY, MONTH, YEAR = 11, 10, 9
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/sparql-results+json"}, timeout=90)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/sparql-results+json"}, timeout=90)
 
 
 # ---------------------------------------------------------------- names as search sees them
@@ -107,7 +107,7 @@ _client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "applic
 
 def words(text: str) -> list[str]:
     """Plain lower-case ASCII words: "A'ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"]."""
-    return espn.words(text)
+    return naming.words(text)
 
 
 def search_text(name: str, aliases: Iterable[str]) -> str:
@@ -408,216 +408,81 @@ def import_locked(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = F
         bus.release(LOCK, token)
 
 
-# ---------------------------------------------------------------- esports, from PandaScore
-
-ESPORTS_PACE = 9.0  # seconds between pages: at most 400 requests an hour of PandaScore's 1,000
-ESPORTS_WAIT = 3600  # how long a run waits, in all, for live series to leave it some of the hour
+# ---------------------------------------------------------------- esports, from the sources' own lists
 
 
-def esports_rows(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Athlete rows from PandaScore players (pure). The handle is the name ("TenZ") and the full name
-    an alias, so either finds them. PandaScore has no popularity signal, so sitelinks stay 0; a pro on a
-    team today counts as current."""
+def roster_rows(system: str, entries: list[Rostered]) -> list[dict[str, Any]]:
+    """Athlete rows from a source's roster (pure). Sources have no popularity signal, so sitelinks stay 0."""
     rows = []
-    for p in players:
-        if not p.get("id") or not words(p.get("name") or ""):
-            continue
-        ref = pandascore_esports.parse_player(p)
-        if ref.league not in pandascore_esports.GAMES:
-            continue  # a 1v1 or battle-royale title
-        full = pandascore_esports.full_name(p)
-        aliases = [full] if full and words(full) != words(ref.name) else []
-        rows.append({
-            "qid": f"pandascore:{ref.athlete_id}",
-            "sport": ESPORTS,
-            "name": ref.name[:200],
-            "aliases": aliases,
-            "search_text": search_text(ref.name, aliases),
-            "birth_date": _date(p.get("birthday")),
-            "country": pandascore_esports.country(p.get("nationality")),
-            "teams": ref.team_names,
-            "league": ref.league,
-            "title": None,
-            "ids": {"pandascore_esports": ref.athlete_id},
-            "image": None,
-            "sitelinks": 0,
-            "current": bool(p.get("active")) and bool(ref.team_ids),
-        })
-    return rows
-
-
-def import_esports() -> int:
-    """Esports pros from each esports source that runs. A source that fails keeps its rows and the others
-    still run; then this raises, so the run reports esports as failed."""
-    total, failed = 0, []
-    for name, source in (("PandaScore", _import_pandascore), ("Liquipedia", _import_liquipedia), ("PUBG", import_pubg)):
-        try:
-            total += source()
-        except Exception:
-            log.exception("registry esports: %s failed; its rows kept", name)
-            failed.append(name)
-    if failed:
-        raise RuntimeError(f"{', '.join(failed)} failed ({total} pros imported from the rest)")
-    return total
-
-
-def _drop_unseen(prefix: str, leagues: list[str], started: datetime) -> None:
-    """After a complete run of one source, its rows in the games that run read and didn't see again
-    (retired, moved on). Rows of games it didn't read are left alone, so a run of a few games is safe."""
-    with session() as db:
-        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like(f"{prefix}%"), Athlete.league.in_(leagues), Athlete.updated_at < started)).rowcount
-    if gone:
-        log.info("registry esports: %d %s pros no longer active removed", gone, prefix.rstrip(":"))
-
-
-def _import_pandascore() -> int:
-    """Import the active pros of pandascore_esports.IMPORT_GAMES, a page of 100 every ESPORTS_PACE
-    seconds and only while live series keep their share of the hour (pandascore.spare). A complete run
-    drops the rows it didn't see again (retired, or moved to a title not imported)."""
-    if "pandascore_esports" not in ADAPTERS:
-        log.info("registry esports: PandaScore isn't running (no token); skipped")
-        return 0
-    started = datetime.now(timezone.utc)
-    games = ",".join(str(pandascore_esports.GAME_IDS[g]) for g in pandascore_esports.IMPORT_GAMES)
-    params = {"filter[videogame_id]": games, "filter[active]": "true", "sort": "id", "page[size]": pandascore.PAGE}
-    total, page, waited, complete = 0, 1, 0, True
-    while True:
-        if not pandascore.spare() and waited < ESPORTS_WAIT:
-            time.sleep(60)
-            waited += 60
-            continue
-        try:
-            players = pandascore.get_json("/players", ttl=0, **params, **{"page[number]": page})
-        except pandascore.RateLimited:
-            if waited >= ESPORTS_WAIT:
-                complete = False
-                break
-            time.sleep(60)
-            waited += 60
-            continue
-        except AdapterError as exc:
-            log.warning("registry esports: page %d failed: %s", page, exc)
-            complete = False
-            break
-        players = players if isinstance(players, list) else []
-        rows = esports_rows(players)
-        with session() as db:
-            upsert(db, rows)
-        total += len(rows)
-        log.info("registry esports: %d pages read, %d pros kept", page, total)
-        if len(players) < pandascore.PAGE:
-            break
-        page += 1
-        time.sleep(ESPORTS_PACE)
-    if complete:
-        _drop_unseen("pandascore:", pandascore_esports.IMPORT_GAMES, started)
-    return total
-
-
-def liquipedia_rows(players: list[dict[str, Any]], wiki: str) -> list[dict[str, Any]]:
-    """Athlete rows from Liquipedia players on one wiki (pure). The handle is the name, the real name an
-    alias. Liquipedia has no popularity signal either, so sitelinks stay 0."""
-    rows = []
-    for p in players:
-        if not p.get("pageid") or not p.get("pagename"):
-            continue
-        ref = liquipedia_esports.parse_player(p, wiki)
+    for e in entries:
+        ref = e.ref
         if not words(ref.name):
             continue
-        aliases = [n for n in dict.fromkeys(p.get(k) for k in ("name", "romanizedname", "localizedname")) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
+        aliases = [n for n in dict.fromkeys(e.aliases) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
         rows.append({
-            "qid": f"lp:{liquipedia_esports.SHORT[wiki]}:{p['pageid']}",
+            "qid": e.key,
             "sport": ESPORTS,
             "name": ref.name[:200],
             "aliases": aliases,
             "search_text": search_text(ref.name, aliases),
             "birth_date": _date(ref.born),
-            "country": p.get("nationality") or None,
+            "country": e.country,
             "teams": ref.team_names,
-            "league": wiki,
+            "league": ref.league,
             "title": None,
-            "ids": {"liquipedia_esports": ref.athlete_id},
+            "ids": {system: ref.athlete_id},
             "image": None,
             "sitelinks": 0,
-            "current": p.get("status") == "Active" and bool(ref.team_ids),
+            "current": e.current,
         })
     return rows
 
 
-def pubg_rows(players: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Athlete rows from the PUBG players seen in recent tournaments (pure): the name without the team
-    tag, the in-game name an alias, keyed by the account."""
-    rows = []
-    for account, info in players.items():
-        if not account or not words(info.get("name") or ""):
-            continue
-        aliases = [info["in_game"]] if info.get("in_game") and words(info["in_game"]) != words(info["name"]) else []
-        rows.append({
-            "qid": f"pubg:{account.split('.', 1)[-1][:15]}",
-            "sport": ESPORTS,
-            "name": info["name"][:200],
-            "aliases": aliases,
-            "search_text": search_text(info["name"], aliases),
-            "birth_date": None,
-            "country": None,
-            "teams": [info["team"]] if info.get("team") else [],
-            "league": "pubg",
-            "title": None,
-            "ids": {"pubg_esports": account},
-            "image": None,
-            "sitelinks": 0,
-            "current": True,  # played in the last fortnight
-        })
-    return rows
-
-
-def import_pubg() -> int:
-    """The players of PUBG's recent tournaments, from the adapter's index (no requests of their own once
-    it's warm). PUBG keeps a fortnight of matches, so a player not seen for three weeks is dropped."""
-    adapter = ADAPTERS.get("pubg_esports")
-    if adapter is None:
-        log.info("registry esports: PUBG isn't running (no key); skipped")
-        return 0
-    rows = pubg_rows(adapter.players())
-    with session() as db:
-        upsert(db, rows)
-        gone = db.execute(delete(Athlete).where(Athlete.sport == ESPORTS, Athlete.qid.like("pubg:%"), Athlete.updated_at < func.now() - text("interval '21 days'"))).rowcount
-    log.info("registry esports: %d PUBG players kept%s", len(rows), f", {gone} not seen for three weeks removed" if gone else "")
-    return len(rows)
-
-
-def _import_liquipedia() -> int:
-    """Import the active players of each battle royale wiki, 1,000 a request, only while the hour's
-    reserve for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
-    if "liquipedia_esports" not in ADAPTERS:
-        log.info("registry esports: Liquipedia isn't running (no key); skipped")
-        return 0
+def import_roster(adapter: Adapter) -> int:
+    """One source's athletes into the registry (adapter.roster). After a complete run, its rows it didn't
+    see again are dropped, in the leagues it read; rows of leagues it didn't read are left alone, so a run
+    of a few games is safe."""
     started = datetime.now(timezone.utc)
-    fields = "pageid,pagename,id,name,romanizedname,localizedname,nationality,birthdate,status,team,teampagename"
-    total, complete = 0, True
-    for wiki in liquipedia_esports.IMPORT_WIKIS:
-        offset, waited = 0, 0
-        while True:
-            if not liquipedia.spare() and waited < ESPORTS_WAIT:
-                time.sleep(60)
-                waited += 60
-                continue
-            try:
-                players = liquipedia.get("player", 0, wiki=wiki, conditions="[[status::Active]]", query=fields, order="pageid ASC", limit=liquipedia.PAGE, offset=offset)
-            except AdapterError as exc:
-                log.warning("registry esports: Liquipedia %s at %d failed: %s", wiki, offset, exc)
-                complete = False
-                break
-            rows = liquipedia_rows(players, wiki)
-            with session() as db:
-                upsert(db, rows)
-            total += len(rows)
-            log.info("registry esports: Liquipedia %s, %d players read, %d kept", wiki, offset + len(players), total)
-            if len(players) < liquipedia.PAGE:
-                break
-            offset += liquipedia.PAGE
-    if complete:
-        _drop_unseen("lp:", liquipedia_esports.IMPORT_WIKIS, started)
+    total = 0
+
+    def keep(entries: list[Rostered]) -> int:
+        nonlocal total
+        rows = roster_rows(adapter.system, entries)
+        with session() as db:
+            upsert(db, rows)
+        total += len(rows)
+        return total
+
+    run = adapter.roster(keep)
+    if run.complete:
+        unseen = [Athlete.sport == ESPORTS, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace]
+        if run.leagues is not None:
+            unseen.append(Athlete.league.in_(run.leagues))
+        with session() as db:
+            gone = db.execute(delete(Athlete).where(*unseen)).rowcount
+        if gone:
+            log.info("registry esports: %d %s pros no longer listed removed", gone, adapter.provider.name)
+    log.info("registry esports: %d %s pros kept", total, adapter.provider.name)
+    return total
+
+
+def import_esports() -> int:
+    """Esports pros from each source with a roster (adapters.base.Adapter) that runs. A source that fails
+    keeps its rows and the others still run; then this raises, so the run reports esports as failed."""
+    total, failed = 0, []
+    for adapter in KNOWN.values():
+        if not hasattr(adapter, "roster"):
+            continue
+        if adapter.system not in ADAPTERS:
+            log.info("registry esports: %s isn't running (no key); skipped", adapter.provider.name)
+            continue
+        try:
+            total += import_roster(adapter)
+        except Exception:
+            log.exception("registry esports: %s failed; its rows kept", adapter.provider.name)
+            failed.append(adapter.provider.name)
+    if failed:
+        raise RuntimeError(f"{', '.join(failed)} failed ({total} pros imported from the rest)")
     return total
 
 
@@ -725,11 +590,11 @@ def same_person(person: Person, ref: PlayerRef) -> bool:
         return agree
     names = [person.name, *person.aliases]
     if agree is not None:
-        return agree and any(espn.names_match(n, ref.name) for n in names)
+        return agree and any(naming.names_match(n, ref.name) for n in names)
     if sorted(words(ref.name)) not in [sorted(words(n)) for n in names]:
         return False
     if person.sport in TEAM_SPORTS and person.teams:
-        return any(espn.team_key(a) in espn.team_key(b) or espn.team_key(b) in espn.team_key(a) for a in person.teams for b in ref.team_names if a and b)
+        return any(naming.team_key(a) in naming.team_key(b) or naming.team_key(b) in naming.team_key(a) for a in person.teams for b in ref.team_names if a and b)
     return True
 
 
@@ -747,27 +612,14 @@ def sport_of(system: str) -> str | None:
 
 
 def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]) -> Iterable[PlayerRef]:
-    """Source athletes a name could mean, surname first: the source's own search where it has one
-    (Sportmonks), else ESPN's search read back through the adapter."""
+    """Source athletes a name could mean, from the source's own search by name (Sportmonks', or ESPN's
+    read back through the adapter). A source without one (Lichess) is found by the id Wikidata has."""
     search = getattr(adapter, "search", None)
-    if search is not None:
-        for ref in search(name)[:6]:
-            if ref.athlete_id not in tried and espn.names_match(name, ref.name):
-                tried.add(ref.athlete_id)
-                yield ref
+    if search is None:
         return
-    uid = ESPN_UIDS.get(adapter.system)
-    if uid is None:
-        return  # Lichess is found by the FIDE id Wikidata has
-    for hit in espn.search_athletes(name, uid)[:6]:
-        if hit["athlete_id"] in tried or not espn.names_match(name, hit["name"]):
-            continue
-        tried.add(hit["athlete_id"])
-        try:
-            ref = adapter.player(hit["athlete_id"], league)
-        except AdapterError:
-            continue
-        if ref:
+    for ref in search(name, league)[:6]:
+        if ref.athlete_id not in tried and naming.names_match(name, ref.name):
+            tried.add(ref.athlete_id)
             yield ref
 
 

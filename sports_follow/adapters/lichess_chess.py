@@ -23,15 +23,16 @@ from urllib.parse import quote
 
 import httpx
 
-from . import espn
-from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .. import naming
+from ..config import USER_AGENT
+from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
 
 API = "https://lichess.org/api"
 DAYS_BACK = 60
 DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()  # one request at a time, as Lichess asks
 _state = {"last": 0.0, "paused_until": 0.0}
@@ -151,7 +152,7 @@ def _points(result: str, white: bool) -> float:
 
 
 def _tokens(name: str) -> list[str]:
-    return [t for t in re.split(r"[^a-z]+", espn.fold(name)) if t]
+    return [t for t in re.split(r"[^a-z]+", naming.fold(name)) if t]
 
 
 def name_score(wanted: str, fide_name: str) -> int:
@@ -376,13 +377,122 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     return f"{word} {fmt_points(pts)}–{fmt_points(other)}"
 
 
+# ---------------------------------------------------------------- search and recognising a name
+
+CHESS_LIMIT = 4  # FIDE rows among all sports; a chess-only search shows more
+# FIDE's list holds about a million players, most of them amateurs; a typed name is only taken to
+# mean a chess player straight away if they're titled or rated 2200+.
+CHESS_TITLES = {"GM", "IM", "WGM", "WIM", "FM", "WFM"}
+# FIDE federation codes for the countries most players come from; others show as the code.
+FEDERATIONS = {
+    "NOR": "Norway", "IND": "India", "USA": "United States", "CHN": "China", "RUS": "Russia", "FID": "FIDE", "NED": "Netherlands",
+    "GER": "Germany", "FRA": "France", "ESP": "Spain", "ENG": "England", "ITA": "Italy", "POL": "Poland", "UKR": "Ukraine",
+    "ARM": "Armenia", "AZE": "Azerbaijan", "HUN": "Hungary", "UZB": "Uzbekistan", "IRI": "Iran", "DEN": "Denmark", "SWE": "Sweden",
+    "CZE": "Czechia", "ROU": "Romania", "SRB": "Serbia", "TUR": "Türkiye", "ISR": "Israel", "CAN": "Canada", "BRA": "Brazil",
+    "ARG": "Argentina", "PER": "Peru", "VIE": "Vietnam", "PHI": "Philippines", "GEO": "Georgia", "KAZ": "Kazakhstan", "AUS": "Australia",
+}
+
+
+def parse_fide(records: list[dict[str, Any]], query: str, limit: int) -> list[SearchResult]:
+    """FIDE records as results: active, titled and higher-rated players first. Amateurs only show
+    up when the name is exactly what was typed or the search is chess only (limit > CHESS_LIMIT)."""
+    out = []
+    for r in records:
+        if not r.get("id") or not r.get("name"):
+            continue
+        name = display_name(r["name"])
+        if not naming.prefix_match(query, name):
+            continue  # FIDE search matches any one word: "max verstappen" returns every titled Max
+        exact = naming.same(query, name)
+        notable = bool(r.get("title")) or (r.get("standard") or 0) >= 2000
+        if not (notable or exact or limit > CHESS_LIMIT):
+            continue
+        fed = FEDERATIONS.get(r.get("federation") or "", r.get("federation") or "")
+        rating = f"{r['standard']} classical" if r.get("standard") else ""
+        detail = " · ".join(x for x in (r.get("title") or "", fed, rating, "inactive" if r.get("inactive") else "") if x)
+        out.append(SearchResult(
+            key=f"lichess_chess:{r['id']}",
+            name=name,
+            sport="Chess",
+            detail=detail,
+            system="lichess_chess",
+            athlete_id=str(r["id"]),
+            live_scores=True,
+            inactive=bool(r.get("inactive")),
+            exact=exact,
+            popularity=5 if r.get("title") and not r.get("inactive") else 0,
+            _rank=(bool(r.get("title")) and not r.get("inactive"), r.get("standard") or 0),
+        ))
+    out.sort(key=lambda x: (x.inactive, -x._rank[1]))
+    return out[:limit]
+
+
+_fide_lock = threading.Lock()
+
+
+def search(query: str, sport: str | None, adapters: list[Adapter]) -> list[SearchResult]:
+    """FIDE's list, for a chess-only search: the registry has the titled players, this the other 1.9 million."""
+    # Lichess asks for one request at a time; a burst of keystrokes shouldn't queue up behind each
+    # other, so a search that can't get the line within a second gives up on chess this time.
+    url = f"{API}/fide/player?q={quote(query)}"
+    records = peek(url, ttl=24 * 3600)
+    if records is None:
+        if not _fide_lock.acquire(timeout=1.0):
+            raise AdapterError("chess search busy")
+        try:
+            records = get_json(url, ttl=24 * 3600)
+        finally:
+            _fide_lock.release()
+    return parse_fide(records if isinstance(records, list) else [], query, 10)
+
+
+def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] | None:
+    """A titled or 2200+ active player with this name on FIDE's list."""
+    chess = adapters[0]
+    try:
+        ref = chess.find_player(query)
+        if ref:
+            record = get_json(f"{API}/fide/player/{ref.athlete_id}", ttl=12 * 3600)
+            if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
+                return chess, ref
+    except AdapterError:
+        pass
+    return None
+
+
+PROVIDER = Provider(
+    name="Lichess",
+    url="https://lichess.org",
+    what="broadcasts of over-the-board events (games, moves and clocks), shown with each organiser's delay.",
+    licence="Broadcast games: CC BY-SA 4.0",
+    licence_url="https://creativecommons.org/licenses/by-sa/4.0/",
+    note="The games are shown unchanged; the evaluations beside them are ours.",
+    search=LiveSearch(find=search, unfiltered=False, min_length=3),
+    recognise=recognise,
+)
+
+
 # ---------------------------------------------------------------- the adapter
 
 
-class LichessChess:
+class LichessChess(Adapter):
     system = "lichess_chess"
     sports = ("chess",)
     live_cadence = 15  # moves come slower than goals; Lichess prefers light polling
+    name = "Lichess"
+    provider = PROVIDER
+    covers = "Chess"
+    # A chess player's tournaments take a dozen rate-limited Lichess reads to find; the preview shows
+    # ratings only and the page finds the tournaments once followed.
+    preview_fixtures = False
+
+    def credits_also(self) -> list[dict[str, Any]]:
+        return [{
+            "name": "FIDE",
+            "url": "https://ratings.fide.com",
+            "what": "Chess titles and ratings, looked up player by player through Lichess.",
+            "note": "Ratings are FIDE's.",
+        }]
 
     def find_player(self, name: str) -> PlayerRef | None:
         # FIDE search matches the name as typed; "Gukesh Dommaraju" only finds FIDE's "Gukesh, D" by
@@ -410,7 +520,7 @@ class LichessChess:
         for it, and search misses events whose player list doesn't name them (Carlsen's Global
         Chess League final).
         """
-        surname = espn.fold(ref.name).split()[-1]
+        surname = naming.fold(ref.name).split()[-1]
         found: dict[str, dict[str, Any]] = {}
         if ref.profile_url:
             try:
@@ -429,7 +539,7 @@ class LichessChess:
         top = get_json(f"{API}/broadcast/top", ttl=600)
         for entry in [*(top.get("active") or []), *(top.get("upcoming") or [])]:
             tour = entry["tour"]
-            text = espn.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
+            text = naming.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
             if surname in text.split() or surname in text.replace(",", " ").split():
                 found.setdefault(tour["id"], tour)
         lo, hi = now - timedelta(days=DAYS_BACK), now + timedelta(days=DAYS_AHEAD)
@@ -443,7 +553,7 @@ class LichessChess:
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
         now = datetime.now(timezone.utc)
-        surname = espn.fold(ref.name).split()[-1]
+        surname = naming.fold(ref.name).split()[-1]
         out: list[Fixture] = []
         for tour in self._tours(ref, now):
             try:
@@ -484,7 +594,7 @@ class LichessChess:
                     unpaired.append(rnd)  # starting soon, pairings not out
                 # else: paired without them (a bye, or not in this section)
             # Rounds not yet paired count as the player's only if they've played in this event or it lists them.
-            listed = surname in espn.fold((tour.get("info") or {}).get("players", "")).replace(",", " ").split()
+            listed = surname in naming.fold((tour.get("info") or {}).get("players", "")).replace(",", " ").split()
             if games or listed:
                 out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
