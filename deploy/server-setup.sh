@@ -18,7 +18,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 apt-get -y upgrade
-apt-get install -y ca-certificates curl git openssl ufw unattended-upgrades fail2ban python3-systemd
+apt-get install -y ca-certificates curl git openssl ufw unattended-upgrades fail2ban python3-systemd age
 echo 'APT::Periodic::Update-Package-Lists "1"; APT::Periodic::Unattended-Upgrade "1";' >/etc/apt/apt.conf.d/20auto-upgrades
 
 # Firewall: SSH and the web only (Docker publishes just Caddy's 80 and 443).
