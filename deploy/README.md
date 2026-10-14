@@ -41,9 +41,19 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 ## Size and cost
 
 The whole stack uses about 450 MB of memory at rest; the API is the largest (240 MB for two workers).
-A **2 vCPU / 4 GB** server leaves room for the weekly registry import, builds and the chess engine:
-$24 a month on DigitalOcean or AWS Lightsail, plus weekly backups ($4.80 on DigitalOcean). Any region
-works; one near India (Bangalore, Mumbai or Singapore) is only a little snappier for fans there.
+A **2 vCPU / 4 GB** server leaves room for the weekly registry import, builds and the chess engine.
+
+It runs on **AWS Lightsail in Sydney** (`ap-southeast-2`): the $24 plan, with 2 vCPU, 4 GB and an 80 GB
+SSD.
+- **Billing:** an AWS account opened in India is billed in rupees by AWS India. It takes RuPay, Visa and
+  Mastercard cards, net banking and UPI. DigitalOcean bills in dollars, and an Indian card was declined
+  there.
+- **Transfer:** Sydney includes 2 TB a month.
+- **CPU:** Lightsail's CPU is burstable. It runs flat out for a while, then slows down. Normal use stays
+  well inside that, but watch the CPU graph in Lightsail after launch.
+- **Region:** Mumbai would be closest to fans in India, but the AWS organization's service control policy
+  denies Lightsail there. Sydney adds a little delay, which barely matters for scores that update every
+  8–15 seconds.
 
 ## First deploy
 
@@ -63,17 +73,35 @@ docker run --rm alpine:3.20 sh -c 'apk add -q age >/dev/null && age-keygen'
 Save the `AGE-SECRET-KEY-1…` line in the password manager. Add the `age1…` public key as a line of
 `deploy/secrets-recipients.txt` and commit it.
 
-**1. Create the server** (you): Ubuntu 24.04, 2 vCPU / 4 GB, with your Mac's SSH key
-(`~/.ssh/id_ed25519.pub`) and weekly backups on. Note its IP address.
+**1. Create the server** (you), in the Lightsail console, in Sydney (`ap-southeast-2`):
+- **Image and plan:** Linux/Unix, OS only, **Ubuntu 24.04 LTS**, on the $24 plan (2 vCPU, 4 GB), with
+  dual-stack networking.
+- **SSH key:** upload your Mac's `~/.ssh/id_ed25519.pub`.
+- **Static IP:** on the Networking tab, attach one. It's free while attached; without it, the address
+  changes whenever the server stops.
+- **Firewall:** add **HTTPS (TCP 443)** to the IPv4 firewall, and UDP 443 for HTTP/3. Don't restrict them:
+  any IPv4 address, `0.0.0.0/0`. SSH (22) and HTTP (80) are open already.
+- **Snapshots** (optional): automatic snapshots take one a day, billed per GB stored. The off-site backups
+  already cover the data, but a snapshot brings the whole server back faster.
 
-**2. Set it up** (from the repo on the Mac). This is the last time you log in as root:
+Note the static IP, and check the Mac's key gets in: `ssh ubuntu@<server-ip> true`. If it says
+`Permission denied (publickey)`, the server was made with Lightsail's default key instead. Add the Mac's
+from the console's browser SSH ("Connect using SSH"), pasting your `~/.ssh/id_ed25519.pub` between the
+quotes:
 ```bash
-ssh root@<server-ip> "RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s" < deploy/server-setup.sh
+echo '<the line from ~/.ssh/id_ed25519.pub>' >> ~/.ssh/authorized_keys
 ```
+
+**2. Set it up** (from the repo on the Mac). Lightsail's first login is `ubuntu`, with sudo:
+```bash
+ssh ubuntu@<server-ip> "sudo RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s" < deploy/server-setup.sh
+```
+On a provider whose first login is root, it's `ssh root@<server-ip> "RECOVERY_KEY=… bash -s" < …` instead.
+
 The repo is private, so the first run stops and prints a key for the server to read it with: add it under
 [Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
-off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) By
-then root can't log in any more, so run the setup again as `deploy`:
+off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) Then
+run the setup again as `deploy` (root can't log in by then):
 ```bash
 ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
 ```
@@ -144,15 +172,17 @@ has sudo without a password (it's in the `docker` group, which is as good as roo
 
 | Key | Can |
 |---|---|
-| The Mac's (copied from root by the first setup) | everything |
+| The Mac's (copied from `ubuntu`, or root, by the first setup) | everything; it still opens `ubuntu` too |
 | The recovery key (`RECOVERY_KEY`) | everything |
 | GitHub Actions' (`DEPLOY_KEY`) | run `deploy.sh` and nothing else: no shell, no forwarding |
-| The provider's web console | the last resort, if no key works: reset root's password in the provider's panel and log in there |
+| Lightsail's default key, if `ubuntu` had it (copied like the Mac's) | everything. Its private half can be downloaded from the AWS account; to drop it, remove its line from `~deploy/.ssh/authorized_keys` |
+| Lightsail's browser SSH ("Connect using SSH" in the console) | the last resort, if no key works: it logs in as `ubuntu` with a key of its own |
 
-Try the recovery key once it's in: `ssh -i <recovery key> deploy@<server-ip> true`.
+Try the recovery key once it's in: `ssh -i <recovery key> deploy@<server-ip> true`. Also open Lightsail's
+browser SSH once after the setup, to check it still gets in.
 
 fail2ban bans an address for an hour after 5 failed logins in 10 minutes, and then even a right key can't
-get in from there: wait, use another network, or the console (`sudo fail2ban-client status sshd`,
+get in from there: wait, use another network, or Lightsail's browser SSH (`sudo fail2ban-client status sshd`,
 `sudo fail2ban-client unban <address>`). Run the setup again after changing it, or to add a key
 (keys are added, never removed; remove one by editing `~deploy/.ssh/authorized_keys`):
 ```bash
@@ -380,8 +410,8 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | Off-site backups | `deploy/offsite-backup.sh list`; run now: `sudo systemctl start sports-follow-offsite`; log: `sudo journalctl -u sports-follow-offsite` |
 
 The daily dumps stay on the server for 14 days. Off-site, they're sealed and kept for longer (see
-[Off-site backups](#off-site-backups)), next to the sealed secrets. The provider's weekly server backup is
-one more copy.
+[Off-site backups](#off-site-backups)), next to the sealed secrets. Lightsail's automatic snapshots, if
+they're on, are one more copy.
 
 A server set up before fan cookies were signed has no cookie key yet: run `deploy/push-secrets.sh
 deploy@<server-ip>` once before deploying, or the API stops at startup and says so. The key is kept from
