@@ -16,6 +16,7 @@ x-app: &app
   environment:
     REDIS_URL: redis://redis:6379/0
     LLM_GATEWAY_URL: http://gateway:8787
+    SPORTS_FOLLOW_SITE_URL: https://${DOMAIN}   # who the app is to push services and data sources
     SPORTS_FOLLOW_SPORTMONKS_TOKEN_FILE: /run/secrets/sportmonks-token
     SPORTS_FOLLOW_LICHESS_TOKEN_FILE: /run/secrets/lichess-token
     SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE: /run/secrets/pandascore-token   # optional: esports team titles

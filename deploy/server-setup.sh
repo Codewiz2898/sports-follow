@@ -11,7 +11,7 @@
 #   DEPLOY_KEY="<public key>"    GitHub Actions' key; it can run deploy/deploy.sh and nothing else
 # Safe to run again: keys are added, never removed.
 set -euo pipefail
-REPO="${REPO:-https://github.com/Codewiz2898/sports-follow.git}"
+REPO="${REPO:-git@github.com:Codewiz2898/sports-follow.git}"   # private: read with REPO_KEY, below
 APP_DIR=/opt/sports-follow
 USER_NAME=deploy
 export DEBIAN_FRONTEND=noninteractive
@@ -122,10 +122,30 @@ EOF
 systemctl enable fail2ban >/dev/null 2>&1
 systemctl restart fail2ban
 
+# The repo is private, so deploy reads it with a read-only key of its own, made here once and added on
+# GitHub by hand (not DEPLOY_KEY, which lets Actions in here). GitHub's host keys come from its API over
+# HTTPS, so the first connection isn't taken on trust.
+REPO_KEY=/home/$USER_NAME/.ssh/github-read
+if [ ! -f "$REPO_KEY" ]; then
+  ssh-keygen -q -t ed25519 -N '' -C "sports-follow read $(hostname)" -f "$REPO_KEY"
+  chown "$USER_NAME:$USER_NAME" "$REPO_KEY" "$REPO_KEY.pub"
+fi
+grep -q '^github.com ' /etc/ssh/ssh_known_hosts 2>/dev/null ||
+  curl -fsS https://api.github.com/meta | python3 -c 'import json, sys; [print("github.com", k) for k in json.load(sys.stdin)["ssh_keys"]]' >>/etc/ssh/ssh_known_hosts
+export GIT_SSH_COMMAND="ssh -i $REPO_KEY -o IdentitiesOnly=yes"
+if ! git ls-remote "$REPO" HEAD >/dev/null 2>&1; then
+  echo "server-setup: add this key on GitHub (Settings, Deploy keys, write access off), then run this again:" >&2
+  echo "  https://github.com/Codewiz2898/sports-follow/settings/keys/new" >&2
+  cat "$REPO_KEY.pub" >&2
+  exit 1
+fi
+
 # The app (owned by deploy, which pulls and builds it), its secrets directory (filled by push-secrets.sh;
 # deploy reads the .env files for compose) and its backups.
-[ -d "$APP_DIR/.git" ] || git clone "$REPO" "$APP_DIR"
+[ -d "$APP_DIR/.git" ] || git clone --quiet "$REPO" "$APP_DIR"
 chown -R "$USER_NAME:$USER_NAME" "$APP_DIR"
+sudo -u "$USER_NAME" git -C "$APP_DIR" remote set-url origin "$REPO"
+sudo -u "$USER_NAME" git -C "$APP_DIR" config core.sshCommand "$GIT_SSH_COMMAND"   # deploy.sh's fetches
 install -d -m 750 -o root -g "$USER_NAME" /etc/sports-follow
 install -d -m 750 -o root -g "$USER_NAME" /var/backups/sports-follow
 if [ ! -f "$APP_DIR/deploy/.env" ]; then

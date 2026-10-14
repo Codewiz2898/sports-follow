@@ -4,8 +4,7 @@
 # DEPLOY_KEY), and deploy.sh deploys only commits on main. Setup and rollback: deploy/README.md.
 #
 # By hand for now (Actions → Deploy → Run workflow). Once trusted, uncomment workflow_run to deploy every
-# commit on main that CI passes. Never on pull_request: the repository is public, and a fork's PR must
-# not reach the deploy key.
+# commit on main that CI passes. Never on pull_request: a fork's PR must not reach the deploy key.
 name: Deploy
 
 on:

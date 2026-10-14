@@ -56,6 +56,11 @@ step 2, then delete the private half from the Mac.
 ```bash
 ssh root@<server-ip> "RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s" < deploy/server-setup.sh
 ```
+The repo is private, so the first run stops and prints a key for the server to read it with: add it under
+[Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
+off, then run the same command again. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets
+GitHub Actions into the server.)
+
 Without a domain the app lives at `https://<ip-with-dashes>.sslip.io`, with a real certificate. For
 your own domain, point an A record at the server first and add `DOMAIN=app.example.com` in front of
 `bash -s` (or edit `/opt/sports-follow/deploy/.env` later).
@@ -109,8 +114,8 @@ ssh deploy@<server-ip> "sudo RECOVERY_KEY='$(cat <new key>.pub)' bash -s" < depl
 
 **From GitHub:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`. A deploy
 goes ahead only if the CI workflow passed for that commit; then it runs `deploy.sh` on the server and
-fetches `/api/health` from outside. It never runs for pull requests: the repository is public, and a
-fork's PR must not reach the deploy key. Once it's trusted, uncomment `workflow_run` in the workflow so
+fetches `/api/health` from outside. It never runs for pull requests: a fork's PR must not reach the deploy
+key. Once it's trusted, uncomment `workflow_run` in the workflow so
 every commit on main that CI passes deploys by itself.
 
 **By hand:** `ssh deploy@<server-ip> /opt/sports-follow/deploy/deploy.sh deploy` (or `deploy <commit>`,

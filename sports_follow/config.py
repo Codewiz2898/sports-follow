@@ -10,8 +10,21 @@ DATABASE_URL = os.environ.get(
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
 
-# How every source and Wikidata see this app: honestly, as itself (ESPN refuses browser-like agents).
-USER_AGENT = "sports-follow/0.1 (+https://github.com/Codewiz2898/sports-follow)"
+# The app's public address: compose sets it from DOMAIN (https://<domain>). Empty in development.
+SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
+# Where fans write about their data: the privacy page shows it (and has no Questions part without it),
+# and data sources see it in the user agent.
+CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "").strip()
+
+
+def user_agent(site: str, contact: str) -> str:
+    """How every source and Wikidata see this app: honestly, as itself (ESPN refuses browser-like agents),
+    with where to reach whoever runs it, as Wikimedia asks. Never the repo: it's private."""
+    reach = "; ".join(c for c in (site, contact) if c)
+    return f"sports-follow/0.1 ({reach})" if reach else "sports-follow/0.1"
+
+
+USER_AGENT = user_agent(SITE_URL, CONTACT_EMAIL)
 
 # How long a full card stays fresh before the scheduler rebuilds it (seconds).
 CARD_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_CARD_MAX_AGE", 6 * 3600))
@@ -36,8 +49,6 @@ FAN_COOKIE = "sf_fan"
 # under a new key no fan's cookie verifies, and every fan starts over with nothing followed.
 COOKIE_SECRET = os.environ.get("SPORTS_FOLLOW_COOKIE_SECRET", "").strip()
 COOKIE_SECRET_FILE = Path(os.environ.get("SPORTS_FOLLOW_COOKIE_SECRET_FILE", Path.home() / ".config" / "sports-follow" / "cookie-secret"))
-# Where fans write about their data (the privacy page). Empty: the page says to use the app's GitHub.
-CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "")
 
 # AI researches beyond each fan's daily three (search.RESEARCH_PER_DAY): at most this many an hour across
 # all fans, well under the gateway's daily budget (about 40 builds), and this many a UTC day from one
