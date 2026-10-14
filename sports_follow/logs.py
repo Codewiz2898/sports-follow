@@ -26,6 +26,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
+from opentelemetry import propagate, trace
+
 from .config import LOG_FORMAT, LOG_LEVEL
 
 T = TypeVar("T")
@@ -69,9 +71,12 @@ def current() -> dict[str, Any]:
 
 
 def carry() -> dict[str, Any]:
-    """What a job queued now takes along so the worker logs it under this unit's id (worker._logged)."""
+    """What a job queued now takes along so the worker logs it under this unit's id (worker._logged), and
+    continues its trace (traceparent, when tracing.py is recording one)."""
     rid = (_context.get() or {}).get("rid")
-    return {"rid": rid} if rid else {}
+    carried = {"rid": rid} if rid else {}
+    propagate.inject(carried)
+    return carried
 
 
 def carried(fn: Callable[..., T]) -> Callable[..., T]:
@@ -89,9 +94,13 @@ _make_record = logging.getLogRecordFactory()
 
 
 def _record(*args: Any, **kwargs: Any) -> logging.LogRecord:
-    """Every record, whichever handler takes it, with the context it was logged in (as it was then)."""
+    """Every record, whichever handler takes it, with the context it was logged in (as it was then), and
+    the trace and span it was logged in when tracing.py is on, so a line opens its trace."""
     record = _make_record(*args, **kwargs)
     record.context = dict(_context.get() or {})
+    span = trace.get_current_span().get_span_context()
+    if span.is_valid:
+        record.context |= {"trace_id": format(span.trace_id, "032x"), "span_id": format(span.span_id, "016x")}
     return record
 
 

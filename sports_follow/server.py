@@ -38,7 +38,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -46,6 +46,7 @@ from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
+tracing.setup("sports-follow-api")
 log = logging.getLogger("sports_follow")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 HEARTBEAT = 15
@@ -66,7 +67,9 @@ async def lifespan(app: FastAPI):
     await state["redis"].aclose()
 
 
-app = FastAPI(title="Sports Follow", lifespan=lifespan)
+# FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
+# RequestLog's span stands for each request instead (tracing.request_span).
+app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False})
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -121,7 +124,8 @@ class RequestLog:
     balancer in front sent, if well formed, else one made here; every line logged while serving the
     request, and every job it queues (enqueue), carries it, and the answer names it in X-Request-ID.
     The line gives the route, status and time taken: never the query string (a search's words) or the
-    client's address. A passing health check and the web app's files aren't logged."""
+    client's address. A passing health check and the web app's files aren't logged. An API request is
+    also a span (tracing.py), the root of its trace, which its jobs continue."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -141,15 +145,17 @@ class RequestLog:
                 message = {**message, "headers": [*message.get("headers", []), (b"x-request-id", rid.encode())]}
             await send(message)
 
-        try:
-            await self.app(scope, receive, answer)
-        finally:
-            path = scope["path"]
-            if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
-                ms = (time.perf_counter() - started) * 1000
+        method, path = scope["method"], scope["path"]
+        with tracing.request_span(method, path) as span:
+            try:
+                await self.app(scope, receive, answer)
+            finally:
                 route = getattr(scope.get("route"), "path", None)
-                request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", scope["method"], path, status, ms,
-                                extra={"method": scope["method"], "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
+                tracing.answered(span, method, route, status, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
+                if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
+                    ms = (time.perf_counter() - started) * 1000
+                    request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", method, path, status, ms,
+                                    extra={"method": method, "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
 
 
 app.add_middleware(RequestLog)  # outermost of ours: requests SameOriginWrites turns away are logged too

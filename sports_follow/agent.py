@@ -22,6 +22,7 @@ from dotenv import dotenv_values
 from llm_providers import Client, LlmError
 from pydantic import BaseModel, ValidationError
 
+from . import tracing
 from .schema import LiveUpdate, PlayerReport
 
 log = logging.getLogger("sports_follow.agent")
@@ -164,18 +165,20 @@ def _run(
                 if left < 30:  # too little for a reply worth waiting for
                     raise AgentError("The agent did not finish within its time limit.")
                 try:
-                    r = llm.complete(
-                        model=MODEL,
-                        system=SYSTEM_PROMPT,
-                        messages=messages,
-                        tools=tools,
-                        max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
-                        thinking="adaptive",
-                        effort=effort,
-                        cache_system=True,
-                        timeout_ms=int(min(CALL_TIMEOUT_MS, left * 1000)),
-                        label=label,
-                    )
+                    with tracing.span("model call", **{"gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL, "sports_follow.label": label}) as call:
+                        r = llm.complete(
+                            model=MODEL,
+                            system=SYSTEM_PROMPT,
+                            messages=messages,
+                            tools=tools,
+                            max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
+                            thinking="adaptive",
+                            effort=effort,
+                            cache_system=True,
+                            timeout_ms=int(min(CALL_TIMEOUT_MS, left * 1000)),
+                            label=label,
+                        )
+                        tracing.usage(call, r)
                     break
                 except LlmError as exc:
                     # One stalled or failed host shouldn't throw away minutes of research: retry once.
