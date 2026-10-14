@@ -68,12 +68,16 @@ ssh root@<server-ip> "RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s
 ```
 The repo is private, so the first run stops and prints a key for the server to read it with: add it under
 [Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
-off, then run the same command again. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets
-GitHub Actions into the server.)
+off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) By
+then root can't log in any more, so run the setup again as `deploy`:
+```bash
+ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
+```
 
 Without a domain the app lives at `https://<ip-with-dashes>.sslip.io`, with a real certificate. For
-your own domain, point an A record at the server first and add `DOMAIN=app.example.com` in front of
-`bash -s` (or edit `/opt/sports-follow/deploy/.env` later).
+your own domain, point an A record at the server first and pass it on that second run, which is the one
+that writes the address: `'sudo DOMAIN=app.example.com bash -s'` (or edit `/opt/sports-follow/deploy/.env`
+later).
 
 **3. Send the secrets:**
 ```bash
