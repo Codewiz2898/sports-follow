@@ -423,6 +423,56 @@ save the topic's URL in `~/.config/sports-follow/alert-url` and run `push-secret
 
 Old images and build cache older than a week are removed early on Sundays (`sports-follow-prune.timer`).
 
+## Traces and logs
+
+With `otlp.env` on the server, the API and the worker send **traces and log lines to Grafana Cloud**
+over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it they stay on the server
+(`c logs`), and the app runs the same.
+
+- **Traces:** each API request is a trace, named for its route. The jobs it queues continue it. Inside
+  are each job, each round of a live poll, and the source requests, database queries, Redis commands and
+  model calls they made, with their timings. Health checks and live streams have none.
+- **Log lines:** every line the app writes to stdout, with its fields as attributes: `rid`, the fan's
+  hash, `job`, `player_id`, `route`, `status`, `duration_ms`. A line logged inside a trace carries its
+  trace id, so Grafana links the line to the trace and the trace to its lines.
+- **Never sent:** query strings (a fan's search words), fan ids (a hash instead), query or Redis values.
+- **Settings:** OpenTelemetry's own (`OTEL_*`, README.md's settings table), so another backend, or a
+  collector on another server, is a change to `otlp.env` alone.
+
+**Setting it up** (you, once):
+1. **The key:** on the grafana.com portal, open your stack → **OpenTelemetry** → **Configure**. Create
+   a token there (its scopes include `traces:write` and `logs:write`). The page then shows the settings
+   to use. Copy just the endpoint and headers lines into `~/.config/sports-follow/otlp.env` on the Mac:
+   ```
+   OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-….grafana.net/otlp
+   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20…
+   ```
+   Leave out the page's `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_SERVICE_NAME` lines: the API and the worker
+   name themselves (`sports-follow-api`, `sports-follow-worker`), and `settings.env` says production.
+2. **Turn it on:** run `chmod 600 ~/.config/sports-follow/otlp.env`, then:
+   ```bash
+   deploy/push-secrets.sh deploy@<server-ip>   # otlp.env to the server, sealed with the rest
+   ```
+   Then on the server, `c up -d --force-recreate api worker`. The next deploy does it too.
+3. **Check:** in the stack's Grafana, go to **Explore**. Pick the **Tempo** data source, search, and
+   choose service `sports-follow-api`; a trace comes within a minute of any request. Or pick **Loki**
+   and query `{service_name="sports-follow-api"}`.
+
+**Finding things:**
+- **A request a fan reports:** its id is in the answer's `X-Request-ID` header. In Loki, query
+  `{service_name=~"sports-follow.*"} | rid="<id>"` for its lines and its jobs' lines. Open the trace from
+  any of them.
+- **A slow or failing route:** in Tempo, search `{span.http.route="/api/follows" && duration>1s}` or
+  `{status=error}`.
+- **A source:** spans named `GET <host>`, each with its rate-limit lane (`sports_follow.lane`). For
+  example `{span.server.address="api.sportmonks.com"}`, or its refusals:
+  `{span.server.address="api.sportmonks.com" && span.http.response.status_code=429}`.
+
+Every trace is kept. That's fine at today's traffic, well inside the free tier's monthly traces and logs.
+Once there's much more, set `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG`
+in `settings.env` to keep a share. Keeping every error and slow trace as well needs a collector that sees
+whole traces (Alloy's tail sampling) in between.
+
 ## Operating
 
 On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`:

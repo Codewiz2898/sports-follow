@@ -1,6 +1,6 @@
 """Traces (tracing.py, BHA-193): off without an exporter; one trace from a request through the jobs it
 queues, each job and poll round a span; a source request's span has no query string; log lines carry
-their trace. Nothing here needs a collector."""
+their trace, and ship over OTLP with their fields (BHA-195). Nothing here needs a collector."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from opentelemetry.trace import SpanKind, StatusCode
 from sports_follow import logs, tracing, worker
 
 ROOT = Path(__file__).resolve().parent.parent
-SETTINGS = ("OTEL_SDK_DISABLED", "OTEL_TRACES_EXPORTER", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_SERVICE_NAME")
+SETTINGS = ("OTEL_SDK_DISABLED", "OTEL_TRACES_EXPORTER", "OTEL_LOGS_EXPORTER", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_SERVICE_NAME")
 
 
 def _alone(fn):
@@ -52,6 +53,53 @@ def test_opentelemetrys_own_settings_choose_the_exporter(monkeypatch):
     monkeypatch.setenv("OTEL_TRACES_EXPORTER", "otlp")
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
     assert tracing._exporter() is None
+
+
+def test_log_lines_ship_where_traces_go_unless_told_not_to(monkeypatch):
+    for key in SETTINGS:
+        monkeypatch.delenv(key, raising=False)
+    assert tracing._log_exporter() is None
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example/otlp")
+    assert type(tracing._log_exporter()).__name__ == "OTLPLogExporter"
+    monkeypatch.setenv("OTEL_LOGS_EXPORTER", "none")
+    assert tracing._log_exporter() is None and type(tracing._exporter()).__name__ == "OTLPSpanExporter"
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    monkeypatch.delenv("OTEL_LOGS_EXPORTER")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "https://otlp.example/otlp/v1/logs")
+    assert type(tracing._log_exporter()).__name__ == "OTLPLogExporter" and tracing._exporter() is None  # logs alone
+
+
+@pytest.fixture
+def shipped():
+    """Log lines shipped (logs.ship) to memory, the handler gone again after the test."""
+    from opentelemetry.instrumentation.logging.handler import LoggingHandler
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    logs.ship(provider)
+    yield exporter
+    root = logging.getLogger()
+    for handler in [h for h in root.handlers if isinstance(h, LoggingHandler)]:
+        root.removeHandler(handler)
+
+
+def test_a_shipped_line_has_its_units_fields_and_its_trace(spans, shipped):
+    def build():
+        logs.begin(rid="ab12cd34ef56ab78", job="build_card", player_id=7)
+        with tracing.span("job build_card") as span:
+            logging.getLogger("sports_follow.pipeline").warning("build %s failed", 7, extra={"status": 502, "route": None})
+            logging.getLogger("opentelemetry.sdk._shared_internal").warning("Failed to export batch")  # never shipped: it would loop
+            return span.get_span_context()
+
+    context = _alone(build)
+    [line] = [r.log_record for r in shipped.get_finished_logs()]
+    assert line.body == "build 7 failed" and line.severity_text == "WARN"
+    assert {k: line.attributes[k] for k in ("rid", "job", "player_id", "status")} == {"rid": "ab12cd34ef56ab78", "job": "build_card", "player_id": 7, "status": 502}
+    assert not {"context", "route", "trace_id", "span_id"} & set(line.attributes)  # flattened; no empty values; the trace in its own fields
+    assert (line.trace_id, line.span_id) == (context.trace_id, context.span_id)
 
 
 def test_a_job_continues_the_trace_of_the_request_that_queued_it(spans, caplog):

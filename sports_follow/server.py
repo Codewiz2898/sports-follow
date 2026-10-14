@@ -68,8 +68,9 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
-# RequestLog's span stands for each request instead (tracing.request_span).
-app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False})
+# RequestLog's span stands for each request instead (tracing.request_span). Nor does it log validation
+# failures, which carry what a client sent.
+app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False})
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
