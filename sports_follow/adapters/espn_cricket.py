@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import naming
 from ..sports import cricket
-from . import espn
+from . import budget, espn
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:200~"
@@ -333,7 +333,7 @@ class EspnCricket(espn.EspnAdapter, Adapter):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             candidates: dict[str, Fixture] = {}
-            for fixtures in pool.map(day, days):
+            for fixtures in pool.map(budget.carry(day), days):
                 for f in fixtures:
                     if involves_team(f, ref):
                         candidates.setdefault(f.source_id, f)
@@ -351,7 +351,7 @@ class EspnCricket(espn.EspnAdapter, Adapter):
                     f.detail = f"{f.detail} · squad not announced" if f.detail else "Squad not announced"
                 return f
 
-            kept = [f for f in pool.map(keep, candidates.values()) if f is not None]
+            kept = [f for f in pool.map(budget.carry(keep), candidates.values()) if f is not None]
         return sorted(kept, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:

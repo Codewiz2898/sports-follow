@@ -18,6 +18,7 @@ import httpx
 
 from .. import naming, sports
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError, LiveSearch, PlayerRef, Provider, SearchResult
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ SITE = "https://site.api.espn.com/apis/site/v2/sports"
 WEB = "https://site.web.api.espn.com/apis"
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=15, follow_redirects=True)
+BUDGET = budget.Budget("espn")  # no published limit: counted, by lane, never refused
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
 
@@ -43,6 +45,7 @@ def get_json(url: str, ttl: float) -> Any:
     res = None
     for attempt in range(2):
         # ESPN's edge answers the odd request with a 502; the same request a moment later works.
+        budget.take(BUDGET)
         try:
             res = _client.get(url)
         except httpx.HTTPError as exc:

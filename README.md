@@ -149,6 +149,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
   serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source.
+- **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
+  declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
+  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Before each request it
+  sends it takes one; it reports what the source says is left and its 429s, which pause every process.
+  Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
+  lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
+  following), `refresh`, `history` and `import`. The background lanes stop at the reserve; a fan loop on
+  Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
+  source's spend this hour and today, by lane.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
@@ -229,8 +238,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
-| `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page |
-| `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
+| `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
+| `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it |
+| `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |
 | `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |

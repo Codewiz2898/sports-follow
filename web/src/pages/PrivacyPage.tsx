@@ -35,11 +35,11 @@ export function PrivacyPage() {
         <p>Without an account: unfollow your players and turn alerts off in Alerts, then clear this site's data in your browser.</p>
       </Part>
 
-      <Part title="Questions">
-        {contact
-          ? <p>Write to <a className="link" href={`mailto:${contact}`}>{contact}</a>.</p>
-          : <p>Open an issue on <a className="link" href="https://github.com/Codewiz2898/sports-follow/issues" target="_blank" rel="noreferrer">GitHub</a>.</p>}
-      </Part>
+      {contact && (
+        <Part title="Questions">
+          <p>Write to <a className="link" href={`mailto:${contact}`}>{contact}</a>.</p>
+        </Part>
+      )}
     </>
   )
 }

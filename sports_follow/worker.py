@@ -20,6 +20,7 @@ from arq import cron
 from arq.connections import RedisSettings
 
 from . import accounts, bus, db, engine, history, logs, notify, pipeline, registry, retention, structured
+from .adapters import budget
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -80,8 +81,18 @@ def _logged(fn, quiet: bool = False):
     return job
 
 
+async def in_lane(lane: str, fn, *args):
+    """fn(*args) on a worker thread, its source requests in this lane (adapters/budget.py)."""
+
+    def run():
+        with budget.in_lane(lane):
+            return fn(*args)
+
+    return await asyncio.to_thread(run)
+
+
 async def build_card(ctx, player_id: int) -> None:
-    await asyncio.to_thread(pipeline.build_card, player_id)
+    await in_lane('refresh', pipeline.build_card, player_id)
 
 
 async def refresh_live(ctx, player_id: int) -> None:
@@ -89,16 +100,16 @@ async def refresh_live(ctx, player_id: int) -> None:
 
 
 async def refresh_structured(ctx, player_id: int) -> None:
-    await asyncio.to_thread(structured.refresh, player_id)
+    await in_lane('refresh', structured.refresh, player_id)
 
 
 async def poll_event(ctx, event_id: int) -> None:
-    await asyncio.to_thread(structured.poll_event, event_id)
+    await in_lane('live', structured.poll_event, event_id)
 
 
 async def poll_lane(ctx, system: str) -> None:
     """Every armed and live event of one source, one request a round (structured.poll_lane)."""
-    await asyncio.to_thread(structured.poll_lane, system)
+    await in_lane('live', structured.poll_lane, system)
 
 
 async def send_moments(ctx, moment_ids: list[int]) -> None:
@@ -113,7 +124,7 @@ async def engine_lane(ctx) -> None:
 
 async def history_lane(ctx) -> None:
     """Older results and missing scorecards, a few source requests a minute (history.py)."""
-    await asyncio.to_thread(history.run)
+    await in_lane('history', history.run)
 
 
 def _import_registry() -> None:
@@ -145,7 +156,7 @@ async def warm_sources(ctx) -> None:
     """Shared source indexes, every ten minutes (_warm_sources)."""
     if await _missed(ctx, "warm_sources"):
         return
-    await asyncio.to_thread(_warm_sources)
+    await in_lane('refresh', _warm_sources)
 
 
 async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> None:
@@ -166,7 +177,7 @@ async def purge_sessions(ctx) -> None:
 async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
     PandaScore; about two hours."""
-    await asyncio.to_thread(_import_registry)
+    await in_lane('import', _import_registry)
 
 
 async def prune(ctx) -> None:

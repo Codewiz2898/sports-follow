@@ -27,8 +27,8 @@ from typing import Any, Callable
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import logs, naming, pipeline, registry, sports, structured
-from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, providers, source_name
+from . import naming, pipeline, registry, sports, structured
+from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, budget, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -302,7 +302,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # Too new or too obscure for Wikidata: ask the sources' own searches (adapters.base.LiveSearch).
         # A name the registry knows well ("bumrah") doesn't need them.
         live = _live(query, sport)
-        jobs = {provider.name: _pool.submit(logs.carried(provider.search.find), query, sport, adapters) for provider, adapters in live} if live and ask() else {}
+        jobs = {provider.name: _pool.submit(budget.carry(provider.search.find), query, sport, adapters) for provider, adapters in live} if live and ask() else {}
         answers, partial = _collect(jobs)
         if live and not jobs:
             partial = [provider.name for provider, _ in live]
@@ -445,7 +445,7 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     by_word = _live(query, sport, by_word=True) if words else []
     if any(score >= SUGGEST_MIN for score, _ in close) or not by_word or live is None or not live():
         return [r for score, r in close if score >= SUGGEST_MIN][:3]
-    jobs = {f"{provider.name}:{w}": _pool.submit(logs.carried(provider.search.find), w, sport, adapters) for provider, adapters in by_word for w in words}
+    jobs = {f"{provider.name}:{w}": _pool.submit(budget.carry(provider.search.find), w, sport, adapters) for provider, adapters in by_word for w in words}
     answers, _ = _collect(jobs)
     for r in (r for hits in answers for r in hits):
         if (not sport or r.sport.lower() == sport) and r.live_scores and sports.on(r.sport):

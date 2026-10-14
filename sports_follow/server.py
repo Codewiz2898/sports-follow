@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
 from . import accounts, bus, credits as credits_page, google_signin, logs, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
-from .adapters import ADAPTERS, KNOWN, AdapterError
+from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
@@ -96,6 +96,21 @@ class SameOriginWrites:
 
 
 app.add_middleware(SameOriginWrites)
+
+
+class FanLane:
+    """Whatever a request to the API asks of a source, a fan is waiting for (adapters/budget.py: the fan
+    lane): a source too scarce for that refuses, and the lane's spend is counted apart."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        with budget.in_lane("fan"):
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(FanLane)
 
 
 request_log = logging.getLogger("sports_follow.requests")

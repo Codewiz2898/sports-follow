@@ -43,7 +43,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, logs, naming, sports
-from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, for_sport
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, budget, for_sport
 from .config import USER_AGENT
 from .db import session
 from .models import Athlete, AthleteOverride, Player, PlayerIdentity
@@ -318,6 +318,13 @@ def blocked(db: Session) -> set[tuple[str, str]]:
     return {(system, str(xid)) for ids in db.scalars(select(AthleteOverride.ids).where(AthleteOverride.action == "remove")) for system, xid in (ids or {}).items()}
 
 
+def db_now() -> datetime:
+    """Now by the database's clock, which stamps every row's updated_at: a run's start compared with them
+    must be on the same clock (the app's may be a little ahead of the database's in another VM or host)."""
+    with session() as db:
+        return db.scalar(select(func.now()))
+
+
 def operator_kept(sport: str) -> Any:
     """The athletes of a sport an operator keeps (players.py: added by hand, or pinned): never dropped by an import."""
     return select(AthleteOverride.qid).where(AthleteOverride.sport == sport, AthleteOverride.action == "keep")
@@ -332,12 +339,12 @@ def too_many_gone(leaving: int, kept: int) -> bool:
 def import_sport(sport: str, new_only: bool = False) -> int:
     """Import one sport. new_only reads just the people not in the table yet (after adding an id
     property, say), in minutes instead of an hour; the weekly run refreshes everyone."""
-    started = datetime.now(timezone.utc)
     qids = members(sport)
     log.info("registry %s: %d people on Wikidata", sport, len(qids))
     if not qids:
         # No sport has nobody: an empty answer is a failed query, and the run below would delete the sport.
         raise RuntimeError(f"Wikidata listed no one in {sport}; last week's rows are kept")
+    started = db_now()  # before the first row is written: every row this run writes is newer
     if new_only:
         with session() as db:
             have = set(db.scalars(select(Athlete.qid).where(Athlete.sport == sport)))
@@ -442,7 +449,7 @@ def import_roster(adapter: Adapter) -> int:
     """One source's athletes into the registry (adapter.roster). After a complete run, its rows it didn't
     see again are dropped, in the leagues it read; rows of leagues it didn't read are left alone, so a run
     of a few games is safe."""
-    started = datetime.now(timezone.utc)
+    started = db_now()
     total = 0
 
     def keep(entries: list[Rostered]) -> int:
@@ -728,7 +735,8 @@ def main(argv: list[str]) -> None:
     unknown = [s for s in wanted if s not in every]
     if unknown:
         sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")
-    done = import_locked(wanted, new_only)
+    with budget.in_lane("import"):
+        done = import_locked(wanted, new_only)
     if done is None:
         sys.exit(f"another registry import is running (the worker's weekly one, or one started by hand); try again when it's done. "
                  f"If none is, the lock is left from one that was killed: it expires within six hours, or redis-cli del lock:{LOCK}")

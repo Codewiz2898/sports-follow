@@ -23,8 +23,8 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .. import bus
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError, Provider
 
 BASE = "https://api.liquipedia.net/api/v3"
@@ -35,6 +35,8 @@ MARGIN = 4  # requests never spent, in case another process counted late
 # when the hour's spending reaches HOURLY - RESERVE.
 RESERVE = int(os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_RESERVE", 30))
 PAGE = 1000  # rows a request, the API's most
+FANS = 10  # requests an hour fans' previews and follows may take: one follow is one, but a loop would spend the lobbies' share
+BUDGET = budget.Budget("liquipedia", windows=(budget.Window(3600, HOURLY, margin=MARGIN),), reserve=RESERVE, fan=FANS)
 
 _client = httpx.Client(headers={"user-agent": f"{USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -51,8 +53,7 @@ PROVIDER = Provider(
 )
 
 
-class RateLimited(AdapterError):
-    """This hour's Liquipedia requests are spent (or Liquipedia said so)."""
+RateLimited = budget.RateLimited
 
 
 @lru_cache(maxsize=1)
@@ -63,34 +64,9 @@ def token() -> str | None:
     return value or None
 
 
-def _hour_key(now: float | None = None) -> str:
-    return f"liquipedia:requests:{int((now or time.time()) // 3600)}"
-
-
-def spent() -> int:
-    """Requests made this clock hour, by every process."""
-    try:
-        return int(bus.sync_redis().get(_hour_key()) or 0)
-    except Exception:  # Redis down: count nothing, and let _take refuse
-        return HOURLY
-
-
-def _take() -> None:
-    """Count one request against the hour, or refuse it if the hour is spent."""
-    try:
-        r = bus.sync_redis()
-        key = _hour_key()
-        used = r.incr(key)
-        r.expire(key, 3700)
-    except Exception as exc:
-        raise RateLimited(f"can't count Liquipedia requests (Redis): {exc}") from exc
-    if used > HOURLY - MARGIN:
-        raise RateLimited(f"Liquipedia's {HOURLY} requests this hour are spent")
-
-
 def spare() -> bool:
     """Whether a background read leaves the hour's reserve for live lobbies and fixtures."""
-    return spent() < HOURLY - MARGIN - RESERVE
+    return budget.spare(BUDGET)
 
 
 def get(datatype: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
@@ -102,12 +78,13 @@ def get(datatype: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
         return hit[1]
     if not token():
         raise AdapterError("no Liquipedia key (~/.config/sports-follow/liquipedia-token)")
-    _take()
+    budget.take(BUDGET)
     try:
         res = _client.get(f"{BASE}/{datatype}", params=params, headers={"authorization": f"Apikey {token()}"})
     except httpx.HTTPError as exc:
         raise AdapterError(f"Liquipedia unreachable: {exc}") from exc
     if res.status_code == 429:
+        budget.pause(BUDGET)
         raise RateLimited("Liquipedia said too many requests (429)")
     if res.status_code in (401, 403):
         raise AdapterError(f"Liquipedia rejected the key (HTTP {res.status_code})")
