@@ -36,7 +36,7 @@ MARGIN = 4  # requests never spent, in case another process counted late
 RESERVE = int(os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_RESERVE", 30))
 PAGE = 1000  # rows a request, the API's most
 FANS = 10  # requests an hour fans' previews and follows may take: one follow is one, but a loop would spend the lobbies' share
-BUDGET = budget.Budget("liquipedia", windows=(budget.Window(3600, HOURLY, margin=MARGIN),), reserve=RESERVE, fan=FANS)
+BUDGET = budget.Budget("liquipedia", windows=(budget.Window(3600, HOURLY, margin=MARGIN),), reserve=RESERVE, fan=FANS, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": f"{USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -50,6 +50,7 @@ PROVIDER = Provider(
     licence="CC BY-SA 3.0",
     licence_url="https://creativecommons.org/licenses/by-sa/3.0/",
     note="Recorded by Liquipedia's editors during and after play; not official tournament records.",
+    budgets=(BUDGET,),
 )
 
 

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from sports_follow import search, worker
-from sports_follow.adapters import budget, liquipedia, pubg
+from sports_follow import history, pipeline, registry, search, server, structured, tools, worker
+from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pubg
 
 from .test_api import api  # noqa: F401  (the fixture)
 
@@ -98,14 +101,85 @@ def test_every_client_asks_the_budget_before_it_sends():
             assert "BUDGET" in names and "budget.take(" in text, path.name
 
 
+def test_every_budget_a_source_declares_is_known():
+    # Each source's client says what it spends (its Provider's budgets, Adapter.budgets), so usage shows
+    # all of it and removing a source takes its budget with it.
+    declared = set()
+    for path in sorted(p for p in ADAPTERS_DIR.glob("*.py") if p.stem != "__init__"):
+        module = importlib.import_module(f"sports_follow.adapters.{path.stem}")
+        declared |= {v.name for v in vars(module).values() if isinstance(v, budget.Budget)}
+    assert declared == {b.name for b in budget.known()}
+
+
 def test_whatever_the_api_asks_of_a_source_is_in_the_fan_lane(api, monkeypatch):
     seen = []
-    monkeypatch.setattr(search, "run", lambda *args, **kwargs: seen.append(budget.lane()) or {"results": [], "suggestions": []})
+    monkeypatch.setattr(search, "run", lambda *args, **kwargs: seen.append(("search", budget.lane())) or {"results": [], "suggestions": []})
+    monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: seen.append(("preview", budget.lane())) or {"name": "x"})
+    adapter = ADAPTERS["espn_soccer"]
+    monkeypatch.setattr(adapter, "player", lambda athlete_id, league=None: seen.append(("player", budget.lane())) or PlayerRef(adapter.system, athlete_id, "x", [], []))
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: seen.append(("start", budget.lane())) or (5, False))
     api.call("GET", "/api/search?q=virat", fan="fan")
-    assert seen == ["fan"]
+    api.call("GET", "/api/athletes/espn_soccer/231388", fan="fan")
+    api.call("POST", "/api/follows", fan="fan", body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert seen == [("search", "fan"), ("preview", "fan"), ("player", "fan"), ("start", "fan")]
 
 
-def test_each_worker_job_names_its_lane():
-    assert asyncio.run(worker.in_lane("live", budget.lane)) == "live"
-    assert asyncio.run(worker.in_lane("history", budget.lane)) == "history"
+@pytest.mark.parametrize("job, module, target, args, lane_name", [
+    ("poll_event", structured, "poll_event", (1,), "live"),
+    ("poll_lane", structured, "poll_lane", ("a_source",), "live"),
+    ("refresh_live", pipeline, "refresh_live", (1,), "live"),
+    ("refresh_structured", structured, "refresh", (1,), "refresh"),
+    ("build_card", pipeline, "build_card", (1,), "refresh"),
+    ("history_lane", history, "run", (), "history"),
+    ("import_registry", registry, "import_locked", (), "import"),
+    ("warm_sources", worker, "_warm_sources", (), "refresh"),
+])
+def test_each_worker_job_runs_in_its_lane(monkeypatch, job, module, target, args, lane_name):
+    # A live poll outside the live lane would stop at the reserve kept for it.
+    seen = []
+    monkeypatch.setattr(module, target, lambda *a: seen.append(budget.lane()))
+    with budget.in_lane("fan"):  # a job that set no lane would show this, not the default
+        asyncio.run(getattr(worker, job)({}, *args))
+    assert seen == [lane_name]
+
+
+def test_the_research_agents_lookups_stay_in_the_lane_that_started_it(monkeypatch):
+    from sports_follow import agent
+
+    seen = []
+    monkeypatch.setattr(agent, "run_tool", lambda name, args: seen.append(budget.lane()) or "ok")
+    lookups = [SimpleNamespace(id=str(n), name="fetch_url", args={"url": "https://example.com"}) for n in range(3)]
+    turns = [SimpleNamespace(finish="tool_use", message={"role": "assistant", "content": ""}, tool_calls=lookups)]
+
+    class Model:
+        def complete(self, **request):
+            if not turns:
+                raise RuntimeError("enough")
+            return turns.pop(0)
+
+    with budget.in_lane("live"), pytest.raises(RuntimeError, match="enough"):
+        list(agent.live_update(Model(), "Player One", "chess", []))  # its lookups run on a pool of threads
+    assert seen == ["live", "live", "live"]
+
+
+def test_the_research_agent_spends_a_sources_budget_on_its_api(monkeypatch):
+    answers = []
+    monkeypatch.setattr(tools._http, "get", lambda url: answers.pop(0) if answers else httpx.Response(200, json={}, request=httpx.Request("GET", url)))
+    # Its requests carry no token: with one, they're counted apart from ours (lichess-anonymous), so a 429
+    # they get doesn't pause our polls; without one, they and ours share Lichess's one limit.
+    lichess = budget.for_url("https://lichess.org/api/broadcast/top")
+    assert lichess is lichess_chess.ANONYMOUS
+    assert (lichess is lichess_chess.BUDGET) == (lichess_chess.token() is None)
+    assert budget.for_url("https://lichess.org/@/someone") is None  # a page, not the API
+    assert budget.for_url("http://LICHESS.org/api/x") is lichess
+    assert budget.for_url("https://api.pubg.com.example.net/x") is None  # another host that starts the same
+    assert budget.for_url("https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard").name == "espn"
+    with budget.in_lane("refresh"):
+        tools.fetch_url("https://lichess.org/api/broadcast/top")
+        answers.append(httpx.Response(429, request=httpx.Request("GET", "https://lichess.org/api/broadcast/top")))
+        with pytest.raises(tools.ToolError, match="HTTP 429"):
+            tools.fetch_url("https://lichess.org/api/broadcast/top")
+        with pytest.raises(tools.ToolError, match="kept for live games"):
+            tools.fetch_url("https://lichess.org/api/broadcast/top")  # the 429 paused Lichess for everyone
+    assert {(r["lane"], r["sent_h"], r["refused_h"]) for r in budget.usage([lichess])} == {("refresh", 2, 1)}
 

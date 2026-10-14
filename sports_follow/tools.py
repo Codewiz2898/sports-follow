@@ -18,6 +18,8 @@ import lxml.html
 import trafilatura
 from ddgs import DDGS
 
+from .adapters import budget
+
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128 Safari/537.36"
 DEFAULT_CHARS = 12_000
 MAX_CHARS = 40_000
@@ -147,10 +149,19 @@ def fetch_url(url: str, max_chars: int = DEFAULT_CHARS) -> str:
     if urlparse(url).scheme not in ("http", "https"):
         raise ToolError("only http(s) URLs can be fetched")
     max_chars = max(1000, min(int(max_chars or DEFAULT_CHARS), MAX_CHARS))
+    # A source's own API (the prompt suggests ESPN's and Lichess's) spends that source's budget, so the
+    # agent can't take what live polls need, and its 429s pause the source for everyone.
+    spends = budget.for_url(url)
     try:
+        if spends:
+            budget.take(spends)
         res = _http.get(url)
+    except budget.RateLimited as exc:
+        raise ToolError(f"not fetched, kept for live games: {exc}. Try another page.") from exc
     except httpx.HTTPError as exc:
         raise ToolError(f"fetch failed: {exc}") from exc
+    if res.status_code == 429 and spends and spends.windows:  # one with no published limit (ESPN) isn't paused for the agent's sake
+        budget.pause(spends)
     if res.status_code >= 400:
         raise ToolError(f"HTTP {res.status_code} from {res.url}")
     ctype = res.headers.get("content-type", "")

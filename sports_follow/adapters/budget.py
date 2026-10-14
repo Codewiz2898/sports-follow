@@ -32,6 +32,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, TypeVar
+from urllib.parse import urlparse
 
 from .base import AdapterError
 
@@ -63,6 +64,7 @@ class Budget:
     reserve: int = 0  # requests of each window kept for live games and fans: background lanes stop there
     fan: int | None = None  # the most fan requests a (first) window may take, for a scarce source; None: no cap of its own
     pause: int = 60  # seconds every lane waits after the source says slow down (429)
+    urls: tuple[str, ...] = ()  # where its requests go: a page the research agent fetches there spends it too
 
 
 # ---------------------------------------------------------------- lanes
@@ -280,7 +282,7 @@ def usage(budgets: list[Budget], now: float | None = None) -> list[dict[str, Any
     rows = []
     for b in budgets:
         for lane_name in LANES:
-            row = {"source": b.name, "lane": lane_name}
+            row: dict[str, Any] = {"source": b.name, "lane": lane_name}
             for what in ("sent", "refused"):
                 for span in ("h", "d"):
                     row[f"{what}_{span}"] = _store_call("get", _use_key(b, lane_name, what, span, now)) or 0
@@ -290,8 +292,19 @@ def usage(budgets: list[Budget], now: float | None = None) -> list[dict[str, Any
 
 
 def known() -> list[Budget]:
-    """Every source's budget (each client module's BUDGET)."""
-    from . import espn, liquipedia, opendota, pandascore, pubg, sportmonks
-    from . import lichess_chess
+    """Every budget a known source spends (Adapter.budgets), once each, in adapters.KNOWN's order."""
+    from . import KNOWN
 
-    return [m.BUDGET for m in (sportmonks, espn, lichess_chess, pandascore, liquipedia, pubg, opendota)]
+    found: dict[str, Budget] = {}
+    for adapter in KNOWN.values():
+        for b in adapter.budgets():
+            found.setdefault(b.name, b)
+    return list(found.values())
+
+
+def for_url(url: str) -> Budget | None:
+    """The budget a request to this URL spends, if a known source's requests go there. Budget.urls are
+    https:// prefixes ending at a "/", matched against the URL's host and path."""
+    parts = urlparse(url)
+    where = f"https://{parts.hostname or ''}{parts.path or '/'}"
+    return next((b for b in known() if any(where.startswith(u) for u in b.urls)), None)

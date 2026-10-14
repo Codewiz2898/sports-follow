@@ -53,8 +53,12 @@ def token() -> str | None:
     return value or None
 
 
+API = "https://lichess.org/api/"
 # Every process's requests together, a minute: what the token allows, or what Lichess allows without one.
-BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),))
+BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,))
+# The research agent's requests (tools.fetch_url) carry no token, so Lichess holds them to its limit
+# without one: with a token they're counted apart, and a 429 they get doesn't pause our own polls.
+ANONYMOUS = budget.Budget("lichess-anonymous", windows=(budget.Window(60, 10, margin=1),), urls=(API,)) if token() else BUDGET
 
 
 def _headers(url: str, text: bool) -> dict[str, str]:
@@ -474,6 +478,7 @@ PROVIDER = Provider(
     note="The games are shown unchanged; the evaluations beside them are ours.",
     search=LiveSearch(find=search, unfiltered=False, min_length=3),
     recognise=recognise,
+    budgets=(BUDGET, ANONYMOUS),
 )
 
 

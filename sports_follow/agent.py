@@ -23,6 +23,7 @@ from llm_providers import Client, LlmError
 from pydantic import BaseModel, ValidationError
 
 from . import tracing
+from .adapters import budget
 from .schema import LiveUpdate, PlayerReport
 from .tools import TOOL_DEFS, ToolError, describe, run_tool
 
@@ -186,6 +187,8 @@ def _run(
                         yield _progress("The model was slow to answer, retrying…")
                         continue
                     raise AgentError(f"Model call failed ({exc.kind}): {exc}") from exc
+            else:  # never: each attempt answers (break) or raises, and only the first retries
+                raise AgentError("The model didn't answer.")
 
             if r.finish == "refusal":
                 raise AgentError("The model declined this request.")
@@ -216,7 +219,7 @@ def _run(
 
             for c in r.tool_calls:
                 yield _progress(describe(c.name, c.args))
-            outputs = list(pool.map(lambda c: _run_tool_safely(c.name, c.args), r.tool_calls))
+            outputs = list(pool.map(budget.carry(lambda c: _run_tool_safely(c.name, c.args)), r.tool_calls))
             for c, (content, failed) in zip(r.tool_calls, outputs):
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": f"Error: {content}" if failed else content})
             failures = sum(failed for _, failed in outputs)

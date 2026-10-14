@@ -36,7 +36,7 @@ MARGIN = 1
 KEEP = 15 * 24 * 3600  # PUBG keeps matches 14 days
 # Counts only the tournament endpoints. Fans' previews and follows read the index warm() keeps; past three a
 # minute of their own, a fan waits for it rather than spend the live lobbies' requests.
-BUDGET = budget.Budget("pubg", windows=(budget.Window(60, PER_MINUTE, margin=MARGIN),), fan=3)
+BUDGET = budget.Budget("pubg", windows=(budget.Window(60, PER_MINUTE, margin=MARGIN),), fan=3, urls=(BASE + "/",))
 UNLIMITED = budget.Budget("pubg-matches")  # match downloads: free, counted only
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/vnd.api+json"}, timeout=30)
@@ -47,6 +47,7 @@ PROVIDER = Provider(
     url="https://developer.pubg.com",
     what="official tournament matches from PUBG's API: placings and every player's finishes, damage, assists and knocks, after each match.",
     note="Standings use the standard PUBG esports points (10, 6, 5, 4, 3, 2, 1, 1 for placing, one a finish); some events score differently. PUBG, PLAYERUNKNOWN'S BATTLEGROUNDS and all related logos are trademarks of PUBG Corporation or its affiliates.",
+    budgets=(BUDGET, UNLIMITED),
 )
 
 

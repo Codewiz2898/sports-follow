@@ -59,7 +59,8 @@ def _docstrings(tree: ast.AST) -> set[int]:
 def test_no_shared_module_names_a_source():
     named = re.compile(rf"\b({'|'.join(KNOWN)})\b")
     found = []
-    for path in [*PACKAGE.glob("*.py"), *(PACKAGE / "sports").glob("*.py")]:
+    shared = [PACKAGE / "adapters" / f"{m}.py" for m in ("base", "budget")]  # what every source shares, beside them
+    for path in [*PACKAGE.glob("*.py"), *(PACKAGE / "sports").glob("*.py"), *shared]:
         tree = ast.parse(path.read_text())
         skip = _docstrings(tree)
         # A sport's Wikidata ids are keyed by the id they hold, which may be a source's ("espn_cricket").
@@ -67,7 +68,10 @@ def test_no_shared_module_names_a_source():
         skip |= {id(n) for w in wikidata for n in ast.walk(w)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
-            if isinstance(node, ast.ImportFrom) and module[-2:-1] == ["adapters"] and module[-1] in SOURCE_MODULES:
+            if isinstance(node, ast.ImportFrom) and path in shared and node.level == 1:
+                imported = [node.module] if node.module else [a.name for a in node.names]
+                found += [f"{path.name}:{node.lineno} imports {m}" for m in imported if m in SOURCE_MODULES]  # from . import espn
+            elif isinstance(node, ast.ImportFrom) and module[-2:-1] == ["adapters"] and module[-1] in SOURCE_MODULES:
                 found.append(f"{path.name}:{node.lineno} imports adapters.{module[-1]}")  # from .adapters.espn import …
             elif isinstance(node, ast.ImportFrom) and module[-1] == "adapters":
                 found += [f"{path.name}:{node.lineno} imports {a.name}" for a in node.names if a.name in SOURCE_MODULES]  # from .adapters import espn
