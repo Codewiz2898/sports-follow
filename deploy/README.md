@@ -64,8 +64,17 @@ SSD.
 ```bash
 ssh-keygen -t ed25519 -C sports-follow-recovery -f ~/sports-follow-recovery
 ```
-Save `~/sports-follow-recovery` (the private half) in the password manager, keep the `.pub` file for
-step 2, then delete the private half from the Mac.
+Keep the `.pub` file for step 2. Save the private half in the password manager **as one line of base64**:
+a pasted key loses its line breaks in a password field, and then can't be read back.
+```bash
+base64 < ~/sports-follow-recovery | tr -d '\n' | pbcopy   # then paste it as the entry's password
+```
+After step 2, copy it back out of the password manager and check that copy opens the server. This prints
+the key's fingerprint and logs in once; the test file and the clipboard are cleared:
+```bash
+umask 077; pbpaste | base64 -d > /tmp/recovery-test && ssh-keygen -lf /tmp/recovery-test && ssh -o IdentitiesOnly=yes -i /tmp/recovery-test deploy@<server-ip> 'echo the saved copy works'; rm -f /tmp/recovery-test; pbcopy < /dev/null
+```
+Only then delete the private half from the Mac (`rm ~/sports-follow-recovery`).
 
 **0b. Make a secrets key** (you), so the server's secrets can be kept off the Mac and the server (see
 [Secrets](#secrets)). With the Mac's Docker, nothing installed:
@@ -175,9 +184,9 @@ has sudo without a password (it's in the `docker` group, which is as good as roo
 | Key | Can |
 |---|---|
 | The Mac's (copied from `ubuntu`, or root, by the first setup) | everything; it still opens `ubuntu` too |
-| The recovery key (`RECOVERY_KEY`) | everything |
+| The recovery key (`RECOVERY_KEY`) | everything; its only copy is in the password manager, as base64 (step 0) |
 | GitHub Actions' (`DEPLOY_KEY`) | run `deploy.sh` and nothing else: no shell, no forwarding |
-| Lightsail's default key, if `ubuntu` had it (copied like the Mac's) | everything. Its private half can be downloaded from the AWS account; to drop it, remove its line from `~deploy/.ssh/authorized_keys` |
+| Lightsail's default key, if `ubuntu` had it (copied like the Mac's) | everything, until you drop it. Its private half can be downloaded from the AWS account. To drop it, remove its line from `~deploy/.ssh/authorized_keys`, as production has. Browser SSH still gets in without it |
 | Lightsail's browser SSH ("Connect using SSH" in the console) | the last resort, if no key works: it logs in as `ubuntu` with a key of its own |
 
 Try the recovery key once it's in: `ssh -i <recovery key> deploy@<server-ip> true`. Also open Lightsail's
@@ -254,26 +263,40 @@ What's kept off-site:
 Other files in the bucket are left alone.
 
 **Setting it up** (you):
-1. **The bucket:** make it private, with another company than the server's, so one account problem can't
-   take both. Cloudflare R2 and Backblaze B2 each give 10 GB free, which is plenty: a dump is a few MB to a
-   few hundred.
-2. **A key for that bucket only:** it needs to read, write and delete objects. On R2 that's an "Object Read
-   & Write" API token for the bucket.
+1. **The bucket**, with another company than the server's, so one account problem can't take both.
+   Production uses **Backblaze B2**: its 10 GB free tier needs no card. A dump is about 17 MB, so 30 days
+   plus 12 monthly firsts come to about 0.7 GB. (Cloudflare R2 also gives 10 GB free, but needs a card on
+   file to turn on.) In B2, under **Buckets → Create a Bucket**:
+   - **Files:** Private.
+   - **Object Lock:** off, so old dumps can be deleted.
+   - **Lifecycle Settings:** "Keep only the last version of the file". B2 keeps every old version by
+     default, so deleted dumps and the hourly copies of `secrets.age` would pile up hidden.
+   - **Endpoint:** note the bucket's, `s3.<region>.backblazeb2.com`.
+2. **A key for that bucket only**, to read, write and delete objects. In B2, under **Application Keys →
+   Add a New Application Key**: the bucket only, Read and Write. **Not the Master Application Key:** B2's
+   S3 interface refuses it ("Malformed Access Key Id"). Its ID is the short 12-character one; an
+   application key's ID is about 25 characters, and the key itself about 31, starting `K`. (On R2: an
+   "Object Read & Write" API token for the bucket.)
 3. **The settings:** on the Mac, `~/.config/sports-follow/offsite.env` (`chmod 600`):
    ```bash
    RCLONE_CONFIG_OFFSITE_TYPE=s3
-   # Cloudflare (R2), DigitalOcean (Spaces), AWS, or Other (Backblaze B2 and the rest)
-   RCLONE_CONFIG_OFFSITE_PROVIDER=Cloudflare
-   # R2: https://<account id>.r2.cloudflarestorage.com, B2: https://s3.<region>.backblazeb2.com,
+   # Other (Backblaze B2 and the rest), Cloudflare (R2), DigitalOcean (Spaces), or AWS
+   RCLONE_CONFIG_OFFSITE_PROVIDER=Other
+   # B2: https://s3.<region>.backblazeb2.com, R2: https://<account id>.r2.cloudflarestorage.com,
    # Spaces: https://<region>.digitaloceanspaces.com
-   RCLONE_CONFIG_OFFSITE_ENDPOINT=https://<account id>.r2.cloudflarestorage.com
-   RCLONE_CONFIG_OFFSITE_REGION=auto
+   RCLONE_CONFIG_OFFSITE_ENDPOINT=https://s3.<region>.backblazeb2.com
+   # B2: the region in the endpoint (us-east-005, …); R2: auto
+   RCLONE_CONFIG_OFFSITE_REGION=<region>
    RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID=<key id>
    RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=<secret>
    # The key can't make buckets, and doesn't need to
    RCLONE_CONFIG_OFFSITE_NO_CHECK_BUCKET=true
    OFFSITE_PATH=<bucket>
    ```
+   Before sending it, the AWS CLI can check the key from the Mac, read-only:
+   `aws s3api list-objects-v2 --bucket <bucket> --endpoint-url <endpoint> --region <region>`, with the key
+   in `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. A key limited to one bucket can't list the others;
+   that's fine.
 4. **Send it and check it:** `deploy/push-secrets.sh deploy@<server-ip>` sends it, sealed with the other
    secrets. Then, on the server:
    ```bash
