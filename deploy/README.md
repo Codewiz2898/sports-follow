@@ -398,9 +398,14 @@ Each one emails when it starts, again every 6 hours while it lasts, and "Resolve
    deploy/grafana/apply-alerts.sh --test       # the rules, the email contact point and policy, and a test email
    ```
 
-Run `apply-alerts.sh` again after changing `rules.json`. Its notification policy replaces the stack's
-whole policy tree. `grafana-admin.env` only loads rules, so it stays on the Mac. To look at alerts or
-silence them, use the stack's Grafana.
+Run `apply-alerts.sh` again after changing `rules.json`. A rule whose query changed starts over: if it
+was firing, it sends "Resolved", then fires again after its wait. Its notification policy replaces the
+stack's whole policy tree. `grafana-admin.env` only loads rules, so it stays on the Mac. To look at alerts
+or silence them, use the stack's Grafana.
+
+Each rule's query returns the current value, such as the backup's age or how full a disk is, and the
+rule's threshold decides whether that's a problem. If the metrics stop, a rule keeps its last state, so a
+silent server sends one "stopped sending metrics" email and no false "Resolved" ones.
 
 **Setting one off on purpose** (on the server, as `deploy`):
 - **A late backup:** this runs the checks once as if there were no backups.
@@ -494,8 +499,13 @@ catching the email.
 - With no dump at all, "The database backup is late" emailed within 2 minutes. A fresh dump gave
   "Resolved" 5 minutes later.
 - The app's containers and the certificate (this machine had neither) emailed after their 10 minutes.
+  So did "The server checks stopped running" once their last run was 15 minutes old.
 - With Alloy stopped, "The server stopped sending metrics" emailed after 10½ minutes and resolved once it
   was back. Meanwhile the other alerts kept their state rather than sending false "Resolved" mails.
+- The first version of the rules returned data only while something was wrong. Kept-state on no data then
+  meant they never resolved; the value-and-threshold rules do.
 
-Not tried there: the real Grafana Cloud, the kernel's memory-pressure figures (the machine has none), and
-`server-setup.sh` itself.
+On the production server, `server-setup.sh` installed Alloy from Grafana's repository, and
+`push-secrets.sh` started it. Its metrics then arrived on the real Grafana Cloud stack (Grafana 13.3):
+about 370 series, all seven containers up. All 14 rules evaluated without errors and stayed quiet. The
+test email arrived through Grafana 13's receivers API, since 13 removed the older test endpoint.

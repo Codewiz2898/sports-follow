@@ -77,9 +77,10 @@ api PUT /api/v1/provisioning/policies "$(jq -n --arg r "$CONTACT_NAME" \
   '{receiver: $r, group_by: ["grafana_folder", "alertname"], group_wait: "30s", group_interval: "5m", repeat_interval: "6h"}')" >/dev/null
 say "notification policy: everything to $CONTACT_NAME, repeated every 6 hours"
 
-# The rules: each query returns a series, with a value above 0, only while something is wrong (rules.json).
-# When the metrics stop, a rule keeps its last state (KeepLast), so a silent server doesn't send false
-# "Resolved" mails; only sf-server-down, whose query has data only while the server is silent, takes no data as OK.
+# The rules (rules.json): each query returns the current value, and its threshold (op, threshold) decides
+# whether that's a problem, so a healthy server has data and its alerts resolve. When the metrics stop, a
+# rule keeps its last state (KeepLast), so a silent server sends no false "Resolved" mails; only
+# sf-server-down, whose query has data only while the server is silent, takes no data as OK.
 group=$(jq --arg ds "$ds" --arg folder "$FOLDER_UID" --arg group "$GROUP" '{
   title: $group, folderUid: $folder, interval: 60,
   rules: [ .[] | {
@@ -91,7 +92,7 @@ group=$(jq --arg ds "$ds" --arg folder "$FOLDER_UID" --arg group "$GROUP" '{
       {refId: "A", relativeTimeRange: {from: 900, to: 0}, datasourceUid: $ds,
        model: {refId: "A", expr: .expr, instant: true, range: false}},
       {refId: "C", relativeTimeRange: {from: 0, to: 0}, datasourceUid: "__expr__",
-       model: {refId: "C", type: "threshold", expression: "A", conditions: [{evaluator: {type: "gt", params: [0]}}]}}
+       model: {refId: "C", type: "threshold", expression: "A", conditions: [{evaluator: {type: .op, params: [.threshold]}}]}}
     ]
   } ]
 }' "$HERE/rules.json")
@@ -99,7 +100,17 @@ api PUT "/api/v1/provisioning/folder/$FOLDER_UID/rule-groups/$GROUP" "$group" >/
 say "$(jq length "$HERE/rules.json") rules in Sports Follow / $GROUP, checked every minute"
 
 if [ -n "$TEST" ]; then
-  api POST /api/alertmanager/grafana/config/api/v1/receivers/test "$(jq -n --arg uid "$CONTACT_UID" --arg name "$CONTACT_NAME" --arg to "$ALERT_EMAIL" \
-    '{receivers: [{name: $name, grafana_managed_receiver_configs: [{uid: $uid, name: $name, type: "email", settings: {addresses: $to, singleEmail: true}}]}]}')" >/dev/null
-  say "test email sent to $ALERT_EMAIL"
+  # Grafana 13 (Grafana Cloud) tests a contact point through its receivers API; older ones through the
+  # Alertmanager config API, which 13 removed.
+  ns=$(api GET /api/frontend/settings | jq -r '.namespace // "default"')
+  receivers="/apis/notifications.alerting.grafana.app/v1beta1/namespaces/$ns/receivers"
+  if receiver=$(api GET "$receivers" 2>/dev/null | jq -r --arg t "$CONTACT_NAME" '[.items[] | select(.spec.title == $t)][0].metadata.name // empty') && [ -n "$receiver" ]; then
+    api POST "$receivers/$receiver/test" "$(jq -n --arg uid "$CONTACT_UID" --arg to "$ALERT_EMAIL" \
+      '{integration: {uid: $uid, type: "email", version: "v1", settings: {addresses: $to, singleEmail: true}},
+        alert: {labels: {alertname: "Sports Follow test"}, annotations: {summary: "A test from deploy/grafana/apply-alerts.sh: Sports Follow alerts reach this address."}}}')" >/dev/null
+  else
+    api POST /api/alertmanager/grafana/config/api/v1/receivers/test "$(jq -n --arg uid "$CONTACT_UID" --arg name "$CONTACT_NAME" --arg to "$ALERT_EMAIL" \
+      '{receivers: [{name: $name, grafana_managed_receiver_configs: [{uid: $uid, name: $name, type: "email", settings: {addresses: $to, singleEmail: true}}]}]}')" >/dev/null
+  fi
+  say "test email sent to $ALERT_EMAIL (from Grafana; check spam too)"
 fi
