@@ -244,6 +244,7 @@ def test_registry_rows_from_pandascore_players():
 
 
 def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatch):
+    monkeypatch.setitem(search.ADAPTERS, "pandascore_esports", ps.PandascoreEsports())  # registered only with a token
     monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
     row = registry.esports_rows([PLAYER])[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")

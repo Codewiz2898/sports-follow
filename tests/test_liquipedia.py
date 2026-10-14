@@ -17,6 +17,7 @@ from sports_follow.adapters import liquipedia, liquipedia_esports as lp
 from sports_follow.adapters.base import Snapshot
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
 
+from .test_pipeline import FakeRedis as BusRedis
 from .test_structured import FakeSource, lane
 
 WIKI = "pubgmobile"
@@ -273,6 +274,7 @@ def test_the_poller_tells_a_lobby_from_the_players_team(monkeypatch):
         return []
 
     monkeypatch.setattr(structured, "session", lambda: db)
+    monkeypatch.setattr(structured.bus, "_sync", BusRedis())  # each poll notes itself there (structured._polled)
     monkeypatch.setattr(structured.notify, "record", record)
     monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)
     binding = {"adapter": "liquipedia_esports", "locator": {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, "cadence": 300}
