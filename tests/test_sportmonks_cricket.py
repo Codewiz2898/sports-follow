@@ -171,11 +171,19 @@ def test_form_note_names_the_formats():
     assert stats[0] == {"label": "Runs", "value": "120"}
 
 
-def test_cricket_reserve_is_per_minute(monkeypatch):
-    monkeypatch.setattr(sportmonks, "remaining", {"Cricket": (sportmonks.CRICKET_RESERVE, 1e12)})
+def test_cricket_keeps_the_match_endpoint_for_live_matches(monkeypatch):
+    monkeypatch.setattr(sportmonks, "remaining", {"Cricket fixtures": (0, 1e12)})
+    assert sc.SportmonksCricket().spare()  # lists of fixtures are counted apart from matches
+    sportmonks.remaining[sportmonks.CRICKET_MATCH] = (sportmonks.LIVE_RESERVE, 1e12)
     assert not sc.SportmonksCricket().spare()
-    sportmonks.remaining["Cricket"] = (sportmonks.CRICKET_RESERVE + 1, 1e12)
+    sportmonks.remaining[sportmonks.CRICKET_MATCH] = (sportmonks.LIVE_RESERVE + 1, 1e12)
     assert sc.SportmonksCricket().spare()
+
+
+def test_cricket_requests_count_against_their_endpoint():
+    assert sportmonks._bucket(f"{sportmonks.CRICKET}/fixtures/71012") == sportmonks.CRICKET_MATCH
+    assert sportmonks._bucket(f"{sportmonks.CRICKET}/fixtures") == "Cricket fixtures"
+    assert sportmonks._bucket(f"{sportmonks.CRICKET}/teams/10/squad/1689") == "Cricket teams/{id}/squad/{id}"
 
 
 def test_the_xi_is_the_team_sheet_before_the_start():

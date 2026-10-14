@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.dialects import postgresql
 
-from sports_follow import pipeline, search
+from sports_follow import pipeline, registry, search
 from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
 from sports_follow.search import Result
 
@@ -149,10 +149,11 @@ def test_apostrophes_are_typed_with_or_without_them():
 def test_an_athlete_in_two_sports_is_two_results():
     # Wikidata has one id for Yuzvendra Chahal; the registry a row for his cricket and one for his chess
     # (BUG-069). Merged by id alone, the chess row stood for both and following it bound his FIDE id.
-    cricket = Athlete(qid="Q8062264", sport="cricket", name="Yuzvendra Chahal", aliases=[], teams=["India"], ids={"espn_cricket": "430246"}, sitelinks=16, current=True)
+    live = registry.live_system("cricket")  # Sportmonks with a token, else ESPN
+    cricket = Athlete(qid="Q8062264", sport="cricket", name="Yuzvendra Chahal", aliases=[], teams=["India"], ids={live: "430246"}, sitelinks=16, current=True)
     chess = Athlete(qid="Q8062264", sport="chess", name="Yuzvendra Chahal", aliases=[], teams=[], ids={"lichess_chess": "5022215"}, sitelinks=16, current=True)
     ranked = search.rank("yuzvendra chahal", [], [search.from_athlete(chess, "yuzvendra chahal"), search.from_athlete(cricket, "yuzvendra chahal")])
-    assert sorted((r.key, r.sport) for r in ranked) == [("espn_cricket:430246", "Cricket"), ("lichess_chess:5022215", "Chess")]
+    assert sorted((r.key, r.sport) for r in ranked) == sorted([(f"{live}:430246", "Cricket"), ("lichess_chess:5022215", "Chess")])
     # Neither with a live id: the key carries the sport, and following sends it.
     football = Athlete(qid="Q483027", sport="football", name="Paolo Maldini", aliases=[], teams=[], ids={"transfermarkt": "5803"}, sitelinks=81, current=False)
     tennis = Athlete(qid="Q483027", sport="tennis", name="Paolo Maldini", aliases=[], teams=[], ids={"atp": "M0DX"}, sitelinks=81, current=False, league="atp")
