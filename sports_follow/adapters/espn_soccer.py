@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from .. import naming
 from ..sports import football
-from . import espn
+from . import budget, espn
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:600~"
@@ -296,7 +296,7 @@ class EspnSoccer(espn.EspnAdapter, Adapter):
         urls = [f"{espn.SITE}/soccer/all/teams/{team_id}/schedule{suffix}" for team_id in ref.team_ids for suffix in ("?fixture=true", "")]
         seen: dict[str, Fixture] = {}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for found in pool.map(schedule, urls):
+            for found in pool.map(budget.carry(schedule), urls):
                 for f in found:
                     seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))

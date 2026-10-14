@@ -26,6 +26,7 @@ import httpx
 
 from .. import bus
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError, Provider
 
 BASE = "https://api.pubg.com"
@@ -33,6 +34,10 @@ TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_PUBG_TOKEN_FILE", Path.home() / 
 PER_MINUTE = 10  # tournament endpoints; match downloads are free
 MARGIN = 1
 KEEP = 15 * 24 * 3600  # PUBG keeps matches 14 days
+# Counts only the tournament endpoints. Fans' previews and follows read the index warm() keeps; past three a
+# minute of their own, a fan waits for it rather than spend the live lobbies' requests.
+BUDGET = budget.Budget("pubg", windows=(budget.Window(60, PER_MINUTE, margin=MARGIN),), fan=3)
+UNLIMITED = budget.Budget("pubg-matches")  # match downloads: free, counted only
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/vnd.api+json"}, timeout=30)
 
@@ -45,8 +50,7 @@ PROVIDER = Provider(
 )
 
 
-class RateLimited(AdapterError):
-    """This minute's tournament requests are spent (or PUBG said so)."""
+RateLimited = budget.RateLimited
 
 
 class NotFound(AdapterError):
@@ -61,29 +65,16 @@ def token() -> str | None:
     return value or None
 
 
-def _take() -> None:
-    """Count one tournament request against the minute, or refuse it."""
-    try:
-        r = bus.sync_redis()
-        key = f"pubg:requests:{int(time.time() // 60)}"
-        used = r.incr(key)
-        r.expire(key, 120)
-    except Exception as exc:
-        raise RateLimited(f"can't count PUBG requests (Redis): {exc}") from exc
-    if used > PER_MINUTE - MARGIN:
-        raise RateLimited(f"PUBG's {PER_MINUTE} tournament requests this minute are spent")
-
-
 def _get(path: str, limited: bool) -> dict[str, Any]:
     if not token():
         raise AdapterError("no PUBG key (~/.config/sports-follow/pubg-token)")
-    if limited:
-        _take()
+    budget.take(BUDGET if limited else UNLIMITED)
     try:
         res = _client.get(f"{BASE}{path}", headers={"authorization": f"Bearer {token()}"})
     except httpx.HTTPError as exc:
         raise AdapterError(f"PUBG unreachable: {exc}") from exc
     if res.status_code == 429:
+        budget.pause(BUDGET)
         raise RateLimited("PUBG said too many requests (429)")
     if res.status_code in (401, 403):
         raise AdapterError(f"PUBG rejected the key (HTTP {res.status_code})")

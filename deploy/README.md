@@ -206,6 +206,7 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
 | Registry import now | `c exec worker python -m sports_follow.registry` |
+| Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |
 | Restore a backup | `c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists < /var/backups/sports-follow/<file>.dump && c start api worker` |

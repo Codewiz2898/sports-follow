@@ -11,6 +11,7 @@ import pytest
 
 from sports_follow import credits, moments, registry
 from sports_follow.adapters import pubg, pubg_esports as pe
+from sports_follow.adapters import budget
 
 T0 = datetime(2026, 10, 13, 6, 30, tzinfo=timezone.utc)
 TEAMS = ["4AM", "DNS", "TWIS", "AT", "FLC", "VP", "GEN", "S8UL"]  # a lobby of 8, the fewest that counts
@@ -228,7 +229,7 @@ def test_the_minute_is_shared_a_gone_match_is_remembered_and_a_spent_minute_read
     assert sum(r.url.path.endswith("/gone") for r in seen) == 1  # asked once, remembered
     assert pubg.match("m1", pe.summarize_match)["map"] == "Erangel" and pubg.match("m1", pe.summarize_match)["id"] == "m1"
     for _ in range(8):  # the minute's other requests
-        pubg._take()
+        budget.take(pubg.BUDGET, lane_name="live")
     assert pubg.tournaments(max_age=0) == [{"id": "as-pgsc4t", "createdAt": "2026-10-09T07:04:22Z"}]  # spent: the kept list
     with pytest.raises(pubg.RateLimited):
         pubg.tournament_matches("never-read", max_age=0)

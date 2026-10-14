@@ -5,7 +5,9 @@ The Sportmonks adapters run only with a token: SPORTS_FOLLOW_SPORTMONKS_TOKEN, o
 Authorization header, never in a URL, so it can't end up in logs (both APIs accept it there, though
 cricket's documentation shows it as a query parameter). Football allows 2,000 requests an hour per
 entity on the Starter plan (counted in the response body); cricket 2,000 an hour per endpoint on
-Major (in the response headers, without a reset time). A 429 pauses reads for a minute, like Lichess.
+Major (in the response headers, without a reset time). Both are counted and kept to by the source budget
+(budget.py, BUDGET): each entity or endpoint is a bucket of its own, and what Sportmonks says is left
+corrects the count. A 429 pauses every lane for a minute.
 
 Terms (sportmonks.com/terms-of-service): commercial use in our own app and storing the data in our
 own database are allowed; reselling it is not. Logos and player photos are not licensed.
@@ -24,22 +26,23 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError, Provider
 
 BASE = "https://api.sportmonks.com/v3"
 CRICKET = "https://cricket.sportmonks.com/api/v2.0"
 TOKEN_FILE = Path(os.environ.get("SPORTS_FOLLOW_SPORTMONKS_TOKEN_FILE", Path.home() / ".config" / "sports-follow" / "sportmonks-token"))
 MAX_PAGES = 8  # 25 rows a page; a year of one team's fixtures is two or three
-# Requests kept back for live matches, of each hour's 2,000: background reads (history.py) stop when
-# the allowance live polls draw on falls this low, and start again when the hour resets.
+# Requests kept back for live matches, of each hour's 2,000: background reads (refreshes, history.py)
+# stop when the allowance live polls draw on falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_SPORTMONKS_RESERVE", 1000))
 CRICKET_MATCH = "Cricket fixtures/{id}"  # the cricket endpoint live matches are polled on
+FIXTURES = "Fixture"  # the football entity live matches are polled on
+BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
-_state = {"paused_until": 0.0}
-remaining: dict[str, tuple[int, float]] = {}  # entity -> (requests left this hour, when the hour resets), from the last response
 
 
 PROVIDER = Provider(
@@ -50,8 +53,7 @@ PROVIDER = Provider(
 )
 
 
-class RateLimited(AdapterError):
-    """Sportmonks said the hourly limit is used up for an entity."""
+RateLimited = budget.RateLimited
 
 
 @lru_cache(maxsize=1)
@@ -71,14 +73,14 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         return hit[1]
     if not token():
         raise AdapterError("no Sportmonks token (~/.config/sports-follow/sportmonks-token)")
-    if time.time() < _state["paused_until"]:
-        raise RateLimited("Sportmonks hourly limit reached; paused for a minute")
+    bucket = _bucket(path)
+    budget.take(BUDGET, bucket)
     try:
         res = _client.get(path if path.startswith("https://") else f"{BASE}{path}", params=params, headers={"authorization": token()})
     except httpx.HTTPError as exc:
         raise AdapterError(f"Sportmonks unreachable: {exc}") from exc
     if res.status_code == 429:
-        _state["paused_until"] = time.time() + 60
+        budget.pause(BUDGET)
         raise RateLimited("Sportmonks hourly limit reached (429); paused for a minute")
     if res.status_code == 401:
         raise AdapterError("Sportmonks rejected the token (HTTP 401)")
@@ -97,10 +99,11 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         raise AdapterError(f"Sportmonks returned {type(data).__name__} for {path}")
     limit = data.get("rate_limit") or {}
     if limit.get("requested_entity"):
-        remaining[limit["requested_entity"]] = (int(limit.get("remaining") or 0), time.time() + int(limit.get("resets_in_seconds") or 3600))
+        # Counted under the entity as the path names it, as take() counted it ("Fixture" either way).
+        budget.observe(BUDGET, bucket, int(limit.get("remaining") or 0), int(limit.get("resets_in_seconds") or 3600))
     elif res.headers.get("x-ratelimit-remaining", "").isdigit():
         # Cricket doesn't say when its hour resets: at the latest an hour after this answer.
-        remaining[_bucket(path)] = (int(res.headers["x-ratelimit-remaining"]), time.time() + 3600)
+        budget.observe(BUDGET, bucket, int(res.headers["x-ratelimit-remaining"]), 3600)
     if ttl <= 0:
         return data
     with _lock:
@@ -125,13 +128,16 @@ def get_all(path: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
 
 
 def _bucket(url: str) -> str:
-    """The allowance a cricket request counts against, its endpoint with the ids left out: a match
-    ("Cricket fixtures/{id}") and a list of fixtures ("Cricket fixtures") are counted apart."""
+    """The allowance a request counts against. Football counts by entity, which Sportmonks names in each
+    answer: "/football/fixtures/multi/1,2" is a Fixture request. Cricket counts by endpoint, its ids left
+    out: a match ("Cricket fixtures/{id}") and a list of fixtures ("Cricket fixtures") are counted apart."""
+    if not url.startswith(CRICKET):
+        parts = url.strip("/").split("/")
+        return parts[1].removesuffix("s").capitalize() if len(parts) > 1 else "Other"
     path = url.removeprefix(CRICKET).strip("/")
     return "Cricket " + "/".join("{id}" if part.isdigit() else part for part in path.split("/"))
 
 
-def spare(entity: str) -> bool:
-    """Whether a background read of this entity ("Fixture", CRICKET_MATCH) leaves the live reserve intact."""
-    left, resets_at = remaining.get(entity, (LIVE_RESERVE + 1, 0.0))
-    return left > LIVE_RESERVE or time.time() >= resets_at
+def spare(bucket: str) -> bool:
+    """Whether a background read of this entity or endpoint (FIXTURES, CRICKET_MATCH) leaves the live reserve intact."""
+    return budget.spare(BUDGET, bucket)
