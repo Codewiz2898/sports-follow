@@ -40,9 +40,16 @@ if [ -f "$in/alert-url" ] || [ -f "$in/heartbeat-url" ]; then
 fi
 # Where the off-site backups go and the storage's keys (deploy/offsite-backup.sh): kept unless a new one is sent.
 if [ -f "$in/offsite.env" ]; then install -m 640 "$in/offsite.env" "$D/offsite.env"; fi
+# Grafana Cloud's metrics settings for Alloy (deploy/alloy/): kept unless a new one is sent, which (re)starts it.
+grafana_new=""
+if [ -f "$in/grafana.env" ]; then install -m 640 "$in/grafana.env" "$D/grafana.env"; grafana_new=1; fi
 chown "root:$grp" "$D"/*.env
 chmod 640 "$D"/*.env
 echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token, push key and cookie key kept)"
+if [ -n "$grafana_new" ] && systemctl cat alloy >/dev/null 2>&1; then
+  if systemctl restart alloy; then echo "install-secrets: Alloy (re)started with grafana.env: metrics go to Grafana Cloud"
+  else echo "install-secrets: Alloy didn't start: sudo journalctl -u alloy" >&2; fi
+fi
 
 # A sealed copy of all of it, for the password manager and the off-site backups (seal-secrets.sh). Exit 3
 # means secrets-recipients.txt has no key yet, which it has said.

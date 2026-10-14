@@ -1,0 +1,101 @@
+[
+  {
+    "uid": "sf-server-down",
+    "title": "The server stopped sending metrics",
+    "for": "0s",
+    "expr": "absent_over_time(up{job=\"sports-follow\"}[10m])",
+    "summary": "No metrics from the server for 10 minutes: it's down or unreachable, or Alloy stopped (sudo systemctl status alloy).",
+    "no_data": "OK"
+  },
+  {
+    "uid": "sf-checks-stale",
+    "title": "The server checks stopped running",
+    "for": "5m",
+    "expr": "time() - max by (instance) (sports_follow_check_timestamp_seconds{job=\"sports-follow\"}) > 900",
+    "summary": "server-check.sh last ran {{ humanizeDuration $values.A.Value }} ago (sudo systemctl status sports-follow-check.timer)."
+  },
+  {
+    "uid": "sf-disk",
+    "title": "A disk is filling up",
+    "for": "10m",
+    "expr": "100 * (1 - node_filesystem_avail_bytes{job=\"sports-follow\"} / node_filesystem_size_bytes{job=\"sports-follow\"}) > 80",
+    "summary": "Disk {{ $labels.mountpoint }} is {{ printf \"%.0f\" $values.A.Value }}% full (sudo du -xh --max-depth=1 {{ $labels.mountpoint }} | sort -h)."
+  },
+  {
+    "uid": "sf-memory-pressure",
+    "title": "Memory is short",
+    "for": "10m",
+    "expr": "100 * rate(node_pressure_memory_waiting_seconds_total{job=\"sports-follow\"}[5m]) > 10",
+    "summary": "Tasks spent {{ printf \"%.0f\" $values.A.Value }}% of the last 5 minutes waiting for memory (free -m; docker stats --no-stream)."
+  },
+  {
+    "uid": "sf-memory-low",
+    "title": "Free memory is almost gone",
+    "for": "10m",
+    "expr": "100 * node_memory_MemAvailable_bytes{job=\"sports-follow\"} / node_memory_MemTotal_bytes{job=\"sports-follow\"} < 5",
+    "summary": "Only {{ printf \"%.1f\" $values.A.Value }}% of memory is free (free -m; docker stats --no-stream)."
+  },
+  {
+    "uid": "sf-oom",
+    "title": "The out-of-memory killer stopped a process",
+    "for": "0s",
+    "expr": "increase(node_vmstat_oom_kill{job=\"sports-follow\"}[10m]) > 0",
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} process(es) stopped for lack of memory in the last 10 minutes (sudo journalctl -k | grep -i oom)."
+  },
+  {
+    "uid": "sf-cpu-throttled",
+    "title": "AWS is holding back the server's CPU",
+    "for": "30m",
+    "expr": "100 * avg by (instance) (rate(node_cpu_seconds_total{job=\"sports-follow\",mode=\"steal\"}[10m])) > 20",
+    "summary": "{{ printf \"%.0f\" $values.A.Value }}% of CPU time is being withheld: Lightsail's burst allowance is used up. If it lasts, move to a bigger plan."
+  },
+  {
+    "uid": "sf-backup",
+    "title": "The database backup is late",
+    "for": "0s",
+    "expr": "time() - sports_follow_backup_newest_timestamp_seconds{job=\"sports-follow\"} > 26 * 3600",
+    "summary": "{{ if gt $values.A.Value 1e9 }}There is no database dump at all{{ else }}The newest database dump is {{ humanizeDuration $values.A.Value }} old{{ end }} (docker compose -f deploy/compose.yaml logs backup)."
+  },
+  {
+    "uid": "sf-offsite",
+    "title": "Off-site backups aren't working",
+    "for": "0s",
+    "expr": "(time() - sports_follow_offsite_last_ok_timestamp_seconds{job=\"sports-follow\"} > 26 * 3600) and on (instance) (sports_follow_offsite_configured{job=\"sports-follow\"} == 1) and on (instance) (time() - sports_follow_offsite_configured_timestamp_seconds{job=\"sports-follow\"} > 7200)",
+    "summary": "{{ if gt $values.A.Value 1e9 }}Off-site backups haven't worked once since they were set up{{ else }}Off-site backups last worked {{ humanizeDuration $values.A.Value }} ago{{ end }} (sudo journalctl -u sports-follow-offsite)."
+  },
+  {
+    "uid": "sf-docker-down",
+    "title": "Docker isn't answering",
+    "for": "10m",
+    "expr": "(1 - sports_follow_docker_up{job=\"sports-follow\"}) > 0",
+    "summary": "Docker didn't answer the server checks, so the app is likely down (sudo systemctl status docker)."
+  },
+  {
+    "uid": "sf-container-down",
+    "title": "An app container is down",
+    "for": "10m",
+    "expr": "(1 - sports_follow_container_up{job=\"sports-follow\"}) > 0",
+    "summary": "{{ $labels.service }} isn't running, or is unhealthy (docker compose -f deploy/compose.yaml ps; logs {{ $labels.service }})."
+  },
+  {
+    "uid": "sf-restarts",
+    "title": "A container keeps restarting",
+    "for": "0s",
+    "expr": "increase(sports_follow_container_restarts_total{job=\"sports-follow\"}[1h]) >= 3",
+    "summary": "{{ $labels.service }} restarted {{ printf \"%.0f\" $values.A.Value }} times in the last hour (docker compose -f deploy/compose.yaml logs {{ $labels.service }})."
+  },
+  {
+    "uid": "sf-cert-untrusted",
+    "title": "No trusted HTTPS certificate",
+    "for": "10m",
+    "expr": "(1 - sports_follow_cert_trusted{job=\"sports-follow\"}) > 0",
+    "summary": "Phones won't trust the certificate Caddy serves (docker compose -f deploy/compose.yaml logs caddy)."
+  },
+  {
+    "uid": "sf-cert-expiring",
+    "title": "The HTTPS certificate hasn't renewed",
+    "for": "0s",
+    "expr": "(sports_follow_cert_not_after_timestamp_seconds{job=\"sports-follow\"} - time() < 10 * 86400) and on (instance) (sports_follow_cert_trusted{job=\"sports-follow\"} == 1)",
+    "summary": "The certificate expires in {{ humanizeDuration $values.A.Value }} and Caddy hasn't renewed it (docker compose -f deploy/compose.yaml logs caddy)."
+  }
+]

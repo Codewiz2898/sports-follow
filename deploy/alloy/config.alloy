@@ -1,0 +1,48 @@
+// Grafana Alloy on the server (deploy/README.md, "Alerts"): the server's own metrics, plus what
+// server-check.sh saw (its metrics.prom), sent to Grafana Cloud every minute, where the alert rules in
+// deploy/grafana/ email you. Runs as the alloy user once /etc/sports-follow/grafana.env exists
+// (systemd/alloy.service.d/sports-follow.conf), which gives the GRAFANA_PROM_* settings below.
+
+// Host metrics, only the ones the rules and a dashboard use: disk, memory and its pressure, the
+// out-of-memory killer (vmstat), CPU (including steal: Lightsail's burstable CPU being held back), load.
+prometheus.exporter.unix "server" {
+  set_collectors = ["cpu", "diskstats", "filesystem", "loadavg", "meminfo", "netdev", "pressure", "textfile", "time", "uname", "vmstat"]
+
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs)$"
+    mount_points_exclude = "^/(dev|proc|run|sys|snap|var/lib/docker/.+)($|/)"
+  }
+
+  // server-check.sh's findings: backups, off-site backups, containers, the certificate.
+  textfile {
+    directory = "/var/lib/sports-follow-check"
+  }
+}
+
+// One job name for everything this server sends, which the alert rules select on (the exporter's own is
+// "integrations/unix"). The instance label is the server's hostname.
+discovery.relabel "server" {
+  targets = prometheus.exporter.unix.server.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "sports-follow"
+  }
+}
+
+prometheus.scrape "server" {
+  targets         = discovery.relabel.server.output
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_PROM_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_PROM_USER")
+      password = sys.env("GRAFANA_PROM_TOKEN")
+    }
+  }
+}
