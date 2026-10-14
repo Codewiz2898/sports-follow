@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -37,13 +38,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
 from .adapters import ADAPTERS, KNOWN, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
+logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 log = logging.getLogger("sports_follow")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 HEARTBEAT = 15
@@ -96,8 +98,55 @@ class SameOriginWrites:
 app.add_middleware(SameOriginWrites)
 
 
+request_log = logging.getLogger("sports_follow.requests")
+
+
+class RequestLog:
+    """Each request's id and its one line in the log (logs.py). The id is the X-Request-ID a proxy or load
+    balancer in front sent, if well formed, else one made here; every line logged while serving the
+    request, and every job it queues (enqueue), carries it, and the answer names it in X-Request-ID.
+    The line gives the route, status and time taken: never the query string (a search's words) or the
+    client's address. A passing health check and the web app's files aren't logged."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        rid = logs.given_id(Headers(scope=scope).get("x-request-id")) or logs.new_id()
+        logs.begin(rid=rid)
+        status = 500  # unless an answer starts: an exception escaped, and the server answers 500
+        started = time.perf_counter()
+
+        async def answer(message: dict) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                message = {**message, "headers": [*message.get("headers", []), (b"x-request-id", rid.encode())]}
+            await send(message)
+
+        try:
+            await self.app(scope, receive, answer)
+        finally:
+            path = scope["path"]
+            if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
+                ms = (time.perf_counter() - started) * 1000
+                route = getattr(scope.get("route"), "path", None)
+                request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", scope["method"], path, status, ms,
+                                extra={"method": scope["method"], "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
+
+
+app.add_middleware(RequestLog)  # outermost of ours: requests SameOriginWrites turns away are logged too
+
+
 def arq() -> ArqRedis:
     return state["arq"]
+
+
+async def enqueue(function: str, *args: Any, **options: Any) -> None:
+    """Queue a worker job that logs under this request's id (worker._logged)."""
+    await arq().enqueue_job(function, *args, trace=logs.carry(), **options)
 
 
 T = TypeVar("T")
@@ -258,7 +307,14 @@ async def account_of(request: Request) -> accounts.Signed | None:
 
 def fan_id(request: Request, response: Response, signed_in: accounts.Signed | None = Depends(account_of)) -> str:
     """Whose follows, levels, mutes and devices a request reads and writes: the signed-in account's, else
-    the anonymous fan in the cookie this server signed, else a new anonymous fan."""
+    the anonymous fan in the cookie this server signed, else a new anonymous fan. The request's log lines
+    name the fan by a hash (logs.fan)."""
+    fan = _fan(request, response, signed_in)
+    logs.bind(fan=logs.fan(fan))
+    return fan
+
+
+def _fan(request: Request, response: Response, signed_in: accounts.Signed | None) -> str:
     if signed_in is not None:
         return signed_in.fan_id
     value = request.cookies.get(FAN_COOKIE) or ""
@@ -540,8 +596,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
         # of minutes. Without one: the agent builds the whole page.
         if ref is not None:
-            await arq().enqueue_job("refresh_structured", player_id)
-        await arq().enqueue_job("build_card", player_id)
+            await enqueue("refresh_structured", player_id)
+        await enqueue("build_card", player_id)
     return player_id
 
 
@@ -602,7 +658,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
         # Write through to the hot copy and tell every subscriber, or they keep seeing "failed".
         bus.store_card(player_id, retried)
     if needs_build:
-        await arq().enqueue_job("build_card", player_id)
+        await enqueue("build_card", player_id)
     card = await read_card(player_id)
     return {"player_id": player_id, "card": card}
 
@@ -670,7 +726,7 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
             await state["redis"].expire(theirs, 2 * DAY)
         await state["redis"].delete(mine)
         # A follow or a device sent just before this, still under way, lands on the anonymous fan: move it too.
-        await arq().enqueue_job("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
+        await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
     return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players}
@@ -1047,14 +1103,14 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         if bus.is_locked(f"structured:{player_id}"):
             return {"queued": False, "reason": "A refresh is already running."}
         await _refresh_due(player_id)
-        await arq().enqueue_job("refresh_structured", player_id)
+        await enqueue("refresh_structured", player_id)
         return {"queued": True}
     if not AGENT_LIVE:
         return {"queued": False, "reason": "Live scores aren't available for this sport yet."}
     if bus.is_locked(f"live:{player_id}"):
         return {"queued": False, "reason": "A live check is already running."}
     await _refresh_due(player_id)
-    await arq().enqueue_job("refresh_live", player_id)
+    await enqueue("refresh_live", player_id)
     return {"queued": True}
 
 

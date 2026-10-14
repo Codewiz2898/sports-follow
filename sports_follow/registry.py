@@ -42,7 +42,7 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, naming, sports
+from . import bus, logs, naming, sports
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, for_sport
 from .config import USER_AGENT
 from .db import session
@@ -738,5 +738,5 @@ def main(argv: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logs.setup()
     main(sys.argv[1:])

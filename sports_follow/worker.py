@@ -8,15 +8,18 @@ Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timezone
+from datetime import datetime, timezone
+from time import perf_counter
 
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, notify, pipeline, registry, retention, structured
+from . import accounts, bus, db, engine, history, logs, notify, pipeline, registry, retention, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -31,11 +34,50 @@ _tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
 # other late run has gone for as long, so a busy queue that delays every tick can't stop them all.
 LATE = 50
 
-# arq's CLI configures only its own logger; show the pipeline's too (binds, polls, refresh failures).
-_handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(asctime)s: %(name)s %(levelname)s %(message)s", "%H:%M:%S"))
-logging.getLogger("sports_follow").addHandler(_handler)
-logging.getLogger("sports_follow").setLevel(logging.INFO)
+# Again at startup: arq's CLI replaces the logging config after importing this module.
+logs.setup()
+# A job's arguments its log lines are tagged with.
+FIELDS = ("player_id", "event_id", "system")
+# A quiet job's closing line (the tick's, every minute) is logged only past this many seconds, or on failure.
+QUIET_UNDER = 10
+
+
+def _logged(fn, quiet: bool = False):
+    """A job whose lines carry its own id, or that of the request that queued it (server.enqueue), its
+    name and its player, game or source, and which ends with one line: how long it waited in the queue,
+    how long it ran and how it ended."""
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    async def job(ctx, *args, trace: dict | None = None, **kwargs):
+        given = signature.bind_partial(ctx, *args, **kwargs).arguments
+        logs.begin(rid=(trace or {}).get("rid") or logs.new_id(), job=fn.__name__, **{k: given[k] for k in FIELDS if k in given})
+        started = perf_counter()
+        queued = ctx.get("enqueue_time")
+        waited = (datetime.now(timezone.utc) - queued).total_seconds() if isinstance(queued, datetime) else None
+
+        def ended(outcome: str, how: str) -> None:
+            took = perf_counter() - started
+            if quiet and outcome == "ok" and took < QUIET_UNDER:
+                return
+            queue = "" if waited is None else f", after {waited:.1f}s in the queue"
+            log.log(logging.INFO if outcome == "ok" else logging.WARNING, "%s %s in %.1fs%s", fn.__name__, how, took, queue, extra={
+                "outcome": outcome, "duration_ms": round(took * 1000, 1), "waited_ms": None if waited is None else round(waited * 1000),
+                "job_id": ctx.get("job_id"), "attempt": ctx.get("job_try"),
+            })
+
+        try:
+            result = await fn(ctx, *args, **kwargs)
+        except asyncio.CancelledError:
+            ended("cancelled", "cancelled (timed out, or the worker stopped)")
+            raise
+        except Exception as exc:
+            ended("failed", f"failed ({type(exc).__name__}: {exc})")
+            raise
+        ended("ok", "done")
+        return result
+
+    return job
 
 
 async def build_card(ctx, player_id: int) -> None:
@@ -147,6 +189,7 @@ async def _missed(ctx, name: str) -> bool:
 async def startup(ctx) -> None:
     """A thread for every job slot, so no job waits for one, and a few for the event loop's own use
     (it looks up hosts in one)."""
+    logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
     # A connection for each of those threads, the tick's and notify's: checkouts give up after 5 s.
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
@@ -154,7 +197,7 @@ async def startup(ctx) -> None:
 
 async def _in_tick_pool(fn):
     """The tick works on threads of its own: whatever the jobs are doing, the scheduler keeps its minute."""
-    return await asyncio.get_running_loop().run_in_executor(_tick_pool, fn)
+    return await asyncio.get_running_loop().run_in_executor(_tick_pool, logs.carried(fn))
 
 
 async def tick(ctx) -> None:
@@ -184,13 +227,13 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers]
+    functions = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers)]
     cron_jobs = [
-        cron(tick, second=0, run_at_startup=True),
-        cron(purge_sessions, hour=4, minute=10, second=0),
-        cron(warm_sources, minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
-        cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
-        cron(prune, hour=2, minute=15, second=0, timeout=3 * 3600),
+        cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
+        cron(_logged(purge_sessions), hour=4, minute=10, second=0),
+        cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
+        cron(_logged(import_registry), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
+        cron(_logged(prune), hour=2, minute=15, second=0, timeout=3 * 3600),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

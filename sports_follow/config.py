@@ -10,6 +10,11 @@ DATABASE_URL = os.environ.get(
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
 
+# Logs (logs.py): one line per record on stdout, "json" for a server's log collector or "text" to read,
+# and our own lines from this level up (other libraries' from WARNING).
+LOG_FORMAT = os.environ.get("SPORTS_FOLLOW_LOG_FORMAT", "text").strip().lower()
+LOG_LEVEL = os.environ.get("SPORTS_FOLLOW_LOG_LEVEL", "INFO").strip().upper()
+
 # How every source and Wikidata see this app: honestly, as itself (ESPN refuses browser-like agents).
 USER_AGENT = "sports-follow/0.1 (+https://github.com/Codewiz2898/sports-follow)"
 

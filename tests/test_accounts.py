@@ -220,7 +220,8 @@ def test_signing_in_brings_this_devices_fan_and_counts_its_researches(api, store
     assert store.adopted == [("anon-1", 1)]
     assert api.redis.data[server.player_search.research_key("acct-1")] == 2  # no three more for signing in
     assert server.player_search.research_key("anon-1") not in api.redis.data
-    assert api.queue.jobs[-1][:3] == ("adopt_stragglers", "anon-1", 1) and api.queue.options == {"_defer_by": 60}
+    assert api.queue.jobs[-1][:3] == ("adopt_stragglers", "anon-1", 1)
+    assert api.queue.options == {"_defer_by": 60, "trace": {"rid": answer.headers["x-request-id"]}}  # logged under the sign-in's id
 
 
 def test_an_accounts_fan_id_is_never_taken_from_a_fan_cookie(api, store, monkeypatch):
