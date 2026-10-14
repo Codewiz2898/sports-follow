@@ -19,3 +19,8 @@ httpx==0.28.1
 httpcore==1.0.9
 # Client for the llm-providers gateway, at a commit. From a checkout: pip install -e ~/repos/llm-providers/python
 llm-providers @ git+https://github.com/Codewiz2898/llm-providers.git@7f0f3bc75d55b0b8d72538548467f94c47b70fb4#subdirectory=python
+# Traces (tracing.py): off unless an OpenTelemetry exporter is set.
+opentelemetry-sdk>=1.45
+opentelemetry-exporter-otlp-proto-http>=1.45
+opentelemetry-instrumentation-httpx>=0.66b1
+opentelemetry-instrumentation-redis>=0.66b1

@@ -33,6 +33,7 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "Trafilatura", "url": "https://trafilatura.readthedocs.io", "licence": "Apache-2.0", "package": "trafilatura"},
     {"name": "DDGS", "url": "https://github.com/deedy5/ddgs", "licence": "MIT", "package": "ddgs"},
     {"name": "python-dotenv", "url": "https://github.com/theskumar/python-dotenv", "licence": "BSD-3-Clause", "package": "python-dotenv"},
+    {"name": "OpenTelemetry", "url": "https://opentelemetry.io", "licence": "Apache-2.0", "package": "opentelemetry-sdk"},
     {"name": "PostgreSQL", "url": "https://www.postgresql.org", "licence": "PostgreSQL"},
     {"name": "Redis", "url": "https://redis.io", "licence": "RSALv2 or SSPLv1"},
     {"name": "React", "url": "https://react.dev", "licence": "MIT"},

@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, moments, naming, notify, registry, sports
+from . import bus, engine, moments, naming, notify, registry, sports, tracing
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -597,7 +597,9 @@ def poll_event(event_id: int) -> None:
         deadline = time.monotonic() + POLL_SESSION
         quiet_since = time.monotonic()
         while True:
-            status, wait, changed = poll_once(event_id)
+            with tracing.span("poll round", {"event_id": event_id}) as round_span:
+                status, wait, changed = poll_once(event_id)
+                round_span.set_attribute("event.status", status)
             if status in ("final", "postponed", "idle") or time.monotonic() + wait > deadline:
                 return
             if changed:
@@ -636,8 +638,10 @@ def poll_lane(system: str) -> None:
     play and changing, otherwise once a minute. Hands over after POLL_SESSION, as poll_event does.
     """
     adapter = ADAPTERS.get(system)
+    if adapter is None:
+        return
     lock = f"lane:{system}"
-    token = bus.try_lock(lock, 120) if adapter is not None else None
+    token = bus.try_lock(lock, 120)
     if not token:
         return
     try:
@@ -645,7 +649,8 @@ def poll_lane(system: str) -> None:
         moved: dict[int, float] = {}
         missing: set[int] = set()
         while True:
-            wait = lane_round(adapter, moved, missing)
+            with tracing.span("lane round", {"system": system}):
+                wait = lane_round(adapter, moved, missing)
             if wait is None or time.monotonic() + wait > deadline:
                 return
             bus.extend(lock, wait + 120, token)

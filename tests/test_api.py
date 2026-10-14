@@ -9,7 +9,8 @@ the registry agrees they're the same person (BUG-033). A push goes to a fan's ne
 are fans, but fans from before keep their ids (BUG-013). The card is private and its ETag covers the
 fan's own fields (BUG-038). Ids no row can have, odd bodies and source ids of the wrong shape are
 refused plainly, never a 500 (BUG-039, BUG-078). The research counter never goes below zero (BUG-079).
-Each request is logged once, under an id its jobs take along (BHA-192).
+Each request is logged once, under an id its jobs take along (BHA-192), and is the root span of a
+trace they continue (BHA-193).
 Redis, the database and the job queue are fakes.
 """
 
@@ -25,6 +26,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from opentelemetry.trace import SpanKind
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
@@ -386,6 +388,20 @@ def test_a_request_is_logged_once_under_an_id_its_jobs_take_along(api, monkeypat
     assert line.getMessage().startswith("POST /api/players/1/refresh 200 ")
     assert (line.route, line.status, line.duration_ms >= 0) == ("/api/players/{player_id}/refresh", 200, True)
     assert line.context == {"rid": rid, "fan": logs.fan("fan-a")}  # the fan by a hash, never their id
+
+
+def test_a_request_is_the_root_span_of_a_trace_its_jobs_continue(api, monkeypatch, spans):
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: object())
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    api.follows.add(("fan-a", 1))
+    answer = api.call("POST", "/api/players/1/refresh?from=card", fan="fan-a")
+    [request] = spans.get_finished_spans()
+    assert (request.name, request.kind) == ("POST /api/players/{player_id}/refresh", SpanKind.SERVER)
+    assert request.attributes["url.path"] == "/api/players/1/refresh" and "from=card" not in str(dict(request.attributes))
+    assert request.attributes["http.response.status_code"] == 200 and request.attributes["request.id"] == answer.headers["x-request-id"]
+    assert request.attributes["enduser.pseudo.id"] == logs.fan("fan-a")  # never the fan's id
+    traceparent = api.queue.options["trace"]["traceparent"]  # the refresh job continues this trace (worker._logged)
+    assert traceparent.split("-")[1:3] == [format(request.context.trace_id, "032x"), format(request.context.span_id, "016x")]
 
 
 def test_a_proxys_request_id_is_kept_and_the_query_string_never_logged(api, caplog):

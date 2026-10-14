@@ -13,13 +13,14 @@ import inspect
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from time import perf_counter
 
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, notify, pipeline, registry, retention, structured
+from . import accounts, bus, db, engine, history, logs, notify, pipeline, registry, retention, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -37,22 +38,25 @@ LATE = 50
 
 # Again at startup: arq's CLI replaces the logging config after importing this module.
 logs.setup()
+tracing.setup("sports-follow-worker")
 # A job's arguments its log lines are tagged with.
 FIELDS = ("player_id", "event_id", "system")
 # A quiet job's closing line (the tick's, every minute) is logged only past this many seconds, or on failure.
 QUIET_UNDER = 10
 
 
-def _logged(fn, quiet: bool = False):
+def _logged(fn, quiet: bool = False, deep: bool = True):
     """A job whose lines carry its own id, or that of the request that queued it (server.enqueue), its
     name and its player, game or source, and which ends with one line: how long it waited in the queue,
-    how long it ran and how it ended."""
+    how long it ran and how it ended. It's a span too, in the trace of the request that queued it, or
+    of its own; a job that isn't deep has only that span, none for the requests and queries it makes."""
     signature = inspect.signature(fn)
 
     @functools.wraps(fn)
     async def job(ctx, *args, trace: dict | None = None, **kwargs):
         given = signature.bind_partial(ctx, *args, **kwargs).arguments
-        logs.begin(rid=(trace or {}).get("rid") or logs.new_id(), job=fn.__name__, **{k: given[k] for k in FIELDS if k in given})
+        fields = {k: given[k] for k in FIELDS if k in given}
+        logs.begin(rid=(trace or {}).get("rid") or logs.new_id(), job=fn.__name__, **fields)
         started = perf_counter()
         queued = ctx.get("enqueue_time")
         waited = (datetime.now(timezone.utc) - queued).total_seconds() if isinstance(queued, datetime) else None
@@ -67,16 +71,19 @@ def _logged(fn, quiet: bool = False):
                 "job_id": ctx.get("job_id"), "attempt": ctx.get("job_try"),
             })
 
-        try:
-            result = await fn(ctx, *args, **kwargs)
-        except asyncio.CancelledError:
-            ended("cancelled", "cancelled (timed out, or the worker stopped)")
-            raise
-        except Exception as exc:
-            ended("failed", f"failed ({type(exc).__name__}: {exc})")
-            raise
-        ended("ok", "done")
-        return result
+        attributes = {"job.id": ctx.get("job_id"), "job.attempt": ctx.get("job_try"), "job.waited_ms": None if waited is None else round(waited * 1000), **fields}
+        with tracing.job_span(fn.__name__, trace, attributes) as span, (nullcontext() if deep else tracing.shallow()):
+            try:
+                result = await fn(ctx, *args, **kwargs)
+            except asyncio.CancelledError:
+                ended("cancelled", "cancelled (timed out, or the worker stopped)")
+                tracing.failed(span, "cancelled")
+                raise
+            except Exception as exc:
+                ended("failed", f"failed ({type(exc).__name__}: {exc})")
+                raise
+            ended("ok", "done")
+            return result
 
     return job
 
@@ -243,8 +250,8 @@ class WorkerSettings:
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
-        cron(_logged(import_registry), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
-        cron(_logged(prune), hour=2, minute=15, second=0, timeout=3 * 3600),
+        cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
+        cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.
