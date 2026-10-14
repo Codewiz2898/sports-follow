@@ -35,6 +35,7 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | `../.github/workflows/deploy.yml` | Checks that CI passed, then runs `deploy.sh` over SSH, then a health check from outside. |
 | `server-check.sh`, `systemd/` | The server checks and their alerts; the weekly Docker clean-up. |
 | `seed-registry.sh` | From the Mac: copies the player registry (323,000 athletes, 15 MB) instead of an hour of Wikidata queries. |
+| `migrate-to-server.sh` | From the Mac: steps 3–6 of the first deploy in one go, with checks before and after ([Moving off the Mac](#moving-off-the-mac)). |
 | `backup.sh` | The daily database dump. |
 
 ## Size and cost
@@ -110,6 +111,31 @@ deploy/seed-registry.sh deploy@<server-ip>
 opens, search finds players, and `/credits` lists Sportmonks and Lichess only.
 
 **7. Turn on the alerts, the off-site backups and the GitHub deploys** (below).
+
+### Moving off the Mac
+
+Steps 3–6 in one go, from the repo's root on the Mac with the development stack's database running:
+```bash
+deploy/migrate-to-server.sh deploy@<server-ip> --check   # checks only; changes nothing
+deploy/migrate-to-server.sh deploy@<server-ip>
+```
+1. **Checks:** the Sportmonks and Lichess tokens, the Mac's registry, and the server's setup. It warns if
+   production has no OpenRouter key of its own yet.
+2. **Secrets:** `push-secrets.sh`.
+3. **First deploy:** `deploy.sh deploy`, run on the server.
+4. **Registry:** `seed-registry.sh`.
+5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so only
+   licensed sources run), and the server's registry has as many athletes as the Mac's.
+
+Each step is one of the scripts above, and running it again is safe.
+
+**Not moved, on purpose:**
+- **The Mac's games, results and news.** Much of it comes from ESPN, which only development may use.
+- **Its fans and follows.** They're development cookies for `localhost`, which no browser sends to the
+  server's address.
+
+The server builds pages again as fans follow. Copying the Mac's cookie or push keys would gain nothing
+either: a browser keeps those per address.
 
 ## Getting in
 
