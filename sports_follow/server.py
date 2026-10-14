@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
+from urllib.parse import urlparse
 
 import redis.asyncio as aredis
 from arq import create_pool
@@ -29,11 +30,12 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as InPath
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
+from starlette.datastructures import Headers
 
 from . import bus, credits as credits_page, games, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
@@ -63,6 +65,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Sports Follow", lifespan=lifespan)
+
+UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _same_origin(headers: Headers) -> bool:
+    """Did this request come from a page of this site? Browsers say so in Sec-Fetch-Site, which a page
+    can't set; older ones only send Origin. A client that isn't a browser sends neither."""
+    site = headers.get("sec-fetch-site")
+    if site:
+        return site in ("same-origin", "none")
+    origin = headers.get("origin")
+    return not origin or urlparse(origin).netloc == headers.get("host")
+
+
+class SameOriginWrites:
+    """Every write to the API comes from the app's own pages and service worker. SameSite=Lax keeps the
+    cookie off another site's posts, but not off a sibling subdomain's (every *.sslip.io server is one
+    site), and some writes take no body, so nothing else stops a form or a fetch from there."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope["method"] in UNSAFE and scope["path"].startswith("/api/") and not _same_origin(Headers(scope=scope)):
+            return await JSONResponse({"detail": "This API only takes changes from the Sports Follow app."}, status_code=403)(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(SameOriginWrites)
 
 
 def arq() -> ArqRedis:
@@ -527,8 +558,6 @@ TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _push_host_ok(endpoint: str) -> bool:
-    from urllib.parse import urlparse
-
     url = urlparse(endpoint)
     host = url.hostname or ""
     return url.scheme == "https" and any(host == h or (h.startswith(".") and host.endswith(h)) for h in PUSH_HOSTS)

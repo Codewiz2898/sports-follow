@@ -139,6 +139,23 @@ export function usePush() {
   return { unavailable, on: Boolean(subscription), permission, quiet, busy, message, enable, disable, saveQuiet, test }
 }
 
+/**
+ * Hands the server this device's subscription once each time the app starts, so the device belongs to
+ * whoever the app is now (after signing in or out), and one the server dropped (trimmed for a newer
+ * device, or signed out somewhere else) comes back while the browser still shows notifications as on.
+ */
+export function PushResync() {
+  useEffect(() => {
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window)) return
+    if (Notification.permission !== 'granted') return
+    navigator.serviceWorker.ready
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => sub && api.pushSubscribe(sub.toJSON(), readQuiet()))
+      .catch(() => { /* offline: next start */ })
+  }, [])
+  return null
+}
+
 /** How much to hear about one player: four choices side by side. Arrow keys move between them. */
 export function AlertLevels({ value, onChange, label }: { value: AlertLevel; onChange: (level: AlertLevel) => void; label: string }) {
   const move = (e: KeyboardEvent<HTMLButtonElement>) => {

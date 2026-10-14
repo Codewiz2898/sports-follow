@@ -289,6 +289,27 @@ def test_limits_count_the_public_address_a_client_comes_from():
     assert [address(h) for h in ("127.0.0.1", "::1", "172.18.0.5", "10.0.0.2", "testclient", None)] == [None] * 6
 
 
+# ---------------------------------------------------------------- writes from other sites
+
+
+@pytest.mark.parametrize("headers, allowed", [
+    ({}, True),  # not a browser
+    ({"Sec-Fetch-Site": "same-origin"}, True),
+    ({"Sec-Fetch-Site": "same-site"}, False),  # a sibling subdomain
+    ({"Sec-Fetch-Site": "cross-site"}, False),
+    ({"Origin": "http://test"}, True),  # an older browser, from this site
+    ({"Origin": "https://evil.example"}, False),
+    ({"Origin": "null"}, False),
+])
+def test_only_the_apps_own_pages_can_write(api, headers, allowed):
+    api.follows.add(("fan", 1))
+    answer = api.call("DELETE", "/api/me/mutes/5", fan="fan", headers=headers)
+    assert (answer.status_code == 200) is allowed
+    assert ("commit" in api.log) is allowed  # a refused write never reached the route
+    # Reads aren't held up: a link from another site still opens the app.
+    assert api.call("GET", "/api/me/mutes", fan="fan", headers=headers).status_code == 200
+
+
 # ---------------------------------------------------------------- refresh (BUG-012)
 
 
