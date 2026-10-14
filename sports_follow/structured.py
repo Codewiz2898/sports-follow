@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, moments, naming, notify, registry
+from . import bus, engine, moments, naming, notify, registry, sports
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -43,10 +43,8 @@ REFRESH_RETRY_MAX = 2 * 3600
 # or the source failing for a while. What changed meanwhile is old news, not a moment.
 POLL_GAP = 5 * 60
 PRE_MATCH = ("scheduled", "armed", "postponed")
-UNDER_WAY = 10  # minutes on a football clock: a game first seen live this late was missed, not just started
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
-NO_LINE = {"cricket": "Did not bat or bowl", "football": "Not in the matchday squad", "basketball": "Not on the game's roster"}
 
 
 def _now() -> datetime:
@@ -219,8 +217,9 @@ def describe(player_id: int) -> str | None:
         loc = row.locator or {}
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
-        league = f" ({loc['league'].upper()})" if loc.get("league") in ("nba", "wnba", "atp", "wta") else ""
         adapter = ADAPTERS.get(row.adapter)
+        named = sports.of(adapter.sport).leagues if adapter else ()
+        league = f" ({loc['league'].upper()})" if loc.get("league") in named else ""
         game = adapter.game_of(PlayerRef(**loc)) if getattr(adapter, "games", None) else None
         if game:
             league = f" ({game} pro, known by this handle)"
@@ -290,7 +289,7 @@ def sport_name(adapter: Adapter, ref: PlayerRef) -> str:
     """A player's sport as Sports Follow names it: their game for an esports pro ("CS2", "BGMI"), else
     the sport their source covers ("Football")."""
     game_of = getattr(adapter, "game_of", None)
-    return (game_of(ref) if game_of else None) or adapter.sports[0].title()
+    return (game_of(ref) if game_of else None) or sports.label(adapter.sport)
 
 
 def rebind(current: str | None, preferred: Adapter | None) -> bool:
@@ -541,11 +540,11 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
 def contribution(snap: Snapshot | None, athlete_id: str) -> str | None:
     """The player's line in a game, in a few words ("2 goals", "Not in the matchday squad")."""
     line = snap.lines.get(athlete_id) if snap else None
-    return line.headline if line else (NO_LINE.get(snap.state.get("kind"), "No stats") if snap and snap.lines else None)
+    return line.headline if line else (sports.of_state(snap.state).no_line if snap and snap.lines else None)
 
 
 def snap_result(snap: Snapshot | None) -> str:
-    return (snap and (snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label)) or ""
+    return (snap and sports.of_state(snap.state).result_text(snap.score_label, snap.clock_label)) or ""
 
 
 def merged_result(old: dict[str, Any] | None, item: dict[str, Any], scorecard: bool) -> dict[str, Any]:
@@ -693,9 +692,10 @@ def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> 
     return adapter.live_cadence if busy else max(60, adapter.live_cadence)
 
 
-def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
-    """Chess: ask the engine for the game's position while it's on and a follower wants to hear
-    about swings, and put the game's latest evaluation (engine.py) into the state."""
+def _evaluate(rules: sports.Sport, db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
+    """A sport our engine evaluates (chess): ask the engine for the game's position while it's on and a
+    follower wants to hear about swings, and put the game's latest evaluation (engine.py), settled by
+    the sport, into the state."""
     state = snap.state
     game, fen = state.get("game_id"), state.get("fen")
     if not (game and fen and engine.enabled()):
@@ -707,7 +707,7 @@ def _evaluate(db: Session, snap: Snapshot, latest: EventState | None, player_ids
     ev = engine.latest(game)
     if ev:
         prev = latest.state if latest is not None and latest.state else {}
-        state["eval"] = moments.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
+        state["eval"] = rules.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
 
 
 def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True) -> moments.Seen | None:
@@ -725,9 +725,9 @@ def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot,
 
 
 def _under_way(snap: Snapshot) -> bool:
-    """A football game well past kick-off by its clock ("61'"). Polled every minute before the start, a
+    """A game well past its start by its clock (football's "61'"). Polled every minute before the start, a
     game is first seen live a minute or two in, so one this far along was missed (the source lagged)."""
-    return snap.state.get("kind") == "football" and moments.number(snap.clock_label) >= UNDER_WAY
+    return sports.of_state(snap.state).missed_start(snap)
 
 
 def _polled(event_id: int, cadence: int) -> bool:
@@ -792,13 +792,14 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             return "idle", 0, False
         people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
         # Esports moments are told from the player's team's side ("Sentinels win map 2"): no line says it.
-        sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if snap.state.get("kind") in ("esports", "battle_royale") else {}
+        rules = sports.of_state(snap.state)
+        sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if rules.team_moments else {}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         # Only changes are stored, so the latest state can be old in a game polled all along (the
         # minutes before kick-off); whether polling had a gap comes from the polls themselves.
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
-        if snap.state.get("kind") == "chess":
-            _evaluate(db, snap, latest, [w[0] for w in watchers])
+        if rules.engine:
+            _evaluate(rules, db, snap, latest, [w[0] for w in watchers])
         if snap.squad:
             snap.state["team_sheet"] = True  # so the poll that first sees line-ups counts as a change
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
@@ -872,7 +873,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
         card["upcoming"] = [u for u in card.get("upcoming", []) if u.get("event_id") != event.id]
         result = {
             "title": title,
-            "result": snap.clock_label if snap.state.get("kind") == "cricket" else snap.score_label,
+            "result": snap_result(snap),
             "date": event.start_utc.date().isoformat() if event.start_utc else None,
             "start_utc": _iso(event.start_utc),
             "player_contribution": line.headline if line else None,

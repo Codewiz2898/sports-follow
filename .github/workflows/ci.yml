@@ -1,0 +1,76 @@
+# Checks every pull request and every push to main. Nothing here calls a live source or needs a token:
+# adapter tests read recorded responses (tests/fixtures).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Tests and migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sports
+          POSTGRES_PASSWORD: sports
+          POSTGRES_DB: sports_follow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sports -d sports_follow"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # One throwaway database: migrated to head, then the tests that need Postgres empty it themselves.
+      DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_follow
+      SPORTS_FOLLOW_TEST_DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_follow
+      SPORTS_FOLLOW_STOCKFISH: /usr/games/stockfish
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"  # as in the Dockerfile
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install Stockfish
+        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends stockfish
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Migrations have one head
+        run: |
+          heads=$(alembic heads)
+          echo "$heads"
+          test "$(echo "$heads" | wc -l)" -eq 1
+      - name: Migrate an empty database
+        run: alembic upgrade head
+      - name: Models match the migrations
+        run: alembic check
+      # Includes tests/test_web_names.py: web/src names sports and sources no more than it did.
+      - name: Tests
+        run: python -m pytest -q -rs
+
+  web:
+    name: Web build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22  # as in the Dockerfile
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Type-check and build
+        run: npm run build

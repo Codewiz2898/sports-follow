@@ -1,9 +1,13 @@
-"""Cricket, as every cricket source shares it: a line's innings, and form over a run of matches."""
+"""Cricket: a line's innings, fifties, hundreds and wicket hauls in each, the XI before the start, results
+named by the side that won, and form over a run of matches."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
+
+from ..naming import team_key
+from .base import ORDINAL, Found, Line, Seen, Sport, crossed, joined, number, stat
 
 
 def _int(value: Any) -> int:
@@ -72,3 +76,96 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
             {"label": "Economy", "value": f"{conceded * 6 / balls_bowled:.2f}"},
         ]
     return stats
+
+
+# ---------------------------------------------------------------- the sport
+
+
+def _another(was: list[Any], now: list[Any]) -> bool:
+    """Whether the player has started another innings since the last poll: the line has more innings,
+    and the ones it had are unchanged. A last line that read otherwise (one holding only the latest
+    innings) doesn't count, so milestones already passed aren't told late."""
+    return len(now) > len(was) and now[:len(was)] == was
+
+
+def _nth(n: int) -> tuple[str, str]:
+    """The player's innings in a cricket moment: the detail's prefix ("i2:"; none for their first, as
+    before) and its name in the body ("2nd innings")."""
+    if n < 2:
+        return "", ""
+    return f"i{n}:", f"{ORDINAL.get(n, f'{n}th')} innings"
+
+
+def winner_outcome(summary: str, teams: list[str]) -> str | None:
+    """The winner a result names ("India won by 8 wkts", "Match tied (India won the Super Over)"), as
+    one of the player's teams by whole name: "India A" and "Mumbai Indians" aren't India. The app's
+    outcome() in web/src/format.ts reads results the same way."""
+    winner = re.search(r"(?:^|\()([^()]+?) won\b", summary, re.I)
+    if not winner:
+        return "D" if any(w in summary.lower() for w in ("drawn", "tied", "no result")) else None
+    named = team_key(winner.group(1))
+    if named and any(team_key(t) == named for t in teams):
+        return "W"
+    return "L" if teams else None
+
+
+class Cricket(Sport):
+    key = "cricket"
+    label = "Cricket"
+    kinds = ("cricket",)
+    team = True
+    wikidata = {"espn_cricket": "P2697"}
+    athletes = 19_745
+    no_line = "Did not bat or bowl"
+    nation_first = True  # India before Royal Challengers Bengaluru
+    games = ("match", "matches")
+    draws = True
+
+    def lineup_title(self, who: str, starting: bool) -> str:
+        return f"{who} is in the XI" if starting else f"{who} is named a substitute"
+
+    def result_text(self, score: str, clock: str) -> str:
+        return clock  # "India won by 57 runs"
+
+    def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
+        """Fifties, hundreds, out and wicket hauls in the player's latest innings: a line's stats are its
+        latest batting and bowling innings, and its headline lists every innings ("103 (152) & 48* (60)").
+        In a Test the second innings starts again from nothing, and its moments say which innings they
+        are in the detail ("i2:100"), so they aren't taken for the first's ("100")."""
+        if now.line is None:
+            return []
+        was_line = before.line
+        found = []
+        (bats_was, bowls_was), (bats_now, bowls_now) = (innings((line or {}).get("headline")) for line in (was_line, now.line))
+        runs_was, runs_now = stat(was_line, "Runs"), stat(now.line, "Runs")
+        if _another(bats_was, bats_now):
+            runs_was = None  # the last poll's runs were the innings before
+        if runs_now is not None:
+            balls = stat(now.line, "Balls")
+            batting = f"{runs_now} ({balls})" if balls else runs_now
+            pre, nth = _nth(len(bats_now))
+            for mark in crossed(number(runs_was), number(runs_now), (50, 100, 150, 200)):
+                found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", joined(batting, nth, now.score), f"{pre}{mark}", 95 if mark >= 150 else 0))
+            out_now = not runs_now.endswith("*") and stat(now.line, "Out") is not None
+            out_was = runs_was is not None and not runs_was.endswith("*") and stat(was_line, "Out") is not None
+            if out_now and not out_was:
+                runs = number(runs_now)
+                found.append(Found("out", "key", f"{who} out for {runs}", joined(batting, nth, stat(now.line, "Out")), f"{pre}out", 75 if runs >= 50 else 65 if runs == 0 else 60))
+        wickets_was, wickets_now = number(stat(was_line, "Wickets")), number(stat(now.line, "Wickets"))
+        if _another(bowls_was, bowls_now):
+            wickets_was = 0
+        pre, nth = _nth(len(bowls_now))
+        for mark in crossed(wickets_was, wickets_now, (3, 4, 5, 6, 7, 8, 9, 10)):
+            figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
+            found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
+        return found
+
+    def outcome(self, result: str, teams: list[str]) -> str | None:
+        # "India won by 5 wickets": a win for an India player, a loss for their opponents'.
+        return winner_outcome(result, teams)
+
+    def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
+        return batting_bowling(lines)
+
+
+SPORT = Cricket()

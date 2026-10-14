@@ -18,8 +18,7 @@ from sports_follow.adapters.base import Snapshot
 from sports_follow.sports import esports
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
 
-from .test_pipeline import FakeRedis as BusRedis
-from .test_structured import FakeSource, lane
+from .test_structured import FakeSource, lane, redis
 
 WIKI = "pubgmobile"
 NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
@@ -263,7 +262,7 @@ class PollSession:
         self.rows[type(row)].append(row)
 
 
-def test_the_poller_tells_a_lobby_from_the_players_team(monkeypatch):
+def test_the_poller_tells_a_lobby_from_the_players_team(monkeypatch, redis):
     # The lane's path, not Seen built by hand: the poller reads the player's team from their binding.
     owais = "pubgmobile:Team_SouL_p1"
     db = PollSession(Event(id=1, status="armed"), Player(id=7, name="Owais", sport="BGMI"), ["Team_SouL"])
@@ -275,7 +274,6 @@ def test_the_poller_tells_a_lobby_from_the_players_team(monkeypatch):
         return []
 
     monkeypatch.setattr(structured, "session", lambda: db)
-    monkeypatch.setattr(structured.bus, "_sync", BusRedis())  # each poll notes itself there (structured._polled)
     monkeypatch.setattr(structured.notify, "record", record)
     monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)
     binding = {"adapter": "liquipedia_esports", "locator": {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, "cadence": 300}

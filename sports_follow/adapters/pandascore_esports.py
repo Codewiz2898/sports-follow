@@ -10,7 +10,7 @@ series are polled once a minute, all of them in one request (structured.poll_lan
 series moments.
 
 Players are known by their PandaScore id: the registry imports the pros of IMPORT_GAMES from here
-(registry.import_esports), since Wikidata knows only a few thousand esports players.
+(registry.import_rosters), since Wikidata knows only a few thousand esports players.
 
 Dota 2 series get what happens inside each map from OpenDota (dota.py): kills, the clock and the gold
 lead while a map is on, and every roster player's hero and numbers once it's over.
@@ -299,8 +299,7 @@ class PandascoreEsports(Adapter):
     name = "PandaScore"
     provider = pandascore.PROVIDER
     covers = "Valorant, CS2, League of Legends, Dota 2 and other team games"
-    # Its games by name too: a pro's sport is their game ("CS2"), and for_sport() finds the source by it.
-    sports = ("esports", "e-sports", "electronic sports", *(g.lower() for g in GAMES.values()), "counter-strike", "cs:go")
+    sport = "esports"
     games = tuple(GAMES)  # covers these games of the sport, beside Liquipedia's: players never move between them
     live_cadence = 60  # map results arrive as each map ends; one request a round for every live series
     MULTI_MAX = 100  # match ids one request takes (a page)
@@ -328,7 +327,8 @@ class PandascoreEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
-    game_names = tuple(GAMES.values())
+    # A pro's sport is their game ("CS2"), and for_sport() finds the source by it.
+    game_names = (*GAMES.values(), "Counter-Strike", "CS:GO")
     roster_prefix = "pandascore:"
 
     @classmethod

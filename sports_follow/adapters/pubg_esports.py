@@ -298,7 +298,7 @@ class PubgEsports(Adapter):
     provider = pubg.PROVIDER
     covers = "PUBG"
     id_pattern = re.compile(r"account\.[0-9a-f]{32}")
-    sports = ("pubg", "pubg: battlegrounds", "playerunknown's battlegrounds", "esports", "e-sports")
+    sport = "esports"
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
     INDEX_AGE = 3600  # how old a tournament's match list may be when finding a player's lobbies
@@ -376,7 +376,7 @@ class PubgEsports(Adapter):
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
 
-    game_names = (GAME,)
+    game_names = (GAME, "PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds")
     roster_prefix = "pubg:"
     roster_every = 6 * 3600  # from the index warm() keeps, so it costs no requests of its own
 

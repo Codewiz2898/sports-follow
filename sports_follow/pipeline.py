@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, games, moments, notify, structured
+from . import bus, moments, notify, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -191,14 +191,9 @@ def _claim(db: Session, player_id: int, system: str, external_id: str, evidence_
     db.flush()
 
 
-# What else a registry sport may be called on a player (an agent-built page's word for it).
-SPORT_NAMES = {"soccer": "football", "association football": "football"}
-
-
 def registry_sport(sport: str | None) -> str:
     """A sport as the registry names it: "football" for "Football" or "Soccer", "esports" for any game."""
-    family = games.family(sport)
-    return SPORT_NAMES.get(family, family)
+    return sports.family(sport)
 
 
 def _qid_holder(db: Session, qid: str) -> Any:
@@ -240,7 +235,7 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
             for player_id, sport in db.execute(select(Player.id, Player.sport).where(Player.wikidata_qid == athlete.qid, Player.id != held.player_id)):
                 if not _in_other_sport(db, athlete.qid, sport, athlete.sport):
                     return player_id, False
-        sport = (games.of_athlete(athlete.league) if athlete.sport == games.ESPORTS else None) or athlete.sport.title()
+        sport = sports.of(athlete.sport).result_sport(athlete)
         slug = _free_slug(db, athlete.name, sport, athlete.qid.lower())
         player = Player(slug=slug, name=athlete.name, sport=sport, status="active", teams=list(athlete.teams or []), wikidata_qid=athlete.qid)
         db.add(player)
@@ -799,9 +794,11 @@ def due_work(now: datetime | None = None) -> Due:
             bindings.setdefault(pid, (adapter, health))
         room = {name: structured.spare(structured.ADAPTERS[name]) for name, _ in bindings.values()}
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
-        sports = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
+        sport_of = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
             pid = card.player_id
+            if not sports.on(sport_of.get(pid)):
+                continue  # a sport this build doesn't run: the page stays as it is
             if rebuild_due(card, now):
                 due.builds.append(pid)
             if card.status != "ready":
@@ -814,7 +811,7 @@ def due_work(now: datetime | None = None) -> Due:
                     due.refreshes.append(pid)
                 continue
             # Followed before their sport had an adapter: the refresh binds them first.
-            preferred = structured.for_sport(sports.get(pid))
+            preferred = structured.for_sport(sport_of.get(pid))
             if preferred and structured.spare(preferred) and not bus.is_locked(f"bindtry:{pid}") and not bus.is_locked(f"structured:{pid}"):
                 due.refreshes.append(pid)
             if card.is_live:
@@ -831,7 +828,7 @@ def due_work(now: datetime | None = None) -> Due:
                 lanes.add(live_binding["adapter"])
             elif live_binding:
                 polls.add(event_id)
-            elif pid not in bindings:
+            elif pid not in bindings and sports.on(sport_of.get(pid)):
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]

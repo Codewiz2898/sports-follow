@@ -28,7 +28,7 @@ def test_licensed_sources_run_only_with_their_token():
 
 def test_football_prefers_sportmonks_and_cricket_keeps_espn_until_the_plan_covers_it():
     everything = pick((SportmonksFootball(), EspnSoccer(), EspnCricket(), SportmonksCricket()), set())
-    first = lambda sport, adapters: next(a.system for a in adapters.values() if sport in a.sports)  # noqa: E731  as for_sport()
+    first = lambda sport, adapters: next(a.system for a in adapters.values() if a.sport == sport)  # noqa: E731  as for_sport()
     assert (first("football", everything), first("cricket", everything)) == ("sportmonks_football", "espn_cricket")
     public = pick((SportmonksFootball(), EspnSoccer(), EspnCricket(), SportmonksCricket()), {"sportmonks_football", "sportmonks_cricket"})
     assert first("cricket", public) == "sportmonks_cricket"

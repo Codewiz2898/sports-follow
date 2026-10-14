@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .. import naming
+from .. import naming, sports
 from ..config import USER_AGENT
 from .base import AdapterError, LiveSearch, PlayerRef, Provider, SearchResult
 
@@ -146,7 +146,7 @@ def parse_search(data: dict[str, Any], query: str, adapters: list[Adapter]) -> l
                 if league is None:
                     system = None  # a league the adapter doesn't read (EuroLeague, ITF): the agent covers them
             if adapter:
-                sport = adapter.sports[0].title()
+                sport = sports.label(adapter.sport)
                 detail = adapter.search_detail(subtitle, description, league)
             else:
                 sport = OTHER_SPORTS.get(item.get("sport") or "", (item.get("sport") or description or "Other").title())
@@ -241,4 +241,4 @@ class EspnAdapter:
 
     def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
         """This sport's line for a search hit."""
-        return search_detail(subtitle, description, self.sports[0])
+        return search_detail(subtitle, description, self.sport)

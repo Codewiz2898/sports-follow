@@ -344,7 +344,7 @@ class LiquipediaEsports(Adapter):
     provider = liquipedia.PROVIDER
     covers = "BGMI, PUBG Mobile, Free Fire and Apex Legends"
     id_pattern = re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}")  # wiki:Page_name
-    sports = ("esports", "e-sports", "bgmi", "pubg mobile", "battlegrounds mobile india", "free fire", "free fire max", "apex legends")  # a pro's sport is their game
+    sport = "esports"
     games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
     WINDOW_BACK, WINDOW_AHEAD = 45, 30  # days of lobbies a refresh reads
@@ -369,7 +369,7 @@ class LiquipediaEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
-    game_names = (*WIKIS.values(), *GAME_NAMES.values())
+    game_names = (*WIKIS.values(), *GAME_NAMES.values(), "Battlegrounds Mobile India")  # a pro's sport is their game
     roster_prefix = "lp:"
 
     @classmethod

@@ -28,8 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
 from sports_follow import alerts, bus, db as db_module, notify, pipeline, registry, server, structured
-from sports_follow.adapters import ADAPTERS, AdapterError, PlayerRef
-from sports_follow.adapters.pandascore_esports import PandascoreEsports
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
 PUBLIC = "81.2.69.142"
@@ -528,8 +527,8 @@ SALAH = registry.Person("Q1354960", "football", "Mohamed Salah", [], date(1992, 
 ])
 def test_a_pick_links_the_registry_athlete_only_when_the_registry_agrees(api, monkeypatch, person, pick, linked):
     links = []
-    monkeypatch.setitem(ADAPTERS, "pandascore_esports", PandascoreEsports())  # registered only with a token
     monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+    monkeypatch.setitem(ADAPTERS, pick.system, KNOWN[pick.system])  # PandaScore runs only with its token
     monkeypatch.setattr(ADAPTERS[pick.system], "player", lambda athlete_id, league=None: pick)
     monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, False))
     monkeypatch.setattr(registry, "link", lambda db, player_id, qid: links.append((player_id, qid)))
