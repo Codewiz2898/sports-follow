@@ -1,11 +1,13 @@
 ---
 name: linear
-description: Close Linear issues when a GitHub PR merges, and comment the PR link on them. Use after any merge in Sports Follow, whether you merged it or the user says it merged, and when the user asks to sync or close Linear issues.
+description: How to handle Linear for Sports Follow. Close issues when a GitHub PR merges and comment the PR link on them, and mark issues that need the user with the "Needs you" label. Use after any merge (whether you merged it or the user says it merged), whenever you create or update a Linear issue, and when the user asks to sync or close Linear issues.
 ---
 
-# Linear after a merge
+# Linear for Sports Follow
 
 Linear: team **BHA**, project **Sports Follow**. Use the Linear connector's tools (load them with ToolSearch if deferred) and `gh`.
+
+## After a merge
 
 1. **Get the PR:** `gh pr view <number> --json number,title,url,state,body,headRefName,mergeCommit`. Stop if it isn't merged.
 2. **Find its issues:** `BHA-n` in the body, title or branch, or `BUG-0xx` ids (match the issue titled `BUG-0xx · …`). If none are named, ask the user which issues it completes; don't guess.
@@ -15,3 +17,7 @@ Linear: team **BHA**, project **Sports Follow**. Use the Linear connector's tool
 5. **Tell the user** which issues you closed.
 
 When opening a PR, end its description with `Fixes BHA-n` (or `Part of BHA-n`) lines so step 2 finds them.
+
+## The "Needs you" label
+
+Add the `Needs you` label to an issue when its next step is one only the user can take: paying for something, signing up for an account, holding a key or password, getting a licence or permission, making a decision, or testing on their own device. Check this whenever you create or update an issue, and remove the label once that step is done.
