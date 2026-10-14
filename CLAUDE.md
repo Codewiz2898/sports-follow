@@ -12,3 +12,7 @@ Sports, players and data sources are things we add, remove and switch often, so 
 - **Add or remove a data source for a sport.** One adapter module that describes itself (its sports, token, credit, id format), plus one entry in that sport's list of sources, in order of preference. Nothing else names the source.
 
 The web app takes the list of sports from the API rather than keeping its own. `tests/test_sources.py`, `tests/test_sports.py` and `tests/test_web_names.py` hold the code to these rules; the README's "Adding or removing" notes say where each change goes.
+
+## Before a pull request
+
+Run the checks in the README's "Run it" (tests, `ruff check`, `basedpyright`, the web build). Then have the `reviewer` agent (`.claude/agents/reviewer.md`) review the branch: name the branch or worktree, and paste the Linear issue's title and description (it can't read Linear). Fix what it marks Blocking, and for anything you leave, say why in the pull request. Add a `Reviewed:` line next to the `Fixes BHA-n` lines, such as `Reviewed: reviewer agent, 2 fixed, 1 left (see above)`. A hook stops `gh pr create` without one.
