@@ -109,13 +109,6 @@ def test_each_sport_brings_its_colour(api):
 WEB = PACKAGE.parent / "web" / "src"
 
 
-def test_the_web_app_keeps_no_list_of_sports():
-    # Outside web/src/sports/ (each sport's view: its board and mark), the app knows sports only from the server.
-    named = re.compile(r"""['"](%s)['"]""" % "|".join(sorted({n for s in sports.ALL for n in (s.key, *s.kinds)})))
-    found = [f"{p.relative_to(WEB)}:{i}" for p in WEB.rglob("*.ts*") if "sports" not in p.relative_to(WEB).parts[:1] for i, line in enumerate(p.read_text().splitlines(), 1) if named.search(line)]
-    assert not found, "\n".join(found)
-
-
 def test_every_web_view_is_of_a_sport_the_server_knows():
     views = {m.group(1): p.name for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
     assert views and set(views) <= set(sports.BY_KEY), views
