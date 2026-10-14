@@ -10,7 +10,7 @@ import { FollowingProvider, useFollowing } from './following'
 import { AthletePage } from './pages/AthletePage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
-import { MomentToasts } from './notifications'
+import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
@@ -159,6 +159,7 @@ function App() {
   return (
     <div className="shell">
       <ScrollToTop />
+      <PushResync />
       <ErrorBoundary fallback={null} resetKey={pathname}>
         <Toasts />
       </ErrorBoundary>
