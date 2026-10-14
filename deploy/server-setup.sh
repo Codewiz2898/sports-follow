@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # One-time setup of a fresh Ubuntu 24.04 server: security updates, a firewall, swap, Docker, a `deploy`
 # user to log in as (root can't, over SSH), the server checks, and this repo in /opt/sports-follow.
-# The first time, from the Mac, as root with the key the provider put on the server:
-#   ssh root@<server-ip> 'RECOVERY_KEY="ssh-ed25519 AAAA… recovery" bash -s' < deploy/server-setup.sh
+# The first time, from the Mac, with the key the provider put on the server: as ubuntu with sudo on Lightsail,
+#   ssh ubuntu@<server-ip> 'sudo RECOVERY_KEY="ssh-ed25519 AAAA… recovery" bash -s' < deploy/server-setup.sh
+# or as root where that's the first login: ssh root@<server-ip> 'RECOVERY_KEY="…" bash -s' < deploy/server-setup.sh
 # Every later run (root login is off by then):
 #   ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
 # Optional, in front of bash -s:
