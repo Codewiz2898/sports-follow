@@ -37,7 +37,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, games, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, structured
+from . import accounts, bus, credits as credits_page, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
 from .adapters import ADAPTERS, KNOWN, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
@@ -447,7 +447,7 @@ def _same_athlete(person: registry.Person, ref: Any) -> bool:
     them, or has none in this source and they match by birth date (or name and team). The client sends
     both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
     adapter = ADAPTERS.get(ref.system)
-    if adapter is None or person.sport not in adapter.sports:
+    if adapter is None or person.sport != adapter.sport:
         return False
     known = person.ids.get(ref.system)
     return known == ref.athlete_id if known else registry.same_person(person, ref)
@@ -1070,7 +1070,7 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
     if found is None:
         athlete = await in_db(registry.get, person.qid, person.sport)
         return {
-            **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": games.label(person.sport),
+            **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": sports.label(person.sport),
             "teams": person.teams, "source": "Wikidata", "source_url": f"https://www.wikidata.org/wiki/{person.qid}",
             "next": None, "last": None, "stats": [], "stats_note": "", "live": False, "country": athlete.country if athlete else None,
         }

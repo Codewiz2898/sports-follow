@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 import httpx
 
-from sports_follow import credits, form, games, moments, registry, search, structured
+from sports_follow import credits, form, moments, registry, search, sports, structured
+from sports_follow.sports.esports import game_of_league
 from sports_follow.adapters import SearchResult, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
@@ -208,12 +209,12 @@ def test_a_forfeit_is_a_result():
 
 
 def test_a_pros_sport_is_their_game():
-    assert {games.family(s) for s in ("Valorant", "CS2", "BGMI", "Free Fire", "League of Legends", "Esports")} == {"esports"}
-    assert games.family("Cricket") == "cricket"
-    assert [games.label(s) for s in ("CS2", "League of Legends", "PUBG Mobile", "cricket", "esports")] == ["CS2", "League of Legends", "PUBG Mobile", "Cricket", "Esports"]
-    assert (games.of_athlete("cs-go"), games.of_athlete("pubgmobile", "India"), games.of_athlete("pubgmobile", "Nepal"), games.of_athlete("freefire")) == ("CS2", "BGMI", "PUBG Mobile", "Free Fire")
-    assert (games.of_athlete("mlbb"), games.of_athlete("kog"), games.of_athlete("apexlegends"), games.of_athlete("pubg")) == ("Mobile Legends", "King of Glory", "Apex Legends", "PUBG")  # PUBG's own API
-    assert {games.family(s) for s in ("Mobile Legends", "Apex Legends", "PUBG", "Rainbow Six Siege")} == {"esports"}
+    assert {sports.family(s) for s in ("Valorant", "CS2", "BGMI", "Free Fire", "League of Legends", "Esports")} == {"esports"}
+    assert sports.family("Cricket") == "cricket"
+    assert [sports.label(s) for s in ("CS2", "League of Legends", "PUBG Mobile", "cricket", "esports")] == ["CS2", "League of Legends", "PUBG Mobile", "Cricket", "Esports"]
+    assert (game_of_league("cs-go"), game_of_league("pubgmobile", "India"), game_of_league("pubgmobile", "Nepal"), game_of_league("freefire")) == ("CS2", "BGMI", "PUBG Mobile", "Free Fire")
+    assert (game_of_league("mlbb"), game_of_league("kog"), game_of_league("apexlegends"), game_of_league("pubg")) == ("Mobile Legends", "King of Glory", "Apex Legends", "PUBG")  # PUBG's own API
+    assert {sports.family(s) for s in ("Mobile Legends", "Apex Legends", "PUBG", "Rainbow Six Siege")} == {"esports"}
     adapter = ps.PandascoreEsports()
     assert structured.sport_name(adapter, ps.parse_player(PLAYER)) == "Valorant"
     stored_before = PlayerRef("pandascore_esports", "1", "amster", ["138811"], ["6666"], league="cs-go")  # a binding saved without a game

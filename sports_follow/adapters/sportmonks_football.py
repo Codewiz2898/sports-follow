@@ -284,7 +284,7 @@ def parse_season_stats(p: dict[str, Any], team_ids: list[str]) -> tuple[list[dic
 
 class SportmonksFootball(Adapter):
     system = "sportmonks_football"
-    sports = ("football", "soccer", "association football")
+    sport = "football"
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Football"

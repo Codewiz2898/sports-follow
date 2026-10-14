@@ -26,7 +26,7 @@ from typing import Any
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import games, naming, pipeline, registry, structured
+from . import naming, pipeline, registry, sports, structured
 from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
@@ -43,7 +43,7 @@ SUGGEST_MIN = 0.78  # how close a spelling must be to be offered as "did you mea
 SURELY = 0.9  # a "did you mean" this close is the name, misspelled: the live sources aren't asked as well
 LIKENESS = 0.4  # trigram likeness of a fan's alias to the query that makes a player a "did you mean"
 
-SPORTS = ("football", "cricket", "basketball", "tennis", "chess", "esports")
+SPORTS = tuple(s.key for s in sports.ALL)  # the filters a search takes
 
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="search")
 
@@ -112,10 +112,8 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
         .order_by(best.desc())
         .limit(LOCAL_LIMIT * 2)
     )
-    if sport == games.ESPORTS:
-        q = q.where(func.lower(Player.sport).in_(sorted(games.NAMES)))  # a pro's sport is their game
-    elif sport:
-        q = q.where(func.lower(Player.sport) == sport)
+    if sport:
+        q = q.where(func.lower(Player.sport).in_(sports.names_of(sports.BY_KEY[sport])))  # an esports pro's sport is their game
     rows = db.execute(q).all()
     if not rows:
         return []
@@ -134,7 +132,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
         out.append(SearchResult(
             key=f"{system}:{ext}" if system else (f"wikidata:{qid}:{player.sport.lower()}" if qid else f"player:{player.id}"),
             name=player.name,
-            sport=games.label(player.sport) or "Sport not known yet",
+            sport=sports.label(player.sport) or "Sport not known yet",
             detail=" · ".join(t for t in (player.teams or [])[:2] if t) or (player.role or ""),
             system=system,
             athlete_id=ext,
@@ -165,28 +163,20 @@ def _fans(db: Session, ids: list[int], fan: str | None) -> tuple[dict[int, int],
 def from_athlete(a: Athlete, query: str) -> SearchResult:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
-    system = registry.live_system(a.sport)
-    if a.sport == "esports":
-        # Two esports sources side by side, each for its own games: the one this row came from.
+    rules = sports.of(a.sport)
+    if rules.side_by_side:
+        # Its sources sit side by side, each for its own games (esports): the one this row came from.
         system = next((s for s in a.ids or {} if s in ADAPTERS), None)
-    live_id = (a.ids or {}).get(system) if system else None
-    teams = list(a.teams or [])
-    if a.sport == "chess":
-        parts = [a.title or "", a.country or ""]
-    elif a.sport == "tennis":
-        parts = [(a.league or "").upper(), a.country or ""]
-    elif a.sport == "basketball":
-        parts = [*teams[:1], (a.league or "").upper() if a.current else ""]
-    elif a.sport == "esports":
-        parts = [*teams[:1], a.country or ""]  # the game is the result's sport
     else:
-        parts = [*teams[:2], a.country or ""]
+        system = registry.live_system(a.sport)
+    live_id = (a.ids or {}).get(system) if system else None
+    parts = rules.search_detail(a)
     aka = _aka(query, a.name, list(a.aliases or []))
     return SearchResult(
         # A person in two sports is two rows (Chahal plays cricket and chess), so the sport is in the key.
         key=f"{system}:{live_id}" if live_id else f"wikidata:{a.qid}:{a.sport}",
         name=a.name,
-        sport=(games.of_athlete(a.league, a.country) if a.sport == games.ESPORTS else None) or a.sport.title(),
+        sport=rules.result_sport(a),
         detail=" · ".join(dict.fromkeys(p for p in parts if p)),
         system=system if live_id else None,
         athlete_id=live_id,
@@ -420,7 +410,7 @@ def _live(query: str, sport: str | None, by_word: bool = False) -> list[tuple[Pr
         live = provider.search
         if live is None or len(query) < live.min_length or (by_word and not live.by_word):
             continue
-        if (sport in {s for a in adapters for s in a.sports}) if sport else live.unfiltered:
+        if (sport in {a.sport for a in adapters}) if sport else live.unfiltered:
             out.append((provider, adapters))
     return out
 

@@ -19,7 +19,7 @@ time: chess, basketball and tennis take a few minutes each, cricket ten, footbal
 run, by hand or the worker's weekly one, holds the "registry-import" lock, so two never overlap; a
 sport (or esports source) that fails keeps last week's rows, and the rest still run.
 
-Esports comes from its sources instead (import_esports): Wikidata has a Liquipedia id for only 2,844
+Esports comes from its sources instead (import_rosters): Wikidata has a Liquipedia id for only 2,844
 people. Each esports source with a roster lists its pros (team titles from PandaScore, battle royale
 from Liquipedia and PUBG), keyed by the source ("pandascore:<id>", "lp:<wiki>:<page id>") where the
 others hold a Wikidata id. Each carries its source's id, so following one binds that source by id like
@@ -42,7 +42,7 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, naming
+from . import bus, naming, sports
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, for_sport
 from .config import USER_AGENT
 from .db import session
@@ -56,24 +56,14 @@ NAMESAKES = 40  # athletes with exactly the typed name that search lists, all fo
 LABEL_LANGS = ("en", "mul", "es", "pt", "fr", "de", "it", "nl")
 MAX_ALIASES = 8
 
-# Who counts as an athlete of each sport (any of these ids), and which ids to keep. The key of each id
-# is the adapter that reads it, where one does ("espn_cricket"), or the database's name.
-SPORTS: dict[str, dict[str, str]] = {
-    "chess": {"lichess_chess": "P1440"},
-    "basketball": {"espn_basketball": "P3685", "nba": "P3647", "wnba": "P3588", "bref_nba": "P2685", "bref_wnba": "P4561"},
-    "tennis": {"espn_tennis": "P11585", "atp": "P536", "wta": "P597"},
-    "cricket": {"espn_cricket": "P2697"},
-    # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
-    "football": {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"},
-}
-# Imported from PandaScore rather than Wikidata (import_esports).
-ESPORTS = "esports"
-TEAM_SPORTS = ("basketball", "cricket", "football")
-CHESS_TITLES = {
-    "Grandmaster": "GM", "International Master": "IM", "FIDE Master": "FM", "Candidate Master": "CM",
-    "Woman Grandmaster": "WGM", "Woman International Master": "WIM", "Woman FIDE Master": "WFM", "Woman Candidate Master": "WCM",
-}
-TITLE_ORDER = ["GM", "IM", "WGM", "FM", "WIM", "CM", "WFM", "WCM"]  # highest first
+# The sports imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
+# ids kept), smallest first, so a first import has most sports searchable long before football is done;
+# then those whose athletes come from their sources' own lists (sports.Sport.roster: esports).
+def importable() -> list[str]:
+    on = [s for s in sports.ALL if s.wikidata or s.roster]
+    return [s.key for s in sorted(on, key=lambda s: (s.roster, s.athletes))]
+
+
 # Country names as fans say them.
 COUNTRIES = {"People's Republic of China": "China", "United States of America": "United States", "Kingdom of the Netherlands": "Netherlands", "Republic of Ireland": "Ireland", "Czech Republic": "Czechia"}
 # Youth and age-group sides aren't who a fan follows a player for.
@@ -153,7 +143,7 @@ def _qid(uri: str) -> str:
 
 
 def members(sport: str) -> list[str]:
-    union = " UNION ".join(f"{{ ?p wdt:{prop} [] }}" for prop in SPORTS[sport].values())
+    union = " UNION ".join(f"{{ ?p wdt:{prop} [] }}" for prop in sports.BY_KEY[sport].wikidata.values())
     return sorted({_qid(r["p"]) for r in sparql(f"SELECT DISTINCT ?p WHERE {{ {union} }}")})
 
 
@@ -163,8 +153,9 @@ def _values(qids: list[str]) -> str:
 
 def fetch(sport: str, qids: list[str]) -> tuple[list[dict], list[dict], list[dict]]:
     values = _values(qids)
-    ids = " ".join(f"OPTIONAL {{ ?p wdt:{prop} ?id_{key} }}" for key, prop in SPORTS[sport].items())
-    title = 'OPTIONAL { ?p wdt:P2962 ?t . ?t rdfs:label ?title FILTER(LANG(?title) = "en") }' if sport == "chess" else ""
+    kind = sports.BY_KEY[sport]
+    ids = " ".join(f"OPTIONAL {{ ?p wdt:{prop} ?id_{key} }}" for key, prop in kind.wikidata.items())
+    title = f'OPTIONAL {{ ?p wdt:{kind.wikidata_title} ?t . ?t rdfs:label ?title FILTER(LANG(?title) = "en") }}' if kind.wikidata_title else ""
     core = sparql(f"""SELECT * WHERE {{
       VALUES ?p {{ {values} }}
       OPTIONAL {{ ?p wikibase:sitelinks ?sitelinks }}
@@ -180,7 +171,7 @@ def fetch(sport: str, qids: list[str]) -> tuple[list[dict], list[dict], list[dic
       {{ ?p rdfs:label ?n FILTER(LANG(?n) IN ({langs})) BIND("label" AS ?kind) }}
       UNION {{ ?p skos:altLabel ?n FILTER(LANG(?n) = "en") BIND("alias" AS ?kind) }} }}""")
     teams: list[dict] = []
-    if sport in TEAM_SPORTS:
+    if kind.team:
         teams = sparql(f"""SELECT ?p ?team ?teamLabel ?start WHERE {{
           VALUES ?p {{ {values} }}
           ?p p:P54 ?st . ?st ps:P54 ?team . FILTER NOT EXISTS {{ ?st pq:P582 [] }}
@@ -217,6 +208,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
     The dead are left out, as is anyone with no name in a Latin-script language we read.
     """
     today = today or datetime.now(timezone.utc).date()
+    kind = sports.BY_KEY[sport]
     people: dict[str, dict[str, Any]] = {}
     for r in core:
         p = people.setdefault(_qid(r["p"]), {"ids": {}, "countries": [], "dead": False})
@@ -236,10 +228,10 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             if country and country not in p["countries"]:
                 # The country they play for first, then citizenship.
                 p["countries"].insert(0 if key == "sport_country" else len(p["countries"]), country)
-        title = CHESS_TITLES.get(r.get("title") or "")
-        if title and (not p.get("title") or TITLE_ORDER.index(title) < TITLE_ORDER.index(p["title"])):
-            p["title"] = title  # a player holds every title they've earned; show the highest
-        for key in SPORTS[sport]:
+        title = kind.title_of(r.get("title") or "")
+        if title and (not p.get("title") or kind.better_title(title, p["title"])):
+            p["title"] = title
+        for key in kind.wikidata:
             if r.get(f"id_{key}"):
                 p["ids"].setdefault(key, r[f"id_{key}"])
     labels: dict[str, dict[str, str]] = {}
@@ -253,7 +245,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
     current_teams: dict[str, list[tuple[str, str, bool]]] = {}
     for r in teams:
         label = r.get("teamLabel") or ""
-        if not label or YOUTH.search(label) or COLLEGE.search(label) or (sport == "basketball" and label.lower().endswith(" football")):
+        if not label or YOUTH.search(label) or COLLEGE.search(label) or not kind.team_ok(label):
             continue
         national = is_national(label)
         current_teams.setdefault(_qid(r["p"]), []).append((r.get("start") or "", team_name(label), national))
@@ -269,22 +261,12 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         stints = sorted(current_teams.get(qid, []), key=lambda t: t[0], reverse=True)
         clubs = [t[1] for t in stints if not t[2]]
         nations = [t[1] for t in stints if t[2]]
-        team_list = list(dict.fromkeys([*clubs[:1], *nations[:1]] if sport != "cricket" else [*nations[:1], *clubs[:1]]))
+        team_list = list(dict.fromkeys([*nations[:1], *clubs[:1]] if kind.nation_first else [*clubs[:1], *nations[:1]]))
         birth: date | None = p.get("birth")
         age = (today - birth).days // 365 if birth else None
         latest_start = _date(stints[0][0]) if stints and stints[0][0] else None
-        if sport in TEAM_SPORTS:
-            current = bool(clubs or nations) and ((latest_start is not None and latest_start.year >= today.year - 10) or (age is not None and age <= 38))
-            current = current or (age is not None and age <= 30)
-        elif sport == "tennis":
-            current = age is None or age <= 40
-        else:
-            current = age is None or age <= 75
-        league = None
-        if sport == "basketball":
-            league = "wnba" if ("wnba" in p["ids"] or "bref_wnba" in p["ids"]) else "nba"
-        elif sport == "tennis":
-            league = "wta" if "wta" in p["ids"] else "atp"
+        current = kind.current(age, bool(clubs or nations), latest_start, today)
+        league = kind.league_of(p["ids"])
         rows.append({
             "qid": qid,
             "sport": sport,
@@ -375,13 +357,13 @@ def import_sport(sport: str, new_only: bool = False) -> int:
     return total
 
 
-def import_all(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int | None]:
-    """Import each sport in turn: athletes kept per sport, None for one that failed. A sport that fails
-    keeps last week's rows, and the others still run."""
+def import_all(keys: Iterable[str] | None = None, new_only: bool = False) -> dict[str, int | None]:
+    """Import each sport in turn (all of importable() unless given): athletes kept per sport, None for one
+    that failed. A sport that fails keeps last week's rows, and the others still run."""
     done: dict[str, int | None] = {}
-    for sport in sports:
+    for sport in importable() if keys is None else keys:
         try:
-            done[sport] = import_esports() if sport == ESPORTS else import_sport(sport, new_only)
+            done[sport] = import_rosters(sport) if sports.BY_KEY[sport].roster else import_sport(sport, new_only)
         except Exception:
             log.exception("registry %s: import failed; last week's rows kept", sport)
             done[sport] = None
@@ -396,19 +378,19 @@ def import_all(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = Fals
 LOCK = "registry-import"
 
 
-def import_locked(sports: Iterable[str] = (*SPORTS, ESPORTS), new_only: bool = False) -> dict[str, int | None] | None:
+def import_locked(keys: Iterable[str] | None = None, new_only: bool = False) -> dict[str, int | None] | None:
     """import_all under the lock every run takes, so a run by hand and the weekly one never overlap.
     None if another run holds it."""
     token = bus.try_lock(LOCK, 6 * 3600)
     if token is None:
         return None
     try:
-        return import_all(sports, new_only)
+        return import_all(keys, new_only)
     finally:
         bus.release(LOCK, token)
 
 
-# ---------------------------------------------------------------- esports, from the sources' own lists
+# ---------------------------------------------------------------- athletes from the sources' own lists (esports)
 
 
 def roster_rows(system: str, entries: list[Rostered]) -> list[dict[str, Any]]:
@@ -421,7 +403,7 @@ def roster_rows(system: str, entries: list[Rostered]) -> list[dict[str, Any]]:
         aliases = [n for n in dict.fromkeys(e.aliases) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
         rows.append({
             "qid": e.key,
-            "sport": ESPORTS,
+            "sport": KNOWN[system].sport,
             "name": ref.name[:200],
             "aliases": aliases,
             "search_text": search_text(ref.name, aliases),
@@ -455,34 +437,35 @@ def import_roster(adapter: Adapter) -> int:
 
     run = adapter.roster(keep)
     if run.complete:
-        unseen = [Athlete.sport == ESPORTS, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace]
+        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace]
         if run.leagues is not None:
             unseen.append(Athlete.league.in_(run.leagues))
         with session() as db:
             gone = db.execute(delete(Athlete).where(*unseen)).rowcount
         if gone:
-            log.info("registry esports: %d %s pros no longer listed removed", gone, adapter.provider.name)
-    log.info("registry esports: %d %s pros kept", total, adapter.provider.name)
+            log.info("registry %s: %d %s athletes no longer listed removed", adapter.sport, gone, adapter.provider.name)
+    log.info("registry %s: %d %s athletes kept", adapter.sport, total, adapter.provider.name)
     return total
 
 
-def import_esports() -> int:
-    """Esports pros from each source with a roster (adapters.base.Adapter) that runs. A source that fails
-    keeps its rows and the others still run; then this raises, so the run reports esports as failed."""
+def import_rosters(sport: str) -> int:
+    """A sport's athletes from each of its sources with a roster (adapters.base.Adapter) that runs (esports
+    pros). A source that fails keeps its rows and the others still run; then this raises, so the run
+    reports the sport as failed."""
     total, failed = 0, []
     for adapter in KNOWN.values():
-        if not hasattr(adapter, "roster"):
+        if adapter.sport != sport or not hasattr(adapter, "roster"):
             continue
         if adapter.system not in ADAPTERS:
-            log.info("registry esports: %s isn't running (no key); skipped", adapter.provider.name)
+            log.info("registry %s: %s isn't running (no key); skipped", sport, adapter.provider.name)
             continue
         try:
             total += import_roster(adapter)
         except Exception:
-            log.exception("registry esports: %s failed; its rows kept", adapter.provider.name)
+            log.exception("registry %s: %s failed; its rows kept", sport, adapter.provider.name)
             failed.append(adapter.provider.name)
     if failed:
-        raise RuntimeError(f"{', '.join(failed)} failed ({total} pros imported from the rest)")
+        raise RuntimeError(f"{', '.join(failed)} failed ({total} athletes imported from the rest)")
     return total
 
 
@@ -593,7 +576,7 @@ def same_person(person: Person, ref: PlayerRef) -> bool:
         return agree and any(naming.names_match(n, ref.name) for n in names)
     if sorted(words(ref.name)) not in [sorted(words(n)) for n in names]:
         return False
-    if person.sport in TEAM_SPORTS and person.teams:
+    if sports.of(person.sport).team and person.teams:
         return any(naming.team_key(a) in naming.team_key(b) or naming.team_key(b) in naming.team_key(a) for a in person.teams for b in ref.team_names if a and b)
     return True
 
@@ -606,9 +589,9 @@ def live_system(sport: str | None) -> str | None:
 
 
 def sport_of(system: str) -> str | None:
-    """The registry sport an adapter serves ("football" for both football sources)."""
+    """The Wikidata sport a running adapter serves ("football" for both football sources)."""
     adapter = ADAPTERS.get(system)
-    return next((s for s in SPORTS if adapter and s in adapter.sports), None)
+    return adapter.sport if adapter and sports.of(adapter.sport).wikidata else None
 
 
 def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]) -> Iterable[PlayerRef]:
@@ -715,10 +698,11 @@ def describe(player_id: int) -> str | None:
 
 def main(argv: list[str]) -> None:
     new_only = "--new" in argv
-    wanted = [a for a in argv if a != "--new"] or [*SPORTS, ESPORTS]
-    unknown = [s for s in wanted if s not in (*SPORTS, ESPORTS)]
+    every = importable()
+    wanted = [a for a in argv if a != "--new"] or every
+    unknown = [s for s in wanted if s not in every]
     if unknown:
-        sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join((*SPORTS, ESPORTS))}")
+        sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")
     done = import_locked(wanted, new_only)
     if done is None:
         sys.exit(f"another registry import is running (the worker's weekly one, or one started by hand); try again when it's done. "

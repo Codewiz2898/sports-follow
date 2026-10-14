@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from sports_follow import form, results
 from sports_follow.adapters import ADAPTERS
 from sports_follow.adapters.base import PlayerRef
+from sports_follow.sports.cricket import winner_outcome
 from sports_follow.structured import merged_result
 
 
@@ -94,7 +95,7 @@ def test_cricket_record_reads_the_winner_by_whole_name():
         ("Match abandoned without a ball bowled", ["India"], None),
         ("West Indies won by 12 runs", [], None),
     ]
-    assert [form._cricket_outcome(text, teams) for text, teams, _ in cases] == [want for _, _, want in cases]
+    assert [winner_outcome(text, teams) for text, teams, _ in cases] == [want for _, _, want in cases]
     stats, _ = form.summarize("cricket", [(result(text), None) for text, teams, _ in cases if teams == kohli], kohli)
     assert stats == [{"label": "W–D–L", "value": "1–0–1"}]
 

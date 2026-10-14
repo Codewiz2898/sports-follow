@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, games, moments, notify, structured
+from . import bus, moments, notify, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -191,14 +191,9 @@ def _claim(db: Session, player_id: int, system: str, external_id: str, evidence_
     db.flush()
 
 
-# What else a registry sport may be called on a player (an agent-built page's word for it).
-SPORT_NAMES = {"soccer": "football", "association football": "football"}
-
-
 def registry_sport(sport: str | None) -> str:
     """A sport as the registry names it: "football" for "Football" or "Soccer", "esports" for any game."""
-    family = games.family(sport)
-    return SPORT_NAMES.get(family, family)
+    return sports.family(sport)
 
 
 def _qid_holder(db: Session, qid: str) -> Any:
@@ -240,7 +235,7 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
             for player_id, sport in db.execute(select(Player.id, Player.sport).where(Player.wikidata_qid == athlete.qid, Player.id != held.player_id)):
                 if not _in_other_sport(db, athlete.qid, sport, athlete.sport):
                     return player_id, False
-        sport = (games.of_athlete(athlete.league) if athlete.sport == games.ESPORTS else None) or athlete.sport.title()
+        sport = sports.of(athlete.sport).result_sport(athlete)
         slug = _free_slug(db, athlete.name, sport, athlete.qid.lower())
         player = Player(slug=slug, name=athlete.name, sport=sport, status="active", teams=list(athlete.teams or []), wikidata_qid=athlete.qid)
         db.add(player)

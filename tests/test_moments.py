@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from sports_follow import moments, notify
+from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
 
@@ -138,22 +139,22 @@ def test_chess_game_start_and_result():
 
 
 def test_chess_bands_need_a_margin_to_change():
-    assert moments.band({"cp": 310}, current=1) == 1  # past +3.0 but not by the margin
-    assert moments.band({"cp": 335}, current=1) == 2
-    assert moments.band({"cp": 290}, current=2) == 2
-    assert moments.band({"cp": 250}, current=2) == 1
-    assert moments.band({"cp": -20, "mate": 4}) == 2 and moments.band({"mate": -2}) == -2
+    assert chess.band({"cp": 310}, current=1) == 1  # past +3.0 but not by the margin
+    assert chess.band({"cp": 335}, current=1) == 2
+    assert chess.band({"cp": 290}, current=2) == 2
+    assert chess.band({"cp": 250}, current=2) == 1
+    assert chess.band({"cp": -20, "mate": 4}) == 2 and chess.band({"mate": -2}) == -2
 
 
 def test_a_chess_swing_counts_once_two_evaluations_agree():
-    first = moments.settle(None, {"cp": 20, "fen": "8/8/8/8/8/8/8/8 w - - 0 30", "at": 1})
-    glitch = moments.settle(first, {"cp": 520, "fen": "8/8/8/8/8/8/8/8 b - - 0 31", "at": 2})
+    first = chess.settle(None, {"cp": 20, "fen": "8/8/8/8/8/8/8/8 w - - 0 30", "at": 1})
+    glitch = chess.settle(first, {"cp": 520, "fen": "8/8/8/8/8/8/8/8 b - - 0 31", "at": 2})
     assert (first["band"], glitch["band"]) == (0, 0)  # one reading isn't enough
-    back = moments.settle(glitch, {"cp": 30, "fen": "8/8/8/8/8/8/8/8 w - - 0 32", "at": 3})
+    back = chess.settle(glitch, {"cp": 30, "fen": "8/8/8/8/8/8/8/8 w - - 0 32", "at": 3})
     assert back["band"] == 0
-    real = moments.settle(moments.settle(back, {"cp": 480, "at": 4, "fen": "8/8/8/8/8/8/8/8 w - - 0 33"}), {"cp": 510, "at": 5, "fen": "8/8/8/8/8/8/8/8 w - - 0 34"})
+    real = chess.settle(chess.settle(back, {"cp": 480, "at": 4, "fen": "8/8/8/8/8/8/8/8 w - - 0 33"}), {"cp": 510, "at": 5, "fen": "8/8/8/8/8/8/8/8 w - - 0 34"})
     assert real["band"] == 2 and real["move"] == 34
-    assert moments.settle(real, {"cp": 510, "at": 5}) is real  # the same evaluation again: unchanged
+    assert chess.settle(real, {"cp": 510, "at": 5}) is real  # the same evaluation again: unchanged
 
 
 def test_chess_swings_from_the_players_side():
@@ -179,7 +180,7 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     def titles(colour: str, cps: list[int]) -> list[str]:
         ev, found = None, []
         for at, cp in enumerate(cps, 1):
-            new = moments.settle(ev, {"cp": cp, "mate": None, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"})
+            new = chess.settle(ev, {"cp": cp, "mate": None, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"})
             if ev is not None:
                 before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
                 found += detect("Chess", "Magnus Carlsen", "1503014", before, now)
@@ -196,7 +197,7 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     assert titles("White", turned) == ["Magnus Carlsen is winning", "Turnaround: Magnus Carlsen is in trouble"]
     # An evaluation stored before "told" was kept counts as nothing told yet: told once more, then kept.
     old = {"cp": 340, "at": 0, "band": 2, "raw": 2, "move": 40}
-    assert moments.settle(old, {"cp": 260, "at": 1})["told"] == 0
+    assert chess.settle(old, {"cp": 260, "at": 1})["told"] == 0
 
 
 def test_levels_decide_who_hears():

@@ -236,7 +236,7 @@ class NameSource:
     """A source whose name search finds one athlete."""
 
     system = "espn_soccer"
-    sports = ("football",)
+    sport = "football"
 
     def __init__(self, ref):
         self.ref = ref
@@ -338,7 +338,7 @@ class FinishedSource:
     is served from the cache, which (as ESPN's does) still holds the poller's last live read."""
 
     system = "fake_source"
-    sports = ("hurling",)
+    sport = "hurling"
     live_cadence = 15
 
     def __init__(self, scorecard: bool):
