@@ -897,6 +897,14 @@ def test_following_a_pick_sends_the_source_only_an_id_of_its_shape(api, monkeypa
     assert asked == []
 
 
+def test_an_athlete_an_operator_removed_cant_be_followed_or_previewed_by_their_source_id(api, monkeypatch):
+    # players.py removed them: their ids in the sources are blocked, so a source's own search can't bring them back.
+    monkeypatch.setattr(registry, "blocked", lambda db: {("espn_soccer", "231388")})
+    monkeypatch.setattr(ADAPTERS["espn_soccer"], "player", lambda athlete_id, league=None: pytest.fail("asked the source"))
+    assert api.call("POST", "/api/follows", fan="fan", body={"system": "espn_soccer", "athlete_id": "231388"}).status_code == 404
+    assert api.call("GET", "/api/athletes/espn_soccer/231388").status_code == 404
+
+
 def test_a_registry_athlete_is_looked_up_only_with_a_sport_that_can_be_stored(monkeypatch):
     monkeypatch.setattr(registry, "get", lambda db, qid, sport: pytest.fail(f"looked up {sport!r}"))
     assert server._registry_athlete(None, {"qid": "Q1354960", "sport": "foot\x00ball"}) is None

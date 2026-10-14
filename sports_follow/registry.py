@@ -46,7 +46,7 @@ from . import bus, naming, sports
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, for_sport
 from .config import USER_AGENT
 from .db import session
-from .models import Athlete, Player, PlayerIdentity
+from .models import Athlete, AthleteOverride, Player, PlayerIdentity
 
 log = logging.getLogger("sports_follow.registry")
 
@@ -291,6 +291,11 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
 
 
 def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
+    """Write athlete rows, new or refreshed. An athlete an operator removed (players.py) is never written again."""
+    if not rows:
+        return
+    removed = set(db.execute(select(AthleteOverride.qid, AthleteOverride.sport).where(AthleteOverride.action == "remove", AthleteOverride.sport.in_({r["sport"] for r in rows}))).all())
+    rows = [r for r in rows if (r["qid"], r["sport"]) not in removed]
     if not rows:
         return
     stmt = insert(Athlete).values(rows)
@@ -305,6 +310,17 @@ def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
             "image": ex.image, "sitelinks": ex.sitelinks, "current": ex.current, "updated_at": func.now(),
         },
     ))
+
+
+def blocked(db: Session) -> set[tuple[str, str]]:
+    """The source ids of every athlete an operator removed (players.py), as (system, id): search leaves
+    them out and following refuses them, so a source's own search can't bring them back."""
+    return {(system, str(xid)) for ids in db.scalars(select(AthleteOverride.ids).where(AthleteOverride.action == "remove")) for system, xid in (ids or {}).items()}
+
+
+def operator_kept(sport: str) -> Any:
+    """The athletes of a sport an operator keeps (players.py: added by hand, or pinned): never dropped by an import."""
+    return select(AthleteOverride.qid).where(AthleteOverride.sport == sport, AthleteOverride.action == "keep")
 
 
 def too_many_gone(leaving: int, kept: int) -> bool:
@@ -344,7 +360,7 @@ def import_sport(sport: str, new_only: bool = False) -> int:
         # Merged, deleted or no-longer-matching items drop out; a partial run keeps everything, and so does
         # one that would remove more of the sport than it kept (a cut-short answer, not a week's churn).
         with session() as db:
-            stale = (Athlete.sport == sport, Athlete.updated_at < started)
+            stale = (Athlete.sport == sport, Athlete.updated_at < started, Athlete.qid.not_in(operator_kept(sport)))
             leaving = db.scalar(select(func.count()).select_from(Athlete).where(*stale)) or 0
             if too_many_gone(leaving, total):
                 log.warning("registry %s: this run kept %d and would remove %d; nothing removed", sport, total, leaving)
@@ -393,8 +409,10 @@ def import_locked(keys: Iterable[str] | None = None, new_only: bool = False) -> 
 # ---------------------------------------------------------------- athletes from the sources' own lists (esports)
 
 
-def roster_rows(system: str, entries: list[Rostered]) -> list[dict[str, Any]]:
-    """Athlete rows from a source's roster (pure). Sources have no popularity signal, so sitelinks stay 0."""
+def roster_rows(system: str, entries: list[Rostered], sport: str | None = None) -> list[dict[str, Any]]:
+    """Athlete rows from a source's roster (pure), in the source's sport. Sources have no popularity signal,
+    so sitelinks stay 0."""
+    sport = sport or KNOWN[system].sport
     rows = []
     for e in entries:
         ref = e.ref
@@ -403,7 +421,7 @@ def roster_rows(system: str, entries: list[Rostered]) -> list[dict[str, Any]]:
         aliases = [n for n in dict.fromkeys(e.aliases) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
         rows.append({
             "qid": e.key,
-            "sport": KNOWN[system].sport,
+            "sport": sport,
             "name": ref.name[:200],
             "aliases": aliases,
             "search_text": search_text(ref.name, aliases),
@@ -429,7 +447,7 @@ def import_roster(adapter: Adapter) -> int:
 
     def keep(entries: list[Rostered]) -> int:
         nonlocal total
-        rows = roster_rows(adapter.system, entries)
+        rows = roster_rows(adapter.system, entries, adapter.sport)
         with session() as db:
             upsert(db, rows)
         total += len(rows)
@@ -437,7 +455,7 @@ def import_roster(adapter: Adapter) -> int:
 
     run = adapter.roster(keep)
     if run.complete:
-        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace]
+        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace, Athlete.qid.not_in(operator_kept(adapter.sport))]
         if run.leagues is not None:
             unseen.append(Athlete.league.in_(run.leagues))
         with session() as db:
