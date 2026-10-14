@@ -38,6 +38,8 @@ if [ -f "$in/alert-url" ] || [ -f "$in/heartbeat-url" ]; then
   if [ -f "$in/alert-url" ]; then printf 'ALERT_URL=%s\n' "$(cat "$in/alert-url")" >>"$D/alerts.env"; fi
   if [ -f "$in/heartbeat-url" ]; then printf 'HEARTBEAT_URL=%s\n' "$(cat "$in/heartbeat-url")" >>"$D/alerts.env"; fi
 fi
+# Where the off-site backups go and the storage's keys (deploy/offsite-backup.sh): kept unless a new one is sent.
+if [ -f "$in/offsite.env" ]; then install -m 640 "$in/offsite.env" "$D/offsite.env"; fi
 chown "root:$grp" "$D"/*.env
 chmod 640 "$D"/*.env
 echo "install-secrets: $D updated (Sportmonks, Lichess and OpenRouter replaced; database password, gateway token, push key and cookie key kept)"

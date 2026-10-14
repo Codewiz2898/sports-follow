@@ -1,0 +1,11 @@
+[Unit]
+Description=Sports Follow off-site backups, hourly
+
+[Timer]
+# Hourly, so a new daily dump is off-site within the hour, whenever the backup container made it.
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
