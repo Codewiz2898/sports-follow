@@ -24,7 +24,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .. import bus
-from . import espn
+from ..config import USER_AGENT
 from .base import AdapterError
 
 BASE = "https://api.liquipedia.net/api/v3"
@@ -36,7 +36,7 @@ MARGIN = 4  # requests never spent, in case another process counted late
 RESERVE = int(os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_RESERVE", 30))
 PAGE = 1000  # rows a request, the API's most
 
-_client = httpx.Client(headers={"user-agent": f"{espn.USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
+_client = httpx.Client(headers={"user-agent": f"{USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
 

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .. import naming
 from . import espn
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
@@ -224,8 +225,8 @@ def involves_team(f: Fixture, ref: PlayerRef) -> bool:
     """Is one of the player's sides in this fixture: the source's team id, or another side by exact name."""
     if set(ref.team_ids) & set(f.team_ids):
         return True
-    wanted = {espn.team_key(t) for t in [*ref.team_names, *ref.other_teams] if t}
-    return any(espn.team_key(n) in wanted for n in f.team_names)
+    wanted = {naming.team_key(t) for t in [*ref.team_names, *ref.other_teams] if t}
+    return any(naming.team_key(n) in wanted for n in f.team_names)
 
 
 def squad_membership(data: dict[str, Any], athlete_id: str) -> bool | None:
@@ -335,7 +336,7 @@ class EspnCricket:
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
-            if espn.names_match(name, hit["name"]):
+            if naming.names_match(name, hit["name"]):
                 return self.player(hit["athlete_id"])
         return None
 

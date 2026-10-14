@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.dialects import postgresql
 
-from sports_follow import pipeline, search
+from sports_follow import naming, pipeline, search
 from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
 from sports_follow.search import Result
 
@@ -97,10 +97,10 @@ def test_a_typo_is_a_suggestion_not_a_result():
 
 
 def test_prefix_match_is_per_word_and_order_free():
-    assert search._prefix_match("caitl", "Caitlin Clark")
-    assert search._prefix_match("clark caitlin", "Caitlin Clark")
-    assert search._prefix_match("jokic", "Nikola Jokić")
-    assert not search._prefix_match("catalin clark", "Caitlin Clark")
+    assert naming.prefix_match("caitl", "Caitlin Clark")
+    assert naming.prefix_match("clark caitlin", "Caitlin Clark")
+    assert naming.prefix_match("jokic", "Nikola Jokić")
+    assert not naming.prefix_match("catalin clark", "Caitlin Clark")
 
 
 # ---------------------------------------------------------------- AI research allowance
@@ -133,8 +133,8 @@ def test_popularity_counts_double_for_players_of_today():
 def test_apostrophes_are_typed_with_or_without_them():
     # The registry's search text drops apostrophes; matching kept them, so A'ja Wilson was found and then
     # left out (BUG-070).
-    assert search._prefix_match("aja wilson", "A'ja Wilson")
-    assert search._prefix_match("shaquille oneal", "Shaquille O'Neal")
+    assert naming.prefix_match("aja wilson", "A'ja Wilson")
+    assert naming.prefix_match("shaquille oneal", "Shaquille O'Neal")
     kante = Athlete(qid="Q7", sport="football", name="N'Golo Kanté", aliases=[], teams=["Al-Ittihad"], ids={}, sitelinks=60, current=True)
     for typed in ("ngolo kante", "N’Golo Kanté", "n'golo"):  # the second as an iPhone types it
         r = search.from_athlete(kante, typed)
@@ -281,7 +281,7 @@ def test_a_query_with_nothing_to_search_by_lists_no_one_and_offers_no_research(m
     # "--" listed ESPN's default stars, and "विराट कोहली" found no one but offered an AI research that
     # always failed: a researched player is named by the query's Latin letters (BUG-075).
     lebron = Result(key="espn_basketball:1966", name="LeBron James", sport="Basketball", detail="", system="espn_basketball", athlete_id="1966", live_scores=True)
-    assert not search._prefix_match("--", "LeBron James")
+    assert not naming.prefix_match("--", "LeBron James")
     for query in ["--", "..", "%%", "विराट कोहली", "விராட் கோலி", "梅西", "Лионель Месси"]:
         asked = searching(monkeypatch, espn=[lebron])
         out = search.run(None, query)
@@ -317,7 +317,7 @@ def test_native_spellings_find_the_star(monkeypatch):
     assert [r["name"] for r in search.run(None, "mueller")["results"]][:1] == ["Thomas Müller"]
     assert search.run(None, "michael")["results"] == []  # looked up as "michal" too, but Michal isn't Michael
     assert search.registry.words("Ðoković") == ["dokovic"]
-    assert search._same("Novak Đoković", "Novak Djokovic") and search._same("thomas mueller", "Thomas Müller")
+    assert naming.same("Novak Đoković", "Novak Djokovic") and naming.same("thomas mueller", "Thomas Müller")
 
 
 # ---------------------------------------------------------------- players on Sports Follow

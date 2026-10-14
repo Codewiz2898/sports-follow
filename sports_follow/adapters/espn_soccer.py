@@ -5,7 +5,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
+from .. import naming
 from . import espn
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
@@ -268,7 +270,7 @@ class EspnSoccer:
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
-            if espn.names_match(name, hit["name"]):
+            if naming.names_match(name, hit["name"]):
                 return self.player(hit["athlete_id"])
         return None
 
@@ -295,13 +297,13 @@ class EspnSoccer:
         """Find a men's national team by country name via search; None when it isn't unambiguous."""
         if not country:
             return None
-        data = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(country)}&limit=10", ttl=24 * 3600)
+        data = espn.get_json(f"{espn.WEB}/search/v2?query={quote(country)}&limit=10", ttl=24 * 3600)
         for group in data.get("results", []):
             if group.get("type") != "team":
                 continue
             for item in group.get("contents", []):
                 uid = item.get("uid") or ""
-                if uid.startswith(SPORT_UID) and espn.fold(item.get("displayName", "")) == espn.fold(country):
+                if uid.startswith(SPORT_UID) and naming.fold(item.get("displayName", "")) == naming.fold(country):
                     return uid.split("~t:")[1], item["displayName"]
         return None
 

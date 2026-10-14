@@ -23,7 +23,8 @@ from urllib.parse import quote
 
 import httpx
 
-from . import espn
+from .. import naming
+from ..config import USER_AGENT
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 API = "https://lichess.org/api"
@@ -31,7 +32,7 @@ DAYS_BACK = 60
 DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()  # one request at a time, as Lichess asks
 _state = {"last": 0.0, "paused_until": 0.0}
@@ -151,7 +152,7 @@ def _points(result: str, white: bool) -> float:
 
 
 def _tokens(name: str) -> list[str]:
-    return [t for t in re.split(r"[^a-z]+", espn.fold(name)) if t]
+    return [t for t in re.split(r"[^a-z]+", naming.fold(name)) if t]
 
 
 def name_score(wanted: str, fide_name: str) -> int:
@@ -410,7 +411,7 @@ class LichessChess:
         for it, and search misses events whose player list doesn't name them (Carlsen's Global
         Chess League final).
         """
-        surname = espn.fold(ref.name).split()[-1]
+        surname = naming.fold(ref.name).split()[-1]
         found: dict[str, dict[str, Any]] = {}
         if ref.profile_url:
             try:
@@ -429,7 +430,7 @@ class LichessChess:
         top = get_json(f"{API}/broadcast/top", ttl=600)
         for entry in [*(top.get("active") or []), *(top.get("upcoming") or [])]:
             tour = entry["tour"]
-            text = espn.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
+            text = naming.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
             if surname in text.split() or surname in text.replace(",", " ").split():
                 found.setdefault(tour["id"], tour)
         lo, hi = now - timedelta(days=DAYS_BACK), now + timedelta(days=DAYS_AHEAD)
@@ -443,7 +444,7 @@ class LichessChess:
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
         now = datetime.now(timezone.utc)
-        surname = espn.fold(ref.name).split()[-1]
+        surname = naming.fold(ref.name).split()[-1]
         out: list[Fixture] = []
         for tour in self._tours(ref, now):
             try:
@@ -484,7 +485,7 @@ class LichessChess:
                     unpaired.append(rnd)  # starting soon, pairings not out
                 # else: paired without them (a bye, or not in this section)
             # Rounds not yet paired count as the player's only if they've played in this event or it lists them.
-            listed = surname in espn.fold((tour.get("info") or {}).get("players", "")).replace(",", " ").split()
+            listed = surname in naming.fold((tour.get("info") or {}).get("players", "")).replace(",", " ").split()
             if games or listed:
                 out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))

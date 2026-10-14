@@ -16,12 +16,13 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, moments, notify, registry
+from . import bus, engine, moments, naming, notify, registry
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn, espn_enabled, for_sport, liquipedia_esports, pandascore_esports
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -70,8 +71,8 @@ def binding(db: Session, player_id: int) -> SourceBinding | None:
 
 
 def _teams_overlap(found: list[str], known: list[str]) -> bool:
-    a = [espn.fold(t) for t in found if t]
-    b = [espn.fold(t) for t in known if t]
+    a = [naming.fold(t) for t in found if t]
+    b = [naming.fold(t) for t in known if t]
     return any(x in y or y in x for x in a for y in b)
 
 
@@ -102,7 +103,7 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
     # is recognised here and every other name goes to the agent.
     if espn_enabled():
         try:
-            search = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit=10", ttl=3600)
+            search = espn.get_json(f"{espn.WEB}/search/v2?query={quote(query)}&limit=10", ttl=3600)
         except AdapterError:
             return None
         namesakes = [item for group in search.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if _name_key(item.get("displayName", "")) == wanted]
@@ -210,8 +211,8 @@ def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
         log.info("bind %s: %s's %r (%s) may not be the %r of %s; not binding", player_id, adapter.system, ref.name, ", ".join(ref.team_names) or "no team", name, ", ".join(teams) or "no team")
         return False
     confidence = 1.0 if certain else 0.8
-    known = {espn.team_key(t) for t in ref.team_names}
-    ref.other_teams = [t for t in teams if t and espn.team_key(t) not in known]
+    known = {naming.team_key(t) for t in ref.team_names}
+    ref.other_teams = [t for t in teams if t and naming.team_key(t) not in known]
     return record(player_id, ref, confidence)
 
 
@@ -551,8 +552,8 @@ def _team_of(f: Fixture, ref: PlayerRef) -> str | None:
     by_id = next((name for tid, name in zip(ref.team_ids, ref.team_names) if tid in f.team_ids), None)
     if by_id:
         return by_id
-    wanted = {espn.team_key(t) for t in ref.other_teams}
-    return next((n for n in f.team_names if espn.team_key(n) in wanted), None)
+    wanted = {naming.team_key(t) for t in ref.other_teams}
+    return next((n for n in f.team_names if naming.team_key(n) in wanted), None)
 
 
 def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:

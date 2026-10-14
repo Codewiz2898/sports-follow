@@ -41,8 +41,9 @@ from sqlalchemy import case, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus
+from . import bus, naming
 from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, espn, for_sport, liquipedia, liquipedia_esports, pandascore, pandascore_esports
+from .config import USER_AGENT
 from .db import session
 from .models import Athlete, Player, PlayerIdentity
 
@@ -99,7 +100,7 @@ ICC_SIDE = re.compile(rf"^({'|'.join(map(re.escape, ICC_MEMBERS))})\s+(men's |wo
 # Wikidata's date precisions (wikibase:timePrecision): a date known to the year is stored as 1 January.
 DAY, MONTH, YEAR = 11, 10, 9
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/sparql-results+json"}, timeout=90)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/sparql-results+json"}, timeout=90)
 
 
 # ---------------------------------------------------------------- names as search sees them
@@ -107,7 +108,7 @@ _client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "applic
 
 def words(text: str) -> list[str]:
     """Plain lower-case ASCII words: "A'ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"]."""
-    return espn.words(text)
+    return naming.words(text)
 
 
 def search_text(name: str, aliases: Iterable[str]) -> str:
@@ -725,11 +726,11 @@ def same_person(person: Person, ref: PlayerRef) -> bool:
         return agree
     names = [person.name, *person.aliases]
     if agree is not None:
-        return agree and any(espn.names_match(n, ref.name) for n in names)
+        return agree and any(naming.names_match(n, ref.name) for n in names)
     if sorted(words(ref.name)) not in [sorted(words(n)) for n in names]:
         return False
     if person.sport in TEAM_SPORTS and person.teams:
-        return any(espn.team_key(a) in espn.team_key(b) or espn.team_key(b) in espn.team_key(a) for a in person.teams for b in ref.team_names if a and b)
+        return any(naming.team_key(a) in naming.team_key(b) or naming.team_key(b) in naming.team_key(a) for a in person.teams for b in ref.team_names if a and b)
     return True
 
 
@@ -752,7 +753,7 @@ def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]
     search = getattr(adapter, "search", None)
     if search is not None:
         for ref in search(name)[:6]:
-            if ref.athlete_id not in tried and espn.names_match(name, ref.name):
+            if ref.athlete_id not in tried and naming.names_match(name, ref.name):
                 tried.add(ref.athlete_id)
                 yield ref
         return
@@ -760,7 +761,7 @@ def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]
     if uid is None:
         return  # Lichess is found by the FIDE id Wikidata has
     for hit in espn.search_athletes(name, uid)[:6]:
-        if hit["athlete_id"] in tried or not espn.names_match(name, hit["name"]):
+        if hit["athlete_id"] in tried or not naming.names_match(name, hit["name"]):
             continue
         tried.add(hit["athlete_id"])
         try:

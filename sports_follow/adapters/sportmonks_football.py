@@ -15,7 +15,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
-from . import espn, sportmonks
+from .. import naming
+from . import sportmonks
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 from .espn_soccer import result_label as _result_label
 
@@ -299,7 +300,7 @@ class SportmonksFootball:
         return [parse_player(p) for p in (data.get("data") or [])[:8] if p.get("id")]
 
     def find_player(self, name: str) -> PlayerRef | None:
-        hits = [r for r in self.search(name) if espn.names_match(name, r.name)]
+        hits = [r for r in self.search(name) if naming.names_match(name, r.name)]
         return hits[0] if len(hits) == 1 else None  # two namesakes: the agent decides who is meant
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:

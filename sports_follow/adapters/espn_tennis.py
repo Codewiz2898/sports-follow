@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .. import naming
 from . import espn
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
@@ -210,7 +211,7 @@ class EspnTennis:
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):
             tour = TOURS.get(hit.get("league_id") or "")
-            if tour is not None and espn.names_match(name, hit["name"]):
+            if tour is not None and naming.names_match(name, hit["name"]):
                 # Individual sport: the player is their own "team", so result labels and titles work as for teams.
                 return PlayerRef(self.system, hit["athlete_id"], hit["name"], [hit["athlete_id"]], [hit["name"]], hit.get("url"), league=tour)
         return None

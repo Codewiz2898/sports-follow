@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sports_follow import moments, structured
+from sports_follow import moments, naming, structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer, lichess_chess, liquipedia, opendota, pandascore, pubg, sportmonks
 from sports_follow.adapters.base import AdapterError, Fixture
 
@@ -33,22 +33,22 @@ def load(name: str) -> dict:
 
 
 def test_names_match_on_surname_and_accents():
-    assert espn.names_match("Ronaldo", "Cristiano Ronaldo")
-    assert espn.names_match("Kohli", "Virat Kohli")
-    assert espn.names_match("Jokic", "Nikola Jokić")
-    assert not espn.names_match("Ronaldo", "Ronald Araújo")
+    assert naming.names_match("Ronaldo", "Cristiano Ronaldo")
+    assert naming.names_match("Kohli", "Virat Kohli")
+    assert naming.names_match("Jokic", "Nikola Jokić")
+    assert not naming.names_match("Ronaldo", "Ronald Araújo")
 
 
 def test_names_match_needs_every_word_of_the_shorter_name():
     # The surname alone used to do: "Ahmed Salah" bound Liverpool's Mohamed Salah (BUG-032).
-    assert not espn.names_match("Ahmed Salah", "Mohamed Salah")
-    assert not espn.names_match("Mohamed Salah", "Ahmed Salah")
-    assert espn.names_match("Jasprit Bumrah", "Jasprit Jasbirsingh Bumrah")  # ESPNcricinfo's longer legal name
-    assert espn.names_match("Cristiano Ronaldo", "Ronaldo")
-    assert espn.names_match("L. Messi", "Lionel Messi")  # an initial stands for its word
-    assert espn.names_match("MS Dhoni", "M. S. Dhoni")
-    assert espn.names_match("Trent Alexander-Arnold", "Trent Alexander Arnold")
-    assert espn.names_match("N’Golo Kanté", "N'Golo Kante")
+    assert not naming.names_match("Ahmed Salah", "Mohamed Salah")
+    assert not naming.names_match("Mohamed Salah", "Ahmed Salah")
+    assert naming.names_match("Jasprit Bumrah", "Jasprit Jasbirsingh Bumrah")  # ESPNcricinfo's longer legal name
+    assert naming.names_match("Cristiano Ronaldo", "Ronaldo")
+    assert naming.names_match("L. Messi", "Lionel Messi")  # an initial stands for its word
+    assert naming.names_match("MS Dhoni", "M. S. Dhoni")
+    assert naming.names_match("Trent Alexander-Arnold", "Trent Alexander Arnold")
+    assert naming.names_match("N’Golo Kanté", "N'Golo Kante")
 
 
 def test_search_hits_are_filtered_by_sport():

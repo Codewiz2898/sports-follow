@@ -24,7 +24,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from . import espn
+from ..config import USER_AGENT
 from .base import AdapterError
 
 BASE = "https://api.pandascore.co"
@@ -36,7 +36,7 @@ HOURLY = 1000
 # hour's remaining allowance falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_PANDASCORE_RESERVE", 300))
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/json"}, timeout=20)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()
 _state = {"paused_until": 0.0}

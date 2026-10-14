@@ -24,7 +24,8 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import espn, pubg
+from .. import naming
+from . import pubg
 from .base import Fixture, Line, PlayerRef, Snapshot
 from .liquipedia_esports import ordinal, result_label as _result_label
 
@@ -358,8 +359,8 @@ class PubgEsports:
         return players_of(self.lobbies())
 
     def search(self, name: str) -> list[PlayerRef]:
-        wanted = espn.fold(name).strip()
-        return [ref_of(acc, info) for acc, info in self.players().items() if wanted in (espn.fold(info["name"]), espn.fold(info.get("in_game") or ""))]
+        wanted = naming.fold(name).strip()
+        return [ref_of(acc, info) for acc, info in self.players().items() if wanted in (naming.fold(info["name"]), naming.fold(info.get("in_game") or ""))]
 
     def find_player(self, name: str) -> PlayerRef | None:
         hits = self.search(name)

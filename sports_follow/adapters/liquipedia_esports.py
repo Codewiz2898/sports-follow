@@ -25,7 +25,8 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import espn, liquipedia
+from .. import naming
+from . import liquipedia
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 # The battle royale wikis read, and what fans call a game won on each. All store lobbies the same way
@@ -367,7 +368,7 @@ class LiquipediaEsports:
         return found
 
     def find_player(self, name: str) -> PlayerRef | None:
-        hits = [r for r in self.search(name) if espn.fold(r.name) == espn.fold(name)]
+        hits = [r for r in self.search(name) if naming.fold(r.name) == naming.fold(name)]
         on_teams = [r for r in hits if r.team_ids]
         pick = hits if len(hits) == 1 else on_teams
         return pick[0] if len(pick) == 1 else None

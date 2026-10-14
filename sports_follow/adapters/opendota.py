@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 
 from .. import bus
-from . import espn
+from ..config import USER_AGENT
 from .base import AdapterError
 
 BASE = "https://api.opendota.com/api"
@@ -27,7 +27,7 @@ ENABLED = os.environ.get("SPORTS_FOLLOW_OPENDOTA", "1") != "0"
 FREE_MINUTE, FREE_DAY = 60, 3000
 MARGIN_MINUTE, MARGIN_DAY = 5, 200
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/json"}, timeout=20)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list), per process
 
 

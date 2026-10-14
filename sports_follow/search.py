@@ -22,11 +22,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import games, pipeline, registry, structured
+from . import games, naming, pipeline, registry, structured
 from .adapters import ADAPTERS, AdapterError, espn, espn_enabled, lichess_chess
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
@@ -94,25 +95,12 @@ def _key(name: str) -> list[str]:
     return structured._name_key(name)
 
 
-def _same(query: str, name: str) -> bool:
-    """The name is exactly what was typed, in any order and either spelling ("thomas mueller" is Thomas Müller)."""
-    names = [sorted(n) for n in espn.spellings(name)]
-    return any(q and sorted(q) in names for q in espn.spellings(query))
-
-
-def _prefix_match(query: str, name: str) -> bool:
-    """Every typed word starts some word of the name, in either spelling: "caitl" -> Caitlin Clark,
-    "v kohli" -> Virat Kohli, "Đoković" -> Djokovic. Never when nothing searchable was typed ("--")."""
-    names = espn.spellings(name)
-    return any(typed and all(any(w.startswith(q) for w in n) for q in typed) for typed in espn.spellings(query) for n in names)
-
-
 def _aka(query: str, name: str, aliases: list[str]) -> str | None:
     """The alias a result was found by when its name doesn't start with what was typed: "jonathan"
     finds Cije as Christian Jonathan. An alias typed whole comes before one it only starts."""
-    if _prefix_match(query, name):
+    if naming.prefix_match(query, name):
         return None
-    return next((x for x in aliases if x and _same(query, x)), None) or next((x for x in aliases if x and _prefix_match(query, x)), None)
+    return next((x for x in aliases if x and naming.same(query, x)), None) or next((x for x in aliases if x and naming.prefix_match(query, x)), None)
 
 
 def searchable(query: str) -> bool:
@@ -188,7 +176,7 @@ def parse_espn(data: dict[str, Any], query: str) -> list[Result]:
                 athlete_id=parts["a"] if system else None,
                 league=league,
                 live_scores=system is not None,
-                exact=_same(query, name),
+                exact=naming.same(query, name),
                 popularity=5 if item.get("image") else 0,
             ))
     return out
@@ -202,9 +190,9 @@ def parse_fide(records: list[dict[str, Any]], query: str, limit: int) -> list[Re
         if not r.get("id") or not r.get("name"):
             continue
         name = lichess_chess.display_name(r["name"])
-        if not _prefix_match(query, name):
+        if not naming.prefix_match(query, name):
             continue  # FIDE search matches any one word: "max verstappen" returns every titled Max
-        exact = _same(query, name)
+        exact = naming.same(query, name)
         notable = bool(r.get("title")) or (r.get("standard") or 0) >= 2000
         if not (notable or exact or limit > CHESS_LIMIT):
             continue
@@ -231,7 +219,7 @@ def parse_fide(records: list[dict[str, Any]], query: str, limit: int) -> list[Re
 def _espn(query: str, limit: int = 20) -> list[Result]:
     if not espn_enabled():
         return []
-    data = espn.get_json(f"{espn.WEB}/search/v2?query={espn.quote(query)}&limit={limit}", ttl=3600)
+    data = espn.get_json(f"{espn.WEB}/search/v2?query={quote(query)}&limit={limit}", ttl=3600)
     return parse_espn(data, query)
 
 
@@ -243,7 +231,7 @@ def _fide(query: str, limit: int) -> list[Result]:
     # other, so a search that can't get the line within a second gives up on chess this time.
     if "lichess_chess" not in ADAPTERS:
         return []
-    url = f"{lichess_chess.API}/fide/player?q={espn.quote(query)}"
+    url = f"{lichess_chess.API}/fide/player?q={quote(query)}"
     records = lichess_chess.peek(url, ttl=24 * 3600)
     if records is None:
         if not _fide_lock.acquire(timeout=1.0):
@@ -311,12 +299,12 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[R
             followers=int(followers.get(player.id, 0)),
             live_scores=system is not None,
             inactive=player.status == "retired",
-            exact=_same(query, player.name),
-            aka=alias.replace("-", " ") if alias and not _prefix_match(query, player.name) else None,
+            exact=naming.same(query, player.name),
+            aka=alias.replace("-", " ") if alias and not naming.prefix_match(query, player.name) else None,
             status=status,
             next=_next(card or {}),
             qid=qid,
-            matched=bool(alias) or _prefix_match(query, player.name),
+            matched=bool(alias) or naming.prefix_match(query, player.name),
             _rank=(float(similarity or 0),),
         ))
     return out
@@ -360,11 +348,11 @@ def from_athlete(a: Athlete, query: str) -> Result:
         league=a.league,
         live_scores=system is not None,  # a running source; an athlete it can't find goes to the agent
         inactive=not a.current,
-        exact=_same(query, a.name) or any(_same(query, x) for x in a.aliases or []),
+        exact=naming.same(query, a.name) or any(naming.same(query, x) for x in a.aliases or []),
         aka=aka,
         qid=a.qid if a.qid.startswith("Q") else None,  # esports rows are keyed by their PandaScore id instead
         born=a.birth_date.year if a.birth_date else None,
-        matched=aka is not None or _prefix_match(query, a.name),
+        matched=aka is not None or naming.prefix_match(query, a.name),
         popularity=a.sitelinks or 0,
     )
 
@@ -422,9 +410,9 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
             # The source's line is current ("GM · Norway"); ours is whatever the agent last called
             # their teams, which for a chess player can be a league side.
             held.detail = r.detail
-        if not _prefix_match(query, held.name):
+        if not naming.prefix_match(query, held.name):
             # Found by another name: as a source writes it ("Dommaraju Gukesh"), before a fan's slug.
-            held.aka = r.aka or (r.name if _prefix_match(query, r.name) else None) or held.aka
+            held.aka = r.aka or (r.name if naming.prefix_match(query, r.name) else None) or held.aka
 
     def group(r: Result) -> int:
         return 0 if r.player_id else (1 if r.live_scores else 2)
@@ -445,7 +433,7 @@ def rank(query: str, local_results: list[Result], source_results: list[Result]) 
     def order(pair: tuple[int, Result]) -> tuple:
         i, r = pair
         popularity = floor.get(group(r), math.inf) - 0.5 if r.exact and not r.popularity else score(r)
-        starts = r.exact or _prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
+        starts = r.exact or naming.prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
         return (group(r), not r.following, -r.followers if r.player_id else 0, not starts, -popularity, not r.exact, r.inactive, i)
 
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
@@ -492,7 +480,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     sources = [*matched, *espn_hits, *[r for r in found if r.system == "lichess_chess"]]
     _ours(db, sources, fan)
     results = rank(query, mine, sources)
-    if not suggestions and not any(r.exact or _prefix_match(query, r.name) for r in results):
+    if not suggestions and not any(r.exact or naming.prefix_match(query, r.name) for r in results):
         suggestions = suggest(db, query, mine, sport)
     _ours(db, suggestions, fan)
     if suggestions:
@@ -518,8 +506,8 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
 def _respellings(query: str) -> list[str]:
     """Other spellings the registry may have the name meant under: Đ as "dj" (Wikidata writes Novak
     Djokovic), and "ue", "oe", "ae" as the umlauts they spell (Thomas Müller is indexed "muller")."""
-    typed = " ".join(espn.words(query))
-    out = [" ".join(espn.words(query.translate(espn.NATIVE)))] if re.search("[đĐÐ]", query) else []
+    typed = " ".join(naming.words(query))
+    out = [" ".join(naming.words(query.translate(naming.NATIVE)))] if re.search("[đĐÐ]", query) else []
     out.append(re.sub(r"([aou])e", r"\1", typed))
     return [x for x in dict.fromkeys(out) if x != typed]
 

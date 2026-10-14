@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 
 from .. import bus
-from . import espn
+from ..config import USER_AGENT
 from .base import AdapterError
 
 BASE = "https://api.pubg.com"
@@ -34,7 +34,7 @@ PER_MINUTE = 10  # tournament endpoints; match downloads are free
 MARGIN = 1
 KEEP = 15 * 24 * 3600  # PUBG keeps matches 14 days
 
-_client = httpx.Client(headers={"user-agent": espn.USER_AGENT, "accept": "application/vnd.api+json"}, timeout=30)
+_client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/vnd.api+json"}, timeout=30)
 
 
 class RateLimited(AdapterError):

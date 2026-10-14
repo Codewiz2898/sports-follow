@@ -19,7 +19,8 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import espn, sportmonks
+from .. import naming
+from . import sportmonks
 from .base import AdapterError, Fixture, Line, PlayerRef, Snapshot
 from .espn_cricket import batting_bowling
 
@@ -326,11 +327,11 @@ class SportmonksCricket:
 
     def search(self, name: str) -> list[PlayerRef]:
         """Players with this surname whose first name matches too, each read with their teams."""
-        words = espn.fold(name).split()
+        words = naming.fold(name).split()
         if not words:
             return []
         rows = sportmonks.get_json(f"{API}/players", ttl=24 * 3600, **{"filter[lastname]": words[-1]}).get("data") or []
-        hits = [r for r in rows if (w := espn.fold(r.get("fullname") or "").split()) and w[0] == words[0] and w[-1] == words[-1]]
+        hits = [r for r in rows if (w := naming.fold(r.get("fullname") or "").split()) and w[0] == words[0] and w[-1] == words[-1]]
         return [ref for ref in (self.player(str(r["id"])) for r in hits[:4]) if ref]
 
     def find_player(self, name: str) -> PlayerRef | None:

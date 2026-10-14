@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from . import games
-from .adapters.espn import team_key
+from .naming import team_key
 from .adapters.espn_cricket import batting_bowling
 
 Line = dict[str, Any]  # {"headline": "38 PTS · 16 REB · 2 AST", "stats": [{"label", "value"}]}

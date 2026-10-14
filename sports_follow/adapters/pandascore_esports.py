@@ -24,8 +24,8 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .. import bus
-from . import dota, espn, opendota, pandascore
+from .. import bus, naming
+from . import dota, opendota, pandascore
 from .base import AdapterError, Fixture, PlayerRef, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
@@ -313,7 +313,7 @@ class PandascoreEsports:
 
     def find_player(self, name: str) -> PlayerRef | None:
         """The pro with exactly this handle; of two, the one on a team, if only one is."""
-        hits = [r for r in self.search(name) if espn.fold(r.name).strip() == espn.fold(name).strip()]
+        hits = [r for r in self.search(name) if naming.fold(r.name).strip() == naming.fold(name).strip()]
         on_teams = [r for r in hits if r.team_ids]
         pick = hits if len(hits) == 1 else on_teams
         return pick[0] if len(pick) == 1 else None

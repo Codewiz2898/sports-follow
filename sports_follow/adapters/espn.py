@@ -8,18 +8,16 @@ notice; that is what binding health and the agent fallback are for (design secti
 
 from __future__ import annotations
 
-import re
 import threading
 import time
-import unicodedata
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
+from ..config import USER_AGENT
 from .base import AdapterError
 
-USER_AGENT = "sports-follow/0.1 (+https://github.com/Codewiz2898/sports-follow)"
 SITE = "https://site.api.espn.com/apis/site/v2/sports"
 WEB = "https://site.web.api.espn.com/apis"
 
@@ -59,49 +57,6 @@ def get_json(url: str, ttl: float) -> Any:
             for key, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:500]:
                 _cache.pop(key, None)
     return data
-
-
-# Letters Unicode doesn't decompose into a base letter plus an accent. Ð (U+00D0, the Icelandic
-# capital eth) is often typed for Đ.
-_LETTERS = str.maketrans({"ø": "o", "Ø": "O", "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ß": "ss", "đ": "d", "Đ": "D", "Ð": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "ı": "i"})
-# Letters with a second plain spelling: Đ is "dj" in English (Wikidata writes Novak Djokovic), and ü,
-# ö, ä are "ue", "oe", "ae" in German (Thomas Müller is Thomas Mueller).
-NATIVE = str.maketrans({"đ": "dj", "Đ": "Dj", "Ð": "Dj", "ü": "ue", "Ü": "Ue", "ö": "oe", "Ö": "Oe", "ä": "ae", "Ä": "Ae"})
-
-
-def fold(text: str) -> str:
-    """Case- and accent-insensitive form for comparing names ("Jokić" == "jokic", "Øen" == "oen")."""
-    return unicodedata.normalize("NFKD", text.translate(_LETTERS)).encode("ascii", "ignore").decode().lower().strip()
-
-
-def words(text: str) -> list[str]:
-    """A name as plain lower-case ASCII words, the one form names are compared in: "A'ja Wilson" and
-    "A’ja Wilson" -> ["aja", "wilson"], "Jokić" -> ["jokic"], "M.S. Dhoni" -> ["m", "s", "dhoni"]."""
-    return re.sub(r"[^a-z0-9]+", " ", fold(re.sub(r"['’`]", "", text or ""))).split()
-
-
-def spellings(text: str) -> list[list[str]]:
-    """A name's words in each of its plain spellings: words(text), then, if it has Đ, ü, ö or ä, with
-    those spelled out ("Thomas Müller" -> ["thomas", "muller"] and ["thomas", "mueller"])."""
-    plain = words(text)
-    native = words(unicodedata.normalize("NFC", text or "").translate(NATIVE))
-    return [plain] if native == plain else [plain, native]
-
-
-def team_key(name: str) -> str:
-    """A team name reduced for exact comparison: "Australia 'A'" == "australia a"; never a substring match."""
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", fold(name)).split())
-
-
-def names_match(wanted: str, found: str) -> bool:
-    """Accept a search hit only if the surnames agree and every word of the shorter name is in the
-    longer one (an initial stands for its word): "Ronaldo" is Cristiano Ronaldo and "Jasprit Bumrah" is
-    "Jasprit Jasbirsingh Bumrah", but "Ahmed Salah" isn't Mohamed Salah."""
-    w, f = words(wanted), words(found)
-    if not (w and f) or not (w[-1] == f[-1] or w[-1] in f):
-        return False
-    short, long = (w, f) if len(w) <= len(f) else (f, w)
-    return all(any(a == b or (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b)) for b in long) for a in short)
 
 
 def birth_date(athlete: dict[str, Any]) -> str | None:
