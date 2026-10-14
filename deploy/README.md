@@ -499,6 +499,61 @@ A server set up before fan cookies were signed has no cookie key yet: run `deplo
 deploy@<server-ip>` once before deploying, or the API stops at startup and says so. The key is kept from
 then on; a new one would sign every fan out of their follows.
 
+### Rebuilding the server from nothing
+
+Use this when the server is gone, the Mac too or not. It needs three things only:
+- **the repo**, on GitHub;
+- **your age key**, in the password manager;
+- **the Backblaze bucket**, through its web page.
+
+The drill (2026-10-14) went from a blank server to serving in **17 minutes**, plus the console steps. Fans
+stay signed in and keep getting notifications, because the cookie and push keys come back with the
+secrets. Their data is as of the newest off-site dump: the daily one, off-site within the hour.
+
+1. **A new server** (First deploy, step 1): Lightsail in Sydney, Ubuntu 24.04, the $24 plan, your key.
+   - **Firewall:** open **HTTPS (TCP and UDP 443)**, to any address.
+   - **Static IP:** on the Networking tab, **move it** from the old instance to the new one. The address,
+     and with it the sslip.io name or your DNS, then stays the same.
+   - **Check you can get in:** `ssh ubuntu@<ip> true`. If it's refused, the server came up with
+     Lightsail's default key. Add yours from the console's browser SSH (First deploy, step 1).
+2. **Setup**, about 3 minutes: `server-setup.sh` as `ubuntu` (First deploy, step 2). Add the read key
+   it prints on GitHub, then run it again as `deploy`. Remove the old server's read key from GitHub.
+3. **Secrets**, about 2 minutes:
+   - **The sealed copy:** download `secrets.age` from the bucket's page (**Browse Files**). It's at most
+     an hour behind the last change to the secrets, so it can be newer than the password manager's copy.
+   - **Put them back:** `deploy/restore-secrets.sh deploy@<ip> secrets.age`, with the age key.
+4. **The app and its data**, about 7 minutes. On the server, as `deploy`, in `/opt/sports-follow`, start
+   only the database first, so the worker never runs on an empty one:
+   ```bash
+   c() { docker compose -f deploy/compose.yaml "$@"; }
+   c build && c up -d postgres redis
+   ```
+   Fetch the newest dump from the Mac with `deploy/fetch-backup.sh deploy@<ip>`, which asks for the age
+   key. Then, back on the server:
+   ```bash
+   c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists --no-owner < /var/backups/sports-follow/fetched/<file>.dump
+   deploy/deploy.sh deploy   # migrations, then everything: API, worker, backups, Caddy
+   sudo systemctl start alloy
+   ```
+   The hourly off-site timer is already on, so with the restored `offsite.env` the new server's dumps go
+   to the same bucket.
+5. **GitHub deploys** point at the old server's host key and key, so redo
+   [Setting up the GitHub deploys](#setting-up-the-github-deploys-you-once): a new key, and the new
+   server's host key in `DEPLOY_KNOWN_HOSTS`.
+6. **Check it:**
+   - `https://<domain>/api/health`, a search, and `/credits` (licensed sources only);
+   - an existing phone is still signed in, with its players;
+   - the Grafana email "The server stopped sending metrics" resolves once Alloy reports from the new
+     server.
+
+**Rehearsing it** next to a live production: make the drill server something production can't feel.
+Don't start its worker or backup job, which would poll the sources on the same tokens and push to real
+fans. Disable its off-site timer and Alloy, which would write to the same bucket and Grafana (`sudo
+systemctl disable --now sports-follow-offsite.timer alloy`, before restoring the secrets). To check
+"still signed in", use a marker fan made on production beforehand: a cookie and a follow, in a dump taken
+then. Its cookie must be accepted on the drill server without a new one being issued. Afterwards, delete
+the instance, its GitHub read key and the marker's follow.
+
 ## Rehearsing locally
 
 The same stack runs on the Mac on other ports, with Caddy's local certificate authority:
@@ -559,3 +614,31 @@ On the production server, `server-setup.sh` installed Alloy from Grafana's repos
 `push-secrets.sh` started it. Its metrics then arrived on the real Grafana Cloud stack (Grafana 13.3):
 about 370 series, all seven containers up. All 14 rules evaluated without errors and stayed quiet. The
 test email arrived through Grafana 13's receivers API, since 13 removed the older test endpoint.
+
+The rebuild was drilled on 2026-10-14 (BHA-175) with a throwaway Lightsail instance in Sydney, from the
+repo, the age key and the Backblaze bucket only.
+
+| Time (UTC) | |
+|---|---|
+| 20:26 | blank server, and the console's browser SSH to add the key it came up without |
+| 20:27–20:30 | `server-setup.sh` as `ubuntu`: updates, Docker, Alloy, `deploy`, the lockdown |
+| 20:32 | its read key added on GitHub, the setup again as `deploy` |
+| 20:33–20:35 | `secrets.age` downloaded from the bucket's page, `restore-secrets.sh`: 11 files, identical to production's |
+| 20:35–20:41 | `c build` (5½ minutes), the database and Redis started |
+| 20:42–20:43 | `fetch-backup.sh` (byte-identical to production's dump), `pg_restore`, migrations, the API up |
+
+That's **17 minutes** to serving, plus the port 443 rule added in the console.
+
+Then, compared with production:
+- The health check answered from outside.
+- A marker fan's production cookie was accepted, with no new one issued (a forged cookie was replaced),
+  and its follow was there.
+- The push public key was the same.
+- So were the counts: 366,805 athletes, 2 follows, 2 players.
+- Search worked, and the credits named no ESPN.
+
+Two things the drill showed:
+- **The off-site secrets can lag by up to an hour.** A secret added at 20:33 (`otlp.env`, for traces)
+  wasn't in the bucket's copy downloaded just after, because the hourly upload hadn't run yet.
+- **How much data a disaster can lose.** It's whatever was written after the newest dump: up to a day,
+  plus that hour. To lose less, make `backup.sh` dump more often.
