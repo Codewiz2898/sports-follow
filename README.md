@@ -187,6 +187,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_RESEND_KEY` | from `SPORTS_FOLLOW_RESEND_KEY_FILE`, else `~/.config/sports-follow/resend-key` | Resend API key for sign-in emails; without it (and `MAIL_FROM`) email sign-in is off |
 | `SPORTS_FOLLOW_MAIL_FROM` | none | the sender of sign-in emails, e.g. `Sports Follow <signin@your-domain>` (a domain verified in Resend) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
+| `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
+| `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
@@ -277,8 +279,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
 - Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);
-  signed in (a code sent by email), a fan's players, alert levels, muted games and devices are the same
-  on every device, and what they followed before signing in comes with them.
+  signed in (a code sent by email, or Google), a fan's players, alert levels, muted games and devices
+  are the same on every device, and what they followed before signing in comes with them. Google's
+  button is hidden in the iPhone home-screen app until its sign-in sheet is tried there.
 - Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
   and there are no lock-screen live scores (Live Activities) or Android ongoing live-score
   notifications; those need a native app.

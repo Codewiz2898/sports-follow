@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAccount } from '../account'
 import { ApiError, api, type Account } from '../api'
 import { SectionHead } from '../components/Blocks'
@@ -8,19 +8,46 @@ import { BackIcon } from '../components/Icons'
 /** Signing in (a code by email), and once signed in: who, signing out, deleting the account. */
 export function AccountPage() {
   const { me } = useAccount()
+  const [params, setParams] = useSearchParams()
+  const [failed] = useState(() => GOOGLE_ERRORS[params.get('error') ?? ''] ?? null)
+  // Back from Google (?welcome=N, said by the account notice) or turned back there (?error=…): said once.
+  useEffect(() => { if (params.has('welcome') || params.has('error')) setParams({}, { replace: true }) }, [params, setParams])
   return (
     <>
       <div className="row" style={{ justifyContent: 'flex-start', gap: 14 }}>
         <Link to="/" className="btn icon" aria-label="Back"><BackIcon width={20} height={20} /></Link>
         <h1 className="dsp page-title">Account</h1>
       </div>
-      {me === null ? <div className="card empty small"><span className="spinner" /></div> : me.signed_in ? <SignedIn account={me} /> : <SignIn />}
+      {me === null ? <div className="card empty small"><span className="spinner" /></div> : me.signed_in ? <SignedIn account={me} /> : <SignIn failed={failed} />}
       <Link to="/privacy" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>What we keep, and why</Link>
     </>
   )
 }
 
 // ---------------------------------------------------------------- signing in
+
+const GOOGLE_ERRORS: Record<string, string> = {
+  google: "Couldn't sign in with Google. Try again, or get a code by email.",
+  google_linked: "This email address's account is linked to a different Google account. Sign in with a code by email instead.",
+  google_off: "Signing in with Google isn't set up on this server yet.",
+}
+
+/** An iPhone home-screen app: Google's sign-in leaves it for a browser sheet, not yet tried there. */
+const IPHONE_APP = /iPhone|iPad|iPod/.test(navigator.userAgent) && window.matchMedia('(display-mode: standalone)').matches
+
+function GoogleButton() {
+  return (
+    <a href="/api/auth/google/start" className="btn google">
+      <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
+        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+        <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+      </svg>
+      Continue with Google
+    </a>
+  )
+}
 
 const PENDING = 'sf-signin'  // the address a code went to, so the app can reload while the fan is in Mail
 const CODE_LIFE_MS = 10 * 60_000
@@ -33,7 +60,7 @@ function readPending(): { email: string; sentAt: number } | null {
   return null
 }
 
-function SignIn() {
+function SignIn({ failed }: { failed: string | null }) {
   const { config, signedIn } = useAccount()
   const pending = readPending()
   const [email, setEmail] = useState(pending?.email ?? '')
@@ -41,7 +68,7 @@ function SignIn() {
   const [code, setCode] = useState('')
   const [wait, setWait] = useState(() => (pending ? Math.max(0, 60 - Math.round((Date.now() - pending.sentAt) / 1000)) : 0))
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(failed)
   const codeInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -100,6 +127,7 @@ function SignIn() {
   }
 
   const emailOff = config !== null && !config.email_sign_in
+  const google = Boolean(config?.google_sign_in) && !IPHONE_APP
   return (
     <>
       <section className="hero" data-sport="other" aria-label="Sign in">
@@ -109,18 +137,28 @@ function SignIn() {
         </p>
       </section>
 
-      {emailOff ? (
+      {emailOff && !google ? (
         <div className="card empty small">Signing in isn't set up on this server yet.</div>
       ) : sentTo === null ? (
         <form className="card card-pad stack" style={{ gap: 12 }} onSubmit={onEmail}>
-          <label htmlFor="signin-email" className="title">Your email</label>
-          <input
-            id="signin-email" className="field" type="email" autoComplete="email" inputMode="email" spellCheck={false} required
-            placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)}
-          />
+          {google && <GoogleButton />}
+          {google && !emailOff && <span className="or small muted">or</span>}
+          {!emailOff && (
+            <>
+              <label htmlFor="signin-email" className="title">Your email</label>
+              <input
+                id="signin-email" className="field" type="email" autoComplete="email" inputMode="email" spellCheck={false} required
+                placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)}
+              />
+            </>
+          )}
           {error && <div className="error-box">{error}</div>}
-          <button type="submit" className="btn primary" disabled={busy || !email.trim()}>{busy && <span className="spinner" />}Email me a code</button>
-          <span className="small muted">No password: we email you a 6-digit code, and that's the sign-in. A new address gets an account.</span>
+          {!emailOff && (
+            <>
+              <button type="submit" className="btn primary" disabled={busy || !email.trim()}>{busy && <span className="spinner" />}Email me a code</button>
+              <span className="small muted">No password: we email you a 6-digit code, and that's the sign-in. A new address gets an account.</span>
+            </>
+          )}
         </form>
       ) : (
         <form className="card card-pad stack" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); if (code.length === 6) verify(code) }}>

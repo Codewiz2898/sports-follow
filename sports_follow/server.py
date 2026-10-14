@@ -30,14 +30,14 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as InPath
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, games, mail, moments, notify, pipeline, registry, results, search as player_search, structured
+from . import accounts, bus, credits as credits_page, games, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, structured
 from .adapters import ADAPTERS, AdapterError
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
@@ -222,6 +222,17 @@ def mac(purpose: str, value: str) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
+def _seal(purpose: str, value: str) -> str:
+    """`value` with its MAC, for a cookie that must come back unchanged."""
+    return f"{value}.{mac(purpose, value)}"
+
+
+def _unseal(purpose: str, sealed: str | None) -> str | None:
+    """What _seal sealed, if its MAC holds."""
+    value, _, given = (sealed or "").rpartition(".")
+    return value if value and hmac.compare_digest(given, mac(purpose, value)) else None
+
+
 def _cookie_fan(request: Request) -> str | None:
     """The anonymous fan in this device's cookie (signed here, or from before signing), without making one."""
     value = request.cookies.get(FAN_COOKIE) or ""
@@ -309,7 +320,7 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
     """What this server offers the app: the model, the ways to sign in, who to write to about privacy."""
-    return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "contact_email": CONTACT_EMAIL}
+    return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/credits")
@@ -722,6 +733,46 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
     await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
+
+
+def _google_callback(request: Request) -> str:
+    # Google sends the browser back only to an address registered for this app, so a forged Host fails there.
+    return f"{request.url.scheme}://{request.headers.get('host', '')}/api/auth/google/callback"
+
+
+@app.get("/api/auth/google/start")
+def google_start(request: Request) -> Response:
+    """Continue with Google: off to Google's sign-in, remembering this attempt in a short-lived cookie."""
+    if not google_signin.configured():
+        return RedirectResponse("/account?error=google_off", status_code=303)
+    url, remembered = google_signin.start(_google_callback(request))
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(google_signin.COOKIE, _seal("google", remembered), max_age=google_signin.LIFE, httponly=True, samesite="lax", secure=_secure(request), path=google_signin.COOKIE_PATH)
+    return response
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(request: Request, state: str = "", code: str = "", error: str = "", signed: accounts.Signed | None = Depends(account_of)) -> Response:
+    """Back from Google: sign in (the first time makes the account, or links the one with this address)."""
+    def back(to: str) -> Response:
+        response = RedirectResponse(to, status_code=303)
+        response.delete_cookie(google_signin.COOKIE, path=google_signin.COOKIE_PATH, httponly=True, samesite="lax", secure=_secure(request))
+        return response
+
+    if error or not code:
+        return back("/account")  # the fan changed their mind at Google
+    try:
+        sub, email = await asyncio.to_thread(google_signin.finish, _unseal("google", request.cookies.get(google_signin.COOKIE)), state, code, _google_callback(request))
+    except google_signin.GoogleError as exc:
+        log.warning("google sign-in: %s", exc)
+        return back("/account?error=google")
+    account_id = await in_db(accounts.find_or_create_google, sub, email)
+    if account_id is None:
+        return back("/account?error=google_linked")
+    response = back("/account")
+    done = await _sign_in(request, response, account_id, signed)
+    response.headers["location"] = f"/account?welcome={done['players_added']}"
+    return response
 
 
 @app.post("/api/auth/signout")

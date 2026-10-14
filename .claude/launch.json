@@ -3,8 +3,10 @@
   "configurations": [
     {
       "name": "api",
-      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeExecutable": "/usr/bin/env",
       "runtimeArgs": [
+        "SPORTS_FOLLOW_MAIL_LOG=1",
+        ".venv/bin/uvicorn",
         "sports_follow.server:app",
         "--port",
         "8421",

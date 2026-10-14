@@ -5,12 +5,17 @@ replaced by a small in-memory stand-in. What that database work does to real row
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from sports_follow import accounts, mail, server
+from sports_follow import accounts, google_signin, mail, server
 from tests.test_api import PUBLIC, Api, api  # noqa: F401  (api: the fixture)
 
 EMAIL = "Fan@Example.com"
@@ -48,6 +53,16 @@ class Accounts:
         self.lookups += 1
         return self.sessions.get(token_hash)
 
+    def find_or_create_google(self, db, sub, email):
+        linked = getattr(self, "google", {})
+        if sub in linked:
+            return linked[sub]
+        account_id = self.find_or_create(db, email)
+        if account_id in linked.values():
+            return None  # this address's account has another Google account
+        self.google = {**linked, sub: account_id}
+        return account_id
+
     def describe(self, db, account_id):
         email = self.emails.get(account_id)
         return {"signed_in": True, "email": email, "google": False, "created_at": "2026-10-13T00:00:00+00:00"} if email else None
@@ -69,7 +84,7 @@ class Accounts:
 @pytest.fixture
 def store(api, monkeypatch):
     fake = Accounts()
-    for name in ("find_or_create", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account"):
+    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account"):
         monkeypatch.setattr(accounts, name, getattr(fake, name))
     return fake
 
@@ -299,3 +314,97 @@ def test_deleting_the_account_ends_every_session_and_forgets_its_keys(api, store
     assert not [k for k in api.redis.data if k.startswith(("session:", "research:acct-1", "auth-code:", "auth-tries:"))]
     jar = set_cookies(answer)
     assert jar["sf_session"][1] and server._signed(jar["sf_fan"][0])
+
+
+# ---------------------------------------------------------------- Continue with Google
+
+
+def id_token(**claims) -> str:
+    """An ID token as Google's token endpoint returns it (its signature isn't checked: see google_signin)."""
+    part = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")  # noqa: E731
+    return f"{part({'alg': 'RS256'})}.{part(claims)}.c2ln"
+
+
+@pytest.fixture
+def google(monkeypatch):
+    """Google, with a fake token endpoint answering with `google.claims` once the code is right."""
+    monkeypatch.setattr(google_signin, "CLIENT_ID", "client-1.apps.googleusercontent.com")
+    monkeypatch.setattr(google_signin, "_secret", lambda: "client-secret")
+    seen = {}
+
+    def exchange(code, verifier, redirect_uri):
+        seen.update(code=code, verifier=verifier, redirect_uri=redirect_uri)
+        return {"id_token": id_token(**seen["claims"](seen["nonce"]))}
+
+    monkeypatch.setattr(google_signin, "_exchange", exchange)
+    return seen
+
+
+def good_claims(**changed):
+    return lambda nonce: {
+        "iss": "https://accounts.google.com", "aud": "client-1.apps.googleusercontent.com", "exp": time.time() + 3600,
+        "sub": "google-123", "email": "Fan@Gmail.com", "email_verified": True, "nonce": nonce, **changed,
+    }
+
+
+def go_to_google(api, google, claims=None, fan="anon-g"):
+    """Start, then come back with a code. Returns (the start's query, the callback's answer)."""
+    started = api.call("GET", "/api/auth/google/start", headers=cookies(fan=fan))
+    assert started.status_code == 303
+    query = {k: v[0] for k, v in parse_qs(urlsplit(started.headers["location"]).query).items()}
+    google.update(nonce=query["nonce"], claims=claims or good_claims())
+    remembered = set_cookies(started)["sf_oauth"][0]
+    jar = f"sf_oauth={remembered}; " + cookies(fan=fan)["Cookie"]
+    return query, api.call("GET", f"/api/auth/google/callback?state={query['state']}&code=the-code", headers={"Cookie": jar})
+
+
+def test_continue_with_google_signs_in_and_brings_the_device(api, store, google):
+    query, back = go_to_google(api, google)
+    assert query["client_id"] == "client-1.apps.googleusercontent.com" and query["code_challenge_method"] == "S256"
+    assert query["redirect_uri"] == "http://test/api/auth/google/callback" == google["redirect_uri"]
+    assert base64.urlsafe_b64encode(hashlib.sha256(google["verifier"].encode()).digest()).decode().rstrip("=") == query["code_challenge"]  # PKCE
+    assert back.status_code == 303 and back.headers["location"] == "/account?welcome=2"
+    jar = set_cookies(back)
+    assert jar["sf_session"][0] and jar["sf_oauth"][1] and jar["sf_fan"][1]
+    assert store.emails == {1: "fan@gmail.com"} and store.adopted == [("anon-g", 1)]
+
+
+@pytest.mark.parametrize("claims", [
+    good_claims(aud="someone-elses-app"),
+    good_claims(iss="https://evil.example"),
+    good_claims(exp=time.time() - 10),
+    good_claims(email_verified=False),
+    good_claims(nonce="replayed"),  # a token from another sign-in
+])
+def test_an_id_token_that_isnt_right_signs_nobody_in(api, store, google, claims):
+    _, back = go_to_google(api, google, claims=claims)
+    assert back.headers["location"] == "/account?error=google"
+    assert store.sessions == {} and "sf_session" not in set_cookies(back)
+
+
+def test_coming_back_without_this_devices_attempt_is_refused(api, store, google):
+    started = api.call("GET", "/api/auth/google/start")
+    query = {k: v[0] for k, v in parse_qs(urlsplit(started.headers["location"]).query).items()}
+    google.update(nonce=query["nonce"], claims=good_claims())
+    # Someone else's link, opened on this device: no attempt remembered here.
+    assert api.call("GET", f"/api/auth/google/callback?state={query['state']}&code=x").headers["location"] == "/account?error=google"
+    # This device's attempt, but another state.
+    jar = f"sf_oauth={set_cookies(started)['sf_oauth'][0]}"
+    assert api.call("GET", "/api/auth/google/callback?state=forged&code=x", headers={"Cookie": jar}).headers["location"] == "/account?error=google"
+    assert store.sessions == {}
+
+
+def test_an_address_whose_account_has_another_google_account_is_sent_to_the_code(api, store, google):
+    go_to_google(api, google)
+    _, back = go_to_google(api, google, claims=good_claims(sub="google-999"))
+    assert back.headers["location"] == "/account?error=google_linked"
+
+
+def test_without_a_client_google_is_off(api, monkeypatch):
+    monkeypatch.setattr(google_signin, "CLIENT_ID", "")
+    assert api.call("GET", "/api/auth/google/start").headers["location"] == "/account?error=google_off"
+    assert api.call("GET", "/api/config").json()["google_sign_in"] is False
+
+
+def test_changing_your_mind_at_google_just_comes_back(api, store, google):
+    assert api.call("GET", "/api/auth/google/callback?error=access_denied").headers["location"] == "/account"
