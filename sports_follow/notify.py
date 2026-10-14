@@ -32,7 +32,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import alerts, bus
+from . import alerts, bus, logs
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
@@ -125,7 +125,7 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
 def dispatch(moment_ids: list[int]) -> None:
     """Send a batch in the background: a poll mustn't wait on push services."""
     if moment_ids:
-        _pool.submit(_send_safely, moment_ids)
+        _pool.submit(logs.carried(_send_safely), moment_ids)  # logged under the poll's or build's id
 
 
 def _send_safely(moment_ids: list[int]) -> None:
@@ -164,7 +164,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
     if not jobs:
         return 0
-    futures = [(notification_id, device, _wire.submit(push, device[1], device[2], device[3], payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
+    futures = [(notification_id, device, _wire.submit(logs.carried(push), device[1], device[2], device[3], payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
     results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
     _settle(results)
     sent = sum(1 for _, _, error in results if error is None)

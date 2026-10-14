@@ -9,6 +9,7 @@ the registry agrees they're the same person (BUG-033). A push goes to a fan's ne
 are fans, but fans from before keep their ids (BUG-013). The card is private and its ETag covers the
 fan's own fields (BUG-038). Ids no row can have, odd bodies and source ids of the wrong shape are
 refused plainly, never a 500 (BUG-039, BUG-078). The research counter never goes below zero (BUG-079).
+Each request is logged once, under an id its jobs take along (BHA-192).
 Redis, the database and the job queue are fakes.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import logging
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -27,7 +29,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, notify, pipeline, registry, server, structured
+from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, structured
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -362,6 +364,39 @@ def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monk
     del api.redis.data["refresh:1"]  # a minute later
     assert refresh("fan-b").json() == {"queued": True}
     assert len(api.queue.jobs) == 2
+
+
+# ---------------------------------------------------------------- the request log (BHA-192)
+
+
+def _request_lines(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "sports_follow.requests"]
+
+
+def test_a_request_is_logged_once_under_an_id_its_jobs_take_along(api, monkeypatch, caplog):
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: object())
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    api.follows.add(("fan-a", 1))
+    caplog.set_level(logging.INFO, "sports_follow")
+    answer = api.call("POST", "/api/players/1/refresh", fan="fan-a")
+    rid = answer.headers["x-request-id"]
+    assert answer.json() == {"queued": True}
+    assert api.queue.jobs == [("refresh_structured", 1)] and api.queue.options == {"trace": {"rid": rid}}  # the worker logs it under rid
+    [line] = _request_lines(caplog)
+    assert line.getMessage().startswith("POST /api/players/1/refresh 200 ")
+    assert (line.route, line.status, line.duration_ms >= 0) == ("/api/players/{player_id}/refresh", 200, True)
+    assert line.context == {"rid": rid, "fan": logs.fan("fan-a")}  # the fan by a hash, never their id
+
+
+def test_a_proxys_request_id_is_kept_and_the_query_string_never_logged(api, caplog):
+    caplog.set_level(logging.INFO, "sports_follow")
+    kept = api.call("GET", "/api/sports?q=private+words", headers={"X-Request-ID": "edge-0f8e2a6c"})
+    made = api.call("GET", "/api/sports", headers={"X-Request-ID": "not an id"})
+    assert kept.headers["x-request-id"] == "edge-0f8e2a6c"
+    assert made.headers["x-request-id"] != "not an id" and logs.given_id(made.headers["x-request-id"])
+    lines = _request_lines(caplog)
+    assert [line.context["rid"] for line in lines] == [kept.headers["x-request-id"], made.headers["x-request-id"]]
+    assert all(line.path == "/api/sports" and "private" not in line.getMessage() for line in lines)
 
 
 # ---------------------------------------------------------------- writes (BUG-029)

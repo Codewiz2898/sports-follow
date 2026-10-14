@@ -272,6 +272,7 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 |---|---|
 | What's live | `deploy/deploy.sh status` |
 | Logs | `c logs -f api worker` (Caddy's certificate work: `c logs caddy`) |
+| One request or job's lines | `c logs api worker \| grep <id>`: JSON lines, each with the `rid` of its request or job; a request's id is in its answer's `X-Request-ID` header, and the jobs it queued log under it too |
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
 | Registry import now | `c exec worker python -m sports_follow.registry` |

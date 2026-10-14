@@ -1,20 +1,24 @@
 """The worker (worker.py): every job slot gets a thread, and the tick has its own. After a sleep, arq's
-missed cron runs don't all run (BUG-022); cron times are UTC (BUG-024)."""
+missed cron runs don't all run (BUG-022); cron times are UTC (BUG-024). A job logs under its own id, or
+the request's that queued it, and ends with one line (BHA-192)."""
 
 from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from arq.worker import Worker, create_worker
 
-from sports_follow import db, engine, history, notify, pipeline, worker
+import pytest
+
+from sports_follow import db, engine, history, logs, notify, pipeline, worker
 
 
 def test_every_job_slot_gets_a_thread(monkeypatch):
@@ -149,3 +153,62 @@ def test_cron_times_are_utc_whatever_the_machines_zone(monkeypatch):
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+# ---------------------------------------------------------------- job logs (BHA-192)
+
+
+def _ran(caplog, job, *args, ctx=None, **kwargs) -> list[logging.LogRecord]:
+    """The sports_follow lines a job logged, run as arq runs it (by default queued a second ago)."""
+    caplog.set_level(logging.INFO, "sports_follow")
+    ctx = {"job_id": "0f8e2a6c", "job_try": 1, "enqueue_time": datetime.now(timezone.utc) - timedelta(seconds=1)} if ctx is None else ctx
+    asyncio.run(job(ctx, *args, **kwargs))
+    return [r for r in caplog.records if r.name.startswith("sports_follow")]
+
+
+def test_a_job_logs_under_the_id_of_the_request_that_queued_it(caplog):
+    async def build_card(ctx, player_id: int) -> None:
+        logging.getLogger("sports_follow.pipeline").info("build %s: bound", player_id)
+        await asyncio.to_thread(logging.getLogger("sports_follow.structured").info, "bind %s: espn", player_id)
+
+    built, bound, done = _ran(caplog, worker._logged(build_card), 7, trace={"rid": "ab12cd34ef56ab78"})
+    assert built.context == bound.context == done.context == {"rid": "ab12cd34ef56ab78", "job": "build_card", "player_id": 7}
+    assert done.getMessage().startswith("build_card done in ") and done.outcome == "ok" and done.job_id == "0f8e2a6c"
+    assert done.waited_ms >= 1000 and done.duration_ms >= 0
+
+
+def test_a_job_nobody_queued_from_a_request_has_an_id_of_its_own(caplog):
+    async def poll_event(ctx, event_id: int) -> None:
+        pass
+
+    first, = _ran(caplog, worker._logged(poll_event), 5)
+    second, = _ran(caplog, worker._logged(poll_event), 5)[1:]
+    assert first.context["event_id"] == 5 and logs.given_id(first.context["rid"]) and first.context["rid"] != second.context["rid"]
+
+
+def test_a_failed_job_says_so_and_still_fails(caplog):
+    async def poll_lane(ctx, system: str) -> None:
+        raise ValueError("no such round")
+
+    with pytest.raises(ValueError):
+        _ran(caplog, worker._logged(poll_lane), "lichess_chess")
+    [failed] = [r for r in caplog.records if r.name == "sports_follow.worker"]
+    assert failed.levelno == logging.WARNING and failed.outcome == "failed" and failed.context["system"] == "lichess_chess"
+    assert "ValueError: no such round" in failed.getMessage()
+
+
+def test_a_quiet_job_logs_only_when_it_runs_long(caplog, monkeypatch):
+    async def tick(ctx) -> None:
+        pass
+
+    assert _ran(caplog, worker._logged(tick, quiet=True), ctx={}) == []
+    clock = iter([0.0, worker.QUIET_UNDER + 1])
+    monkeypatch.setattr(worker, "perf_counter", lambda: next(clock))
+    [slow] = _ran(caplog, worker._logged(tick, quiet=True), ctx={})
+    assert slow.getMessage() == f"tick done in {worker.QUIET_UNDER + 1:.1f}s" and slow.waited_ms is None  # called by hand: no queue
+
+
+def test_every_job_and_cron_run_is_logged():
+    assert all(hasattr(f, "__wrapped__") for f in worker.WorkerSettings.functions)
+    assert all(hasattr(j.coroutine, "__wrapped__") for j in worker.WorkerSettings.cron_jobs)
+    assert {j.name for j in worker.WorkerSettings.cron_jobs} >= {"cron:tick", "cron:prune"}  # arq still names them after the job

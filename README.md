@@ -233,6 +233,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_COOKIE_SECRET` | from `~/.config/sports-follow/cookie-secret`, made on first start | the key fan cookies are signed with (at least 32 characters; `SPORTS_FOLLOW_COOKIE_SECRET_FILE` names another file). Every API process needs the same one, and it must never change: under a new key every fan starts over |
 | `SPORTS_FOLLOW_RESEND_KEY` | from `SPORTS_FOLLOW_RESEND_KEY_FILE`, else `~/.config/sports-follow/resend-key` | Resend API key for sign-in emails; without it (and `MAIL_FROM`) email sign-in is off |
 | `SPORTS_FOLLOW_MAIL_FROM` | none | the sender of sign-in emails, e.g. `Sports Follow <signin@your-domain>` (a domain verified in Resend) |
+| `SPORTS_FOLLOW_LOG_FORMAT` | `text` | `json` writes each log line as one JSON object on stdout, for a server's log collector (the production setting); every line from a request or a job carries its id (`rid`, also in each answer's `X-Request-ID`), and fans appear only as a hash |
+| `SPORTS_FOLLOW_LOG_LEVEL` | `INFO` | the lowest level of this app's own lines that is logged (other libraries' lines from `WARNING`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |

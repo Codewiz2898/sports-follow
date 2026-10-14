@@ -33,7 +33,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from . import bus
+from . import bus, logs
 from .config import KEEP_MOMENTS_DAYS, KEEP_TIMELINE_DAYS
 from .db import session
 from .models import Follow
@@ -178,7 +178,7 @@ def prune() -> dict[str, int] | None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logs.setup()
     if sys.argv[1:] == ["--count"]:
         print(run(count=True))
     elif not sys.argv[1:]:

@@ -30,7 +30,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, registry, sports
+from . import bus, logs, registry, sports
 from .adapters import KNOWN
 from .db import session
 from .models import Athlete, AthleteOverride, EventPlayer, Follow, Moment, Player, PlayerIdentity
@@ -275,4 +275,5 @@ def main(argv: list[str], ask: Any = input) -> int:
 
 
 if __name__ == "__main__":
+    logs.setup()
     sys.exit(main(sys.argv[1:]))
