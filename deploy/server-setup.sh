@@ -19,7 +19,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 apt-get -y upgrade
-apt-get install -y ca-certificates curl git openssl ufw unattended-upgrades fail2ban python3-systemd age rclone
+apt-get install -y ca-certificates curl git gnupg openssl ufw unattended-upgrades fail2ban python3-systemd age rclone
 echo 'APT::Periodic::Update-Package-Lists "1"; APT::Periodic::Unattended-Upgrade "1";' >/etc/apt/apt.conf.d/20auto-upgrades
 
 # Firewall: SSH and the web only (Docker publishes just Caddy's 80 and 443).
@@ -50,6 +50,17 @@ if ! command -v docker >/dev/null; then
 fi
 mkdir -p /etc/docker
 [ -f /etc/docker/daemon.json ] || { echo '{ "log-driver": "local" }' >/etc/docker/daemon.json; systemctl restart docker; }
+
+# Grafana Alloy from Grafana's own repository: sends the server's metrics to Grafana Cloud, where the alert
+# rules email you (README.md, "Alerts"). It starts once grafana.env is on the server (push-secrets.sh).
+if ! command -v alloy >/dev/null; then
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/grafana.gpg
+  chmod a+r /etc/apt/keyrings/grafana.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" >/etc/apt/sources.list.d/grafana.list
+  apt-get update
+  apt-get install -y alloy
+fi
 
 # The deploy user: runs the app and the deploys. Docker's group already makes it root's equal, so its sudo
 # has no password; a password would only be one more secret to lose.
@@ -163,11 +174,15 @@ if [ ! -f "$APP_DIR/deploy/.env" ]; then
   chown "$USER_NAME:$USER_NAME" "$APP_DIR/deploy/.env"
 fi
 
-# The server checks (every 5 minutes; alerts go to ALERT_URL), the weekly Docker clean-up, and the hourly
-# off-site backups (which wait for offsite.env).
+# The server checks (every 5 minutes; their findings go to Grafana Cloud through Alloy), the weekly Docker
+# clean-up, the hourly off-site backups (which wait for offsite.env), and Alloy (which waits for grafana.env).
 install -m 644 "$APP_DIR"/deploy/systemd/*.service "$APP_DIR"/deploy/systemd/*.timer /etc/systemd/system/
+install -d -m 755 /etc/systemd/system/alloy.service.d
+install -m 644 "$APP_DIR"/deploy/systemd/alloy.service.d/sports-follow.conf /etc/systemd/system/alloy.service.d/
 systemctl daemon-reload
 systemctl enable --now sports-follow-check.timer sports-follow-prune.timer sports-follow-offsite.timer
+systemctl enable alloy >/dev/null 2>&1
+[ ! -f /etc/sports-follow/grafana.env ] || systemctl restart alloy
 
 host=$(grep '^DOMAIN=' "$APP_DIR/deploy/.env" | cut -d= -f2)
 echo "server-setup: done. The app will be at https://$host"

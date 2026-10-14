@@ -12,8 +12,8 @@ phone ─────────────────▶ caddy ──▶ api
                                         └──▶ OpenRouter
 backup: pg_dump once a day, 14 kept in /var/backups/sports-follow ──▶ sealed, to object storage hourly
 GitHub Actions ──ssh deploy@──▶ deploy.sh (build, migrate, swap, wait for health)
-systemd timers: server checks every 5 minutes (alerts to your phone), off-site backups hourly,
-                Docker clean-up weekly
+systemd timers: server checks every 5 minutes, off-site backups hourly, Docker clean-up weekly
+alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the checks'; alert rules there email you
 ```
 
 Only Caddy is published. Postgres, Redis, the gateway and the API talk on the compose network. The
@@ -33,7 +33,9 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `pg_restore`. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
 | `../.github/workflows/deploy.yml` | Checks that CI passed, then runs `deploy.sh` over SSH, then a health check from outside. |
-| `server-check.sh`, `systemd/` | The server checks and their alerts; the weekly Docker clean-up. |
+| `server-check.sh`, `systemd/` | The server checks, whose findings go to Grafana Cloud as metrics; the weekly Docker clean-up. |
+| `alloy/` | Grafana Alloy's config: the server's metrics and the checks' findings, to Grafana Cloud every minute. |
+| `grafana/` | The alert rules (`rules.json`), and `apply-alerts.sh`, which puts them, an email contact point and the policy into Grafana Cloud. |
 | `seed-registry.sh` | From the Mac: copies the player registry (323,000 athletes, 15 MB) instead of an hour of Wikidata queries. |
 | `migrate-to-server.sh` | From the Mac: steps 3–6 of the first deploy in one go, with checks before and after ([Moving off the Mac](#moving-off-the-mac)). |
 | `backup.sh` | The daily database dump. |
@@ -349,45 +351,70 @@ The live image and the previous one are kept; older ones are removed.
 
 ## Alerts
 
-`server-check.sh` runs every 5 minutes as `deploy` and sends an alert when one of these starts, again
-every 6 hours while it lasts, and once more when it clears:
+Alerts come by **email from Grafana Cloud**, on its free tier.
+- **Alloy:** on the server, Grafana Alloy (`alloy/config.alloy`) sends the server's own metrics every
+  minute. It comes from Grafana's apt repository and starts once `grafana.env` is there.
+- **The checks:** Alloy also sends what `server-check.sh` sees every 5 minutes, from its `metrics.prom`:
+  backups, off-site backups, containers and the certificate.
+- **The rules:** they live in `grafana/rules.json` and run in Grafana Cloud, so they still work when the
+  server is down. That's one of the things they catch.
 
-| Check | Alerts when |
+Each one emails when it starts, again every 6 hours while it lasts, and "Resolved" when it clears:
+
+| Rule | Emails when |
 |---|---|
-| Disk | `/`, Docker's or the backups' disk is 80% full |
-| Memory | tasks spent more than 10% of the last 5 minutes waiting for memory |
-| Out-of-memory killer | it stopped any process since the last check |
+| The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
+| The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
+| Disk | any disk is over 80% full for 10 minutes |
+| Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |
+| Out-of-memory killer | it stopped any process |
+| CPU held back | for 30 minutes, Lightsail withheld over 20% of CPU time: its burst allowance is used up |
 | Backups | the newest dump is 26 hours old, or there is none |
 | Off-site backups | once set up: the last hourly copy that worked is 26 hours old, or none worked in the first 2 hours |
-| Containers | one isn't running, is unhealthy, or restarted 3 times in an hour |
-| Certificate | the one Caddy serves isn't trusted, or expires within 10 days |
+| Docker, containers | Docker, or one of the app's containers, isn't up for 10 minutes; or a container restarted 3 times in an hour |
+| Certificate | the one Caddy serves isn't trusted for 10 minutes, or expires within 10 days |
 
-**Setting it up** (you): install the ntfy app on your phone and subscribe to a topic with a long random
-name (`echo sports-follow-$(openssl rand -hex 12)`). Anyone who knows the name can read and post, so keep
-it with your other secrets. Then:
-```bash
-echo https://ntfy.sh/<topic> > ~/.config/sports-follow/alert-url
-curl -d "Sports Follow alerts work" https://ntfy.sh/<topic>   # a push should arrive
-deploy/push-secrets.sh deploy@<server-ip>
-```
-Optionally, a heartbeat for when the whole server is down (the checks can't send anything then): a free
-Healthchecks.io check with a 5 minute period, its ping URL in `~/.config/sports-follow/heartbeat-url`,
-and `push-secrets.sh` again. Its own alerts can go to the same ntfy topic.
+**Setting it up** (you, once):
+1. **Sign up** at grafana.com (free) and create a stack.
+2. **Metrics:** on the grafana.com portal, open your stack → **Prometheus** → **Details** for the remote
+   write URL and username. Create an access policy token with `metrics:write`. On the Mac, write
+   `~/.config/sports-follow/grafana.env`:
+   ```
+   GRAFANA_PROM_URL=https://prometheus-prod-…grafana.net/api/prom/push
+   GRAFANA_PROM_USER=<the number>
+   GRAFANA_PROM_TOKEN=<the token>
+   ```
+3. **Rules:** in the stack's Grafana, go to **Administration → Users and access → Service accounts**. Make
+   `sports-follow-alerts` with the Admin role, then a token for it. On the Mac, write
+   `~/.config/sports-follow/grafana-admin.env`:
+   ```
+   GRAFANA_URL=https://<stack>.grafana.net
+   GRAFANA_SA_TOKEN=<the token>
+   ALERT_EMAIL=<where alerts go>
+   ```
+4. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
+   ```bash
+   deploy/push-secrets.sh deploy@<server-ip>   # grafana.env to the server; Alloy starts
+   deploy/grafana/apply-alerts.sh --test       # the rules, the email contact point and policy, and a test email
+   ```
 
-**Setting each one off on purpose** (on the server; each sends an alert, and the plain `check` after it
-sends "Cleared"):
-```bash
-check() { sudo systemd-run --quiet --wait --pipe -p User=deploy -p EnvironmentFile=/etc/sports-follow/alerts.env \
-  -p StateDirectory=sports-follow-check "$@" /opt/sports-follow/deploy/server-check.sh; }
-check -E DISK_MAX_PCT=1; check                     # disk
-check -E MEMORY_PRESSURE_MAX=-1; check             # memory
-check -E BACKUP_MAX_HOURS=0; check                 # backups
-check -E CERT_MIN_DAYS=365; check                  # certificate
-docker run --rm -m 64m --memory-swap 64m sports-follow:latest python -c "x = bytearray(512 * 1024 * 1024)"; check   # out-of-memory killer
-docker stop sports-follow-worker-1; check; docker start sports-follow-worker-1; check                               # a container down
-for i in 1 2 3; do sudo kill -9 "$(docker inspect -f '{{.State.Pid}}' sports-follow-backup-1)"; sleep 5; done; check  # restarts
-```
-The checks' log: `sudo journalctl -u sports-follow-check`.
+Run `apply-alerts.sh` again after changing `rules.json`. Its notification policy replaces the stack's
+whole policy tree. `grafana-admin.env` only loads rules, so it stays on the Mac. To look at alerts or
+silence them, use the stack's Grafana.
+
+**Setting one off on purpose** (on the server, as `deploy`):
+- **A late backup:** this runs the checks once as if there were no backups.
+  ```bash
+  sudo systemd-run --quiet --wait -p User=deploy -p StateDirectory=sports-follow-check -E BACKUP_DIR=/nonexistent /opt/sports-follow/deploy/server-check.sh
+  ```
+  "The database backup is late" arrives within about 3 minutes. The timer's next normal run puts it
+  right, and "Resolved" follows within about 10.
+- **The server going quiet:** `sudo systemctl stop alloy`. The email comes after about 11 minutes. Then
+  `sudo systemctl start alloy`.
+
+`server-check.sh` can still push to an ntfy topic as well, but the emails cover the same ground. For that,
+save the topic's URL in `~/.config/sports-follow/alert-url` and run `push-secrets.sh`. The checks' log:
+`sudo journalctl -u sports-follow-check`. Alloy's: `sudo journalctl -u alloy`.
 
 Old images and build cache older than a week are removed early on Sundays (`sports-follow-prune.timer`).
 
@@ -457,3 +484,18 @@ On the second machine:
 - `fetch-backup.sh` brought the newest dump back at its exact size.
 - `pg_restore` gave a database with the same 5,000 rows and checksum.
 - A wrong key and a bad dump name were refused, with nothing left behind.
+
+The Grafana alerts were rehearsed on another such machine, with Alloy 1.20.1 from Grafana's repository.
+Grafana Cloud was played by a local Prometheus with its remote-write receiver, Grafana 12 and Mailpit
+catching the email.
+- Alloy was skipped until `grafana.env` existed, then sent about 500 series, including the checks'
+  `metrics.prom`. `install-secrets.sh` installs that file and restarts Alloy.
+- `apply-alerts.sh` loaded the 14 rules, twice, all evaluating without errors. `--test` sent a test email.
+- With no dump at all, "The database backup is late" emailed within 2 minutes. A fresh dump gave
+  "Resolved" 5 minutes later.
+- The app's containers and the certificate (this machine had neither) emailed after their 10 minutes.
+- With Alloy stopped, "The server stopped sending metrics" emailed after 10½ minutes and resolved once it
+  was back. Meanwhile the other alerts kept their state rather than sending false "Resolved" mails.
+
+Not tried there: the real Grafana Cloud, the kernel's memory-pressure figures (the machine has none), and
+`server-setup.sh` itself.

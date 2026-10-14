@@ -6,6 +6,8 @@
 # ALERT_URL takes a plain-text POST: an ntfy.sh topic (a push to your phone) or a Healthchecks.io /fail URL.
 # HEARTBEAT_URL, if set, gets a GET on every run, so a service like Healthchecks.io can tell you when the
 # checks stop (the server is down). Both come from /etc/sports-follow/alerts.env (push-secrets.sh).
+# Each run also writes what it saw as Prometheus metrics to $STATE/metrics.prom, which Grafana Alloy sends
+# to Grafana Cloud with the server's own metrics; the alert rules there (deploy/grafana/) email you.
 # By hand: sudo systemctl start sports-follow-check; sudo journalctl -u sports-follow-check
 set -uo pipefail
 
@@ -33,6 +35,13 @@ events=$(mktemp)
 trap 'rm -f "$problems" "$events"' EXIT
 problem() { printf '%s\t%s\n' "$1" "$2" >>"$problems"; }   # a state: alerted when it starts and when it clears
 event() { echo "$1" >>"$events"; }                         # something that happened: alerted once
+
+# What the checks saw, for metrics.prom (write_metrics). Disk, memory and the out-of-memory killer come
+# from Alloy's own host metrics, so only what the host can't tell is here.
+backup_newest=0
+offsite_configured=0 offsite_since=0 offsite_last_ok=0
+docker_up=1 container_up="" container_restarts=""
+cert_checked=0 cert_trusted=0 cert_not_after=0
 
 check_disk() {
   local line pct mount avail
@@ -69,6 +78,7 @@ check_backup() {
     problem backup "No database backup in $BACKUP_DIR"
     return
   fi
+  backup_newest=${newest%.*}
   age=$(( (now - ${newest%.*}) / 3600 ))
   [ "$age" -ge "$BACKUP_MAX_HOURS" ] && problem backup "The newest database backup is $age hours old (docker compose -f deploy/compose.yaml logs backup)"
 }
@@ -77,9 +87,12 @@ check_offsite() {
   local since hours
   # Only once it's set up (offsite.env); until then the README's first deploy says to.
   [ -f "$OFFSITE_CONF" ] || return 0
+  offsite_configured=1
+  offsite_since=$(stat -c %Y "$OFFSITE_CONF")
   # The last hourly run that got everything off-site, or (none yet) when it was set up, with 2 hours' grace.
   if [ -s "$OFFSITE_STATE/last-ok" ]; then
     since=$(cat "$OFFSITE_STATE/last-ok")
+    offsite_last_ok=$since
     hours=$(( (now - since) / 3600 ))
     [ "$hours" -ge "$BACKUP_MAX_HOURS" ] && problem offsite "Off-site backups last worked $hours hours ago (sudo journalctl -u sports-follow-offsite)"
   elif [ $(( now - $(stat -c %Y "$OFFSITE_CONF") )) -ge 7200 ]; then
@@ -88,10 +101,11 @@ check_offsite() {
 }
 
 check_containers() {
-  local seen service status count health ids
-  ids=$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null) || { problem docker "Docker isn't answering"; return; }
+  local seen service status count health ids up
+  ids=$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null) || { problem docker "Docker isn't answering"; docker_up=0; return; }
   if [ -z "$ids" ]; then
     problem app "The app isn't running: no containers (deploy/deploy.sh deploy)"
+    for service in $SERVICES; do container_up+="sports_follow_container_up{service=\"$service\"} 0"$'\n'; done
     return
   fi
   seen=$(mktemp)
@@ -100,6 +114,10 @@ check_containers() {
   touch "$STATE/restarts"
   for service in $SERVICES; do
     read -r _ status count health < <(awk -v s="$service" '$1 == s' "$seen" | sort -r -k2,2 | head -1) || true
+    # Up: running and not unhealthy. Restarts: Docker's count, which a deploy starts again at 0 (a counter reset).
+    if [ "${status:-}" = running ] && [ "${health:-}" != unhealthy ]; then up=1; else up=0; fi
+    container_up+="sports_follow_container_up{service=\"$service\"} $up"$'\n'
+    [ -z "${count:-}" ] || container_restarts+="sports_follow_container_restarts_total{service=\"$service\"} $count"$'\n'
     if [ -z "${status:-}" ]; then
       problem "container:$service" "$service isn't running (no container)"
     elif [ "$status" != running ]; then
@@ -123,11 +141,16 @@ check_containers() {
 check_certificate() {
   local cert
   [ -n "$DOMAIN" ] || return 0
+  cert_checked=1
   # The certificate Caddy serves, checked as a phone would: trusted, for this name, and not about to expire.
   if ! cert=$(openssl s_client -connect "127.0.0.1:$HTTPS_PORT" -servername "$DOMAIN" -verify_hostname "$DOMAIN" \
       -verify_return_error </dev/null 2>/dev/null | openssl x509 2>/dev/null) || [ -z "$cert" ]; then
     problem cert "No trusted HTTPS certificate for $DOMAIN (docker compose -f deploy/compose.yaml logs caddy)"
-  elif ! openssl x509 -noout -checkend $((CERT_MIN_DAYS * 86400)) <<<"$cert" >/dev/null; then
+    return
+  fi
+  cert_trusted=1
+  cert_not_after=$(date -d "$(openssl x509 -noout -enddate <<<"$cert" | cut -d= -f2)" +%s 2>/dev/null || echo 0)
+  if ! openssl x509 -noout -checkend $((CERT_MIN_DAYS * 86400)) <<<"$cert" >/dev/null; then
     problem cert "The HTTPS certificate for $DOMAIN expires $(openssl x509 -noout -enddate <<<"$cert" | cut -d= -f2) and hasn't renewed"
   fi
 }
@@ -138,6 +161,42 @@ check_backup
 check_offsite
 check_containers
 check_certificate
+
+# The checks' findings as Prometheus metrics, for Alloy's textfile collector (deploy/alloy/config.alloy).
+# Written whole, then moved into place, so a half-written file is never read.
+gauge() { printf '# HELP %s %s\n# TYPE %s gauge\n' "$1" "$2" "$1"; }
+write_metrics() {
+  local out="$STATE/metrics.prom"
+  {
+    gauge sports_follow_check_timestamp_seconds "When the server checks last ran."
+    echo "sports_follow_check_timestamp_seconds $now"
+    gauge sports_follow_backup_newest_timestamp_seconds "When the newest database dump was made (0: there is none)."
+    echo "sports_follow_backup_newest_timestamp_seconds $backup_newest"
+    gauge sports_follow_offsite_configured "1 once off-site backups are set up (offsite.env)."
+    echo "sports_follow_offsite_configured $offsite_configured"
+    gauge sports_follow_offsite_configured_timestamp_seconds "When offsite.env was last written (0: not set up)."
+    echo "sports_follow_offsite_configured_timestamp_seconds $offsite_since"
+    gauge sports_follow_offsite_last_ok_timestamp_seconds "When an hourly off-site run last got everything off-site (0: never)."
+    echo "sports_follow_offsite_last_ok_timestamp_seconds $offsite_last_ok"
+    gauge sports_follow_docker_up "1 while Docker answers."
+    echo "sports_follow_docker_up $docker_up"
+    if [ -n "$container_up" ]; then
+      gauge sports_follow_container_up "1 while the app's container for this service is running and not unhealthy."
+      printf '%s' "$container_up"
+    fi
+    if [ -n "$container_restarts" ]; then
+      printf '# HELP %s %s\n# TYPE %s counter\n' sports_follow_container_restarts_total "Docker's restart count for the service's container (0 again after a deploy)." sports_follow_container_restarts_total
+      printf '%s' "$container_restarts"
+    fi
+    if [ "$cert_checked" = 1 ]; then
+      gauge sports_follow_cert_trusted "1 while the certificate Caddy serves is trusted for the domain."
+      echo "sports_follow_cert_trusted $cert_trusted"
+      gauge sports_follow_cert_not_after_timestamp_seconds "When that certificate expires (0: no trusted one)."
+      echo "sports_follow_cert_not_after_timestamp_seconds $cert_not_after"
+    fi
+  } >"$out.tmp" && chmod 644 "$out.tmp" && mv "$out.tmp" "$out"
+}
+write_metrics
 
 # Compare with the last run: new problems, ones still open REPEAT_HOURS after the last alert, cleared ones.
 touch "$STATE/open"
