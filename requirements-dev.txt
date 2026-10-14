@@ -1,1 +1,3 @@
+basedpyright==1.40.2
 pytest==9.1.1
+ruff==0.17.0

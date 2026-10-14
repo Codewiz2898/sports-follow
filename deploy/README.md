@@ -12,8 +12,8 @@ phone ─────────────────▶ caddy ──▶ api
                                         └──▶ OpenRouter
 backup: pg_dump once a day, 14 kept in /var/backups/sports-follow ──▶ sealed, to object storage hourly
 GitHub Actions ──ssh deploy@──▶ deploy.sh (build, migrate, swap, wait for health)
-systemd timers: server checks every 5 minutes (alerts to your phone), off-site backups hourly,
-                Docker clean-up weekly
+systemd timers: server checks every 5 minutes, off-site backups hourly, Docker clean-up weekly
+alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the checks'; alert rules there email you
 ```
 
 Only Caddy is published. Postgres, Redis, the gateway and the API talk on the compose network. The
@@ -33,16 +33,29 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `pg_restore`. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
 | `../.github/workflows/deploy.yml` | Checks that CI passed, then runs `deploy.sh` over SSH, then a health check from outside. |
-| `server-check.sh`, `systemd/` | The server checks and their alerts; the weekly Docker clean-up. |
+| `server-check.sh`, `systemd/` | The server checks, whose findings go to Grafana Cloud as metrics; the weekly Docker clean-up. |
+| `alloy/` | Grafana Alloy's config: the server's metrics and the checks' findings, to Grafana Cloud every minute. |
+| `grafana/` | The alert rules (`rules.json`), and `apply-alerts.sh`, which puts them, an email contact point and the policy into Grafana Cloud. |
 | `seed-registry.sh` | From the Mac: copies the player registry (323,000 athletes, 15 MB) instead of an hour of Wikidata queries. |
+| `migrate-to-server.sh` | From the Mac: steps 3–6 of the first deploy in one go, with checks before and after ([Moving off the Mac](#moving-off-the-mac)). |
 | `backup.sh` | The daily database dump. |
 
 ## Size and cost
 
 The whole stack uses about 450 MB of memory at rest; the API is the largest (240 MB for two workers).
-A **2 vCPU / 4 GB** server leaves room for the weekly registry import, builds and the chess engine:
-$24 a month on DigitalOcean or AWS Lightsail, plus weekly backups ($4.80 on DigitalOcean). Any region
-works; one near India (Bangalore, Mumbai or Singapore) is only a little snappier for fans there.
+A **2 vCPU / 4 GB** server leaves room for the weekly registry import, builds and the chess engine.
+
+It runs on **AWS Lightsail in Sydney** (`ap-southeast-2`): the $24 plan, with 2 vCPU, 4 GB and an 80 GB
+SSD.
+- **Billing:** an AWS account opened in India is billed in rupees by AWS India. It takes RuPay, Visa and
+  Mastercard cards, net banking and UPI. DigitalOcean bills in dollars, and an Indian card was declined
+  there.
+- **Transfer:** Sydney includes 2 TB a month.
+- **CPU:** Lightsail's CPU is burstable. It runs flat out for a while, then slows down. Normal use stays
+  well inside that, but watch the CPU graph in Lightsail after launch.
+- **Region:** Mumbai would be closest to fans in India, but the AWS organization's service control policy
+  denies Lightsail there. Sydney adds a little delay, which barely matters for scores that update every
+  8–15 seconds.
 
 ## First deploy
 
@@ -62,17 +75,35 @@ docker run --rm alpine:3.20 sh -c 'apk add -q age >/dev/null && age-keygen'
 Save the `AGE-SECRET-KEY-1…` line in the password manager. Add the `age1…` public key as a line of
 `deploy/secrets-recipients.txt` and commit it.
 
-**1. Create the server** (you): Ubuntu 24.04, 2 vCPU / 4 GB, with your Mac's SSH key
-(`~/.ssh/id_ed25519.pub`) and weekly backups on. Note its IP address.
+**1. Create the server** (you), in the Lightsail console, in Sydney (`ap-southeast-2`):
+- **Image and plan:** Linux/Unix, OS only, **Ubuntu 24.04 LTS**, on the $24 plan (2 vCPU, 4 GB), with
+  dual-stack networking.
+- **SSH key:** upload your Mac's `~/.ssh/id_ed25519.pub`.
+- **Static IP:** on the Networking tab, attach one. It's free while attached; without it, the address
+  changes whenever the server stops.
+- **Firewall:** add **HTTPS (TCP 443)** to the IPv4 firewall, and UDP 443 for HTTP/3. Don't restrict them:
+  any IPv4 address, `0.0.0.0/0`. SSH (22) and HTTP (80) are open already.
+- **Snapshots** (optional): automatic snapshots take one a day, billed per GB stored. The off-site backups
+  already cover the data, but a snapshot brings the whole server back faster.
 
-**2. Set it up** (from the repo on the Mac). This is the last time you log in as root:
+Note the static IP, and check the Mac's key gets in: `ssh ubuntu@<server-ip> true`. If it says
+`Permission denied (publickey)`, the server was made with Lightsail's default key instead. Add the Mac's
+from the console's browser SSH ("Connect using SSH"), pasting your `~/.ssh/id_ed25519.pub` between the
+quotes:
 ```bash
-ssh root@<server-ip> "RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s" < deploy/server-setup.sh
+echo '<the line from ~/.ssh/id_ed25519.pub>' >> ~/.ssh/authorized_keys
 ```
+
+**2. Set it up** (from the repo on the Mac). Lightsail's first login is `ubuntu`, with sudo:
+```bash
+ssh ubuntu@<server-ip> "sudo RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' bash -s" < deploy/server-setup.sh
+```
+On a provider whose first login is root, it's `ssh root@<server-ip> "RECOVERY_KEY=… bash -s" < …` instead.
+
 The repo is private, so the first run stops and prints a key for the server to read it with: add it under
 [Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
-off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) By
-then root can't log in any more, so run the setup again as `deploy`:
+off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) Then
+run the setup again as `deploy` (root can't log in by then):
 ```bash
 ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
 ```
@@ -111,6 +142,31 @@ opens, search finds players, and `/credits` lists Sportmonks and Lichess only.
 
 **7. Turn on the alerts, the off-site backups and the GitHub deploys** (below).
 
+### Moving off the Mac
+
+Steps 3–6 in one go, from the repo's root on the Mac with the development stack's database running:
+```bash
+deploy/migrate-to-server.sh deploy@<server-ip> --check   # checks only; changes nothing
+deploy/migrate-to-server.sh deploy@<server-ip>
+```
+1. **Checks:** the Sportmonks and Lichess tokens, the Mac's registry, and the server's setup. It warns if
+   production has no OpenRouter key of its own yet.
+2. **Secrets:** `push-secrets.sh`.
+3. **First deploy:** `deploy.sh deploy`, run on the server.
+4. **Registry:** `seed-registry.sh`.
+5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so only
+   licensed sources run), and the server's registry has as many athletes as the Mac's.
+
+Each step is one of the scripts above, and running it again is safe.
+
+**Not moved, on purpose:**
+- **The Mac's games, results and news.** Much of it comes from ESPN, which only development may use.
+- **Its fans and follows.** They're development cookies for `localhost`, which no browser sends to the
+  server's address.
+
+The server builds pages again as fans follow. Copying the Mac's cookie or push keys would gain nothing
+either: a browser keeps those per address.
+
 ## Getting in
 
 Root can't log in over SSH, and nobody can log in with a password. Everyone logs in as `deploy`, which
@@ -118,15 +174,17 @@ has sudo without a password (it's in the `docker` group, which is as good as roo
 
 | Key | Can |
 |---|---|
-| The Mac's (copied from root by the first setup) | everything |
+| The Mac's (copied from `ubuntu`, or root, by the first setup) | everything; it still opens `ubuntu` too |
 | The recovery key (`RECOVERY_KEY`) | everything |
 | GitHub Actions' (`DEPLOY_KEY`) | run `deploy.sh` and nothing else: no shell, no forwarding |
-| The provider's web console | the last resort, if no key works: reset root's password in the provider's panel and log in there |
+| Lightsail's default key, if `ubuntu` had it (copied like the Mac's) | everything. Its private half can be downloaded from the AWS account; to drop it, remove its line from `~deploy/.ssh/authorized_keys` |
+| Lightsail's browser SSH ("Connect using SSH" in the console) | the last resort, if no key works: it logs in as `ubuntu` with a key of its own |
 
-Try the recovery key once it's in: `ssh -i <recovery key> deploy@<server-ip> true`.
+Try the recovery key once it's in: `ssh -i <recovery key> deploy@<server-ip> true`. Also open Lightsail's
+browser SSH once after the setup, to check it still gets in.
 
 fail2ban bans an address for an hour after 5 failed logins in 10 minutes, and then even a right key can't
-get in from there: wait, use another network, or the console (`sudo fail2ban-client status sshd`,
+get in from there: wait, use another network, or Lightsail's browser SSH (`sudo fail2ban-client status sshd`,
 `sudo fail2ban-client unban <address>`). Run the setup again after changing it, or to add a key
 (keys are added, never removed; remove one by editing `~deploy/.ssh/authorized_keys`):
 ```bash
@@ -293,45 +351,75 @@ The live image and the previous one are kept; older ones are removed.
 
 ## Alerts
 
-`server-check.sh` runs every 5 minutes as `deploy` and sends an alert when one of these starts, again
-every 6 hours while it lasts, and once more when it clears:
+Alerts come by **email from Grafana Cloud**, on its free tier.
+- **Alloy:** on the server, Grafana Alloy (`alloy/config.alloy`) sends the server's own metrics every
+  minute. It comes from Grafana's apt repository and starts once `grafana.env` is there.
+- **The checks:** Alloy also sends what `server-check.sh` sees every 5 minutes, from its `metrics.prom`:
+  backups, off-site backups, containers and the certificate.
+- **The rules:** they live in `grafana/rules.json` and run in Grafana Cloud, so they still work when the
+  server is down. That's one of the things they catch.
 
-| Check | Alerts when |
+Each one emails when it starts, again every 6 hours while it lasts, and "Resolved" when it clears:
+
+| Rule | Emails when |
 |---|---|
-| Disk | `/`, Docker's or the backups' disk is 80% full |
-| Memory | tasks spent more than 10% of the last 5 minutes waiting for memory |
-| Out-of-memory killer | it stopped any process since the last check |
+| The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
+| The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
+| Disk | any disk is over 80% full for 10 minutes |
+| Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |
+| Out-of-memory killer | it stopped any process |
+| CPU held back | for 30 minutes, Lightsail withheld over 20% of CPU time: its burst allowance is used up |
 | Backups | the newest dump is 26 hours old, or there is none |
 | Off-site backups | once set up: the last hourly copy that worked is 26 hours old, or none worked in the first 2 hours |
-| Containers | one isn't running, is unhealthy, or restarted 3 times in an hour |
-| Certificate | the one Caddy serves isn't trusted, or expires within 10 days |
+| Docker, containers | Docker, or one of the app's containers, isn't up for 10 minutes; or a container restarted 3 times in an hour |
+| Certificate | the one Caddy serves isn't trusted for 10 minutes, or expires within 10 days |
 
-**Setting it up** (you): install the ntfy app on your phone and subscribe to a topic with a long random
-name (`echo sports-follow-$(openssl rand -hex 12)`). Anyone who knows the name can read and post, so keep
-it with your other secrets. Then:
-```bash
-echo https://ntfy.sh/<topic> > ~/.config/sports-follow/alert-url
-curl -d "Sports Follow alerts work" https://ntfy.sh/<topic>   # a push should arrive
-deploy/push-secrets.sh deploy@<server-ip>
-```
-Optionally, a heartbeat for when the whole server is down (the checks can't send anything then): a free
-Healthchecks.io check with a 5 minute period, its ping URL in `~/.config/sports-follow/heartbeat-url`,
-and `push-secrets.sh` again. Its own alerts can go to the same ntfy topic.
+**Setting it up** (you, once):
+1. **Sign up** at grafana.com (free) and create a stack.
+2. **Metrics:** on the grafana.com portal, open your stack → **Prometheus** → **Details** for the remote
+   write URL and username. Create an access policy token with `metrics:write`. On the Mac, write
+   `~/.config/sports-follow/grafana.env`:
+   ```
+   GRAFANA_PROM_URL=https://prometheus-prod-…grafana.net/api/prom/push
+   GRAFANA_PROM_USER=<the number>
+   GRAFANA_PROM_TOKEN=<the token>
+   ```
+3. **Rules:** in the stack's Grafana, go to **Administration → Users and access → Service accounts**. Make
+   `sports-follow-alerts` with the Admin role, then a token for it. On the Mac, write
+   `~/.config/sports-follow/grafana-admin.env`:
+   ```
+   GRAFANA_URL=https://<stack>.grafana.net
+   GRAFANA_SA_TOKEN=<the token>
+   ALERT_EMAIL=<where alerts go>
+   ```
+4. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
+   ```bash
+   deploy/push-secrets.sh deploy@<server-ip>   # grafana.env to the server; Alloy starts
+   deploy/grafana/apply-alerts.sh --test       # the rules, the email contact point and policy, and a test email
+   ```
 
-**Setting each one off on purpose** (on the server; each sends an alert, and the plain `check` after it
-sends "Cleared"):
-```bash
-check() { sudo systemd-run --quiet --wait --pipe -p User=deploy -p EnvironmentFile=/etc/sports-follow/alerts.env \
-  -p StateDirectory=sports-follow-check "$@" /opt/sports-follow/deploy/server-check.sh; }
-check -E DISK_MAX_PCT=1; check                     # disk
-check -E MEMORY_PRESSURE_MAX=-1; check             # memory
-check -E BACKUP_MAX_HOURS=0; check                 # backups
-check -E CERT_MIN_DAYS=365; check                  # certificate
-docker run --rm -m 64m --memory-swap 64m sports-follow:latest python -c "x = bytearray(512 * 1024 * 1024)"; check   # out-of-memory killer
-docker stop sports-follow-worker-1; check; docker start sports-follow-worker-1; check                               # a container down
-for i in 1 2 3; do sudo kill -9 "$(docker inspect -f '{{.State.Pid}}' sports-follow-backup-1)"; sleep 5; done; check  # restarts
-```
-The checks' log: `sudo journalctl -u sports-follow-check`.
+Run `apply-alerts.sh` again after changing `rules.json`. A rule whose query changed starts over: if it
+was firing, it sends "Resolved", then fires again after its wait. Its notification policy replaces the
+stack's whole policy tree. `grafana-admin.env` only loads rules, so it stays on the Mac. To look at alerts
+or silence them, use the stack's Grafana.
+
+Each rule's query returns the current value, such as the backup's age or how full a disk is, and the
+rule's threshold decides whether that's a problem. If the metrics stop, a rule keeps its last state, so a
+silent server sends one "stopped sending metrics" email and no false "Resolved" ones.
+
+**Setting one off on purpose** (on the server, as `deploy`):
+- **A late backup:** this runs the checks once as if there were no backups.
+  ```bash
+  sudo systemd-run --quiet --wait -p User=deploy -p StateDirectory=sports-follow-check -E BACKUP_DIR=/nonexistent /opt/sports-follow/deploy/server-check.sh
+  ```
+  "The database backup is late" arrives within about 3 minutes. The timer's next normal run puts it
+  right, and "Resolved" follows within about 10.
+- **The server going quiet:** `sudo systemctl stop alloy`. The email comes after about 11 minutes. Then
+  `sudo systemctl start alloy`.
+
+`server-check.sh` can still push to an ntfy topic as well, but the emails cover the same ground. For that,
+save the topic's URL in `~/.config/sports-follow/alert-url` and run `push-secrets.sh`. The checks' log:
+`sudo journalctl -u sports-follow-check`. Alloy's: `sudo journalctl -u alloy`.
 
 Old images and build cache older than a week are removed early on Sundays (`sports-follow-prune.timer`).
 
@@ -354,8 +442,8 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | Off-site backups | `deploy/offsite-backup.sh list`; run now: `sudo systemctl start sports-follow-offsite`; log: `sudo journalctl -u sports-follow-offsite` |
 
 The daily dumps stay on the server for 14 days. Off-site, they're sealed and kept for longer (see
-[Off-site backups](#off-site-backups)), next to the sealed secrets. The provider's weekly server backup is
-one more copy.
+[Off-site backups](#off-site-backups)), next to the sealed secrets. Lightsail's automatic snapshots, if
+they're on, are one more copy.
 
 A server set up before fan cookies were signed has no cookie key yet: run `deploy/push-secrets.sh
 deploy@<server-ip>` once before deploying, or the API stops at startup and says so. The key is kept from
@@ -401,3 +489,23 @@ On the second machine:
 - `fetch-backup.sh` brought the newest dump back at its exact size.
 - `pg_restore` gave a database with the same 5,000 rows and checksum.
 - A wrong key and a bad dump name were refused, with nothing left behind.
+
+The Grafana alerts were rehearsed on another such machine, with Alloy 1.20.1 from Grafana's repository.
+Grafana Cloud was played by a local Prometheus with its remote-write receiver, Grafana 12 and Mailpit
+catching the email.
+- Alloy was skipped until `grafana.env` existed, then sent about 500 series, including the checks'
+  `metrics.prom`. `install-secrets.sh` installs that file and restarts Alloy.
+- `apply-alerts.sh` loaded the 14 rules, twice, all evaluating without errors. `--test` sent a test email.
+- With no dump at all, "The database backup is late" emailed within 2 minutes. A fresh dump gave
+  "Resolved" 5 minutes later.
+- The app's containers and the certificate (this machine had neither) emailed after their 10 minutes.
+  So did "The server checks stopped running" once their last run was 15 minutes old.
+- With Alloy stopped, "The server stopped sending metrics" emailed after 10½ minutes and resolved once it
+  was back. Meanwhile the other alerts kept their state rather than sending false "Resolved" mails.
+- The first version of the rules returned data only while something was wrong. Kept-state on no data then
+  meant they never resolved; the value-and-threshold rules do.
+
+On the production server, `server-setup.sh` installed Alloy from Grafana's repository, and
+`push-secrets.sh` started it. Its metrics then arrived on the real Grafana Cloud stack (Grafana 13.3):
+about 370 series, all seven containers up. All 14 rules evaluated without errors and stayed quiet. The
+test email arrived through Grafana 13's receivers API, since 13 removed the older test endpoint.

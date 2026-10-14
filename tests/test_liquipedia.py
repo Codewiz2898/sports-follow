@@ -19,7 +19,7 @@ from sports_follow.adapters.base import Snapshot
 from sports_follow.sports import esports
 from sports_follow.models import Athlete, Event, EventState, Player, PlayerLine, SourceBinding
 
-from .test_structured import FakeSource, lane, redis
+from .test_structured import FakeSource, lane, redis  # noqa: F401 (redis: the fixture)
 
 WIKI = "pubgmobile"
 NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)

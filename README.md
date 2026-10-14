@@ -210,6 +210,18 @@ Then three processes:
 cd web && npm run dev                                              # app on http://localhost:5173
 ```
 
+The checks CI runs on every pull request, after `.venv/bin/pip install -r requirements-dev.txt`:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/ruff check .                                      # lint: rules that find bugs (pyproject.toml)
+.venv/bin/basedpyright --pythonpath .venv/bin/python       # types: fails on errors not in .basedpyright/baseline.json
+cd web && npm run build                                     # type-check and build the app
+```
+
+The type baseline holds the errors from before CI checked types. After fixing some, run basedpyright
+with `--writebaseline` to shrink it; never add to it to get a pull request through.
+
 For a single-process deploy, `npm run build` in `web/` and the API serves the built app itself (with the
 service worker, manifest and icons; try installing it from http://localhost:8421). Notifications need
 that build too: turn them on under Alerts. Always pass

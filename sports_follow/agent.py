@@ -24,9 +24,9 @@ from pydantic import BaseModel, ValidationError
 
 from . import tracing
 from .schema import LiveUpdate, PlayerReport
+from .tools import TOOL_DEFS, ToolError, describe, run_tool
 
 log = logging.getLogger("sports_follow.agent")
-from .tools import TOOL_DEFS, ToolError, describe, run_tool
 
 # `:nitro` asks OpenRouter for its fastest hosts; the default routing picks by price and some hosts stall.
 MODEL = os.environ.get("SPORTS_FOLLOW_MODEL", "openrouter:moonshotai/kimi-k2.6:nitro")

@@ -83,6 +83,8 @@ do_deploy() {
       *) docker image rm "$tag" >/dev/null 2>&1 || say "kept $tag (still in use)" ;;
     esac
   done
+  # Alloy's config is in this checkout (deploy/alloy/): pick up any change. Nothing if it isn't running yet.
+  sudo -n systemctl try-reload-or-restart alloy 2>/dev/null || true
   say "${sha:0:7} is live"
 }
 
