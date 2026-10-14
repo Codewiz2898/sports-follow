@@ -1,0 +1,12 @@
+[Unit]
+Description=Sports Follow off-site backups: sealed dumps and secrets to object storage (deploy/offsite-backup.sh)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+# Where to, from /etc/sports-follow/offsite.env (push-secrets.sh); the script reads it. last-ok goes here,
+# for server-check.sh.
+StateDirectory=sports-follow-offsite
+ExecStart=/opt/sports-follow/deploy/offsite-backup.sh upload

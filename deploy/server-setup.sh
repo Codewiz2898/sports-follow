@@ -18,7 +18,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 apt-get -y upgrade
-apt-get install -y ca-certificates curl git openssl ufw unattended-upgrades fail2ban python3-systemd age
+apt-get install -y ca-certificates curl git openssl ufw unattended-upgrades fail2ban python3-systemd age rclone
 echo 'APT::Periodic::Update-Package-Lists "1"; APT::Periodic::Unattended-Upgrade "1";' >/etc/apt/apt.conf.d/20auto-upgrades
 
 # Firewall: SSH and the web only (Docker publishes just Caddy's 80 and 443).
@@ -162,10 +162,11 @@ if [ ! -f "$APP_DIR/deploy/.env" ]; then
   chown "$USER_NAME:$USER_NAME" "$APP_DIR/deploy/.env"
 fi
 
-# The server checks (every 5 minutes; alerts go to ALERT_URL) and the weekly Docker clean-up.
+# The server checks (every 5 minutes; alerts go to ALERT_URL), the weekly Docker clean-up, and the hourly
+# off-site backups (which wait for offsite.env).
 install -m 644 "$APP_DIR"/deploy/systemd/*.service "$APP_DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now sports-follow-check.timer sports-follow-prune.timer
+systemctl enable --now sports-follow-check.timer sports-follow-prune.timer sports-follow-offsite.timer
 
 host=$(grep '^DOMAIN=' "$APP_DIR/deploy/.env" | cut -d= -f2)
 echo "server-setup: done. The app will be at https://$host"
