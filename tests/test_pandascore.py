@@ -11,7 +11,7 @@ import httpx
 
 from sports_follow import credits, form, moments, registry, search, sports, structured
 from sports_follow.sports.esports import game_of_league
-from sports_follow.adapters import ADAPTERS, KNOWN, SearchResult, pandascore, pandascore_esports as ps
+from sports_follow.adapters import ADAPTERS, KNOWN, SearchResult, budget, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
 
@@ -313,10 +313,9 @@ def test_the_token_goes_in_a_header_and_a_429_pauses_reads(monkeypatch):
     monkeypatch.setattr(pandascore, "_client", httpx.Client(transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(pandascore, "token", lambda: "secret-token")
     monkeypatch.setattr(pandascore, "_cache", {})
-    monkeypatch.setattr(pandascore, "_state", {"paused_until": 0.0})
     assert pandascore.get_json("/matches", 0, **{"filter[id]": "1"}) == [{"id": 1}]
     assert seen[0].headers["authorization"] == "Bearer secret-token" and "secret-token" not in str(seen[0].url)
-    assert pandascore.remaining["left"] == 412
+    assert budget.left(pandascore.BUDGET) == 412  # what PandaScore says is left, shared by every process
     try:
         pandascore.get_json("/matches", 0, **{"filter[id]": "page"})
         raise AssertionError("expected a rate limit")

@@ -11,7 +11,8 @@ from sports_follow import search, sports
 from sports_follow.adapters import KNOWN, Provider, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
-SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base"}
+# Every module in adapters/ is a source's, but what all of them share: what an adapter is, and the budget.
+SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base", "budget"}
 
 
 def test_every_source_describes_itself():

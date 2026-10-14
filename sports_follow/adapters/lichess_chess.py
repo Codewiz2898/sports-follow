@@ -25,6 +25,7 @@ import httpx
 
 from .. import naming
 from ..config import USER_AGENT
+from . import budget
 from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
 
 API = "https://lichess.org/api"
@@ -34,8 +35,8 @@ MAX_TOURS = 6  # the most recent tournaments a player is followed through
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _cache: dict[str, tuple[float, Any]] = {}
-_lock = threading.Lock()  # one request at a time, as Lichess asks
-_state = {"last": 0.0, "paused_until": 0.0}
+_lock = threading.Lock()  # one request at a time from each process, as Lichess asks
+_state = {"last": 0.0}
 SPACING = 1.0  # seconds between requests; bursts of ~25 at 0.3 s drew a 429
 
 
@@ -52,6 +53,10 @@ def token() -> str | None:
     return value or None
 
 
+# Every process's requests together, a minute: what the token allows, or what Lichess allows without one.
+BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),))
+
+
 def _headers(url: str, text: bool) -> dict[str, str]:
     headers = {"accept": "*/*"} if text else {}
     if url.startswith("https://lichess.org/") and token():
@@ -59,9 +64,9 @@ def _headers(url: str, text: bool) -> dict[str, str]:
     return headers
 
 
-class RateLimited(AdapterError):
-    """Lichess said slow down. Unlike a missing round, this must fail the whole read: a fixture
-    list with holes would drop results from the card until the next refresh."""
+# Lichess said slow down, or the minute is spent. Unlike a missing round, this must fail the whole read: a
+# fixture list with holes would drop results from the card until the next refresh.
+RateLimited = budget.RateLimited
 
 
 def get_json(url: str, ttl: float, text: bool = False) -> Any:
@@ -74,8 +79,7 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         hit = _cache.get(url)  # another thread may have fetched it while this one waited
         if hit and time.time() - hit[0] < ttl:
             return hit[1]
-        if time.time() < _state["paused_until"]:
-            raise RateLimited("Lichess asked us to slow down; paused for a minute")
+        budget.take(BUDGET)
         time.sleep(max(0.0, _state["last"] + SPACING - time.time()))
         try:
             res = _client.get(url, headers=_headers(url, text))
@@ -84,7 +88,7 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         finally:
             _state["last"] = time.time()
         if res.status_code == 429:
-            _state["paused_until"] = time.time() + 60
+            budget.pause(BUDGET)
             raise RateLimited("Lichess rate limit (429); paused for a minute")
         if res.status_code == 401 and token():
             raise AdapterError("Lichess rejected the API token (HTTP 401); check ~/.config/sports-follow/lichess-token")

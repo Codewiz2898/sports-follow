@@ -12,6 +12,7 @@ import pytest
 
 from sports_follow import credits, moments
 from sports_follow.adapters import dota, opendota, pandascore, pandascore_esports as ps
+from sports_follow.adapters import budget
 from sports_follow.adapters.base import AdapterError
 
 SPIRIT, LIQUID = 1669, 1652
@@ -217,9 +218,9 @@ def test_a_match_is_kept_once_complete_and_the_minute_is_never_overspent(monkeyp
     assert opendota.match(9001)["players"][0]["kills"] == 3 and sent.count("/api/matches/9001") == 2  # kept now
     assert "sports-follow" in opendota._client.headers["user-agent"]
     for _ in range(opendota.FREE_MINUTE - opendota.MARGIN_MINUTE - 2):
-        opendota._take()
+        budget.take(opendota.BUDGET, lane_name="live")
     with pytest.raises(opendota.RateLimited):
-        opendota._take()
+        budget.take(opendota.BUDGET, lane_name="live")
 
 
 def test_turned_off_it_asks_nothing(monkeypatch):

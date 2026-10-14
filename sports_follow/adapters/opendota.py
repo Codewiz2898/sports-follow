@@ -2,8 +2,8 @@
 
 Not a source of its own: it adds to PandaScore's Dota 2 series (pandascore_esports), which have the
 schedule and the series and map scores but nothing inside a map. No key needed: the free tier allows 60
-requests a minute and 3,000 a day, counted in Redis across processes and never spent past FREE_* less a
-margin. Finished matches never change, so each is kept in Redis once it's complete.
+requests a minute and 3,000 a day, counted by the source budget (budget.py, BUDGET) and never spent past
+FREE_* less a margin. Finished matches never change, so each is kept in Redis once it's complete.
 
 OpenDota is community-run and publishes no data licence (best effort, no guarantee), so a public build
 leaves it off until its terms are checked: SPORTS_FOLLOW_OPENDOTA=0.
@@ -20,45 +20,33 @@ import httpx
 
 from .. import bus
 from ..config import USER_AGENT
+from . import budget
 from .base import AdapterError
 
 BASE = "https://api.opendota.com/api"
 ENABLED = os.environ.get("SPORTS_FOLLOW_OPENDOTA", "1") != "0"
 FREE_MINUTE, FREE_DAY = 60, 3000
 MARGIN_MINUTE, MARGIN_DAY = 5, 200
+BUDGET = budget.Budget("opendota", windows=(budget.Window(60, FREE_MINUTE, margin=MARGIN_MINUTE), budget.Window(86400, FREE_DAY, margin=MARGIN_DAY)))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list), per process
 
 
-class RateLimited(AdapterError):
-    """The minute's or the day's free requests are spent."""
-
-
-def _take() -> None:
-    try:
-        r = bus.sync_redis()
-        now = time.time()
-        minute, day = f"opendota:m:{int(now // 60)}", f"opendota:d:{int(now // 86400)}"
-        used_minute, used_day = r.incr(minute), r.incr(day)
-        r.expire(minute, 120)
-        r.expire(day, 2 * 86400)
-    except Exception as exc:
-        raise RateLimited(f"can't count OpenDota requests (Redis): {exc}") from exc
-    if used_minute > FREE_MINUTE - MARGIN_MINUTE or used_day > FREE_DAY - MARGIN_DAY:
-        raise RateLimited("OpenDota's free requests are spent for now")
+RateLimited = budget.RateLimited
 
 
 def _get(path: str, kind: type = list) -> Any:
     """An OpenDota document: a list (live games, pro matches, heroes, pros), or a dict (a match)."""
     if not ENABLED:
         raise AdapterError("OpenDota is turned off (SPORTS_FOLLOW_OPENDOTA=0)")
-    _take()
+    budget.take(BUDGET)
     try:
         res = _client.get(f"{BASE}{path}")
     except httpx.HTTPError as exc:
         raise AdapterError(f"OpenDota unreachable: {exc}") from exc
     if res.status_code == 429:
+        budget.pause(BUDGET)
         raise RateLimited("OpenDota said too many requests (429)")
     if res.status_code != 200:
         raise AdapterError(f"OpenDota returned HTTP {res.status_code} for {path}"[:300])

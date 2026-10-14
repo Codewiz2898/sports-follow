@@ -7,7 +7,10 @@ import time
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from sports_follow.adapters import sportmonks, sportmonks_football as sm
+from sports_follow.adapters import budget
 
 HOME, AWAY = 688, 34
 STAR, SUB, UNUSED, KEEPER = 4125, 7001, 7002, 7003
@@ -162,13 +165,15 @@ def test_history_pages_step_back_ninety_days_per_team():
     assert pages[-1]["from"] == "2025-06-07" and len(pages) == 8
 
 
-def test_background_reads_stop_at_the_live_reserve(monkeypatch):
-    monkeypatch.setattr(sportmonks, "remaining", {})
-    assert sportmonks.spare("Fixture")  # nothing read yet
-    sportmonks.remaining["Fixture"] = (sportmonks.LIVE_RESERVE, 1e12)
-    assert not sportmonks.spare("Fixture")
-    sportmonks.remaining["Fixture"] = (sportmonks.LIVE_RESERVE, 0.0)  # the hour has reset since
-    assert sportmonks.spare("Fixture")
+def test_background_reads_stop_at_the_live_reserve(source_budgets):
+    assert sportmonks.spare(sportmonks.FIXTURES)  # nothing read yet
+    budget.observe(sportmonks.BUDGET, sportmonks.FIXTURES, sportmonks.LIVE_RESERVE, 600)  # what Sportmonks says is left
+    assert not sportmonks.spare(sportmonks.FIXTURES)
+    budget.take(sportmonks.BUDGET, sportmonks.FIXTURES, "live")  # live polls still go
+    with pytest.raises(sportmonks.RateLimited):
+        budget.take(sportmonks.BUDGET, sportmonks.FIXTURES, "history")
+    source_budgets.data.clear()  # the hour has reset since
+    assert sportmonks.spare(sportmonks.FIXTURES)
 
 
 def test_live_matches_come_fifty_to_a_request(monkeypatch):

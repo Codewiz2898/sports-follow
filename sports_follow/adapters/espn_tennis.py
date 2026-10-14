@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .. import naming
-from . import espn
+from . import budget, espn
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 SPORT_UID = "s:850~"
@@ -254,7 +254,7 @@ class EspnTennis(espn.EspnAdapter, Adapter):
 
         seen: dict[str, Fixture] = {}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for fixtures in pool.map(read, days):
+            for fixtures in pool.map(budget.carry(read), days):
                 for f in fixtures:
                     if ref.athlete_id in f.team_ids:
                         seen.setdefault(f.source_id, f)
@@ -275,7 +275,7 @@ class EspnTennis(espn.EspnAdapter, Adapter):
 
         seen: dict[str, Fixture] = {}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for fixtures in pool.map(read, page["days"]):
+            for fixtures in pool.map(budget.carry(read), page["days"]):
                 for f in fixtures:
                     if ref.athlete_id in f.team_ids and f.status == "final":
                         seen.setdefault(f.source_id, f)

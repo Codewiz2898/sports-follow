@@ -149,6 +149,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
   serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source.
+- **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
+  declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
+  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Before each request it
+  sends it takes one; it reports what the source says is left and its 429s, which pause every process.
+  Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
+  lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
+  following), `refresh`, `history` and `import`. The background lanes stop at the reserve; a fan loop on
+  Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
+  source's spend this hour and today, by lane.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,

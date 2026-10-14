@@ -296,7 +296,7 @@ class SportmonksFootball(Adapter):
     def spare(self) -> bool:
         """Whether history.py may read now: every call here is a Fixture request, and live matches
         need the hour's last LIVE_RESERVE of them."""
-        return sportmonks.spare("Fixture")
+        return sportmonks.spare(sportmonks.FIXTURES)
 
     @classmethod
     def available(cls) -> bool:
