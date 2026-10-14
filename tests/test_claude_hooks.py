@@ -135,3 +135,17 @@ def test_a_pull_request_waits_for_a_review(tmp_path):
     ]
     assert [c for c in passes if run("pr_reviewed.py", c, tmp_path) != 0] == []
     assert [c for c in stops if run("pr_reviewed.py", c, tmp_path) != 2] == []
+
+
+@pytest.mark.parametrize("command, blocked", [
+    ("curl -s localhost:18421/api/health", False),
+    ("docker exec sports-follow-postgres psql -U sports -d sports_follow_r2 -c 'select 1'", False),
+    ("cd /w && env REDIS_URL=redis://127.0.0.1:6381/0 /v/bin/uvicorn sports_follow.server:app --port 18431 &", False),
+    ("git -C /w log --oneline -5 && gh pr view 40", False),
+    ("git stash", True),
+    ('git -C "/w x" checkout main', True),
+    ("curl -s x; git commit -am wip", True),
+    ("gh pr comment 40 --body hi", True),
+])
+def test_a_hunter_runs_its_repros_but_never_changes_git(command, blocked):
+    assert run("hunter_guard.py", command) == (2 if blocked else 0)
