@@ -43,6 +43,10 @@ SSH key (`~/.ssh/id_ed25519.pub`) and weekly backups on. Note its IP address.
 ```bash
 ssh root@<server-ip> 'bash -s' < deploy/server-setup.sh
 ```
+The repo is private, so the first run stops and prints the server's own deploy key: add it under
+[Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new), read-only, then
+run the same command again. Updates (`git pull`) use the same key.
+
 Without a domain the app lives at `https://<ip-with-dashes>.sslip.io`, with a real certificate. For
 your own domain, point an A record at the server first and run `DOMAIN=app.example.com bash -s` instead
 (or edit `/opt/sports-follow/deploy/.env` later).

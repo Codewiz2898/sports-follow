@@ -8,6 +8,8 @@ from sports_follow.adapters.espn_soccer import EspnSoccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.lichess_chess import LichessChess
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
+from sports_follow.config import user_agent
+from sports_follow.notify import vapid_subject
 
 
 def test_every_source_runs_unless_the_build_lists_its_licensed_ones():
@@ -53,3 +55,11 @@ def test_no_token_means_anonymous_requests(monkeypatch, tmp_path):
         assert lichess_chess._headers("https://lichess.org/api/broadcast", text=False) == {}
     finally:
         lichess_chess.token.cache_clear()
+
+
+def test_sources_and_push_services_are_told_the_site_never_the_private_repo():
+    assert user_agent("https://app.example.com", "hello@example.com") == "sports-follow/0.1 (https://app.example.com; hello@example.com)"
+    assert user_agent("", "hello@example.com") == "sports-follow/0.1 (hello@example.com)"
+    assert user_agent("", "") == "sports-follow/0.1"
+    assert vapid_subject("https://app.example.com") == "https://app.example.com"
+    assert vapid_subject("") == vapid_subject("http://localhost:8421") == "https://localhost"  # push wants https or mailto

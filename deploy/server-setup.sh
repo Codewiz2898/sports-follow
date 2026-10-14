@@ -5,7 +5,8 @@
 # DOMAIN defaults to <server-ip>.sslip.io (real HTTPS, no domain needed); pass DOMAIN=app.example.com
 # in front of bash -s to use your own. Safe to run again.
 set -euo pipefail
-REPO=https://github.com/Codewiz2898/sports-follow.git
+REPO=git@github.com:Codewiz2898/sports-follow.git   # private: read with this server's deploy key
+DEPLOY_KEY=/root/.ssh/sports-follow-deploy
 APP_DIR=/opt/sports-follow
 export DEBIAN_FRONTEND=noninteractive
 
@@ -40,7 +41,23 @@ mkdir -p /etc/docker
 [ -f /etc/docker/daemon.json ] || { echo '{ "log-driver": "local" }' >/etc/docker/daemon.json; systemctl restart docker; }
 
 # The app, its secrets directory (filled by push-secrets.sh) and its backups.
+# The repo is private, so the server reads it with its own read-only deploy key, made here once. GitHub's
+# host keys come from its API over HTTPS, so the first connection isn't taken on trust.
+install -d -m 700 /root/.ssh
+[ -f "$DEPLOY_KEY" ] || ssh-keygen -q -t ed25519 -N '' -C "sports-follow deploy $(hostname)" -f "$DEPLOY_KEY"
+if ! grep -q '^github.com ' /root/.ssh/known_hosts 2>/dev/null; then
+  curl -fsS https://api.github.com/meta | python3 -c 'import json, sys; [print("github.com", k) for k in json.load(sys.stdin)["ssh_keys"]]' >>/root/.ssh/known_hosts
+fi
+export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes"
+if ! git ls-remote "$REPO" HEAD >/dev/null 2>&1; then
+  echo "server-setup: add this key as a read-only deploy key, then run this again:"
+  echo "  https://github.com/Codewiz2898/sports-follow/settings/keys/new"
+  cat "$DEPLOY_KEY.pub"
+  exit 1
+fi
 [ -d "$APP_DIR/.git" ] || git clone "$REPO" "$APP_DIR"
+git -C "$APP_DIR" remote set-url origin "$REPO"
+git -C "$APP_DIR" config core.sshCommand "$GIT_SSH_COMMAND"
 install -d -m 700 /etc/sports-follow
 install -d -m 700 /var/backups/sports-follow
 if [ ! -f "$APP_DIR/deploy/.env" ]; then

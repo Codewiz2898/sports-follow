@@ -33,6 +33,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import alerts, bus
+from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
 from .models import Follow, Moment, Notification, NotificationMute, PushSubscription
@@ -40,8 +41,15 @@ from .models import Follow, Moment, Notification, NotificationMute, PushSubscrip
 log = logging.getLogger("sports_follow.notify")
 
 VAPID_KEY = Path(os.environ.get("SPORTS_FOLLOW_VAPID_KEY", Path.home() / ".config" / "sports-follow" / "vapid-private.pem"))
-# Push services ask who is sending (RFC 8292): a URL for this project, never a person's address.
-VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT", "https://github.com/Codewiz2898/sports-follow")
+
+
+def vapid_subject(site: str) -> str:
+    """Who is sending, for push services (RFC 8292): a URL for this project, never a person's address.
+    The site once it's hosted; in development, where no push service checks it, localhost."""
+    return site if site.startswith("https://") else "https://localhost"
+
+
+VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT") or vapid_subject(SITE_URL)
 MAX_FAILURES = 5
 MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
