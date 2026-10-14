@@ -24,7 +24,8 @@ CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "").strip()
 
 def user_agent(site: str, contact: str) -> str:
     """How every source and Wikidata see this app: honestly, as itself (ESPN refuses browser-like agents),
-    with where to reach whoever runs it, as Wikimedia asks. Never the repo: it's private."""
+    with where to reach whoever runs it, as Wikimedia asks. Not the repo: that names who wrote the code,
+    not who runs this copy of it."""
     reach = "; ".join(c for c in (site, contact) if c)
     return f"sports-follow/0.1 ({reach})" if reach else "sports-follow/0.1"
 
