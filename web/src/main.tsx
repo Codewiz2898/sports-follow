@@ -1,17 +1,20 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { AccountNotice, AccountProvider, useAccount } from './account'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { BellIcon, HomeIcon, SearchIcon } from './components/Icons'
+import { BellIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { FollowingProvider, useFollowing } from './following'
+import { AccountPage } from './pages/AccountPage'
 import { AthletePage } from './pages/AthletePage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
+import { PrivacyPage } from './pages/PrivacyPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
 import { TodayPage } from './pages/TodayPage'
@@ -98,6 +101,7 @@ function SidebarSearch() {
 
 function Sidebar() {
   const { cards, progress } = useFollowing()
+  const { me } = useAccount()
   const live = cards.filter((c) => c.live.is_live)
   return (
     <aside className="sidebar" aria-label="Followed players">
@@ -106,6 +110,7 @@ function Sidebar() {
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
         <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts<Unread /></NavLink>
+        <NavLink to="/account"><UserIcon width={18} height={18} />{me?.signed_in ? 'Account' : 'Sign in'}</NavLink>
       </nav>
       <InstallButton compact />
       <span className="eyebrow" style={{ marginTop: 8 }}>Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
@@ -116,7 +121,10 @@ function Sidebar() {
           ))}
         </ErrorBoundary>
       </nav>
-      <NavLink to="/credits" className="tiny muted link" style={{ marginTop: 'auto' }}>Credits and sources</NavLink>
+      <span className="row tiny muted" style={{ marginTop: 'auto', justifyContent: 'flex-start' }}>
+        <NavLink to="/credits" className="link">Credits and sources</NavLink>
+        <NavLink to="/privacy" className="link">Privacy</NavLink>
+      </span>
     </aside>
   )
 }
@@ -166,6 +174,7 @@ function App() {
       <Sidebar />
       <main className="main">
         <PwaNotices />
+        <AccountNotice />
         {/* A page that fails to render shows a message, and the tab bar still works; another page tries again. */}
         <ErrorBoundary resetKey={pathname}>
           <Routes>
@@ -175,6 +184,8 @@ function App() {
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/credits" element={<CreditsPage />} />
+            <Route path="/account" element={<AccountPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </ErrorBoundary>
@@ -192,11 +203,13 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <PwaProvider>
-        <FollowingProvider>
-          <ActivityProvider>
-            <App />
-          </ActivityProvider>
-        </FollowingProvider>
+        <AccountProvider>
+          <FollowingProvider>
+            <ActivityProvider>
+              <App />
+            </ActivityProvider>
+          </FollowingProvider>
+        </AccountProvider>
       </PwaProvider>
     </BrowserRouter>
   </StrictMode>,

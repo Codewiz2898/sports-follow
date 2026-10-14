@@ -4,10 +4,39 @@ import type { Card, LatestResult, UpcomingEvent } from '../api'
 import { useNow } from '../clock'
 import { highlight, LiveScoreboard, NextStrip, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
-import { PlusIcon, SearchIcon } from '../components/Icons'
+import { CloseIcon, PlusIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
+import { useAccount } from '../account'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
+
+const NUDGE = 'sf-save-nudge'
+
+/** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
+function SaveNudge() {
+  const { me } = useAccount()
+  const { cards } = useFollowing()
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem(NUDGE) === 'dismissed' } catch { return false }
+  })
+  if (hidden || !me || me.signed_in || cards.length === 0) return null
+  const dismiss = () => {
+    setHidden(true)
+    try { localStorage.setItem(NUDGE, 'dismissed') } catch { /* storage blocked */ }
+  }
+  return (
+    <div className="notice">
+      <Link to="/account" className="stack" style={{ gap: 2, flex: 1 }}>
+        <span className="title">Save your players</span>
+        <span className="small muted">Sign in to keep them, and their alerts, on every device.</span>
+      </Link>
+      <Link to="/account" className="btn small">Sign in</Link>
+      <button type="button" className="btn icon" style={{ width: 32, height: 32, background: 'transparent', color: 'inherit' }} aria-label="Not now" onClick={dismiss}>
+        <CloseIcon width={16} height={16} />
+      </button>
+    </div>
+  )
+}
 
 /** Group live cards by the game they're in, so two followed players in one match show as one game. */
 function liveGames(cards: Card[]) {
@@ -88,6 +117,7 @@ export function TodayPage() {
       <div className="row mobile-only" style={{ gap: 8, paddingBottom: 4 }}>
         <InstallButton compact />
         <Link to="/search" className="btn icon" aria-label="Search players"><SearchIcon width={20} height={20} /></Link>
+        <Link to="/account" className="btn icon" aria-label="Account"><UserIcon width={20} height={20} /></Link>
       </div>
     </header>
   )
@@ -123,6 +153,11 @@ export function TodayPage() {
 
       <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
         {moment && <ResultHero result={moment.result} sport={moment.sport} />}
+      </ErrorBoundary>
+
+      <SaveNudge />
+
+      <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
         {next && <NextStrip event={next} playerId={next.card.player_id} sport={next.card.player.sport} />}
       </ErrorBoundary>
 

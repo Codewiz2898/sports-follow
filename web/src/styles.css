@@ -138,6 +138,10 @@ p { margin: 0; }
 .btn.icon:hover { background: #2a2a2a; }
 .btn.small { height: 36px; padding: 0 14px; font-size: 13px; }
 .btn.link { border: 0; background: none; height: auto; padding: 0; font-size: 13px; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover { background: #fde8e6; }
+.btn.danger.primary { background: var(--danger); color: #fff; }
+.btn.danger.primary:hover { background: #8f1c13; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .stat { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 16px; background: var(--surface); min-width: 0; }
@@ -152,6 +156,12 @@ p { margin: 0; }
 .search:focus-within { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text); }
 .search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: 600 17px var(--body); outline: none; }
 .search input::placeholder { color: var(--muted); }
+/* A form's own input: the search box's look. 17px so a phone doesn't zoom in on it. */
+.field { width: 100%; height: 54px; padding: 0 16px; border-radius: 16px; border: 2px solid var(--text); background: var(--surface); color: var(--text); font: 600 17px var(--body); outline: none; }
+.field:focus { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text); }
+.field::placeholder { color: var(--muted); }
+.field.code { height: 64px; font: 400 36px var(--display); letter-spacing: 0.32em; text-align: center; }
+.field.code::placeholder { color: var(--line); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .spinner { width: 16px; height: 16px; border: 2.5px solid rgba(13, 13, 13, 0.18); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }

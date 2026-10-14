@@ -238,6 +238,21 @@ export type StreamEvent =
 export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }
 export interface Credits { data: Credit[]; also: Credit[]; software: Credit[]; notices: string[] }
 
+/** Who this device is signed in as (GET /api/me/account; sports_follow/accounts.py). */
+export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number }
+export type Me = Account | { signed_in: false; reason?: 'signed_out' }
+/** What this server offers (GET /api/config). */
+export interface ServerConfig { model: string; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
+
+/** A refusal from the API: its message for the fan, and the HTTP status. */
+export class ApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
@@ -246,10 +261,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await res.json()
       if (typeof body.detail === 'string') message = body.detail
     } catch { /* not JSON */ }
-    throw new Error(message)
+    throw new ApiError(message, res.status)
   }
   return res.json() as Promise<T>
 }
+
+const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
 export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
@@ -292,7 +309,12 @@ export const api = {
   activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
   mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
   mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
-  config: () => request<{ model: string }>('/api/config'),
+  config: () => request<ServerConfig>('/api/config'),
+  account: () => request<Me>('/api/me/account'),
+  emailStart: (email: string) => request<{ ok: boolean; resend_in: number }>('/api/auth/email/start', json('POST', { email })),
+  emailVerify: (email: string, code: string) => request<Account>('/api/auth/email/verify', json('POST', { email, code })),
+  signOut: (everywhere = false) => request<{ signed_in: false }>('/api/auth/signout', json('POST', { everywhere })),
+  deleteAccount: () => request<{ deleted: boolean }>('/api/me/account', json('DELETE', { confirm: true })),
   credits: () => request<Credits>('/api/credits'),
 }
 
