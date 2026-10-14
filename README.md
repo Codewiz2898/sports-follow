@@ -184,6 +184,10 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
 | `SPORTS_FOLLOW_COOKIE_SECRET` | from `~/.config/sports-follow/cookie-secret`, made on first start | the key fan cookies are signed with (at least 32 characters; `SPORTS_FOLLOW_COOKIE_SECRET_FILE` names another file). Every API process needs the same one, and it must never change: under a new key every fan starts over |
+| `SPORTS_FOLLOW_RESEND_KEY` | from `SPORTS_FOLLOW_RESEND_KEY_FILE`, else `~/.config/sports-follow/resend-key` | Resend API key for sign-in emails; without it (and `MAIL_FROM`) email sign-in is off |
+| `SPORTS_FOLLOW_MAIL_FROM` | none | the sender of sign-in emails, e.g. `Sports Follow <signin@your-domain>` (a domain verified in Resend) |
+| `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
+| `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | `https://github.com/Codewiz2898/sports-follow` | the contact push services see |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |
@@ -255,8 +259,8 @@ for hosting and a Google Play developer account, and ships to closed testing fir
 - Search reads names in Latin letters only (accents folded; "Đoković" and "mueller" also find Djokovic
   and Müller). A name in Devanagari, Tamil, Chinese or Cyrillic finds no one and can't be researched:
   the standard library has no transliteration, and none is added as a dependency.
-- A fan's three AI researches are counted per anonymous cookie, so clearing cookies resets them (the
-  per-address and hourly limits still hold); accounts will fix that.
+- An anonymous fan's three AI researches a day are counted per cookie, so clearing cookies resets them
+  (the per-address and hourly limits still hold); a signed-in fan's are counted per account.
 - A name typed into "Research with AI" that the sources don't recognize still waits for the agent (1–4
   minutes) before the adapter is bound, because the agent is what says which sport it belongs to.
 - Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's
@@ -272,8 +276,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   one request a second and a rate limit fails the refresh instead of dropping results.
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
-- Fans are anonymous (a cookie), so each browser or phone is its own fan: following and notification
-  levels don't carry across devices until accounts exist.
+- Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);
+  signed in (a code sent by email), a fan's players, alert levels, muted games and devices are the same
+  on every device, and what they followed before signing in comes with them.
 - Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
   and there are no lock-screen live scores (Live Activities) or Android ongoing live-score
   notifications; those need a native app.

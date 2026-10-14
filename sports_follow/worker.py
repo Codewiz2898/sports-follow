@@ -16,7 +16,7 @@ from datetime import timezone
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import bus, db, engine, history, notify, pipeline, registry, retention, structured
+from . import accounts, bus, db, engine, history, notify, pipeline, registry, retention, structured
 from .config import REDIS_URL
 
 log = logging.getLogger("sports_follow.worker")
@@ -103,6 +103,21 @@ async def warm_sources(ctx) -> None:
     await asyncio.to_thread(_warm_sources)
 
 
+async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> None:
+    """A minute after a sign-in: whatever a request already under way wrote to the device's anonymous
+    fan after its things moved into the account (accounts.adopt_later)."""
+    moved = await asyncio.to_thread(accounts.adopt_later, anon, account_id, session_id)
+    if moved:
+        log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
+
+
+async def purge_sessions(ctx) -> None:
+    """Sessions unused for a year end, and their devices' alerts with them."""
+    ended = await asyncio.to_thread(accounts.purge_expired)
+    if ended:
+        log.info("accounts: %d expired session(s) ended", ended)
+
+
 async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
     PandaScore; about two hours."""
@@ -166,9 +181,10 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane]
+    functions = [build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers]
     cron_jobs = [
         cron(tick, second=0, run_at_startup=True),
+        cron(purge_sessions, hour=4, minute=10, second=0),
         cron(warm_sources, minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(import_registry, weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(prune, hour=2, minute=15, second=0, timeout=3 * 3600),

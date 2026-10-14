@@ -290,6 +290,14 @@ def send_test(fan_id: str) -> int:
     return sum(1 for _, error in results if error is None)
 
 
+def trim_devices(db: Session, fan_id: str, keep: Any, room: int) -> None:
+    """Delete this fan's devices beyond the newest `room` that aren't `keep` (a condition on
+    PushSubscription), so with the kept ones a push goes to at most MAX_DEVICES (BUG-055)."""
+    others = PushSubscription.fan_id == fan_id, ~keep
+    newest = select(PushSubscription.id).where(*others).order_by(PushSubscription.id.desc()).limit(max(room, 0))
+    db.execute(delete(PushSubscription).where(*others, PushSubscription.id.not_in(newest)))
+
+
 def opened(db: Session, fan_id: str, notification_id: int) -> bool:
     """The fan tapped a notification: the first tap is its open time."""
     return bool(db.execute(
