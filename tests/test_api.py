@@ -97,7 +97,7 @@ class Redis:
     async def delete(self, *keys):
         return sum(self.data.pop(k, None) is not None for k in keys)
 
-    async def expire(self, key, seconds):
+    async def expire(self, key, seconds, nx=False):
         return True
 
     async def ttl(self, key):
@@ -284,6 +284,27 @@ def test_a_research_that_fails_to_start_is_given_back(api, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"qid": "Q99", "sport": "football"}).status_code == 500
     counts = {k: v for k, v in api.redis.data.items() if k.startswith("research")}
     assert len(counts) == 3 and set(counts.values()) == {0}
+
+
+def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_address(api, monkeypatch):
+    monkeypatch.setattr(server, "SOURCE_SEARCHES_PER_MINUTE", 3)
+    allowed = []
+
+    def run(db, q, sport, fan, may_ask):
+        allowed.append(may_ask())  # search.run asks only when it would go on to the sources
+        return {"query": q, "results": [], "partial": []}
+
+    monkeypatch.setattr(server.player_search, "run", run)
+
+    def searching(fan, address):
+        return api.call("GET", "/api/search?q=someone", fan=fan, address=address).status_code
+
+    assert [searching("script", PUBLIC) for _ in range(4)] == [200] * 4  # still answered, from the registry
+    assert allowed == [True, True, True, False]
+    # A new cookie from the same address is over that address's limit; another address isn't held up.
+    searching("new-cookie", PUBLIC)
+    searching("someone-else", "81.2.69.143")
+    assert allowed[4:] == [False, True]
 
 
 def test_limits_count_the_public_address_a_client_comes_from():

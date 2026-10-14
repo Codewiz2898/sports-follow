@@ -40,7 +40,7 @@ from starlette.datastructures import Headers
 from . import accounts, bus, credits as credits_page, google_signin, mail, moments, notify, pipeline, registry, results, search as player_search, sports, structured
 from .adapters import ADAPTERS, KNOWN, AdapterError
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1043,15 +1043,33 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
 # ---------------------------------------------------------------- search
 
 
-def _search(q: str, sport: str | None, fan: str) -> dict[str, Any]:
+def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) -> dict[str, Any]:
     with session() as db:
-        return player_search.run(db, q, sport, fan)
+        return player_search.run(db, q, sport, fan, may_ask)
+
+
+async def _source_search_allowed(fan: str, address: str | None) -> bool:
+    """Count a search that goes on to the sources' own against the fan's minute and their address's.
+    Over either, it doesn't go: a script sending a new name each time would otherwise keep the sources
+    (and the search's threads) busy for everyone. A minute starts at its first such search."""
+    for key in [f"sourcesearch:fan:{fan}", *([f"sourcesearch:address:{address}"] if address else [])]:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
+        if used > SOURCE_SEARCHES_PER_MINUTE:
+            return False
+    return True
 
 
 @app.get("/api/search")
-async def search(q: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def search(request: Request, q: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Athletes matching a name, from players on Sports Follow and the live sources (search.py)."""
-    result = await asyncio.to_thread(_search, q[:80], (sport or "").lower() or None, fan)
+    loop, address = asyncio.get_running_loop(), client_address(request)
+
+    def may_ask() -> bool:
+        # From the search's thread, and only when the sources would be asked: names the registry knows aren't counted.
+        return asyncio.run_coroutine_threadsafe(_source_search_allowed(fan, address), loop).result()
+
+    result = await asyncio.to_thread(_search, q[:80], (sport or "").lower() or None, fan, may_ask)
     return {**result, "research": player_search.research_status(await research_used(fan))}
 
 
