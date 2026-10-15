@@ -9,6 +9,10 @@ is this year's or last year's (Sportmonks' "current teams" misses franchise side
 different squads (India's T20I, ODI and Test sides), so a match counts only if the player is in its
 XI, or in the team's squad for that season before the XI is out.
 
+Live matches are polled together (structured.poll_lane): every match in play comes in one livescores
+request a round, with the same includes as a match read, however many are on. A match livescores
+doesn't carry (before the toss, just finished) is read on its own, at poll_event's pace.
+
 Which competitions answer depends on the plan. Ours is Major: the IPL, T20 internationals, the T20
 World Cups, the Big Bash, the PSL, the T20 Blast and the other T20 leagues, women's ODIs, but not men's
 ODIs or Tests (World adds those), so a player who plays only those has no matches here.
@@ -16,7 +20,11 @@ ODIs or Tests (World adds those), so a player who plays only those has no matche
 
 from __future__ import annotations
 
+import copy
+import logging
 import re
+import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -25,9 +33,13 @@ from ..sports import cricket
 from . import sportmonks
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
+log = logging.getLogger("sports_follow.sportmonks")
+
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
 MATCH_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup,manofmatch,bowling,batting.result,batting.bowler,batting.catchstump,batting.runoutby"
+# The relations MATCH_INCLUDE adds to a match: Sportmonks sends each one, empty ([] or null) if there's nothing yet.
+_INCLUDED = frozenset(name.split(".")[0] for name in MATCH_INCLUDE.split(","))
 
 _FINAL = {"Finished"}
 _OFF = {"Cancl.", "Postp.", "Aban."}
@@ -289,6 +301,23 @@ def current_teams(p: dict[str, Any], seasons: dict[int, dict[str, Any]], today: 
     return list(dict.fromkeys((tid, name) for _, _, tid, name in recent))
 
 
+@dataclass
+class _Watched:
+    """One of the live lane's matches: its latest snapshot, when that last changed, and when it was last
+    read on its own (None: livescores carried it since)."""
+
+    snap: Snapshot
+    moved: float
+    read: float | None
+
+    def due(self, now: float, every: float) -> bool:
+        """Whether a match livescores left out this round is read again, or its last answer stands."""
+        if self.read is None:
+            return True  # livescores carried it last time: it has just finished, or livescores dropped it
+        quiet = self.snap.status != "live" or now - self.moved > 60  # unchanged for a minute, as poll_event counts it
+        return not quiet or now - self.read >= every
+
+
 def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
     """Batting and bowling over the player's recent completed matches, from their scorecards."""
     lines, formats = [], []
@@ -314,13 +343,20 @@ class SportmonksCricket(Adapter):
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Cricket"
-    live_cadence = 10  # 360 requests an hour per live match, of the 2,000 a match endpoint allows
+    live_cadence = 10  # one livescores request for every live match: 360 an hour, of the 2,000 it allows
+    # A match livescores leaves out is read on its own every round while it's in play and changing, else
+    # once this many seconds have passed: every minute's round, before the toss or through a long break.
+    ALONE_EVERY = 50
     WINDOW_BACK, WINDOW_AHEAD = 120, 90  # days of fixtures a refresh reads (two requests per team)
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
 
+    def __init__(self) -> None:
+        self._lane: dict[str, _Watched] = {}  # the live lane's matches, by fixture id (snapshots)
+        self._thin_told = False
+
     def spare(self) -> bool:
-        """Whether history.py may read now: the scorecards it reads come from the endpoint live matches
-        are polled on, and they need the hour's last LIVE_RESERVE of it."""
+        """Whether history.py may read now: its scorecards come from the match endpoint, where the live
+        lane reads the matches livescores leaves out, and those need the hour's last LIVE_RESERVE of it."""
         return sportmonks.spare(sportmonks.CRICKET_MATCH)
 
     def _seasons(self) -> dict[int, dict[str, Any]]:
@@ -402,12 +438,65 @@ class SportmonksCricket(Adapter):
         one = PlayerRef(**{**ref.__dict__, "team_ids": [page["team"]]})
         return [f for f in self._matches(one, date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600) if f.status == "final"]
 
-    def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        # A short cache lets every followed player in one match share each poll's fetch.
-        data = sportmonks.get_json(f"{API}/fixtures/{locator['fixture']}", ttl=24 * 3600 if final else 5, include=MATCH_INCLUDE)
+    def _match(self, fixture: str, ttl: float) -> dict[str, Any]:
+        data = sportmonks.get_json(f"{API}/fixtures/{fixture}", ttl=ttl, include=MATCH_INCLUDE)
         if not data.get("data"):
-            raise AdapterError(f"Sportmonks has no cricket fixture {locator['fixture']}")
-        return parse_match(data["data"])
+            raise AdapterError(f"Sportmonks has no cricket fixture {fixture}")
+        return data["data"]
+
+    def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
+        # A short cache lets every followed player in one match share each poll's fetch. A finished match
+        # is kept a day, but a copy cached before it finished is read again.
+        x = self._match(locator["fixture"], 24 * 3600 if final else 5)
+        if final and _status(x.get("status")) != "final":
+            x = self._match(locator["fixture"], 5)
+        return parse_match(x)
+
+    def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
+        """Many matches at once: the live lane's fetch a round. Every match in play comes in one livescores
+        request (not paged, and not cached: each round wants the matches as they are now). A match it
+        doesn't carry, or carries without one of MATCH_INCLUDE's relations, is read on its own, uncached:
+        at once when livescores has just dropped it (it finished), then every round while it's in play
+        and changing, else every ALONE_EVERY seconds, the last answer standing in between. Keyed as
+        given; a match neither answers for is left out."""
+        now = time.time()
+        wanted = {key: str(loc["fixture"]) for key, loc in locators.items()}
+        ids = set(wanted.values())
+        rows = sportmonks.get_json(f"{API}/livescores", ttl=0, include=MATCH_INCLUDE).get("data") or []
+        carried = {}
+        for x in rows:
+            fixture = str(x.get("id")) if isinstance(x, dict) else ""
+            if fixture in ids and _INCLUDED <= x.keys():
+                carried[fixture] = parse_match(x)
+            elif fixture in ids and not self._thin_told:
+                self._thin_told = True
+                log.warning("Sportmonks livescores sent cricket match %s without %s; matches it sends so are read on their own, a request each (told once)", fixture, ", ".join(sorted(_INCLUDED - x.keys())))
+        found = {}
+        for fixture in sorted(ids):
+            seen = self._lane.get(fixture)
+            snap = carried.get(fixture)
+            if snap is None and seen is not None and not seen.due(now, self.ALONE_EVERY):
+                found[fixture] = seen.snap
+                continue
+            if snap is None:
+                try:
+                    snap = parse_match(self._match(fixture, 0))
+                except AdapterError:
+                    continue  # one match unread (gone, or its endpoint's allowance spent) doesn't hold up the rest
+            found[fixture] = self._note(fixture, snap, now, alone=fixture not in carried)
+        self._lane = {fixture: seen for fixture, seen in self._lane.items() if fixture in ids}
+        # Copies: apply_poll marks a snapshot's state, and the one kept here is compared with the next.
+        return {key: copy.deepcopy(found[fixture]) for key, fixture in wanted.items() if fixture in found}
+
+    def _note(self, fixture: str, snap: Snapshot, now: float, alone: bool) -> Snapshot:
+        """Keep the lane's latest snapshot of a match. An answer that has it not started once it has
+        (a read lagging livescores) doesn't take it back: the match would leave the lane."""
+        seen = self._lane.get(fixture)
+        if seen is not None and snap.status == "scheduled" and seen.snap.status in ("live", "final"):
+            snap = seen.snap
+        moved = seen.moved if seen is not None and snap == seen.snap else now
+        self._lane[fixture] = _Watched(snap, moved, now if alone else None)
+        return snap
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         r = fixture.result or {}
