@@ -21,7 +21,8 @@ sports app, not a feed of every poll:
 - **Late is worse than never** for a live moment: one older than its TTL isn't pushed.
 - **Corrections.** A moment the source takes back (a goal VAR rules out) is corrected on the same
   notification, by the same rules, for the fans who were sent that moment; a fan who never heard it
-  hears nothing. The moment leaves the story underneath.
+  hears nothing, and a moment taken back before it went isn't sent at all. The moment leaves the
+  story underneath.
 
 Quiet hours are per device, so notify.py applies them after this.
 """
@@ -116,8 +117,10 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
         how = tier(levels[item.player_id], item)
         if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
             continue
-        if item.corrects is not None and item.corrects not in told:
-            continue  # a correction of something this fan was never sent
+        if item.id in taken or (item.corrects is not None and item.corrects not in told):
+            # Taken back before it went (a batch the tick swept up late), or the correction of something
+            # this fan was never sent.
+            continue
         tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
         groups.setdefault(tag, []).append((item, how == "loud"))
 

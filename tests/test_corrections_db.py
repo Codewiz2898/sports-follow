@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import notify, structured
+from sports_follow import moments, notify, server, structured
 from sports_follow.adapters.base import Line, Snapshot
 from sports_follow.models import Event, Follow, Moment, NotificationMute, Player, PushSubscription
 
@@ -103,16 +103,36 @@ def test_a_goal_var_rules_out_corrects_the_games_notification(db, monkeypatch):
     db.commit()
     fan(db, "later")
     poll(0, "25'", 0, [])
+    assert heard() == set()  # one poll could be an older copy of the game
+    poll(0, "26'", 0, [])
     # The goal's notification (same tag) becomes the correction, without the goal under it; silent, as
     # the game made a sound a moment ago. Only the fan who was sent the goal and still wants the game hears.
-    assert heard() == {("sent", "e1", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 25'", False)}
+    assert heard() == {("sent", "e1", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 26'", False)}
     [correction] = db.scalars(select(Moment).where(Moment.kind == "correction")).all()
     assert correction.corrects == db.scalar(select(Moment.id).where(Moment.kind == "goal"))
+    # The activity list has it with the goal, and not for a fan who followed since.
+    assert [m["title"] for m in server.activity(None, 50, "sent", db)["items"]] == ["Goal ruled out: Mohamed Salah", "Goal: Mohamed Salah puts Egypt ahead"]
+    assert server.activity(None, 50, "later", db)["items"] == []
 
-    poll(0, "26'", 0, [])
+    poll(0, "27'", 0, [])
     poll(0, "30'", 0, [])
     assert heard() == set()  # corrected once
 
     poll(1, "70'", 1, [goal("102", "70'")])
     later_goal = ("e1", "Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'\nGoal ruled out: Mohamed Salah", True)
     assert heard() == {("sent", *later_goal), ("later", "e1", "Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'", True)}
+
+
+def test_a_goal_taken_back_before_it_went_isnt_sent(db, monkeypatch):
+    # A restart dropped the goal's batch; its correction went to nobody, as nobody had the goal. The
+    # tick's sweep then finds the goal, still young enough to send: no push, and no toast of the goal.
+    pushed, toasts = [], []
+    monkeypatch.setattr(notify, "push", lambda *args, **kwargs: pushed.append(args))
+    monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: toasts.append(event["moment"]["title"]))
+    fan(db, "sent")
+    goal_id = notify.record(db, 7, 1, [moments.Found("goal", "key", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 23'", "goal@101")])[0]
+    correction_id = notify.record(db, 7, 1, [moments.Found("correction", "key", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 26'", "goal:goal@101")])[0]
+    db.commit()
+    assert notify.send([correction_id]) == 0
+    assert notify.send([goal_id]) == 0
+    assert pushed == [] and "Goal: Mohamed Salah" not in toasts

@@ -179,10 +179,11 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
         items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects) for m in rows]
-        jobs = _plan(db, items, now)
+        taken_back = _taken_back(db, items)
+        jobs = _plan(db, items, now, taken_back)
     # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself.
     for item in items:
-        if (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
+        if item.id not in taken_back and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
             bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
     if not jobs:
         return 0
@@ -200,7 +201,14 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     return sent
 
 
-def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
+def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
+    """The moments of a batch's games a correction has taken back (a goal VAR ruled out), the batch's
+    own corrections among them: not sent if they haven't been, and out of the story underneath."""
+    events = {i.event_id for i in items if i.event_id}
+    return {m for m in db.scalars(select(Moment.corrects).where(Moment.event_id.in_(events), Moment.corrects.is_not(None))).all() if m} if events else set()
+
+
+def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, endpoint, p256dh, auth), payload, ttl, topic)."""
     players = {i.player_id for i in items}
@@ -223,8 +231,6 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[in
     earlier = select(Notification).where(Notification.fan_id.in_(devices), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
     for n in db.scalars(earlier):
         sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
-    # Moments of these games a correction has taken back (a goal VAR ruled out): out of the story.
-    taken_back = {m for m in db.scalars(select(Moment.corrects).where(Moment.event_id.in_(events), Moment.corrects.is_not(None))) if m} if events else set()
 
     jobs = []
     for fan, fan_devices in devices.items():

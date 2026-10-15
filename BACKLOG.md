@@ -124,10 +124,6 @@ phone, so the rules are about the tray and the sound.
   fan already heard its line-up.
 - A first look at a game already under way is a baseline, so nobody gets "reaches 50" an hour late.
   Live moments aren't sent after 15 minutes (line-ups after an hour); results and news after 12 hours.
-- Corrections (built 2026-10-15): a goal VAR rules out (Sportmonks marks it rescinded; ESPN drops it as
-  the count goes down) replaces the game's notification with "Goal ruled out", by the same rules, for
-  the fans who were sent the goal; the goal leaves the story. Goals are keyed by the source's play (id,
-  else minute), so a later real goal is still told. A sport says what it takes back (`taken_back`).
 
 **Delivery.** A batch is claimed in the database before sending, so it goes once; every push is a
 `notification` row (lead kind, lines, loud, devices, delivered, opened). Pushes to devices go out at
@@ -146,6 +142,9 @@ while they're live, and the live score says when its alerts are muted; muted gam
   should get quieter, or its priority lower.
 - **Personal context from the stored results:** "a first hundred since March", "a career-high 41",
   "10th goal of the season" (`event_player.result` and `form.py` already hold the history).
+- **Corrections:** a goal ruled out by VAR lowers the count, but the goal's notification stands and a
+  later real goal reuses its key (`goal1`), so it isn't sent. Track ruled-out goals and update the
+  game's notification instead.
 - **Line-ups an hour ahead:** arm Sportmonks football at 60 minutes instead of 30 (one lane request a
   round covers every match, so it costs little).
 - **iPhone and lock-screen live scores.** Web Push reaches iPhone only from a Home Screen install, and

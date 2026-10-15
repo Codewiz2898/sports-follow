@@ -230,7 +230,7 @@ def test_quiet_hours_in_the_devices_timezone():
 def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypatch, caplog):
     now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
     goal = SimpleNamespace(id=1, player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3), corrects=None)
-    answers = iter([[1], [goal]])  # the claim, then the claimed moments
+    answers = iter([[1], [goal], []])  # the claim, the claimed moments, then what corrections took back
 
     @contextmanager
     def session():
@@ -238,7 +238,7 @@ def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypat
 
     devices = [(11, (1, "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
     monkeypatch.setattr(notify, "session", session)
-    monkeypatch.setattr(notify, "_plan", lambda db, items, at: devices)
+    monkeypatch.setattr(notify, "_plan", lambda db, items, at, taken_back: devices)
     monkeypatch.setattr(notify, "push", lambda endpoint, *rest: None if "fcm" in endpoint else 410)
     monkeypatch.setattr(notify, "_settle", lambda results: None)
     monkeypatch.setattr(notify.bus, "publish", lambda *args: None)
@@ -359,48 +359,79 @@ def _told(polls: list[Seen]) -> list[tuple[str, str]]:
     return told
 
 
-RULED_OUT = ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 25'")
+RULED_OUT = ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 26'")
 
 
 def test_a_goal_after_one_var_rules_out_is_told():
-    # 23': a goal; 25': VAR rules it out, the count drops and the play leaves the events; 70': a real
-    # one. Keyed by the count, the 70' goal was "goal1" again and never told.
+    # 23': a goal; 25': VAR rules it out, the count drops and the play leaves the events; 26': still so,
+    # so it's taken back; 70': a real one. Keyed by the count, the 70' goal was "goal1" again and never told.
     ruled_out, real = goal("23'", id="101"), goal("70'", id="102")
-    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [ruled_out], clock="23'"), scored(0, 0, [], goals=0, clock="25'"), scored(1, 0, [real], clock="70'")]
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [ruled_out], clock="23'"), scored(0, 0, [], goals=0, clock="25'"), scored(0, 0, [], goals=0, clock="26'"), scored(1, 0, [real], clock="70'")]
     assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), RULED_OUT, ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'")]
     # A source without play ids (Sportmonks): by the goal's minute.
-    polls = [scored(0, 0, [], goals=0), scored(1, 0, [goal("23'")]), scored(0, 0, [], goals=0), scored(1, 0, [goal("70'")])]
+    polls = [scored(0, 0, [], goals=0), scored(1, 0, [goal("23'")]), scored(0, 0, [], goals=0), scored(0, 0, [], goals=0), scored(1, 0, [goal("70'")])]
     assert [body for _, body in _told(polls)] == ["Egypt 1 – 0 South Africa · 23'", "Egypt 0 – 0 South Africa · 90'", "Egypt 1 – 0 South Africa · 70'"]
     # The count dropping and coming back for the same goal (a glitch in the line) isn't a new goal, and,
     # the goal still in the events, isn't one ruled out either.
-    polls = [scored(0, 0, [], goals=0), scored(1, 0, [ruled_out]), scored(1, 0, [ruled_out], goals=0), scored(1, 0, [ruled_out])]
+    polls = [scored(0, 0, [], goals=0), scored(1, 0, [ruled_out]), scored(1, 0, [ruled_out], goals=0), scored(1, 0, [ruled_out], goals=0), scored(1, 0, [ruled_out])]
     assert len(_told(polls)) == 1
     # The assist on a goal VAR rules out doesn't hide the next one.
     def assisted(n: int, plays: list[dict]) -> Seen:
         return Seen("live", state=FOOTBALL, line=line("Started", Assists=str(n)), score="Egypt 1 – 0 South Africa", events=plays)
 
-    polls = [assisted(0, []), assisted(1, [goal("23'", id="1", athlete_ids=["9", "173896"])]), assisted(0, []), assisted(1, [goal("70'", id="2", athlete_ids=["9", "173896"])])]
+    polls = [assisted(0, []), assisted(1, [goal("23'", id="1", athlete_ids=["9", "173896"])]), assisted(0, []), assisted(0, []), assisted(1, [goal("70'", id="2", athlete_ids=["9", "173896"])])]
     assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah", "Goal ruled out: no assist for Mohamed Salah", "Assist: Mohamed Salah"]
 
 
 def test_a_goal_var_rules_out_is_corrected_once():
     told = [("goal", "goal@101")]
-    before = scored(1, 0, [goal("23'", id="101")], clock="23'")
-    [f] = detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'"), told)
+    gone, still = scored(0, 0, [], goals=0, clock="25'"), scored(0, 0, [], goals=0, clock="26'")
+    [f] = detect("Football", "Mohamed Salah", "173896", gone, still, told)
     assert (f.kind, f.level, f.title, f.body, f.detail, f.priority) == ("correction", "key", *RULED_OUT, "goal:goal@101", 85)
     # Never told (scored and ruled out between two polls), or corrected already: nothing to take back.
-    assert detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'")) == []
-    assert detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'"), [*told, ("correction", "goal:goal@101")]) == []
+    assert detect("Football", "Mohamed Salah", "173896", gone, still) == []
+    assert detect("Football", "Mohamed Salah", "173896", gone, still, [*told, ("correction", "goal:goal@101")]) == []
     # Of two goals, the one gone from the events.
-    two = scored(2, 0, [goal("60'", id="102"), goal("23'", id="101")], goals=2)
-    assert kinds(detect("Football", "Mohamed Salah", "173896", two, scored(1, 0, [goal("23'", id="101")]), [*told, ("goal", "goal@102")])) == [("correction", "goal:goal@102")]
+    one = scored(1, 0, [goal("23'", id="101")])
+    assert kinds(detect("Football", "Mohamed Salah", "173896", one, one, [*told, ("goal", "goal@102")])) == [("correction", "goal:goal@102")]
     # Still in the events, credited to someone else: not ruled out.
-    assert detect("Football", "Mohamed Salah", "173896", before, scored(1, 0, [goal("23'", id="101", athlete_ids=["9"])], goals=0), told) == []
+    credited = scored(1, 0, [goal("23'", id="101", athlete_ids=["9"])], goals=0)
+    assert detect("Football", "Mohamed Salah", "173896", credited, credited, told) == []
     # The source marks it ruled out (Sportmonks keeps it, rescinded) before its count goes down: corrected
     # then, and not again when the count follows.
     marked = goal("23'", kind="DISALLOWED")
     polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(0, 0, [marked], clock="25'"), scored(0, 0, [marked], goals=0, clock="26'"), scored(0, 0, [marked], goals=0, clock="30'")]
-    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), RULED_OUT]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 25'")]
+    # Re-credited to a teammate (Sportmonks rescinds the event and adds one at the same minute): not ruled out.
+    recredited = scored(1, 0, [goal("23'", athlete="9"), marked], goals=0)
+    assert detect("Football", "Mohamed Salah", "173896", recredited, recredited, [("goal", "goal@23'")]) == []
+
+
+def test_one_poll_short_takes_nothing_back():
+    # One poll from an older copy of the game: the count down and the play gone, then both back. The goal
+    # stands, and nobody hears it was ruled out.
+    told = goal("23'", id="101")
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [told], clock="23'"), scored(0, 0, [], goals=0, clock="24'"), scored(1, 0, [told], clock="24'"), scored(1, 0, [told], clock="25'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'")]
+    # From a source without events (goals keyed by count) too; two polls short is a goal ruled out.
+    polls = [scored(0, 0, [], goals=0), scored(1, 0, []), scored(0, 0, [], goals=0), scored(1, 0, [])]
+    assert len(_told(polls)) == 1
+    assert _told([*polls, scored(0, 0, [], goals=0, clock="30'"), scored(0, 0, [], goals=0, clock="31'")])[1:] == [("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 31'")]
+    # The count drops a poll before the play leaves the events: taken back once both say so.
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [told], clock="23'"), scored(0, 0, [told], goals=0, clock="25'"), scored(0, 0, [], goals=0, clock="26'")]
+    assert _told(polls)[1:] == [RULED_OUT]
+
+
+def test_the_goal_taken_back_is_found_by_its_play():
+    # The 23' goal was told by its play (101); the 60' one by its count (goal2), its play not yet in the
+    # events. VAR rules out the 23' one, and the events now hold only play 102: the 60' goal stands.
+    told = [("goal", "goal@101"), ("goal", "goal2")]
+    two, one = scored(2, 0, [goal("23'", id="101")], goals=2, clock="60'"), scored(1, 0, [goal("60'", id="102")], clock="62'")
+    assert detect("Football", "Mohamed Salah", "173896", two, one, told) == []  # short for one poll only
+    assert kinds(detect("Football", "Mohamed Salah", "173896", one, one, told)) == [("correction", "goal:goal@101")]
+    # A goal from before anyone followed (play 100, never told) doesn't hide a told one ruled out.
+    early = scored(1, 0, [goal("10'", id="100")], clock="52'")
+    assert kinds(detect("Football", "Mohamed Salah", "173896", early, early, [("goal", "goal@102")])) == [("correction", "goal:goal@102")]
 
 
 def test_priorities_rank_moments():

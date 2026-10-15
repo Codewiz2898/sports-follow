@@ -126,3 +126,14 @@ def test_a_correction_replaces_the_goal_for_the_fans_who_were_sent_it():
     later = [*heard, sent(GAME, "Goal ruled out: Mohamed Salah", ago=60, moments=[6])]
     [p] = plan([item(7, "yellow", "Yellow card: Mohamed Salah", level="minor", priority=20)], {KOHLI: "everything"}, set(), later, NOW, {5})
     assert p.story == ["Goal ruled out: Mohamed Salah", "Mohamed Salah starts"]
+
+
+def test_a_goal_taken_back_before_it_went_isnt_sent():
+    goal = item(5, "goal", "Goal: Mohamed Salah puts Egypt ahead", priority=90)
+    correction = item(6, "correction", "Goal ruled out: Mohamed Salah", priority=85, corrects=5)
+    # A restart dropped the goal's batch, and its correction went to nobody (nobody was sent the goal):
+    # the tick's sweep, still inside the goal's TTL, doesn't send it now.
+    assert plan([correction], {KOHLI: "key"}, set(), [], NOW) == []
+    assert plan([goal], {KOHLI: "key"}, set(), [], NOW, {5}) == []
+    # The sweep found both in one batch: neither goes.
+    assert plan([goal, correction], {KOHLI: "key"}, set(), [], NOW) == []
