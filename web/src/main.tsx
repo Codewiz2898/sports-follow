@@ -199,7 +199,8 @@ function App() {
         </ErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
-        <NavLink to="/" end><HomeIcon width={20} height={20} />Today</NavLink>
+        {/* The Following page is part of Today here (its strip opens it): Today stays lit there. */}
+        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
         <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>

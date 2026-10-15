@@ -17,7 +17,7 @@ export function FollowingPage() {
       <header className="stack" style={{ gap: 6 }}>
         <Link to="/" className="eyebrow back-link"><BackIcon width={14} height={14} strokeWidth={2.6} />Today</Link>
         <h1 className="dsp page-title">Following</h1>
-        <span className="eyebrow">{cards.length} {cards.length === 1 ? 'player' : 'players'}{live ? ` · ${live} live` : ''}</span>
+        {(loaded || cards.length > 0) && <span className="eyebrow">{cards.length} {cards.length === 1 ? 'player' : 'players'}{live ? ` · ${live} live` : ''}</span>}
       </header>
       {failed && !loaded && <LoadFailed />}
       {loaded && cards.length === 0 && <p className="muted">You don't follow anyone yet. Find a player to see their games here.</p>}

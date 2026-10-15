@@ -285,9 +285,10 @@ a.photo-credit:hover { text-decoration: underline; }
    colour, under a heading that is one link to the Following page, its chevron saying "see all". */
 .strip { gap: 0; margin-top: -8px; }
 .strip .rail { gap: 8px; }
-.strip-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.strip-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
 .strip-head svg { flex-shrink: 0; }
-.strip-pill { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 14px; border-radius: 999px; background: var(--sport); color: var(--on-sport); white-space: nowrap; }
+/* Positioned, so the screen-reader words inside (.sr-only) sit in the rail and not out past the page's edge. */
+.strip-pill { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 14px; border-radius: 999px; background: var(--sport); color: var(--on-sport); white-space: nowrap; }
 .strip-pill:focus-visible { border-radius: 999px; }
 .strip-pill .dsp { font-size: 19px; line-height: 1; }
 .strip-pill .when { max-width: 140px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
