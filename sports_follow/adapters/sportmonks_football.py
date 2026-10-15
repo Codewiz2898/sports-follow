@@ -224,7 +224,8 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         clock_label=clock(x),
         state=state,
         lines=parse_lines(x, status),
-        moments=moments[:12],
+        # The newest dozen, and every goal, ruled out or not: a goal's alert reads its minute and assist here.
+        moments=[m for i, m in enumerate(moments) if i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
         source_url=None,  # Sportmonks has no public match pages
         squad=parse_squad(x),
     )

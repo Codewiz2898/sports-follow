@@ -132,6 +132,15 @@ def test_a_goal_ruled_out_corrects_the_goals_alert():
     assert moments.detect("Football", "Mohamed Salah", str(STAR), seen(STAR), seen(STAR), [("goal", "goal@4'"), ("goal", "goal@45+2'")]) == []
 
 
+def test_every_goal_stays_in_the_events_however_many_cards():
+    # Fourteen cards after the 4' goal and the ruled-out 5' one: the newest dozen alone would drop both,
+    # and a goal's alert reads its play there (whether it stands, what it was).
+    cards = [{"type": {"developer_name": "YELLOWCARD"}, "minute": 10 + n, "participant_id": AWAY, "player_id": KEEPER, "player_name": "A. Keeper"} for n in range(14)]
+    ruled_out = {"type": {"developer_name": "GOAL"}, "minute": 5, "participant_id": HOME, "player_id": SUB, "player_name": "Ozan Tufan", "rescinded": True}
+    snap = sm.parse_match(_match("INPLAY_2ND_HALF", 1, 0, events=[EVENTS[0], ruled_out, *cards]))
+    assert [(m["clock"], m["kind"]) for m in snap.moments[12:]] == [("5'", "DISALLOWED"), ("4'", "GOAL")]
+
+
 def test_clock_in_stoppage_time_and_breaks():
     stoppage = [{"ticking": True, "minutes": 93, "counts_from": 45, "period_length": 45}]
     assert sm.clock(_match("INPLAY_2ND_HALF", 1, 1, periods=stoppage)) == "90+3'"

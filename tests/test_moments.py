@@ -397,11 +397,11 @@ def test_a_goal_var_rules_out_is_corrected_once():
     # Still in the events, credited to someone else: not ruled out.
     credited = scored(1, 0, [goal("23'", id="101", athlete_ids=["9"])], goals=0)
     assert detect("Football", "Mohamed Salah", "173896", credited, credited, told) == []
-    # The source marks it ruled out (Sportmonks keeps it, rescinded) before its count goes down: corrected
-    # then, and not again when the count follows.
+    # The source marks it ruled out (Sportmonks keeps it, rescinded): corrected as soon as the count goes
+    # down too, without waiting for a second poll, and not again.
     marked = goal("23'", kind="DISALLOWED")
     polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(0, 0, [marked], clock="25'"), scored(0, 0, [marked], goals=0, clock="26'"), scored(0, 0, [marked], goals=0, clock="30'")]
-    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 25'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), RULED_OUT]
     # Re-credited to a teammate (Sportmonks rescinds the event and adds one at the same minute): not ruled out.
     recredited = scored(1, 0, [goal("23'", athlete="9"), marked], goals=0)
     assert detect("Football", "Mohamed Salah", "173896", recredited, recredited, [("goal", "goal@23'")]) == []
@@ -446,6 +446,31 @@ def test_a_play_the_source_moves_is_the_same_goal():
 
     polls = [assisted(0, None), assisted(1, "45'"), assisted(1, "45+1'"), assisted(1, "45+1'")]
     assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah"]
+
+
+def test_a_goal_the_source_rescinds_and_adds_again_stands():
+    # Sportmonks moves a goal by rescinding its event and adding another (23' to 24', 45' to 45+1'), the
+    # count unchanged: the same goal, not one ruled out.
+    told = [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'")]
+    for old, new in (("23'", "24'"), ("45'", "45+1'")):
+        moved = [goal(new), goal(old, kind="DISALLOWED")]
+        polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal(old)], clock="23'"), scored(1, 0, moved, clock="46'"), scored(1, 0, moved, clock="47'")]
+        assert _told(polls)[1:] == [], old
+    # Rescinded one poll and added again at the same minute the next.
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(1, 0, [goal("23'", kind="DISALLOWED")], clock="24'"),
+             scored(1, 0, [goal("23'"), goal("23'", kind="DISALLOWED")], clock="25'"), scored(1, 0, [goal("23'"), goal("23'", kind="DISALLOWED")], clock="26'")]
+    assert _told(polls) == told
+
+
+def test_a_moved_play_is_paired_with_the_nearest_goal():
+    # Goals at 23' and 60' told; Sportmonks revises 60' to 61'; then VAR rules out the 23' one, the count
+    # going down before its event is marked. The 61' play is the 60' goal, so the 23' one is taken back.
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(2, 0, [goal("60'"), goal("23'")], goals=2, clock="60'"),
+             scored(2, 0, [goal("61'"), goal("23'")], goals=2, clock="62'"), scored(1, 0, [goal("61'")], clock="63'"), scored(1, 0, [goal("61'")], clock="64'"),
+             scored(1, 0, [goal("61'"), goal("23'", kind="DISALLOWED")], clock="65'")]
+    assert _told(polls)[2:] == [("Goal ruled out: Mohamed Salah", "Egypt 1 – 0 South Africa · 64'")]
+    stored = [("goal", "goal@23'"), ("goal", "goal@60'")]
+    assert kinds(detect("Football", "Mohamed Salah", "173896", polls[4], polls[5], stored)) == [("correction", "goal:goal@23'")]
 
 
 def test_a_goal_ruled_out_as_the_game_ends_is_corrected():

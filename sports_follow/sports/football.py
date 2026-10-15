@@ -3,6 +3,8 @@ side, form in apps and goals."""
 
 from __future__ import annotations
 
+import math
+import re
 from collections import Counter
 from typing import TYPE_CHECKING, Any
 
@@ -73,16 +75,28 @@ def _base(detail: str) -> str:
     return detail.split("#")[0]
 
 
+def _minute(clock: str | None) -> float:
+    """A clock's minute, added time in ("45+2'" is 47); infinity for none (a play keyed by its id)."""
+    match = re.fullmatch(r"(\d+)(?:\+(\d+))?'", clock or "")
+    return int(match.group(1)) + int(match.group(2) or 0) if match else math.inf
+
+
 def _standing(kind: str, at: int, athlete_id: str, told: list[str], now: Seen) -> set[str]:
     """Which of the goals (or assists) told stand in the source's events. One told by its play stands
     while the play is anyone's goal. A play of the player's that no told one names is one told before
     its play was in the events (by its count), or one whose play the source has moved (a revised
-    minute): as many stand as there are such plays, the ones told by count first, then the oldest."""
+    minute): as many stand as there are such plays, the ones told by count first, then the nearest in
+    minutes to one of them, then the oldest."""
     listed = {_play_key(kind, 0, e) for e in now.events if e.get("kind") == "GOAL"}
     standing = {d for d in told if _base(d) in listed}
     named = {_base(d) for d in standing}
-    free = [e for e in _plays(now, athlete_id, at) if _play_key(kind, 0, e) not in named]
-    rest = sorted((d for d in told if d not in standing), key=lambda d: "@" in d)  # by count first, then oldest
+    free = [_minute(e.get("clock")) for e in _plays(now, athlete_id, at) if _play_key(kind, 0, e) not in named]
+
+    def nearest(detail: str) -> float:
+        minute = _minute(_base(detail).partition("@")[2])
+        return min((abs(minute - m) for m in free), default=math.inf) if minute != math.inf else math.inf
+
+    rest = sorted((d for d in told if d not in standing), key=lambda d: ("@" in d, nearest(d)))
     return standing | set(rest[:len(free)])
 
 
@@ -165,37 +179,38 @@ class Football(Sport):
         return found
 
     def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
-        """A goal fans were told about that VAR has ruled out, and the assist on it. The source marks it so
-        (DISALLOWED in its events), unless it was re-credited: the same side's goal at that minute stands
-        for someone else, or an own goal at that minute does. Or the player's count is below the number
-        told, in this poll and the last (or in the final one), and its play is no one's goal now: the
-        count is the evidence, so one poll from an older copy of the game, or a play the source moved (a
-        revised minute), takes nothing back. A goal taken back that the source shows as theirs again,
-        the count back up in both polls (the correction came from older copies), is told again."""
+        """A goal fans were told about that VAR has ruled out, and the assist on it: one that doesn't stand
+        in the source's events (_standing: no one's goal now, nor a play of theirs moved or re-credited),
+        with the player's count below the number told. The count is the evidence: below in this poll and
+        the last (or in the final one), or in this poll alone when the source marks the goal ruled out
+        (DISALLOWED). So one poll from an older copy of the game, a play the source moved (a revised
+        minute), or a goal rescinded and added again, takes nothing back. A goal taken back that the
+        source shows as theirs again, the count back up in both polls (the correction came from older
+        copies), is told again."""
+        if before.line is None or now.line is None:
+            return []
         corrections = [d for k, d in told if k == "correction"]
         where = joined(now.score, now.clock)
         found = []
         for kind, label, at, title in (("goal", "Goals", 0, "Goal ruled out: {who}"), ("assist", "Assists", 1, "Goal ruled out: no assist for {who}")):
             mine = [d for k, d in told if k == kind and f"{kind}:{d}" not in corrections]
-            # Re-credited: the same side's goal at that minute stands for someone else. An own goal's team is
-            # the side it went against, so one at that minute stands whichever side.
-            stands = {(_play_key(kind, 0, e), None if e.get("own_goal") else e.get("team_id")) for e in now.events if e.get("kind") == "GOAL"}
-            marked = [e for e in now.events if e.get("kind") == "DISALLOWED" and (e.get("athlete_ids") or [])[at:at + 1] == [athlete_id]]
-            gone = [d for d in mine if any(_play_key(kind, 0, e) == _base(d) and not {(_base(d), e.get("team_id")), (_base(d), None)} & stands for e in marked)]
-            if before.line is not None and now.line is not None:
-                counts = [number(stat(now.line, label))] if now.status == "final" else [number(stat(before.line, label)), number(stat(now.line, label))]
-                # The count below what was told: as many as that, less those marked, of the ones that don't stand, newest first.
-                standing = _standing(kind, at, athlete_id, mine, now)
-                gone += [d for d in reversed(mine) if d not in standing and d not in gone][:max(len(mine) - max(counts) - len(gone), 0)]
-                # Taken back, and theirs again with the count back up: told again, under the times it was taken back.
-                times = Counter(_base(d.split(":", 1)[1]) for d in corrections if d.startswith(f"{kind}:"))
-                theirs = {_play_key(kind, 0, e): n for n, e in enumerate(_plays(now, athlete_id, at), 1)}
-                back = [b for b in times if "@" in b and b in theirs and (kind, f"{b}#{times[b]}") not in told]
-                for b in back[:max(min(counts) - len(mine), 0)]:
-                    again = _goal(who, athlete_id, theirs[b], now, where) if kind == "goal" else Found(kind, "key", f"Assist: {who}", where)
-                    again.detail = f"{b}#{times[b]}"
-                    found.append(again)
+            got = number(stat(now.line, label))
+            counts = [got] if now.status == "final" else [number(stat(before.line, label)), got]
+            standing = _standing(kind, at, athlete_id, mine, now)
+            missing = [d for d in reversed(mine) if d not in standing]  # newest first
+            # Marked ruled out: the count below what was told in this poll is enough. Otherwise in both.
+            marked = {_play_key(kind, 0, e) for e in now.events if e.get("kind") == "DISALLOWED" and (e.get("athlete_ids") or [])[at:at + 1] == [athlete_id]}
+            gone = [d for d in missing if _base(d) in marked][:max(len(mine) - got, 0)]
+            gone += [d for d in missing if d not in gone][:max(len(mine) - max(counts) - len(gone), 0)]
             found += [Found("correction", "key", title.format(who=who), where, f"{kind}:{d}") for d in gone]
+            # Taken back, and theirs again with the count back up: told again, under the times it was taken back.
+            times = Counter(_base(d.split(":", 1)[1]) for d in corrections if d.startswith(f"{kind}:"))
+            theirs = {_play_key(kind, 0, e): n for n, e in enumerate(_plays(now, athlete_id, at), 1)}
+            back = [b for b in times if "@" in b and b in theirs and (kind, f"{b}#{times[b]}") not in told]
+            for b in back[:max(min(counts) - len(mine), 0)]:
+                again = _goal(who, athlete_id, theirs[b], now, where) if kind == "goal" else Found(kind, "key", f"Assist: {who}", where)
+                again.detail = f"{b}#{times[b]}"
+                found.append(again)
         return found
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
