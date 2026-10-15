@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -1114,6 +1114,13 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         for m, name, event, muted in db.execute(query)
     ]
     return {"items": items, "next": items[-1]["id"] if len(items) == limit else None}
+
+
+@app.get("/api/me/week")
+def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Today's "This week" and the Wire (week.py): the big moments of the fan's players over the last seven
+    days, as each sport words them for a poster, biggest first; and their line-ups and news, newest first."""
+    return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
 
 
 @app.delete("/api/follows/{player_id}")

@@ -57,6 +57,17 @@ class Found:
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY (moments.py)
 
 
+@dataclass
+class Poster:
+    """A player's game this week as Today's "This week" rail draws it (week.py): a word or two in big type
+    ("Hundred", "Hat-trick"), a short line under the player's name ("112 (98) v Australia"), and the moment
+    it was read from, which dates it."""
+
+    word: str
+    line: str = ""
+    of: Found | None = field(default=None, compare=False)
+
+
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
     for s in (line or {}).get("stats") or []:
         if s.get("label") == label:
@@ -75,6 +86,10 @@ def crossed(before: int, now: int, marks: tuple[int, ...]) -> list[int]:
 
 def joined(*parts: str | None) -> str:
     return " · ".join(p for p in parts if p)
+
+
+def spaced(*parts: str | None) -> str:
+    return " ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------- form: what sports' summaries read
@@ -232,6 +247,24 @@ class Sport:
         the fans who were sent that moment, and reaches no one else (alerts.py). A moment taken back that
         the source shows again may be found again here, under a new detail."""
         return []
+
+    def poster(self, found: list[Found], versus: str) -> Poster | None:
+        """A player's game this week as a poster in Today's "This week" (week.py), from the moments found for
+        them in it, oldest first (none a source took back): by default its biggest high (high), the newest
+        of equals. `versus` is the other side of the game ("v Australia"), or "" when the game's title
+        doesn't say. None for a game without one."""
+        best = None
+        for f in sorted(found, key=lambda f: f.priority):  # stable: of equals, the newest comes last
+            if (made := self.high(f, versus)) is not None:
+                made.of = made.of or f
+                best = made
+        return best
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """One moment as a poster, if it's one of the player's highs, read off the title and body this sport
+        wrote it with: the title says what the kind can't (a cricketer's "takes 5 wickets" is a "Five-for").
+        None for a set, a yellow card, a line-up, being out, the news. A sport no module knows has none."""
+        return None
 
     # ---- live games and cards (structured.py)
 

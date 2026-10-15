@@ -197,7 +197,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
-  line-up, what happens during a game, what a source takes back (`taken_back`)), its form summary,
+  line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
+  player's highs on Today's "This week" and in what words (`poster`: a "Five-for")), its form summary,
   how search shows its athletes, and its colours (a player's photo is recoloured with them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
