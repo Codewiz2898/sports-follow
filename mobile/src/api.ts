@@ -55,8 +55,9 @@ export const api = {
   search: (q: string, signal?: AbortSignal) => request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
   // Notifications (push.ts): what the server can push by, this device's FCM token, and a tapped notification.
   pushInfo: () => request<{ enabled: boolean; fcm: boolean }>('/api/push'),
-  registerPush: (device: { token: string; timezone: string; quiet_start: string | null; quiet_end: string | null; previous_token: string | null }) =>
+  registerPush: (device: { token: string; timezone: string; quiet_start?: string | null; quiet_end?: string | null; previous_token: string | null }) =>
     request<PushSettings>('/api/push/fcm', { method: 'POST', body: JSON.stringify(device) }),
+  unregisterPush: (token: string) => request<{ ok: boolean }>('/api/push/fcm', { method: 'DELETE', body: JSON.stringify({ token }) }),
   opened: (notificationId: number) => request<{ ok: boolean }>(`/api/notifications/${notificationId}/opened`, { method: 'POST' }),
 }
 

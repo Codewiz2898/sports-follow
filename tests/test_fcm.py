@@ -37,14 +37,16 @@ def unpad(part: str) -> bytes:
 class FakeFcm:
     """Google's token endpoint and FCM's send, for one Firebase project. It checks what a real one checks
     (the assertion's signature and claims, the bearer token) and answers for each device token as FCM
-    would: `gone` ones are UNREGISTERED, `elsewhere` ones another project's, and with `revoked` the
-    service account may no longer send."""
+    would: `gone` ones are UNREGISTERED, `elsewhere` ones another project's, `made_up` ones no token at
+    all, and with `revoked` the service account may no longer send."""
 
     key: rsa.RSAPrivateKey
     sent: list[dict] = field(default_factory=list)
     sign_ins: list[dict] = field(default_factory=list)
+    asked: int = 0  # requests to the token endpoint, answered or not
     gone: set[str] = field(default_factory=set)
     elsewhere: set[str] = field(default_factory=set)
+    made_up: set[str] = field(default_factory=set)
     revoked: bool = False
     failing: int | None = None  # every send answers this status
     token_endpoint_down: bool = False
@@ -57,6 +59,7 @@ class FakeFcm:
         return httpx.Response(404)
 
     def sign_in(self, request: httpx.Request) -> httpx.Response:
+        self.asked += 1
         if self.token_endpoint_down:
             return httpx.Response(503, text="unavailable")
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
@@ -75,8 +78,12 @@ class FakeFcm:
         message = json.loads(request.content)["message"]
         if self.revoked:
             return error(403, "PERMISSION_DENIED")
+        if self.failing == 400:
+            return error(400, "INVALID_ARGUMENT", "INVALID_ARGUMENT", "Invalid value at 'message.android.ttl'")
         if self.failing:
             return error(self.failing, "INTERNAL", "INTERNAL")
+        if message["token"] in self.made_up:
+            return error(400, "INVALID_ARGUMENT", "INVALID_ARGUMENT", "The registration token is not a valid FCM registration token")
         if message["token"] in self.gone:
             return error(404, "NOT_FOUND", "UNREGISTERED")
         if message["token"] in self.elsewhere:
@@ -85,14 +92,14 @@ class FakeFcm:
         return httpx.Response(200, json={"name": f"projects/{PROJECT}/messages/{len(self.sent)}"})
 
 
-def error(code: int, status: str, fcm_code: str | None = None) -> httpx.Response:
+def error(code: int, status: str, fcm_code: str | None = None, message: str = "…") -> httpx.Response:
     details = [{"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode": fcm_code}] if fcm_code else []
-    return httpx.Response(code, json={"error": {"code": code, "message": "…", "status": status, "details": details}})
+    return httpx.Response(code, json={"error": {"code": code, "message": message, "status": status, "details": details}})
 
 
 def reset() -> None:
     fcm.account.cache_clear()
-    fcm._forget_access()
+    fcm._access.clear()
 
 
 @pytest.fixture
@@ -170,18 +177,34 @@ def test_the_server_signs_in_once_an_hour_and_sends_with_its_access_token(fake_f
 def test_what_fcm_answers_is_what_the_devices_health_reads(fake_fcm):
     fake_fcm.gone.add("gone-" + TOKEN)
     fake_fcm.elsewhere.add("other-" + TOKEN)
+    fake_fcm.made_up.add("madeup-" + TOKEN)
     assert fcm.push("gone-" + TOKEN, GOAL, 600) == 404  # uninstalled: the device is removed
     assert fcm.push("other-" + TOKEN, GOAL, 600) == 410  # another Firebase project's: it never will work
+    assert fcm.push("madeup-" + TOKEN, GOAL, 600) == 404  # never a token at all: removed too
+    fake_fcm.failing = 400
+    assert fcm.push(TOKEN, GOAL, 600) == 400  # our message's fault: counted, but nobody's device is removed at once
     fake_fcm.failing = 500
     assert fcm.push(TOKEN, GOAL, 600) == 500  # FCM's own trouble: counted, removed only after MAX_FAILURES
     fake_fcm.failing = None
     fake_fcm.revoked = True
     assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS  # this server's key: never the device's fault
     fake_fcm.revoked = False
-    assert fcm.push(TOKEN, GOAL, 600) is None and len(fake_fcm.sign_ins) == 2  # and it signs in again
-    fcm._forget_access()
+    assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS and len(fake_fcm.sent) == 0  # paused, not asked again at once
+    fcm._access["paused_until"] = time.time() - 1
+    assert fcm.push(TOKEN, GOAL, 600) is None and len(fake_fcm.sign_ins) == 2  # then it signs in again
+
+
+def test_a_failed_sign_in_pauses_android_pushes_rather_than_each_asking_again(fake_fcm, caplog):
+    # A batch's pushes run at once, behind one sign-in: with Google down or the key revoked, each asking
+    # again in turn (10 s apiece) held up every other push of the batch, browsers' too.
     fake_fcm.token_endpoint_down = True
-    assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS
+    caplog.set_level(logging.INFO, "sports_follow")
+    assert [fcm.push(TOKEN, GOAL, 600) for _ in range(5)] == [fcm.OURS] * 5
+    assert fake_fcm.asked == 1
+    assert len([r for r in caplog.records if r.levelno == logging.ERROR]) == 1  # one problem, one error
+    fake_fcm.token_endpoint_down = False
+    fcm._access["paused_until"] = time.time() - 1  # PAUSE seconds on
+    assert fcm.push(TOKEN, GOAL, 600) is None and fake_fcm.asked == 2
 
 
 def test_a_failed_sign_in_or_revoked_key_isnt_counted_against_the_device():

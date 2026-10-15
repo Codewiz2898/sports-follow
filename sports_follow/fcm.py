@@ -44,6 +44,10 @@ QUIET_CHANNEL = "quiet"
 # What a push answers for a refusal that is this server's (its key, or FCM off): not the device's fault,
 # so notify._health doesn't count it against the device.
 OURS = 401
+# Seconds after Google or FCM refuses this server's key (or doesn't answer for one) that pushes go unsent,
+# answering OURS at once, rather than each asking again: a batch's other pushes, browsers' among them,
+# mustn't wait behind a sign-in that won't work, and one problem is one error in the log, not one a device.
+PAUSE = 60
 
 _client = httpx.Client(timeout=10)
 
@@ -90,8 +94,12 @@ def valid_token(value: Any) -> bool:
 # ---------------------------------------------------------------- access tokens
 
 
-_access: dict[str, Any] = {}  # the OAuth access token and when it expires (time.time())
+_access: dict[str, Any] = {}  # the OAuth access token and when it expires, or until when pushes pause (time.time())
 _access_lock = threading.Lock()
+
+
+class Paused(RuntimeError):
+    """This server's key was refused less than PAUSE seconds ago (already logged)."""
 
 
 def _jwt(acc: Account, now: int) -> str:
@@ -114,22 +122,35 @@ def _jwt(acc: Account, now: int) -> str:
 
 def access_token(acc: Account) -> str:
     """An access token for FCM, kept until a minute before it expires (they last an hour). One thread
-    fetches it while a batch's other pushes wait."""
+    fetches it while a batch's other pushes wait. A failed fetch pauses pushes (Paused) for PAUSE seconds."""
     with _access_lock:
-        if _access.get("token") and _access["expires"] - 60 > time.time():
+        now = time.time()
+        if _access.get("token") and _access["expires"] - 60 > now:
             return _access["token"]
-        now = int(time.time())
-        answer = _client.post(acc.token_uri, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": _jwt(acc, now)})
-        if answer.status_code != 200:
-            raise RuntimeError(f"Google's token endpoint answered {answer.status_code}: {answer.text[:200]}")
-        said = answer.json()
-        _access.update(token=said["access_token"], expires=now + int(said.get("expires_in", 3600)))
+        if _access.get("paused_until", 0) > now:
+            raise Paused()
+        try:
+            answer = _client.post(acc.token_uri, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": _jwt(acc, int(now))})
+            if answer.status_code != 200:
+                raise RuntimeError(f"Google's token endpoint answered {answer.status_code}: {answer.text[:200]}")
+            said = answer.json()
+            _access.clear()
+            _access.update(token=str(said["access_token"]), expires=now + int(said.get("expires_in", 3600)))
+        except Exception:
+            _pause_locked(now)
+            raise
         return _access["token"]
 
 
-def _forget_access() -> None:
+def _pause_locked(now: float) -> None:
+    _access.clear()
+    _access["paused_until"] = now + PAUSE
+
+
+def _pause() -> None:
+    """FCM refused this server's key: forget its access token, and send nothing for PAUSE seconds."""
     with _access_lock:
-        _access.clear()
+        _pause_locked(time.time())
 
 
 # ---------------------------------------------------------------- messages
@@ -167,8 +188,10 @@ def push(token: str, payload: dict[str, Any], ttl: int) -> int | str | None:
         return OURS
     try:
         bearer = access_token(acc)
+    except Paused:
+        return OURS
     except Exception as exc:
-        log.error("fcm: no access token for %s: %s", acc.client_email, str(exc)[:200], extra={"push_service": "fcm"})
+        log.error("fcm: no access token for %s, so no Android pushes for %ss: %s", acc.client_email, PAUSE, str(exc)[:200], extra={"push_service": "fcm"})
         return OURS
     try:
         answer = _client.post(SEND_URL.format(project=acc.project_id), headers={"authorization": f"Bearer {bearer}"}, json={"message": message(token, payload, ttl)})
@@ -177,26 +200,32 @@ def push(token: str, payload: dict[str, Any], ttl: int) -> int | str | None:
         return str(exc)[:100]
     if answer.status_code == 200:
         return None
-    code = _error_code(answer)
+    code, said = _error(answer)
+    if answer.status_code == 401 or code in ("PERMISSION_DENIED", "THIRD_PARTY_AUTH_ERROR"):
+        log.error("fcm: FCM refused %s's key (%s %s), so no Android pushes for %ss", acc.client_email, answer.status_code, code, PAUSE, extra={"push_service": "fcm", "status": answer.status_code})
+        _pause()
+        return OURS
     log.warning("push to fcm %s… failed (%s %s)", token[:8], answer.status_code, code, extra={"push_service": "fcm", "status": answer.status_code})
     if code == "UNREGISTERED":
         return 404
     if code == "SENDER_ID_MISMATCH":
         return 410
-    if answer.status_code == 401 or code in ("PERMISSION_DENIED", "THIRD_PARTY_AUTH_ERROR"):
-        _forget_access()  # the next push asks for a new token
-        return OURS
+    if code == "INVALID_ARGUMENT" and "registration token" in said:
+        # "The registration token is not a valid FCM registration token": never a device's, so it goes as
+        # one FCM no longer knows does. Any other INVALID_ARGUMENT is our message's fault, so stays a failure.
+        return 404
     return answer.status_code
 
 
-def _error_code(answer: httpx.Response) -> str | None:
+def _error(answer: httpx.Response) -> tuple[str | None, str]:
     """FCM's reason for a refusal: its FcmError code (UNREGISTERED, SENDER_ID_MISMATCH, …), else the
-    error's status (PERMISSION_DENIED, …)."""
+    error's status (PERMISSION_DENIED, …); and its message."""
     try:
         error = answer.json().get("error") or {}
     except ValueError:
-        return None
+        return None, ""
+    said = str(error.get("message") or "")
     for detail in error.get("details") or []:
         if isinstance(detail, dict) and detail.get("errorCode"):
-            return str(detail["errorCode"])
-    return error.get("status")
+            return str(detail["errorCode"]), said
+    return error.get("status"), said

@@ -5,8 +5,9 @@
 // On start the app makes its two channels, and once the fan follows someone it asks to notify them (Android
 // 13 and later ask the fan; earlier ones don't). Allowed, it registers the device's FCM token with the API
 // (POST /api/push/fcm) with its timezone and quiet hours, at every start and whenever FCM replaces the
-// token, so the device belongs to whoever the app is now and one the server dropped comes back. A tap opens
-// the player's page and tells the server it was opened.
+// token, so the device belongs to whoever the app is now and one the server dropped comes back; turned off
+// in Android's settings, the next start takes it off the server. A tap opens the player's page and tells the
+// server it was opened.
 //
 // FCM needs the app's Firebase config (google-services.json, app.config.ts). A build without it, or a server
 // without its key, has no notifications and says why in the log.
@@ -62,12 +63,27 @@ async function stored<T>(key: string): Promise<T | null> {
   }
 }
 
-/** Registers this device's token with the API, replacing `previous` if FCM gave it a new one. */
+/** Registers this device's token with the API, replacing `previous` if FCM gave it a new one. Quiet hours
+ * go when the app has them; without, a replaced token's carry over on the server. */
 async function register(token: string, previous: string | null): Promise<void> {
   const quiet = await stored<{ start: string | null; end: string | null }>(QUIET)
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  await api.registerPush({ token, timezone, quiet_start: quiet?.start ?? null, quiet_end: quiet?.end ?? null, previous_token: previous && previous !== token ? previous : null })
+  await api.registerPush({
+    token,
+    timezone,
+    ...(quiet ? { quiet_start: quiet.start, quiet_end: quiet.end } : {}),
+    previous_token: previous && previous !== token ? previous : null,
+  })
   await AsyncStorage.setItem(TOKEN, JSON.stringify(token))
+}
+
+/** Notifications were turned off in Android's settings: the server stops sending to this device (FCM would
+ * still take the pushes, so it would never find out). */
+async function unregister(): Promise<void> {
+  const token = await stored<string>(TOKEN)
+  if (!token) return
+  await api.unregisterPush(token)
+  await AsyncStorage.removeItem(TOKEN)
 }
 
 /** Turns notifications on if they're allowed, asking first when `ask` and the app hasn't asked before. */
@@ -78,7 +94,7 @@ async function enable(ask: boolean): Promise<void> {
     await AsyncStorage.setItem(ASKED, 'true')
     ;({ granted } = await Notifications.requestPermissionsAsync())
   }
-  if (!granted) return
+  if (!granted) return unregister()
   if (!Constants.expoConfig?.extra?.firebase) {
     console.info('push: this build has no google-services.json, so notifications are off (README.md, "Android app")')
     return
