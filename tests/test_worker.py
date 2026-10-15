@@ -209,6 +209,26 @@ def test_a_quiet_job_logs_only_when_it_runs_long(caplog, monkeypatch):
 
 
 def test_every_job_and_cron_run_is_logged():
-    assert all(hasattr(f, "__wrapped__") for f in worker.WorkerSettings.functions)
+    assert all(hasattr(getattr(f, "coroutine", f), "__wrapped__") for f in worker.WorkerSettings.functions)  # or arq's func(), for a timeout
     assert all(hasattr(j.coroutine, "__wrapped__") for j in worker.WorkerSettings.cron_jobs)
     assert {j.name for j in worker.WorkerSettings.cron_jobs} >= {"cron:tick", "cron:prune"}  # arq still names them after the job
+
+
+def test_a_worker_starting_without_a_recent_starters_refresh_queues_one():
+    """A fresh server, or one whose last refresh failed, needn't wait for 04:40; a deploy's restart after a
+    refresh doesn't spend the sources again."""
+    queued = []
+
+    class Redis:
+        def __init__(self, done: bool):
+            self.done = done
+
+        async def exists(self, key):
+            return self.done
+
+        async def enqueue_job(self, name, **options):
+            queued.append((name, options.get("_job_id")))
+
+    asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=False)}))
+    asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=True)}))
+    assert queued == [("refresh_starters", "refresh_starters:startup")]

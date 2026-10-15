@@ -229,9 +229,10 @@ async def startup(ctx) -> None:
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
-    if not await ctx["redis"].exists(STARTERS_DONE):
+    redis = ctx.get("redis")
+    if redis is not None and not await redis.exists(STARTERS_DONE):
         # A deploy restarts the worker several times a day: only one that finds no recent refresh queues one.
-        await ctx["redis"].enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
+        await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
 
 
 async def wind_down(ctx) -> None:
