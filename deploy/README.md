@@ -339,7 +339,8 @@ every commit on main that CI passes deploys by itself.
 What a deploy does: fetches main from GitHub (a commit that isn't on main is refused), builds the image
 on the server and tags it with the commit, runs the migrations on their own, then swaps the containers
 and waits until the API is healthy and the worker hasn't crashed. Fans see about two seconds of errors
-during the swap.
+during the swap. The old worker's jobs (a live poll, a card build) stop and free their locks within
+five seconds, and the new worker starts them again as soon as it's up.
 
 - **A migration fails:** nothing is replaced; the old version keeps serving.
 - **The new version doesn't get healthy:** the previous one comes back by itself, and the deploy fails.

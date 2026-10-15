@@ -30,7 +30,7 @@ import subprocess
 import time
 from typing import Any
 
-from . import bus
+from . import bus, shutdown
 
 log = logging.getLogger("sports_follow.engine")
 
@@ -192,18 +192,19 @@ def run_lane() -> None:
     busy = 0.0
     started = idle_since = time.monotonic()
     try:
-        while time.monotonic() - started < SESSION:
+        while time.monotonic() - started < SESSION and not shutdown.stopping.is_set():
             bus.extend(LOCK, 120)
             job = take(r, time.time())
             if job is None:
                 if time.monotonic() - idle_since > IDLE_EXIT:
                     break
-                time.sleep(1)
+                shutdown.sleep(1)
                 continue
             idle_since = time.monotonic()
             game, fen = job
             key = f"engine:pos:{position_key(fen)}"
             hit = r.get(key)
+            spent = 0.0
             if hit:
                 result, cached = json.loads(hit), cached + 1
             else:
@@ -215,7 +216,7 @@ def run_lane() -> None:
                 r.set(key, json.dumps(result), ex=CACHE_TTL)
             r.set(f"engine:latest:{game}", json.dumps({**result, "fen": fen, "at": time.time()}), ex=LATEST_TTL)
             if not hit:
-                time.sleep(rest(spent))
+                shutdown.sleep(rest(spent))
     except Exception:
         log.exception("engine lane crashed")
     finally:

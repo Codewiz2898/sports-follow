@@ -4,10 +4,11 @@ at most one evaluation per game per interval, and the engine itself when it's in
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
-from sports_follow import engine
+from sports_follow import bus, engine
 
 
 class FakeRedis:
@@ -108,3 +109,31 @@ def test_the_engine_finds_mate_for_either_side():
     finally:
         e.close()
     assert white["mate"] == 1 and black["mate"] == -1
+
+
+def test_the_lane_stops_when_the_worker_does(monkeypatch, stopping):
+    # BHA-51: a deploy while games are on. The lane ends after the position under way, instead of
+    # evaluating on until the process is killed, and frees its lock.
+    r, evaluated, freed = FakeRedis(), [], []
+
+    class Stockfish:
+        def evaluate(self, fen):
+            evaluated.append(fen)
+            stopping.set()  # told to stop while this position is evaluated
+            return {"score": 0}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    monkeypatch.setattr(engine, "Engine", Stockfish)
+    monkeypatch.setattr(engine, "take", lambda r, now: ("game", START))  # positions keep coming
+    monkeypatch.setattr(bus, "sync_redis", lambda: r)
+    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
+    monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: True)
+    monkeypatch.setattr(bus, "release", lambda name, token=None: freed.append(name))
+    lane = threading.Thread(target=engine.run_lane, daemon=True)
+    lane.start()
+    lane.join(5)
+    assert not lane.is_alive()
+    assert evaluated == [START] and freed == [engine.LOCK]
