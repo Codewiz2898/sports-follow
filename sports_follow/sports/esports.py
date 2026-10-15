@@ -148,6 +148,11 @@ def _lobby_final(who: str, now: Seen) -> Found:
     return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
 
 
+def _series_won(won: int, lost: int) -> str:
+    """A series won as a poster's word: "Sweep 2–0" when the other side took no map (of more than one), else "Win 2–1"."""
+    return f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}"
+
+
 # ---------------------------------------------------------------- form
 
 
@@ -217,14 +222,23 @@ class Esports(Sport):
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
         lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""
         if m := re.search(r" win (\d+)–(\d+)$", f.title):
-            won, lost = int(m[1]), int(m[2])
-            return Poster(f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}", f.body.split(" · ", 1)[0])  # "v GenOne"
+            return Poster(_series_won(int(m[1]), int(m[2])), f.body.split(" · ", 1)[0])  # "v GenOne"
         if m := re.search(r": (.+) win the lobby · ([\d.]+ pts)$", f.title):
             return Poster("Lobby won", joined(m[1], m[2]))
         if f.kind == "dinner":
             word, _, team = f.title.partition(": ")
             game = re.search(r"Match \d+", f.body)
             return Poster(word, joined(team, game[0].lower() if game else None))
+        return None
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The player's team winning, off a finished series' or lobby's result from their side, as high()
+        words its moment: "Won 2–1" is a "Win 2–1" v the other side, "Won 2–0" a "Sweep 2–0"; "1st of 16 ·
+        87 pts" is "Lobby won" (the result doesn't name the team: "87 pts · 16 teams"). Not a forfeit."""
+        if m := re.fullmatch(r"Won (\d+)–(\d+)", result):
+            return Poster(_series_won(int(m[1]), int(m[2])), versus, priority=80)  # a result's (moments.PRIORITY)
+        if (placed := _placed(result)) and placed[0] == 1:
+            return Poster("Lobby won", f"{points(placed[2])} pts · {placed[1]} teams", priority=90)  # as _lobby_final's
         return None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

@@ -81,6 +81,16 @@ def _points(result: str) -> tuple[float, float] | None:
     return value(match.group(1)), value(match.group(2))
 
 
+def _won(text: str, priority: int = 0) -> Poster | None:
+    """A win as a poster, from a result's line at the end of `text` ("Won with Black vs Firouzja", or a
+    moment's "Gukesh D: Won the match 2–1 vs So")."""
+    if m := re.search(r"(?:^|: )Won with (\w+) vs (.+)$", text):
+        return Poster("Win", f"with {m[1]} v {m[2]}", priority=priority)
+    if m := re.search(r"(?:^|: )Won the match (\S+) vs (.+)$", text):
+        return Poster("Match won", f"{m[1]} v {m[2]}", priority=priority)
+    return None
+
+
 class Chess(Sport):
     key = "chess"
     label = "Chess"
@@ -156,11 +166,11 @@ class Chess(Sport):
 
     def high(self, f: Found, versus: str) -> Poster | None:
         """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""
-        if m := re.search(r": Won with (\w+) vs (.+)$", f.title):
-            return Poster("Win", f"with {m[1]} v {m[2]}")
-        if m := re.search(r": Won the match (\S+) vs (.+)$", f.title):
-            return Poster("Match won", f"{m[1]} v {m[2]}")
-        return None
+        return _won(f.title)
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """A win, off a finished game's line, as high() words its result's moment (whose title is the line)."""
+        return _won(line.get("headline") or "", 80)  # a result's priority (moments.PRIORITY)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         scored = [p for p in (_points(r.get("result", "")) for r in items) if p]

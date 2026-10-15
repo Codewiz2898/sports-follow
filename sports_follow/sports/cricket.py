@@ -83,6 +83,14 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 # A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
 _RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
+MARKS = (50, 100, 150, 200)  # the batting milestones told
+# Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
+_RUNS_PRIORITY = {50: 70, 100: 90}
+
+
+def _haul(wickets: int) -> int:
+    """A wicket haul's priority: a five-for is near a hundred."""
+    return 90 if wickets >= 5 else 75 if wickets == 4 else 70
 
 
 def _another(was: list[Any], now: list[Any]) -> bool:
@@ -155,7 +163,7 @@ class Cricket(Sport):
             balls = stat(now.line, "Balls")
             batting = f"{runs_now} ({balls})" if balls else runs_now
             pre, nth = _nth(len(bats_now))
-            for mark in crossed(number(runs_was), number(runs_now), (50, 100, 150, 200)):
+            for mark in crossed(number(runs_was), number(runs_now), MARKS):
                 found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", joined(batting, nth, now.score), f"{pre}{mark}", 95 if mark >= 150 else 0))
             out_now = not runs_now.endswith("*") and stat(now.line, "Out") is not None
             out_was = runs_was is not None and not runs_was.endswith("*") and stat(was_line, "Out") is not None
@@ -168,7 +176,7 @@ class Cricket(Sport):
         pre, nth = _nth(len(bowls_now))
         for mark in crossed(wickets_was, wickets_now, (3, 4, 5, 6, 7, 8, 9, 10)):
             figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
-            found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
+            found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", _haul(mark)))
         return found
 
     def high(self, f: Found, versus: str) -> Poster | None:
@@ -182,6 +190,18 @@ class Cricket(Sport):
         else:
             return None
         return Poster(word, spaced(figures, versus))
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The match's best innings, from the headline's ("103 (152) & 48* (60) · 5/23 (4 ov)"): fifty or more
+        ("Hundred", "112 (98) v Australia"), or three wickets or more ("Five-for", "5/23 (4 ov) v
+        Australia"), as high() words their moments; of a batting and a bowling high, the bigger."""
+        made = []
+        for part in re.split(r" & | · ", line.get("headline") or ""):
+            if (m := _BAT.fullmatch(part)) and (marks := [k for k in MARKS if k <= int(m[1])]):
+                made.append(Poster(_RUNS.get(marks[-1], str(marks[-1])), spaced(part, versus), priority=_RUNS_PRIORITY.get(marks[-1], 95)))
+            elif (m := _BOWL.fullmatch(part)) and int(m[1]) >= 3:
+                made.append(Poster(f"{_HAUL.get(int(m[1]), m[1])}-for", spaced(part, versus), priority=_haul(int(m[1]))))
+        return max(made, key=lambda p: p.priority, default=None)
 
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.

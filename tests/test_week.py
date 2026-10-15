@@ -1,12 +1,14 @@
 """Today's "This week" posters (week.py): each sport picks a game's poster from the moments it found for the
 player in it (Sport.poster), and words each of the player's highs (Sport.high) off the titles its own rules
-write, so these tests find their moments the way live polls do (moments.detect)."""
+write, so these tests find their moments the way live polls do (moments.detect). A game first seen after it
+ended has no moments: its sport words its poster off the line and result it left the player
+(Sport.finished_poster), in the same words and as big as the moment would have been."""
 
 from __future__ import annotations
 
 import pytest
 
-from sports_follow import sports, week
+from sports_follow import moments, sports, week
 from sports_follow.moments import Seen, detect
 from sports_follow.sports import esports
 from sports_follow.sports.base import Found, Poster
@@ -22,6 +24,11 @@ def poster(sport: str, found: Found, versus: str = "") -> Poster | None:
 def game(sport: str, found: list[Found], versus: str = "") -> Poster | None:
     """A game's poster, from every moment found for the player in it, oldest first."""
     return sports.of(sport).poster(found, versus)
+
+
+def finished(sport: str, headline: str, result: str = "", versus: str = "", **stats: str) -> Poster | None:
+    """A finished game's poster, off the player's line in it and the result from their side."""
+    return sports.of(sport).finished_poster(line(headline, **stats), result, versus)
 
 
 def polls(sport: str, who: str, athlete: str, *seen: Seen) -> list[Found]:
@@ -139,6 +146,77 @@ def test_a_sport_no_module_knows_and_the_news_make_no_poster():
     assert poster("Golf", Found("final", "key", "Rory McIlroy: full time", "")) is None
     assert poster("Cricket", Found("news", "key", "Virat Kohli: retirement news", "Kohli retires from Tests")) is None
     assert poster("Football", Found("lineup", "key", "Mohamed Salah starts", "Egypt v South Africa · line-ups are out")) is None
+
+
+def test_a_finished_cricket_line_is_its_best_innings():
+    assert finished("Cricket", "112 (98)", "India won by 40 runs", "v Australia") == Poster("Hundred", "112 (98) v Australia")
+    assert finished("Cricket", "5/23 (4 ov)", versus="v Australia") == Poster("Five-for", "5/23 (4 ov) v Australia")
+    assert [finished("Cricket", h).word for h in ("57* (40)", "163* (120)", "201 (180)", "3/40 (10 ov)")] == ["Fifty", "150", "Double hundred", "Three-for"]
+    # A Test's two innings and the bowling: the best of them by their moments' priorities, the batting of equals.
+    assert finished("Cricket", "103 (152) & 48* (60) · 5/40 (20 ov)") == Poster("Hundred", "103 (152)")
+    assert finished("Cricket", "12 (30) & 61 (90) · 1/20 (8 ov) & 6/50 (22 ov)") == Poster("Six-for", "6/50 (22 ov)")
+    assert finished("Cricket", "49 (30) · 2/10 (3 ov)") is None
+    assert finished("Cricket", "Did not bat or bowl") is None
+
+
+def test_a_finished_football_line_counts_its_goals_then_its_assists():
+    assert finished("Football", "2 goals, 1 assist", "Won 3–1", "v Ghana") == Poster("Brace", "v Ghana")
+    assert [finished("Football", h).word for h in ("3 goals", "4 goals", "1 goal")] == ["Hat-trick", "4 goals", "Goal"]
+    assert finished("Football", "1 goal, 2 assists", versus="v Ghana") == Poster("Goal", "v Ghana")  # one goal outshines any number of assists
+    assert finished("Football", "2 assists", versus="v Ghana") == Poster("2 assists", "v Ghana")
+    assert finished("Football", "1 assist").word == "Assist"
+    assert [finished("Football", h) for h in ("Started", "Came on", "On the bench", "Not in the matchday squad")] == [None] * 4
+
+
+def test_a_finished_basketball_line_is_thirty_points_or_a_triple_double():
+    # The points scored, where the moment says the mark reached ("30 points").
+    assert finished("Basketball", "38 PTS · 6 REB · 2 AST", versus="v Utah Jazz") == Poster("38 points", "v Utah Jazz")
+    assert finished("Basketball", "22 PTS · 11 REB · 10 AST", versus="v Utah Jazz") == Poster("Triple-double", "22 PTS · 11 REB · 10 AST")
+    assert finished("Basketball", "10 PTS · 12 REB · 4 AST", Blocks="10").word == "Triple-double"  # blocks and steals count
+    assert finished("Basketball", "44 PTS · 11 REB · 10 AST").word == "Triple-double"  # 40 points is as big: the triple-double
+    assert finished("Basketball", "52 PTS · 11 REB · 10 AST").word == "52 points"
+    assert finished("Basketball", "29 PTS · 10 REB · 9 AST") is None and finished("Basketball", "Did not play (rest)") is None
+
+
+def test_a_finished_chess_or_esports_result_is_a_win():
+    assert finished("Chess", "Won with Black vs Alireza Firouzja", "Won 1–0") == Poster("Win", "with Black v Alireza Firouzja")
+    assert finished("Chess", "Won the match 2½–1½ vs Hikaru Nakamura", "Won 2½–1½") == Poster("Match won", "2½–1½ v Hikaru Nakamura")
+    assert finished("Chess", "Drew with White vs Gukesh D", "Drew ½–½") is None and finished("Chess", "Lost with White vs Gukesh D", "Lost 0–1") is None
+    # Esports results are the team's: a series, or a lobby (whose result doesn't name the team).
+    assert finished("Valorant", "", "Won 2–1", "v NRG") == Poster("Win 2–1", "v NRG")
+    assert finished("Valorant", "", "Won 2–0", "v NRG") == Poster("Sweep 2–0", "v NRG")
+    assert finished("CS2", "", "Won 1–0").word == "Win 1–0"  # one map is no sweep
+    assert [finished("Valorant", "", r) for r in ("Lost 1–2", "Drew 1–1", "Won by forfeit")] == [None] * 3
+    assert finished("BGMI", "1st · 46 pts", "1st of 16 · 46 pts") == Poster("Lobby won", "46 pts · 16 teams")
+    assert finished("BGMI", "2nd · 30 pts", "2nd of 16 · 30 pts") is None
+
+
+def test_a_finished_line_makes_no_poster_only_a_moment_could():
+    assert finished("Tennis", "Won in 3 sets", "Won 6-4 3-6 6-2") is None  # an upset needs the seeds the score had
+    assert finished("Golf", "-14", "Won by 2") is None
+
+
+def test_a_finished_poster_is_as_big_as_its_moment_would_have_been():
+    # The moments a live poll finds for the same line: the poster from them, and its moment's priority.
+    def live(sport: str, who: str, athlete: str, before: Seen, now: Seen) -> tuple[str, int]:
+        made = game(sport, detect(sport, who, athlete, before, now))
+        assert made is not None and made.of is not None
+        return made.word, made.of.priority
+
+    hundred = live("Cricket", "Smriti Mandhana", "1", Seen("live", line=line("48* (39)", Runs="48*", Balls="39")), Seen("live", line=line("112 (98)", Runs="112", Balls="98", Out="b Starc")))
+    assert hundred == ("Hundred", finished("Cricket", "112 (98)").priority)
+    haul = live("Cricket", "Jasprit Bumrah", "2", Seen("live", line=line("2/20 (3 ov)", Wickets="2")), Seen("live", line=line("4/23 (4 ov)", Wickets="4", Runs_conceded="23", Overs="4")))
+    assert haul == ("Four-for", finished("Cricket", "4/23 (4 ov)").priority)
+    started = Seen("live", line=line("Started"))
+    hat_trick = polls("Football", "Mohamed Salah", "173896", started, scored(4, 1, [goal("80'"), goal("60'"), goal("10'")], goals=3))
+    assert (game("Football", hat_trick).word, max(f.priority for f in hat_trick)) == ("Hat-trick", finished("Football", "3 goals").priority)
+    forty = live("Basketball", "Caitlin Clark", "3", Seen("live", line=line("38 PTS · 2 REB · 3 AST")), Seen("live", line=line("41 PTS · 2 REB · 3 AST")))
+    assert forty == ("40 points", finished("Basketball", "41 PTS · 2 REB · 3 AST").priority)
+    triple = live("Basketball", "Caitlin Clark", "3", Seen("live", line=line("18 PTS · 9 REB · 9 AST")), Seen("live", line=line("19 PTS · 10 REB · 10 AST")))
+    assert triple == ("Triple-double", finished("Basketball", "19 PTS · 10 REB · 10 AST").priority)
+    chess = live("Chess", "Magnus Carlsen", "1503014", Seen("live"), Seen("final", line=line("Won with White vs Gukesh D"), score="1–0"))
+    assert chess == ("Win", finished("Chess", "Won with White vs Gukesh D").priority)
+    assert finished("Valorant", "", "Won 2–1").priority == moments.PRIORITY["final"]  # a series' result
 
 
 @pytest.mark.parametrize("title, mine, said", [
