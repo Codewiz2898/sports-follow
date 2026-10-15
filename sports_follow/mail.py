@@ -90,11 +90,13 @@ def send_code(email: str, code: str) -> None:
 
 
 def _refuses_recipient(answer: httpx.Response) -> bool:
-    """Whether Resend refused the request for its `to` field: a 422 whose message names it."""
+    """Whether Resend refused the address itself: a 422 "Invalid `to` field" (a domain it won't send to,
+    like example.com). Anything else about our request (a missing `to`, too many) is ours to fix, so stays
+    a server error the API's alert sees."""
     if answer.status_code != 422:
         return False
     try:
         said = answer.json()
     except ValueError:
         return False
-    return isinstance(said, dict) and "`to`" in str(said.get("message", ""))
+    return isinstance(said, dict) and str(said.get("message", "")).startswith("Invalid `to` field")

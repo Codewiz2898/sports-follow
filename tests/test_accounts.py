@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
@@ -233,7 +234,7 @@ def test_a_code_that_couldnt_be_sent_can_be_asked_for_again_at_once(api, store, 
     assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)
 
 
-def test_an_address_the_mail_service_wont_send_to_is_the_fans_to_change(api, store, monkeypatch):
+def test_an_address_the_mail_service_wont_send_to_is_the_fans_to_change(api, store, monkeypatch, caplog):
     """Resend refuses some addresses (example.com's): a 400 that says so, not a server error (a 5xx counts
     against the API's alert). Its other refusals and failures stay 502s."""
     monkeypatch.setattr(mail, "_key", lambda: "re_test")
@@ -245,14 +246,23 @@ def test_an_address_the_mail_service_wont_send_to_is_the_fans_to_change(api, sto
         return httpx.Response(status, text=text)
 
     monkeypatch.setattr(mail._client, "post", post)
+    caplog.set_level(logging.INFO, "sports_follow.mail")
     refused = '{"statusCode":422,"name":"validation_error","message":"Invalid `to` field. Please use our testing email address instead of domains like `example.com`."}'
     answers.append((422, refused))
     answer = api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)
     assert answer.status_code == 400 and "that address" in answer.json()["detail"]
     assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)  # another address may follow at once
-    for status, text in [(422, '{"statusCode":422,"name":"validation_error","message":"The `from` field is invalid."}'), (422, "not json"), (500, "")]:
+    ours = [
+        (422, '{"statusCode":422,"name":"missing_required_field","message":"Missing `to` field."}'),  # our request's fault
+        (422, '{"statusCode":422,"name":"validation_error","message":"The `from` field is invalid."}'),
+        (422, "not json"),
+        (500, ""),
+    ]
+    for status, text in ours:
         answers.append((status, text))
         assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 502
+    levels = [r.levelno for r in caplog.records if r.name == "sports_follow.mail"]
+    assert levels == [logging.INFO] + [logging.WARNING] * len(ours)  # only the server's own failures are warnings
 
 
 def test_without_a_mail_key_email_sign_in_is_off_and_logging_codes_needs_plain_http(api, monkeypatch):
