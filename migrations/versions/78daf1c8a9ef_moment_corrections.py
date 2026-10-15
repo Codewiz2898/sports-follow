@@ -3,7 +3,7 @@
 A correction goes only to the fans who were sent the moment it takes back.
 
 Revision ID: 78daf1c8a9ef
-Revises: 780ca4a81e4f
+Revises: b7d3e5a9c2f1
 Create Date: 2026-10-15
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "78daf1c8a9ef"
-down_revision = "780ca4a81e4f"
+down_revision = "b7d3e5a9c2f1"
 branch_labels = None
 depends_on = None
 
