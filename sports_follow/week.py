@@ -83,7 +83,9 @@ NEWS_DAYS = 3  # as long as a story counts as just happened (pipeline.news_momen
 LINEUP_TAG = "Line-up"
 NEWS_TAGS = {"injury": "Injury", "transfer": "Transfer", "retirement": "Retired"}
 _NEWS_KEY = re.compile(r":news:n(\d+)$")  # notify._key of a story's moment: "-:<player>:news:n<news id>"
-_BREAKING = re.compile(r"^\W*breaking(?:\s+news)?\W*[:|–—-]\s*", re.I)
+_NEWS_KIND = re.compile(r": (\w+) news$")  # its title, pipeline.news_moments: "Bukayo Saka: injury news"
+# A site's label in front of its headline: "BREAKING:", "Breaking news -", or "BREAKING" alone in capitals.
+_BREAKING = re.compile(r"^\W*(?:(?i:breaking(?:\s+news)?)\W*[:|–—-]|BREAKING(?:\s+NEWS)?\b|Breaking\s+news\b)\s*")
 
 
 def _plain(headline: str) -> str:
@@ -93,7 +95,8 @@ def _plain(headline: str) -> str:
 
 def wire(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, Any]]:
     """The Wire's rows for the fan's players, newest first: each one's tag, its line, the site it's from (a
-    story's) and where it opens (the story, or the player's page)."""
+    story's) and where it opens (the story, or the player's page). A player's line-up for a game is its
+    latest (a late change: "now on the bench"), and a story about two of the fan's players is one row."""
     now = now or datetime.now(timezone.utc)
     rows = db.execute(
         select(Moment, Player, Event.title)
@@ -109,17 +112,25 @@ def wire(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, A
     ids = {int(m[1]) for moment, _, _ in rows if (m := _NEWS_KEY.search(moment.key))}
     stories = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(ids)))} if ids else {}
     found: list[tuple[datetime, dict[str, Any]]] = []
+    told: set[tuple[str, int | None, int | None]] = set()  # line-ups by player and game, stories by id: newest first
     for moment, player, title in rows:
         row = {"id": moment.id, "player_id": moment.player_id, "player": player.name, "sport": player.sport}
         if moment.kind == "lineup":
+            if ("lineup", moment.player_id, moment.event_id) in told:
+                continue  # an earlier team sheet, since changed
+            told.add(("lineup", moment.player_id, moment.event_id))
             line = " ".join(x for x in (moment.title, versus(title, [*(player.teams or []), player.name])) if x)
             found.append((moment.created_at, row | {"tag": LINEUP_TAG, "text": line, "source": None, "url": moment.url}))
             continue
         m = _NEWS_KEY.search(moment.key)
         story = stories.get(int(m[1])) if m else None
-        if story is None or story.kind not in NEWS_TAGS or not story.url:
-            continue  # gone, or not a story the Wire tells
-        found.append((moment.created_at, row | {"tag": NEWS_TAGS[story.kind], "text": _plain(story.headline), "source": story.source or None, "url": story.url}))
+        # The kind the moment was told as: the story's row keeps the kind of whichever report stored it first.
+        said = _NEWS_KIND.search(moment.title)
+        kind = said[1] if said else story.kind if story else None
+        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told:
+            continue  # gone, not a story the Wire tells, or on it already
+        told.add(("news", story.id, None))
+        found.append((moment.created_at, row | {"tag": NEWS_TAGS[kind], "text": _plain(story.headline), "source": story.source or None, "url": story.url}))
     # When each reached us, as the Alerts list dates them: a story's own date is often a day with no time.
     found.sort(key=lambda f: (f[0], f[1]["id"]), reverse=True)
     return [row | {"at": at.isoformat()} for at, row in found[:WIRE_LIMIT]]

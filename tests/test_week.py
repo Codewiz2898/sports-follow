@@ -159,6 +159,8 @@ def test_versus_names_the_other_side_only_when_the_title_says_which_is_theirs(ti
     ("BREAKING: Saka ruled out for a month", "Saka ruled out for a month"),
     ("Breaking News - Saka ruled out", "Saka ruled out"),
     ("BREAKING | Saka signs for Real Madrid", "Saka signs for Real Madrid"),
+    ("BREAKING Salah ruled out", "Salah ruled out"),
+    ("Breaking news Salah ruled out", "Salah ruled out"),
     ("Breaking Bad star at the Emirates", "Breaking Bad star at the Emirates"),  # not a site's label
     ("Saka ruled out, Arteta confirms", "Saka ruled out, Arteta confirms"),
 ])

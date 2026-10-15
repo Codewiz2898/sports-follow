@@ -88,7 +88,7 @@ def test_only_the_fans_players_this_week_and_never_a_goal_ruled_out(db):
     assert server.this_week("nobody", db)["posters"] == []
 
 
-def story(db, player_id: int, headline: str, kind: str, breaking: bool = True, hours: int = 2, source: str = "Sportstar") -> None:
+def story(db, player_id: int, headline: str, kind: str | None, breaking: bool = True, hours: int = 2, source: str = "Sportstar") -> None:
     """A story the research agent brought back for the player, down the real path: stored, then a moment
     when it's new, recent and marked as just happened (pipeline.news_moments)."""
     player = db.get(Player, player_id)
@@ -132,3 +132,23 @@ def test_a_brace_is_counted_from_the_goals_that_stand(db):
     notify.record(db, 1, 10, [Found("correction", "key", "Goal ruled out: Mohamed Salah", "Egypt 1 – 0 South Africa · 62'", db.get(Moment, first).key.split(":", 2)[2])])
     db.flush()
     assert [(p["word"], p["line"]) for p in server.this_week("fan", db)["posters"]] == [("Goal", "60' v South Africa")]
+
+
+def test_the_wire_tells_a_late_team_sheet_change_and_each_story_once(db):
+    # Named to start, then moved to the bench: only the change is still true.
+    notify.record(db, 2, 21, [Found("lineup", "key", "Smriti Mandhana is in the XI", "India v England · line-ups are out", "starting", 50)])
+    notify.record(db, 2, 21, [Found("lineup", "key", "Smriti Mandhana is named a substitute", "India v England · line-ups are out", "bench", 45)])
+    # One story about two of the fan's players: one row.
+    story(db, 1, "Salah and Mandhana named in the team of the week", "milestone")
+    story(db, 1, "Salah and Mandhana both out injured", "injury")
+    story(db, 2, "Salah and Mandhana both out injured", "injury")
+    # A story first stored for a player as nothing in particular, then for another as an injury: the
+    # moment says what it was told as.
+    story(db, 3, "Mandhana hurt at training", None, breaking=False)
+    story(db, 2, "Mandhana hurt at training", "injury")
+    rows = server.this_week("fan", db)["wire"]
+    assert sorted((r["tag"], r["text"]) for r in rows) == [
+        ("Injury", "Mandhana hurt at training"),
+        ("Injury", "Salah and Mandhana both out injured"),
+        ("Line-up", "Smriti Mandhana is named a substitute v England"),
+    ]
