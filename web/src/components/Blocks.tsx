@@ -244,13 +244,18 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
   )
 }
 
+/** The newest moment of a game on Today's board ("Goal: Saka · 2–1 · 52'"), and whether it came after the
+ * fan last looked at their alerts. */
+export interface LatestMoment { text: string; missed: boolean }
+
 /**
  * The live scoreboard. Scores from a structured source carry a sport-specific state (two sides and
  * scorers for football, innings for cricket), drawn by that sport's view (sports/); scores the research
- * agent read off a web page, and states no view draws, are text in one generic layout. With a `seed`
- * (Today's game key) the sport's line art sits faint behind it.
+ * agent read off a web page, and states no view draws, are text in one generic layout. Today's is compact:
+ * with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is one row
+ * with the game's `latest` moment under it.
  */
-export function LiveScoreboard({ live, playerName, sport, teams, compact, seed }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string }) {
+export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
   const state = live.state
   const view = viewOfKind(state?.kind)
@@ -272,7 +277,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed }
       {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
       <ErrorBoundary fallback={plain} resetKey={live}>
         {view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} live={live} /> : plain}
-        <PlayerLine live={live} playerName={playerName} />
+        {compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />}
         {!compact && live.moments && live.moments.length > 0 && (
           <ul className="moments">
             {live.moments.slice(0, 5).map((m, i) => (
@@ -291,6 +296,40 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed }
         {!compact && safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" className="link" style={{ color: 'var(--text)' }}>Open source</a>}
       </div>
     </section>
+  )
+}
+
+/** A stat in words: "3 shots", "2 key passes"; an abbreviation stays as it is ("22 PTS"), and a value that
+ * isn't a number follows its label ("Colour Black"). */
+function statWords(s: Stat): string {
+  if (!/^[\d.,½*/–-]/.test(s.value)) return `${s.label} ${s.value}`
+  return `${s.value} ${s.label === s.label.toUpperCase() ? s.label : s.label.toLowerCase()}`
+}
+
+/**
+ * The followed player's line on Today's board, in one row: their name in the sport's colour, then their
+ * numbers (the headline first, "67* (71)", without the stats it already says). Under it, the newest thing
+ * that happened to the fan's players in this game, which the fan missed if it came after they last looked
+ * at their alerts.
+ */
+function LiveLine({ live, playerName, latest }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null }) {
+  const stats = live.player_stats ?? []
+  const view = viewOfKind(live.state?.kind)
+  const said = new Set(view?.inHeadline ?? [])
+  const numbers = live.headline ? [live.headline, ...stats.filter((s) => !said.has(s.label)).slice(0, 4).map(statWords)] : stats.slice(0, 5).map(statWords)
+  // No numbers yet: say why, unless the sport has no player lines at all (esports: the team's result says it).
+  const why = !numbers.length && live.state && view?.noLine !== null ? view?.noLine ?? 'has no numbers in this game yet' : null
+  if (!numbers.length && !why && !latest) return null
+  return (
+    <div className="live-line">
+      {(numbers.length > 0 || why) && (
+        <span className="row" style={{ justifyContent: 'flex-start', alignItems: 'baseline', flexWrap: 'wrap', columnGap: 8, rowGap: 2 }}>
+          <span className="dsp who">{shortName(playerName)}</span>
+          <span className="what">{numbers.length ? numbers.join(' · ') : why}</span>
+        </span>
+      )}
+      {latest && <span className="missed"><b>{latest.missed ? 'You missed' : 'Latest'}</b> {latest.text}</span>}
+    </div>
   )
 }
 

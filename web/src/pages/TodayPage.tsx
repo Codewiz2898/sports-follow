@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import type { Card, UpcomingEvent } from '../api'
+import { useActivity } from '../activity'
+import type { ActivityItem, Card, UpcomingEvent } from '../api'
 import { useNow } from '../clock'
-import { ComingCard, highlight, LiveScoreboard, PlayerTile, ResultCard, SectionHead, type GameResult } from '../components/Blocks'
+import { ComingCard, highlight, LiveScoreboard, PlayerTile, ResultCard, SectionHead, type GameResult, type LatestMoment } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, PlusIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { Rail } from '../components/Rail'
@@ -53,6 +54,16 @@ function liveGames(cards: Card[]): [string, Card[]][] {
     games.set(key, [...(games.get(key) ?? []), c])
   }
   return [...games.entries()]
+}
+
+/** The newest moment of the fan's players in a live game (the alerts list is newest first), and whether the
+ * fan missed it: it came after they last looked at their alerts. Only a structured score names its game. */
+function latestIn(items: ActivityItem[], group: Card[], seen: number): LatestMoment | null {
+  const game = group[0].live.event_id
+  if (game == null) return null
+  const ids = new Set(group.map((c) => c.player_id))
+  const m = items.find((i) => i.event_id === game && ids.has(i.player_id))
+  return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen } : null
 }
 
 interface Coming { key: string; event: UpcomingEvent; players: Card[] }
@@ -132,6 +143,7 @@ function LoadFailed() {
 
 export function TodayPage() {
   const { cards, loaded, failed, progress } = useFollowing()
+  const { items: alerts, seen } = useActivity()
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
 
@@ -175,7 +187,7 @@ export function TodayPage() {
 
       {games.map(([key, group]) => (
         <Link key={group[0].player_id} to={`/player/${group[0].player_id}`} className="stack" style={{ gap: 8 }}>
-          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} compact seed={key} />
+          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} compact seed={key} latest={latestIn(alerts, group, seen)} />
           {group.length > 1 && <span className="tiny muted" style={{ fontWeight: 700 }}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</span>}
         </Link>
       ))}
