@@ -211,6 +211,32 @@ def test_an_uncached_read_is_not_kept(monkeypatch):
     assert len(sportmonks._cache) == 1
 
 
+def _confirmed(value: bool) -> list[dict]:
+    return [{"type_id": 159, "values": {"home": "3-4-2-1", "away": "4-2-3-1"}}, {"type_id": 572, "values": {"confirmed": value}}]
+
+
+def test_a_predicted_line_up_is_nobodys_team_sheet():
+    # BHA-43 (seen 15 Oct 2026, a Bundesliga match two days out): Sportmonks fills the line-ups with its
+    # own prediction, eleven starters a side, marked unconfirmed. Armed an hour and a quarter ahead, the
+    # poll would have told fans "starts" from a guess.
+    predicted = [{"player_id": STAR, "team_id": HOME, "type_id": 11}, {"player_id": KEEPER, "team_id": AWAY, "type_id": 11}]
+    assert sm.parse_match(_match("NS", 0, 0, lineups=predicted, metadata=_confirmed(False))).squad == {}
+    published = sm.parse_match(_match("NS", 0, 0, lineups=LINEUPS, metadata=_confirmed(True)))
+    assert published.squad == {str(STAR): "starting", str(SUB): "bench", str(UNUSED): "bench", str(KEEPER): "starting"}
+
+
+def test_a_predicted_line_up_makes_no_lines_after_kick_off_either():
+    # The clubs' sheets still unconfirmed at kick-off: a guessed starter would be told as one, and a
+    # player missing from the guess would read as left out.
+    predicted = [{"player_id": STAR, "team_id": HOME, "type_id": 11}]
+    assert sm.parse_match(_match("INPLAY_1ST_HALF", 0, 0, lineups=predicted, metadata=_confirmed(False))).lines == {}
+    assert sm.parse_match(_match("INPLAY_1ST_HALF", 0, 0, lineups=LINEUPS, metadata=_confirmed(True))).lines
+
+
+def test_the_match_poll_asks_whether_the_line_ups_are_confirmed():
+    assert "metadata" in sm.MATCH_INCLUDE.split(";")
+
+
 def test_the_team_sheet_before_kick_off_and_goal_details():
     snap = sm.parse_match(_match("NS", 0, 0, lineups=LINEUPS))
     assert snap.lines == {}  # a team sheet isn't a line

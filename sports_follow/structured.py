@@ -442,6 +442,17 @@ def close_live(db: Session, event_ids: list[int]) -> list[tuple[int, dict[str, A
 _ORDER = {"scheduled": 0, "postponed": 0, "armed": 1, "live": 2, "final": 3}
 
 
+def arm_before(sport: str | None) -> timedelta:
+    """How long before its start a game is armed, and polled: ARM_BEFORE_START, or earlier for a sport
+    whose team sheets come out sooner (Sport.team_sheet_before), so its line-up is told when it's out."""
+    return timedelta(seconds=max(ARM_BEFORE_START, sports.of(sport).team_sheet_before))
+
+
+def arm_before_any() -> timedelta:
+    """The longest arm_before of any sport: every game that may be due for arming starts within it."""
+    return timedelta(seconds=max(ARM_BEFORE_START, *(s.team_sheet_before for s in sports.ALL)))
+
+
 def next_status(current: str | None, from_schedule: str, moved_later: bool = False) -> str:
     """An event's status after a schedule read. Schedules can be minutes old, so a read never moves a
     game backwards: it doesn't un-arm one or reopen one the poller saw finish. A postponed game can
@@ -469,7 +480,7 @@ def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> E
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    later = f.start_utc is not None and f.start_utc > _now() + timedelta(seconds=ARM_BEFORE_START) + timedelta(hours=1)
+    later = f.start_utc is not None and f.start_utc > _now() + arm_before(event.sport or player.sport) + timedelta(hours=1)
     event.status = next_status(event.status, f.status, moved_later=later)
     db.flush()
     db.execute(insert(EventPlayer).values(event_id=event.id, player_id=player.id).on_conflict_do_nothing())
