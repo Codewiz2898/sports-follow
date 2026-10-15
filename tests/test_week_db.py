@@ -157,6 +157,7 @@ def test_posters_read_off_results_count_toward_the_limit_the_newest_first(db):
         finished(db, 1, 100 + n, "1 goal", "Won 1–0", ago=timedelta(hours=n + 1))
     posters = server.this_week("fan", db)["posters"]
     assert [p["event_id"] for p in posters] == [100 + n for n in range(week.LIMIT)]
+    assert len(posters) == 12  # Today shows every one the server sends (BHA-226)
 
 
 def story(db, player_id: int, headline: str, kind: str | None, breaking: bool = True, hours: int = 2, source: str = "Sportstar") -> None:

@@ -21,7 +21,6 @@ import { welcomed } from './WelcomePage'
 const NUDGE = 'sf-save-nudge'
 const FEW = 3  // until a fan follows this many, Today keeps offering starters
 const AHEAD_DAYS = 14  // how far Coming up looks
-const POSTERS = 12  // This week's posters at most (the server sends a few more, for those left out)
 
 /** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
 function SaveNudge() {
@@ -182,9 +181,8 @@ export function TodayPage() {
   const games = liveGames(cards)
   const done = results(cards, now)
   const coming = comingUp(cards, now)
-  // This week leaves out the games the Results rail has.
-  const onResults = new Set((done?.games ?? []).flatMap((g) => g.players.flatMap((p) => (p.result.event_id != null ? [p.result.event_id] : []))))
-  const posters = week.posters.filter((p) => p.event_id == null || !onResults.has(p.event_id)).slice(0, POSTERS)
+  // This week is the whole week's big moments, games on the Results rail too.
+  const posters = week.posters
 
   return (
     <>
