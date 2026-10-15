@@ -4,10 +4,13 @@ named by the side that won, and form over a run of matches."""
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Poster, Seen, Sport, crossed, joined, number, spaced, stat
+from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stat, stage
+
+if TYPE_CHECKING:
+    from ..adapters.base import Fixture
 
 
 def _int(value: Any) -> int:
@@ -16,6 +19,12 @@ def _int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
 
+
+# A league game's size (notable): by its stage, else by who plays it; a finish this close is one to see.
+STAGE_RANK = {3: 95, 2: 85, 1: 70}
+NATIONS, LEAGUE = 55, 40  # an international, any other game the sources list
+CLOSE_RUNS, CLOSE_WICKETS, CLOSE_BALLS = 5, 2, 3
+_MARGIN = re.compile(r"\bwon by (\d+) (runs?|wickets?)(?:.*?\bwith (\d+) balls? remaining)?", re.I)
 
 _BAT = re.compile(r"(\d+)(\*?) \((\d+)\)")
 _BOWL = re.compile(r"(\d+)/(\d+) \(([\d.]+) ov\)")
@@ -208,6 +217,36 @@ class Cricket(Sport):
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.
         return winner_outcome(result, teams)
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """Every match its sources list is one, as big as its stage (a final 95, a semi-final 85, a playoff
+        70, by the round's name: "Final", "Qualifier 1") or who plays it (an international 55, any other 40). Once it's over, 15 more for a close finish: a tie or a super over, CLOSE_RUNS runs or fewer,
+        CLOSE_WICKETS wickets or fewer, or CLOSE_BALLS balls to spare. Its word is the margin ("By 6
+        wickets"), under it who beat whom."""
+        level, why = stage(fixture.detail)  # not the competition's: a "… Finals Series" is every round of it
+        rank = STAGE_RANK.get(level) or (NATIONS if fixture.facts.get("national") else LEAGUE)
+        r = fixture.result
+        if fixture.status != "final" or not r:
+            return Notable(rank, why=why)
+        summary = str(r.get("summary") or "")
+        teams = r.get("teams") or []
+        winner = next((t for t in teams if t.get("winner")), None)
+        loser = next((t for t in teams if t is not winner), None) if winner else None
+        line = f"{winner['name']} beat {loser['name']}" if winner and loser and winner.get("name") and loser.get("name") else ""
+        margin = _MARGIN.search(summary)
+        if fixture.facts.get("super_over") or re.search(r"super over", summary, re.I):
+            word, close = "Super over", "Super over"
+        elif re.search(r"\btied?\b", summary, re.I):
+            word, close = "Tied", "Tied"
+        elif margin:
+            n, unit, balls = int(margin[1]), margin[2].lower(), margin[3]
+            word = f"By {n} {unit}"
+            close = "Last over" if balls is not None and int(balls) <= CLOSE_BALLS else "Thriller" if n <= (CLOSE_RUNS if unit.startswith("run") else CLOSE_WICKETS) else ""
+        elif re.search(r"no result|abandoned", summary, re.I):
+            return None  # nothing to see
+        else:
+            word, close = (winner or {}).get("name") or summary, ""
+        return Notable(min(100, rank + (15 if close else 0)), word=word, line=line, why=why or close)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         return batting_bowling(lines)
