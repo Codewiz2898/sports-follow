@@ -6,7 +6,7 @@
 // request on.
 
 import Constants from 'expo-constants'
-import type { Card, FollowTarget, LiveSport, SearchResponse, SportCatalog } from '../../web/src/types'
+import type { Card, FollowTarget, LiveSport, PushSettings, SearchResponse, SportCatalog } from '../../web/src/types'
 
 export type * from '../../web/src/types'
 
@@ -53,6 +53,11 @@ export const api = {
   card: (playerId: number) => request<Card>(`/api/players/${playerId}/card`),
   live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
   search: (q: string, signal?: AbortSignal) => request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
+  // Notifications (push.ts): what the server can push by, this device's FCM token, and a tapped notification.
+  pushInfo: () => request<{ enabled: boolean; fcm: boolean }>('/api/push'),
+  registerPush: (device: { token: string; timezone: string; quiet_start: string | null; quiet_end: string | null; previous_token: string | null }) =>
+    request<PushSettings>('/api/push/fcm', { method: 'POST', body: JSON.stringify(device) }),
+  opened: (notificationId: number) => request<{ ok: boolean }>(`/api/notifications/${notificationId}/opened`, { method: 'POST' }),
 }
 
 /** A URL the API gives relative to itself ("/api/photos/…"), made whole. */

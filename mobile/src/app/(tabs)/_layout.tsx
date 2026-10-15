@@ -1,4 +1,4 @@
-// The tabs: Today, Search, Following. Alerts joins them with push (BHA-230).
+// The tabs: Today, Search, Following. Alerts joins them with the rest of the screens (BHA-231).
 
 import { Tabs } from 'expo-router'
 import { SymbolView, type SymbolViewProps } from 'expo-symbols'
