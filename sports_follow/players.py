@@ -37,7 +37,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, logs, registry, search, sports, starters
-from .adapters import KNOWN, AdapterError
+from .adapters import ADAPTERS, KNOWN, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, EventPlayer, Follow, Moment, Player, PlayerIdentity
 
@@ -202,19 +202,21 @@ def starter_athletes(found: Found, sport: str | None = None) -> list[Athlete]:
     return found.athletes
 
 
-def check_source(person: registry.Person) -> None:
-    """Refuse a starter their sport's live source doesn't have: a new fan would follow an empty card, or
-    spend an AI research. Finds their id there by name and birth date when Wikidata didn't give it, and
-    writes it to the registry (registry.resolve), so following them is by id."""
-    system = registry.live_system(person.sport)
+def check_source(person: registry.Person) -> str:
+    """The source a starter is followed through, or refused when it doesn't have them: a new fan would
+    follow an empty card, or spend an AI research. In the sport's live source, their id is found by name
+    and birth date when Wikidata didn't give it and written to the registry (registry.resolve), so
+    following them is by id; a source side by side with it (esports) is asked for the id their row has."""
+    system = registry.follow_system(person.sport, person.ids)
     if system is None:
-        raise Refused(f"no live source runs for {person.sport} in this build, so new fans can't follow {person.name} live")
+        raise Refused(f"no live source runs for {person.name} ({person.sport}) in this build, so new fans can't follow them live")
     try:
-        found = registry.resolve(person)
+        found = registry.resolve(person) if system == registry.live_system(person.sport) else ADAPTERS[system].player(person.ids[system], person.league)
     except AdapterError as exc:
         raise Refused(f"couldn't reach {system} to check {person.name}: {exc}") from exc
     if found is None:
         raise Refused(f"{system} doesn't have {person.name} ({person.qid}); a starter must be someone new fans can follow live")
+    return system
 
 
 def make_starters(db: Session, athletes: list[Athlete]) -> list[tuple[Athlete, bool]]:
@@ -326,11 +328,11 @@ def main(argv: list[str], ask: Any = input) -> int:
         elif args.command == "starter" and args.action == "add":
             with session() as db:
                 people = [registry.Person.of(a) for a in starter_athletes(find(db, args.ref, args.sport), args.sport)]
-            for person in people:
-                check_source(person)  # outside a transaction: it asks the source, and may learn their id
+            # Outside a transaction: it asks the source, and may learn their id.
+            through = {(p.qid, p.sport): check_source(p) for p in people}
             with session() as db:
                 for a, new in make_starters(db, starter_athletes(find(db, args.ref, args.sport), args.sport)):
-                    print(f"{'Starter' if new else 'Already a starter'}: {a.name} ({a.sport}, {a.qid}), followed live through {registry.live_system(a.sport)}.")
+                    print(f"{'Starter' if new else 'Already a starter'}: {a.name} ({a.sport}, {a.qid}), followed live through {through.get((a.qid, a.sport))}.")
         elif args.command == "starter":
             with session() as db:
                 found = find(db, args.ref, args.sport)

@@ -165,11 +165,7 @@ def from_athlete(a: Athlete, query: str) -> SearchResult:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
     rules = sports.of(a.sport)
-    if rules.side_by_side:
-        # Its sources sit side by side, each for its own games (esports): the one this row came from.
-        system = next((s for s in a.ids or {} if s in ADAPTERS), None)
-    else:
-        system = registry.live_system(a.sport)
+    system = registry.follow_system(a.sport, a.ids or {})
     live_id = (a.ids or {}).get(system) if system else None
     parts = rules.search_detail(a)
     aka = _aka(query, a.name, list(a.aliases or []))

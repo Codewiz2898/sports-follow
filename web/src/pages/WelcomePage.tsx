@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { StarterPicker, useStarters } from '../components/Starters'
 import { CheckIcon, PlusIcon } from '../components/Icons'
 import { useFollowing } from '../following'
@@ -27,15 +27,32 @@ export function WelcomePage() {
   const [step, setStep] = useState(1)
   const [picked, setPicked] = useState<string[]>([])
 
-  if (sports === null) return <span className="spinner" aria-label="Loading" />
-  if (failed || sports.length === 0) {
-    markWelcomed()  // nothing to offer: Today's own start, finding a player
-    return <Navigate to="/" replace />
-  }
+  const offering = !!sports?.length
+  useEffect(() => {
+    if (offering) markWelcomed()  // shown once: leaving by the tab bar doesn't bring a fan back here
+  }, [offering])
 
   const finish = () => {
     markWelcomed()
     navigate('/', { replace: true })
+  }
+
+  if (sports === null && failed) {
+    // Not marked unless skipped: the welcome comes back once the server answers.
+    return (
+      <div className="stack" style={{ gap: 12 }}>
+        <div className="error-box">Couldn't load players to suggest. Try again in a moment, or find one yourself.</div>
+        <div className="row">
+          <button type="button" className="btn link" onClick={finish}>Skip</button>
+          <Link to="/search" className="btn primary">Find a player</Link>
+        </div>
+      </div>
+    )
+  }
+  if (sports === null) return <span className="spinner" aria-label="Loading" />
+  if (sports.length === 0) {
+    markWelcomed()  // nothing to offer: Today's own start, finding a player
+    return <Navigate to="/" replace />
   }
   const pick = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((k) => k !== key) : [...p, key]))
   const offered = picked.length ? sports.filter((s) => picked.includes(s.key)) : sports  // none picked: every sport

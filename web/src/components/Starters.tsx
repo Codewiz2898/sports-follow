@@ -5,15 +5,21 @@ import { SectionHead } from './Blocks'
 import { CheckIcon, PlusIcon } from './Icons'
 import { followTarget } from './Search'
 
+// What this page load knows, shared by every picker: the last answer (shown at once by the next picker,
+// while it asks again), the player each starter followed here became, and the sport last picked by chip.
+let lastAnswer: StarterSport[] | null = null
+const followedHere: Record<string, number> = {}
+let lastChip = ''
+
 /** The starters this server offers a new fan, by sport (GET /api/starters, starters.py): null while loading. */
 export function useStarters(): { sports: StarterSport[] | null; failed: boolean } {
-  const [sports, setSports] = useState<StarterSport[] | null>(null)
+  const [sports, setSports] = useState<StarterSport[] | null>(lastAnswer)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
     let current = true
     api.starters()
-      .then((r) => { if (current) setSports(r.sports) })
-      .catch(() => { if (current) { setFailed(true); setSports([]) } })
+      .then((r) => { lastAnswer = r.sports; if (current) setSports(r.sports) })
+      .catch(() => { if (current) setFailed(true) })
     return () => { current = false }
   }, [])
   return { sports, failed }
@@ -35,8 +41,8 @@ export function starterNames(sports: StarterSport[] | null, n: number): string[]
  */
 export function StarterPicker({ sports, chips = false }: { sports: StarterSport[]; chips?: boolean }) {
   const following = useFollowing()
-  const [shown, setShown] = useState(sports[0]?.key ?? '')
-  const [ids, setIds] = useState<Record<string, number>>({})  // the player each starter followed here became
+  const [shown, setShown] = useState(sports.some((s) => s.key === lastChip) ? lastChip : sports[0]?.key ?? '')
+  const [ids, setIds] = useState<Record<string, number>>(() => ({ ...followedHere }))
   const [pending, setPending] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -55,7 +61,8 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
       if (id != null && following.isFollowing(id)) await following.unfollow(id)
       else {
         const card = await following.follow(followTarget(r))
-        setIds((m) => ({ ...m, [r.key]: card.player_id }))
+        followedHere[r.key] = card.player_id
+        setIds({ ...followedHere })
       }
     } catch (e) {
       setError((e as Error).message)
@@ -70,7 +77,7 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
       {chips && sports.length > 1 && (
         <div className="chips" role="group" aria-label="Sport">
           {sports.map((s) => (
-            <button key={s.key} type="button" className="chip" data-sport={s.key} aria-pressed={shown === s.key} onClick={() => setShown(s.key)}>
+            <button key={s.key} type="button" className="chip" data-sport={s.key} aria-pressed={shown === s.key} onClick={() => { lastChip = s.key; setShown(s.key) }}>
               <span className="dot" />{s.label}
             </button>
           ))}

@@ -19,7 +19,9 @@ import pytest
 from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import players, registry, sports, starters
+from types import SimpleNamespace
+
+from sports_follow import adapters, players, registry, sports, starters
 from sports_follow.adapters import Adapter, PlayerRef, Roster, Rostered, pubg
 from sports_follow.models import Athlete, AthleteOverride, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
 
@@ -273,3 +275,20 @@ def test_a_starter_in_two_sports_needs_the_sport(db, capsys):
     assert players.main(["starter", "add", "Q213854", "--sport", "cricket"]) == 0
     db.expire_all()
     assert [(s.qid, s.sport) for s in db.scalars(select(Starter))] == [("Q213854", "cricket")]
+
+
+def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, capsys, monkeypatch, live_source):
+    """Esports sources sit side by side, each for its own games: a pro from the second is checked there,
+    not looked for by name in the sport's first source."""
+    for system in [s for s, a in adapters.ADAPTERS.items() if a.sport == "esports"]:
+        monkeypatch.delitem(adapters.ADAPTERS, system)
+    asked: list[tuple[str, str]] = []
+    for system in ("first_esports", "second_esports"):
+        monkeypatch.setitem(adapters.ADAPTERS, system, SimpleNamespace(system=system, sport="esports", player=lambda xid, league=None, s=system: asked.append((s, xid)) or object()))
+    registry.upsert(db, [athlete("pro:77", "esports", "Jonathan", {"second_esports": "77"}, league="bgmi")])
+    db.commit()
+    assert players.main(["starter", "add", "pro:77"]) == 0
+    assert "followed live through second_esports" in capsys.readouterr().out
+    assert asked == [("second_esports", "77")] and live_source == []  # never searched for by name in the first
+    [row] = starters.offer(db, "fan")[0]["players"]
+    assert (row["system"], row["athlete_id"]) == ("second_esports", "77")
