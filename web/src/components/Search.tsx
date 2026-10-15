@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type FollowTarget, type Research, type SearchResponse, type SearchResult } from '../api'
+import { APP_NAME } from '../app'
 import { relative } from '../format'
 import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
@@ -53,7 +54,7 @@ export function sections(data: SearchResponse): Section[] {
     ].filter((s) => s.items.length)
   }
   return [
-    { key: 'ours', title: 'On Sports Follow', items: results.filter((r) => r.player_id) },
+    { key: 'ours', title: `On ${APP_NAME}`, items: results.filter((r) => r.player_id) },
     { key: 'athletes', title: 'Athletes', items: results.filter((r) => !r.player_id && r.live_scores) },
     { key: 'other', title: 'Other sports · AI research only', items: results.filter((r) => !r.player_id && !r.live_scores) },
     { key: 'suggestions', title: 'Did you mean', items: data.suggestions },

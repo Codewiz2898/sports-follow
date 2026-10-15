@@ -192,7 +192,7 @@ export interface Credits { data: Credit[]; also: Credit[]; software: Credit[]; n
 export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number }
 export type Me = Account | { signed_in: false; reason?: 'signed_out' }
 /** What this server offers (GET /api/config). */
-export interface ServerConfig { model: string; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
+export interface ServerConfig { name: string; model: string; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
 
 /** A refusal from the API: its message for the fan, and the HTTP status. */
 export class ApiError extends Error {

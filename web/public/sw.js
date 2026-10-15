@@ -1,4 +1,4 @@
-// Sports Follow's service worker: the app opens instantly, and offline it shows the last update of
+// The app's service worker: it opens instantly, and offline it shows the last update of
 // your players. Live data stays live: scores and streams always go to the network.
 //
 // Pages: network first, the cached app shell when offline (the app is one page, so "/" serves every
@@ -110,7 +110,7 @@ async function show(data) {
   // With the app open and in front, the moment shows as a toast in the page instead.
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
   if (data.kind !== 'test' && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
-  await self.registration.showNotification(data.title || 'Sports Follow', options(data))
+  await self.registration.showNotification(data.title || '%APP_NAME%', options(data))
   return badge()
 }
 

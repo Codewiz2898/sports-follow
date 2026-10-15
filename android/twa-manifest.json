@@ -1,8 +1,6 @@
 {
   "packageId": "io.github.codewiz2898.sportsfollow",
   "host": "sportsfollow.example",
-  "name": "Sports Follow",
-  "launcherName": "Sports Follow",
   "display": "standalone",
   "orientation": "portrait",
   "themeColor": "#F3F3EF",
