@@ -58,9 +58,9 @@ class Tennis(Sport):
             return []
         return [Found("upset", "key", f"Upset: {who} beats [{other['seed']}] {other.get('name')}", now.score)]
 
-    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+    def high(self, f: Found, versus: str) -> Poster | None:
         """An upset: "beat Sinner, the No. 2 seed"."""
-        if m := re.match(r"Upset: .+ beats \[(\d+)\] (.+)$", title):
+        if m := re.match(r"Upset: .+ beats \[(\d+)\] (.+)$", f.title):
             return Poster("Upset", f"beat {m[2]}, the No. {m[1]} seed")
         return None
 

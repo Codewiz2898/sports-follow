@@ -1,6 +1,6 @@
-"""Today's "This week" posters (week.py): each sport picks its players' highs from the moments it found and
-words them (Sport.poster), read off the titles its own rules write, so these tests find their moments the
-way a live poll does (moments.detect)."""
+"""Today's "This week" posters (week.py): each sport picks a game's poster from the moments it found for the
+player in it (Sport.poster), and words each of the player's highs (Sport.high) off the titles its own rules
+write, so these tests find their moments the way live polls do (moments.detect)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,18 @@ from .test_moments import goal, line, scored
 
 
 def poster(sport: str, found: Found, versus: str = "") -> Poster | None:
-    return sports.of(sport).poster(found.kind, found.title, found.body, versus)
+    """One moment as a poster, if it's one of the player's highs."""
+    return sports.of(sport).high(found, versus)
+
+
+def game(sport: str, found: list[Found], versus: str = "") -> Poster | None:
+    """A game's poster, from every moment found for the player in it, oldest first."""
+    return sports.of(sport).poster(found, versus)
+
+
+def polls(sport: str, who: str, athlete: str, *seen: Seen) -> list[Found]:
+    """Every moment a run of polls finds, oldest first."""
+    return [f for before, now in zip(seen, seen[1:]) for f in detect(sport, who, athlete, before, now)]
 
 
 def test_cricket_posters_are_milestones_and_hauls_never_being_out():
@@ -33,6 +44,9 @@ def test_cricket_posters_are_milestones_and_hauls_never_being_out():
     out = Seen("live", line=line("103 (82)", Runs="103", Balls="82", Out="c Holder b Joseph"))
     [gone] = detect("Cricket", "Virat Kohli", "253802", now, out)
     assert poster("Cricket", gone) is None
+    # A game's poster is its biggest high: the hundred over the fifty, the five-for over the three.
+    assert game("Cricket", [fifty, hundred, gone]).word == "Hundred"
+    assert game("Cricket", hauls).word == "Five-for"
 
 
 def test_football_posters_say_what_the_goal_did():
@@ -41,14 +55,36 @@ def test_football_posters_say_what_the_goal_did():
     assert poster("Football", equaliser, "v South Africa") == Poster("Late equaliser", "88' v South Africa")
     [plain] = detect("Football", "Mohamed Salah", "173896", before, scored(3, 0, [goal("70'"), goal("20'", athlete="7"), goal("5'", athlete="7")]))
     assert poster("Football", plain, "v South Africa") == Poster("Goal", "70' v South Africa")
-    brace, hat_trick = detect("Football", "Mohamed Salah", "173896", Seen("live", line=line("1 goal", Goals="1")), scored(4, 1, [goal("80'"), goal("60'"), goal("10'")], goals=3))
-    assert poster("Football", brace, "v South Africa") == Poster("Brace", "v South Africa")
-    assert poster("Football", hat_trick, "v South Africa") == Poster("Hat-trick", "v South Africa")  # three minutes: none
+    assert game("Football", [plain], "v South Africa") == Poster("Goal", "70' v South Africa")
     now = Seen("live", line=line("1 goal", Goals="1", Assists="1", Yellow="1"), score="Egypt 2–0 South Africa", clock="67'")
     found = {f.kind: f for f in detect("Football", "Mohamed Salah", "173896", Seen("live", line=line("On the bench")), now)}
     assert poster("Football", found["assist"]) == Poster("Assist", "67'")
     assert poster("Football", found["yellow"]) is None and poster("Football", found["on"]) is None
     assert poster("Football", Found("correction", "key", "Goal ruled out: Mohamed Salah", "Egypt 1–0 South Africa · 70'")) is None
+
+
+def test_football_counts_the_goals_that_stand():
+    # A goal's title says what it did, and that can drop its count: the first puts Egypt ahead (at a higher
+    # priority than the second's plain "Goal (2)"), or the second levels the game. Two goals are a brace.
+    started = Seen("live", line=line("Started"))
+    ahead = polls("Football", "Mohamed Salah", "173896", started, scored(1, 0, [goal("10'")], clock="10'"), scored(2, 0, [goal("60'"), goal("10'")], goals=2, clock="60'"))
+    assert [(f.title, f.priority) for f in ahead] == [("Goal: Mohamed Salah puts Egypt ahead", 90), ("Goal: Mohamed Salah (2)", 85)]
+    assert game("Football", ahead, "v South Africa") == Poster("Brace", "v South Africa")
+    level = polls("Football", "Mohamed Salah", "173896", started, scored(1, 1, [goal("30'"), goal("20'", athlete="9", team="2")], clock="30'"), scored(2, 1, [goal("70'"), goal("30'"), goal("20'", athlete="9", team="2")], goals=2, clock="70'"))
+    assert [f.title for f in level] == ["Equaliser: Mohamed Salah", "Goal: Mohamed Salah puts Egypt ahead"]
+    assert game("Football", level).word == "Brace"
+    three = polls("Football", "Mohamed Salah", "173896", started, scored(4, 1, [goal("80'"), goal("60'"), goal("10'")], goals=3))
+    assert [f.kind for f in three] == ["goal"] * 3
+    assert game("Football", three, "v South Africa") == Poster("Hat-trick", "v South Africa")  # three minutes: none
+    four = [*three, *polls("Football", "Mohamed Salah", "173896", scored(4, 1, [goal("80'"), goal("60'"), goal("10'")], goals=3), scored(5, 1, [goal("85'"), goal("80'"), goal("60'"), goal("10'")], goals=4))]
+    assert game("Football", four).word == "4 goals"  # not the third's "Hat-trick"
+    # One goal standing, whatever its title counted when it went in.
+    assert game("Football", [Found("goal", "key", "Goal: Mohamed Salah (2)", "Egypt 2 – 0 South Africa · 60'", priority=85)]) == Poster("Goal", "60'")
+    assert game("Football", [Found("goal", "key", "Hat-trick: Mohamed Salah", "Egypt 3 – 0 South Africa · 80'", priority=95)]) == Poster("Goal", "80'")
+    # Assists count too, below any goal.
+    assists = [Found("assist", "key", "Assist: Mohamed Salah", "1–0 · 20'"), Found("assist", "key", "Assist: Mohamed Salah (2)", "2–0 · 50'")]
+    assert game("Football", assists, "v Ghana") == Poster("2 assists", "v Ghana")
+    assert game("Football", [*assists, ahead[0]]).word == "Goal"
 
 
 def test_basketball_posters_are_thirty_points_and_triple_doubles():
@@ -117,3 +153,14 @@ def test_a_sport_no_module_knows_and_the_news_make_no_poster():
 ])
 def test_versus_names_the_other_side_only_when_the_title_says_which_is_theirs(title, mine, said):
     assert week.versus(title, mine) == said
+
+
+@pytest.mark.parametrize("headline, plain", [
+    ("BREAKING: Saka ruled out for a month", "Saka ruled out for a month"),
+    ("Breaking News - Saka ruled out", "Saka ruled out"),
+    ("BREAKING | Saka signs for Real Madrid", "Saka signs for Real Madrid"),
+    ("Breaking Bad star at the Emirates", "Breaking Bad star at the Emirates"),  # not a site's label
+    ("Saka ruled out, Arteta confirms", "Saka ruled out, Arteta confirms"),
+])
+def test_the_wire_never_says_breaking(headline, plain):
+    assert week._plain(headline) == plain

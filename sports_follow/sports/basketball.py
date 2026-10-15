@@ -70,13 +70,13 @@ class Basketball(Sport):
             found.append(Found("triple", "key", f"{who}: triple-double", where))
         return found
 
-    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+    def high(self, f: Found, versus: str) -> Poster | None:
         """30 points or more ("40 points v Utah Jazz"), or a triple-double with its line ("22 PTS · 11 REB ·
         10 AST", the start of the body)."""
-        if m := re.search(r": (\d+) points$", title):
+        if m := re.search(r": (\d+) points$", f.title):
             return Poster(f"{m[1]} points", versus) if int(m[1]) >= 30 else None
-        if title.endswith(": triple-double"):
-            line = re.match(r"\d+ PTS · \d+ REB · \d+ AST", body)
+        if f.title.endswith(": triple-double"):
+            line = re.match(r"\d+ PTS · \d+ REB · \d+ AST", f.body)
             return Poster("Triple-double", line[0] if line else versus)
         return None
 

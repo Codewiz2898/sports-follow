@@ -154,11 +154,11 @@ class Chess(Sport):
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
 
-    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+    def high(self, f: Found, versus: str) -> Poster | None:
         """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""
-        if m := re.search(r": Won with (\w+) vs (.+)$", title):
+        if m := re.search(r": Won with (\w+) vs (.+)$", f.title):
             return Poster("Win", f"with {m[1]} v {m[2]}")
-        if m := re.search(r": Won the match (\S+) vs (.+)$", title):
+        if m := re.search(r": Won the match (\S+) vs (.+)$", f.title):
             return Poster("Match won", f"{m[1]} v {m[2]}")
         return None
 

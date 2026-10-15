@@ -171,13 +171,13 @@ class Cricket(Sport):
             found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
         return found
 
-    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+    def high(self, f: Found, versus: str) -> Poster | None:
         """A fifty or more ("Hundred"), or three wickets or more ("Five-for"), with the innings as the body
         has it: "112 (98) v Australia", "5/23 (4 ov) v Australia"."""
-        figures = body.split(" · ", 1)[0]
-        if m := re.search(r" reaches (\d+)$", title):
+        figures = f.body.split(" · ", 1)[0]
+        if m := re.search(r" reaches (\d+)$", f.title):
             word = _RUNS.get(int(m[1]), m[1])
-        elif m := re.search(r" takes (\d+) wickets$", title):
+        elif m := re.search(r" takes (\d+) wickets$", f.title):
             word = f"{_HAUL.get(int(m[1]), m[1])}-for"
         else:
             return None

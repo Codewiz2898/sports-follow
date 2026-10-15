@@ -274,6 +274,27 @@ a.photo-credit:hover { text-decoration: underline; }
 /* All of them at once: posters stay poster-sized, two across on a phone. */
 .week .rail.open { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 
+/* The Wire (Wire.tsx): an ink card of rows, each a tag in the player's sport colour, one line, and when. */
+.wire { list-style: none; margin: 0; padding: 4px 16px; border-radius: 18px; background: var(--text); color: var(--bg); --focus: var(--bg); }
+.wire li + li { border-top: 1px solid rgba(255, 255, 255, 0.16); }
+.wire-row { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; }
+.wire-tag { flex-shrink: 0; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+.wire-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wire-text { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* A story's site, always shown: the line is its headline, not ours. */
+.wire-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; }
+.wire-source, .wire-time { color: #a9abb0; }
+.wire-time { flex-shrink: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset: 3px; }
+
+/* This week and the Wire: one after the other on a phone; side by side on a desktop when there are both,
+   where This week's rail scrolls inside its half rather than out to the page's edge. */
+.week-wire { display: flex; flex-direction: column; gap: 16px; }
+@media (min-width: 1024px) {
+  .week-wire.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+  .week-wire.pair .rail:not(.open) { margin-inline: 0; padding-inline: 0; scroll-padding-inline: 0; }
+}
+
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (min-width: 720px) { .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
 .tile { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-height: 116px; padding: 14px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); transition: transform 0.12s; }
@@ -444,6 +465,7 @@ div.result-main { cursor: default; }
 .notice.action { background: var(--text); color: var(--bg); }
 .notice.action .btn { color: inherit; }
 @media (min-width: 1024px) { .mobile-only { display: none !important; } }
+@media (max-width: 1023.98px) { .desktop-only { display: none !important; } }
 /* Installed on a phone: no browser bar above, so the page starts below the status bar. */
 @media (display-mode: standalone) { .main { padding-top: calc(16px + env(safe-area-inset-top, 0px)); } }
 

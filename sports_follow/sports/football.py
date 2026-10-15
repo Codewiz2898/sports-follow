@@ -15,8 +15,10 @@ if TYPE_CHECKING:
 
 LATE_MINUTE = 80  # a goal from here on that levels the game or puts a side ahead is "late"
 UNDER_WAY = 10  # minutes on the clock: a game first seen live this late was missed, not just started
-# The moments that make a poster in Today's "This week", by their title's first words ("Hat-trick: Saka").
-POSTERS = ("Hat-trick", "Late equaliser", "Equaliser", "Late goal", "Goal", "Assist")
+# One goal or assist on a poster in Today's "This week", by its title's first words ("Equaliser: Saka"). A
+# "Hat-trick" alone is the one of three that still stands after VAR took two back: a goal.
+HIGHS = {"Late equaliser": "Late equaliser", "Equaliser": "Equaliser", "Late goal": "Late goal", "Goal": "Goal", "Hat-trick": "Goal", "Assist": "Assist"}
+MANY_GOALS = {2: "Brace", 3: "Hat-trick"}
 
 
 def pens(a: int | None, b: int | None) -> str:
@@ -215,16 +217,24 @@ class Football(Sport):
                 found.append(again)
         return found
 
-    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
-        """A goal by what it did ("Hat-trick", "Late equaliser"; a second is a "Brace"), or an assist, with
-        its minute: "67' v Chelsea". A hat-trick has three minutes, so it has none."""
-        head, _, rest = title.partition(": ")
-        if head not in POSTERS:
+    def poster(self, found: list[Found], versus: str) -> Poster | None:
+        """Two goals or more are a "Brace", a "Hat-trick", "4 goals", counted from the goals that stand (a
+        goal's title says what it did, which can drop its count: a second goal that levels the game is an
+        "Equaliser"); two assists and no goal, "2 assists". Else the biggest single high."""
+        for kind, many in (("goal", MANY_GOALS), ("assist", {})):
+            mine = [f for f in found if f.kind == kind]
+            if len(mine) > 1:
+                return Poster(many.get(len(mine), f"{len(mine)} {kind}s"), versus, max(mine, key=lambda f: f.priority))
+            if mine:
+                break  # one goal outshines any number of assists
+        return super().poster(found, versus)
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """One goal by what it did ("Late equaliser", "Equaliser") or an assist, at its minute: "67' v Chelsea"."""
+        word = HIGHS.get(f.title.partition(": ")[0])
+        if word is None:
             return None  # a card, a goal ruled out
-        count = re.search(r" \((\d+)\)$", rest)
-        n = int(count[1]) if count else 1
-        word = head if n == 1 else f"{n} assists" if head == "Assist" else "Brace" if n == 2 else f"{n} goals"
-        minute = re.search(r"\b\d+(?:\+\d+)?'", body) if n == 1 and head != "Hat-trick" else None
+        minute = re.search(r"\b\d+(?:\+\d+)?'", f.body)
         return Poster(word, spaced(minute[0] if minute else None, versus))
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

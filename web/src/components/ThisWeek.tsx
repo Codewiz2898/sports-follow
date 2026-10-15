@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type WeekPoster } from '../api'
+import { api, type WeekPoster, type WireRow } from '../api'
 import { daysAgo, day, parseDate, shortName } from '../format'
 import { useFollowing } from '../following'
 import { sportKey } from '../sports'
@@ -8,26 +8,30 @@ import { Rail } from './Rail'
 
 const SETTLE_MS = 1500  // one poll can bring several moments: fetch once they've all arrived
 
+interface Week { posters: WeekPoster[]; wire: WireRow[] }
+const NONE: Week = { posters: [], wire: [] }
+
 /**
- * The big moments of the fan's players over the last week (GET /api/me/week), biggest first, as their sports
- * word them: loaded when the follow list changes, and again once the stream has brought new moments.
+ * This week and the Wire for the fan's players (GET /api/me/week): the big moments of the last week,
+ * biggest first, as their sports word them, and the line-ups and news, newest first. Loaded when the follow
+ * list changes, and again once the stream has brought new moments.
  */
-export function useWeek(): WeekPoster[] {
+export function useWeek(): Week {
   const { cards, loaded, heard } = useFollowing()
-  const [posters, setPosters] = useState<WeekPoster[]>([])
+  const [week, setWeek] = useState<Week>(NONE)
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
 
   useEffect(() => {
     if (!loaded) return
-    if (!who) { setPosters([]); return }
+    if (!who) { setWeek(NONE); return }
     let stale = false
     const timer = window.setTimeout(() => {
-      api.week().then((r) => { if (!stale) setPosters(r.posters) }).catch(() => {})
+      api.week().then((r) => { if (!stale) setWeek(r) }).catch(() => {})
     }, heard ? SETTLE_MS : 0)
     return () => { stale = true; window.clearTimeout(timer) }
   }, [loaded, who, heard])
 
-  return posters
+  return week
 }
 
 /** When it was: "Today", the weekday within the week ("Mon"), else the date. */
@@ -56,16 +60,11 @@ function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
   )
 }
 
-/**
- * "This week" on Today: the big moments of the fan's players over the last seven days, a poster each,
- * leaving out the games the Results rail already has (`shown`, their event ids). Nothing when there's none.
- */
-export function ThisWeek({ posters, shown, now }: { posters: WeekPoster[]; shown: Set<number>; now: number }) {
-  const left = posters.filter((p) => p.event_id == null || !shown.has(p.event_id))
-  if (!left.length) return null
+/** "This week" on Today: the big moments of the fan's players over the last seven days, a poster each. */
+export function ThisWeek({ posters, now }: { posters: WeekPoster[]; now: number }) {
   return (
     <Rail title="This week" note="The big moments" all="Every big moment this week" className="week">
-      {left.map((p) => <Poster key={p.id} poster={p} now={now} />)}
+      {posters.map((p) => <Poster key={p.id} poster={p} now={now} />)}
     </Rail>
   )
 }
