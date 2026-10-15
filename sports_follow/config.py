@@ -83,9 +83,14 @@ SOURCES = {s.strip() for s in os.environ.get("SPORTS_FOLLOW_SOURCES", "").split(
 # out isn't searched, imported, polled or researched: its sources don't run, it's not a search filter,
 # and the pages of its players already followed stay as they are, without updates.
 SPORTS = {s.strip().lower() for s in os.environ.get("SPORTS_FOLLOW_SPORTS", "").split(",") if s.strip()}
+# The research agent (agent.py, through the llm-providers gateway): each player's profile and news, and the
+# whole page of a player no source has. "0" runs the app without a model, as with no OpenRouter key: fans
+# follow athletes a running source has (from the registry and search), their pages come from that source
+# alone (fixtures, results, stats, live scores and alerts), and nothing offers AI research.
+AGENT = os.environ.get("SPORTS_FOLLOW_AGENT", "1") != "0"
 # Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
 # pages come from the agent without live scores or alerts, and no model calls go to watching games.
-AGENT_LIVE = os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
+AGENT_LIVE = AGENT and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
 
 # The Android app (a Trusted Web Activity wrapping the web app): its package name and the SHA-256
 # fingerprints of its signing certificates (comma separated), published at /.well-known/assetlinks.json.

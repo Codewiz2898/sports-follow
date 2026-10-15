@@ -298,7 +298,7 @@ reached, the app says so plainly rather than looking broken.
   those ids.
 - The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
 
-### 8. Esports (step 1 built; battle royale built, waiting on a Liquipedia key)
+### 8. Esports (step 1 built and on in the public build with PUBG; battle royale built, waiting on a Liquipedia key)
 
 **Built (step 1).** `adapters/pandascore_esports.py` follows a pro's
 team in PandaScore's team titles (Valorant, CS2, LoL, Dota 2, Mobile Legends, Rainbow Six, Overwatch,
@@ -328,8 +328,11 @@ their game on their next refresh.
 
 **To finish step 1**
 - Follow a pro whose team plays soon and watch one series through: the start, map and result alerts.
-- Add `pandascore_esports` to `SPORTS_FOLLOW_SOURCES` in `deploy/settings.env` once PandaScore
-  confirms the free plan allows a commercial app; until then a public build leaves it off.
+- PandaScore's written word that the free plan allows a commercial app. The public build runs
+  `pandascore_esports` and `pubg_esports` from 15 Oct 2026 (decided before that word came), once their
+  tokens are on the server (deploy/README.md, "Esports"). Their pages don't need the AI: with
+  `SPORTS_FOLLOW_AGENT=0` (no OpenRouter key) pros are followed from the registry and search, and scores,
+  series, results and alerts come from the sources alone.
 
 **Before step 1.** No esports source. A pro gamer typed into "Research with AI" got an AI-built page
 with no scores or alerts, as in any sport without a source. Search barely found them: only 2,844 people

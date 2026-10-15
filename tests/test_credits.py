@@ -32,6 +32,12 @@ def test_the_ai_credit_names_the_model():
     assert credits._model() in ai["what"] and "can get things wrong" in ai["note"]
 
 
+def test_a_build_without_the_agent_credits_no_model_and_no_news():
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): pages come from the sources alone.
+    page = credits.credits({"sportmonks_football": 1, "pandascore_esports": 1, "pubg_esports": 1}, stockfish=False, agent=False)
+    assert "PandaScore" in _names(page["data"]) and "AI" not in _names(page["also"]) and "News publishers" not in _names(page["also"])
+
+
 def test_listed_python_licences_match_the_installed_packages():
     for item in credits.SOFTWARE:
         if "package" not in item:

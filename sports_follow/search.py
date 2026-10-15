@@ -275,6 +275,8 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     """Search every source in parallel and merge. sport narrows to one of SPORTS. may_ask is asked once,
     just before the first of the sources' own searches would go out: False leaves them out (a client over
     its limit, server.search) and the answer comes from Sports Follow and the registry."""
+    from .config import AGENT
+
     query = " ".join(query.split())[:80]
     sport = sport if sport in SPORTS else None
     ask = functools.cache(may_ask)
@@ -321,6 +323,11 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     if blocked:
         results = [r for r in results if (r.system, r.athlete_id) not in blocked]
         suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
+    if not AGENT:
+        # No research agent to build a page (config.AGENT): only athletes a running source has, and
+        # players already here, can be followed.
+        results = [r for r in results if r.player_id or r.live_scores]
+        suggestions = [r for r in suggestions if r.player_id or r.live_scores]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
     # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
     results = [r for i, r in enumerate(results) if i < LIVE_LIMIT + LOCAL_LIMIT or r.exact]
@@ -335,7 +342,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         "suggestions": [_public(r) for r in suggestions],
         "namesakes": namesakes if namesakes > 1 else 0,
         "partial": partial,
-        "researchable": bool(slugify(query)),
+        "researchable": AGENT and bool(slugify(query)),
     }
 
 

@@ -53,6 +53,8 @@ BUILD_RETRY = 30 * 60
 # which is longer than an agent run may take (agent.RUN_LIMIT). arq's timeout doesn't stop the build's
 # thread, so the lock, not the job, says a build is still running.
 BUILD_LOCK = 20 * 60
+# Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
+AGENT_OFF = "The research agent is off and no live source has this player."
 
 _llm = None
 
@@ -253,8 +255,11 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
     """A fan picked this exact athlete in search: their player, created and bound if new.
 
     Returns (player_id, created). A new player's card is published at once from the source with
-    profile and news pending; the caller queues the fixtures refresh and the agent build.
+    profile and news pending (none with the agent off: the source's page is the whole page); the caller
+    queues the fixtures refresh and the agent build.
     """
+    from .config import AGENT
+
     sport = structured.sport_name(adapter, ref)
 
     def create(db: Session) -> tuple[int, dict[str, Any] | None]:
@@ -269,7 +274,7 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         _claim(db, player.id, ref.system, ref.athlete_id, ref.profile_url)
         # The plain name becomes an alias only if it's free: typing it keeps finding whoever had it first.
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
-        card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile", "news"]}
+        card = {**placeholder_card(player), "status": "ready", "version": 1} | ({"pending": ["profile", "news"]} if AGENT else {})
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
         return player.id, card
 
@@ -533,6 +538,8 @@ def apply_live(player_id: int, update_: dict[str, Any]) -> None:
 
 def fan_message(raw: str) -> str:
     """What a fan sees when a build fails. The raw provider text stays in the worker log."""
+    if raw == AGENT_OFF:
+        return "No live source has this player, so there's no page to show yet."
     text = raw.lower()
     if "budget_exceeded" in text:
         # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.
@@ -611,8 +618,11 @@ def build_card(player_id: int) -> None:
     if not token:
         return
     try:
-        from .config import CARD_MAX_AGE
+        from .config import AGENT, CARD_MAX_AGE
 
+        if not AGENT:
+            _without_agent(player_id)
+            return
         with session() as db:
             player = db.get(Player, player_id)
             card_row = db.get(PlayerCard, player_id)
@@ -704,6 +714,29 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
     return landed
 
 
+def _without_agent(player_id: int) -> None:
+    """A build with the research agent off (config.AGENT). A player bound to a source has their page from
+    it, whole without the profile and news: one still waiting for the agent stops waiting, and one whose
+    page was the agent's (a failed build tried again) is read from the source. A player no source has
+    can't be built."""
+    with session() as db:
+        card_row = db.get(PlayerCard, player_id)
+        if card_row is None or (card_row.status == "ready" and not (card_row.card or {}).get("pending")):
+            return
+        reread = card_row.status != "ready"
+        if structured.binding(db, player_id) is None:
+            card = None
+        else:
+            card ={k: v for k, v in (card_row.card or {}).items() if k != "pending"} | {"status": "ready", "version": (card_row.version or 0) + 1}
+            card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+    if card is None:
+        mark_failed(player_id, AGENT_OFF)
+        return
+    bus.store_card(player_id, card)
+    if reread:
+        structured.refresh(player_id)
+
+
 def refresh_live(player_id: int) -> None:
     lock = f"live:{player_id}"
     token = bus.try_lock(lock, 300)  # longer than a live check may take (agent.LIVE_LIMIT)
@@ -746,11 +779,14 @@ def rebuild_due(card: PlayerCard, now: datetime) -> bool:
 
     A failed card is left alone: it waits for a fan to retry. A ready card whose rebuild failed waits
     for its back_off, and none is queued again while its build is still running, so nothing loops.
+    With the agent off (config.AGENT) a ready card has nothing to gain from one: only a first build and
+    a source's page still waiting for the agent are settled (_without_agent).
     """
-    from .config import CARD_MAX_AGE
+    from .config import AGENT, CARD_MAX_AGE
 
     stale = card.built_at is None or card.built_at < now - timedelta(seconds=CARD_MAX_AGE)
-    wanted = card.status == "building" or (card.status == "ready" and stale)
+    waiting = stale if AGENT else bool((card.card or {}).get("pending"))
+    wanted = card.status == "building" or (card.status == "ready" and waiting)
     return wanted and not bus.is_locked(f"build:{card.player_id}") and not _backing_off(card.player_id, now)
 
 

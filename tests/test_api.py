@@ -1010,3 +1010,36 @@ def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
     monkeypatch.setattr(starters, "offer", lambda db, fan: asked.append(fan) or offer)
     answer = api.call("GET", "/api/starters", fan="fan")
     assert answer.status_code == 200 and answer.json() == {"sports": offer} and asked == ["fan"]
+
+
+# ---------------------------------------------------------------- without the research agent
+
+
+def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_a_model(api, monkeypatch):
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): an esports pro picked in search is followed from PandaScore
+    # with no build queued, and a name or registry athlete no source has is refused, counted nowhere.
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "AGENT", False)
+    tenz = PlayerRef("pandascore_esports", "8742", "TenZ", ["1"], ["Sentinels"], game="Valorant")
+    monkeypatch.setitem(ADAPTERS, tenz.system, KNOWN[tenz.system])  # PandaScore runs only with its token
+    monkeypatch.setattr(ADAPTERS[tenz.system], "player", lambda athlete_id, league=None: tenz)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, True))
+    answer = api.call("POST", "/api/follows", fan="fan", body={"system": tenz.system, "athlete_id": tenz.athlete_id})
+    assert answer.status_code == 200 and answer.json()["player_id"] == 5
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def nowhere(person):
+        return None
+
+    monkeypatch.setattr(server, "_resolve", nowhere)
+    monkeypatch.setattr(pipeline, "start_from_registry", lambda person: pytest.fail("a page for the agent was started"))
+    for body in ({"qid": "Q99", "sport": "football"}, {"query": "Brand New Name"}):
+        answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
+        assert answer.status_code == 404 and answer.json()["detail"].startswith("No live source has this player yet"), body
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert api.call("GET", "/api/config").json()["research"] is False

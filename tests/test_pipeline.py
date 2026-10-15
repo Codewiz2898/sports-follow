@@ -202,6 +202,52 @@ def test_a_failed_first_build_waits_for_a_fan():
     assert not pipeline.rebuild_due(card, NOW)
 
 
+# ---------------------------------------------------------------- without the research agent
+
+
+def test_without_the_agent_a_sources_page_is_whole_and_nothing_waits_for_a_model(monkeypatch, redis):
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): pages bound to a source are settled once, from the source,
+    # and never sent to the agent; a page no source has fails, saying so.
+    picked = Player(id=1, slug="tenz", name="TenZ", sport="Valorant", status="active", teams=["Sentinels"])
+    retried = Player(id=2, slug="aspas", name="aspas", sport="Valorant", status="active", teams=["MIBR"])
+    typed = Player(id=3, slug="someone", name="Someone", sport=None, status="active", teams=[])
+    cards = [
+        # Picked in search while the agent was on: the source's page, waiting for the profile and news.
+        PlayerCard(player_id=1, status="ready", card={"status": "ready", "pending": ["profile", "news"], "upcoming": [{"title": "Sentinels v G2"}]}, version=4, built_at=None),
+        PlayerCard(player_id=2, status="building", card={"status": "building"}, version=2, built_at=None),  # a failed build, tried again
+        PlayerCard(player_id=3, status="building", card={"status": "building"}, version=0, built_at=None),  # a typed name no source has
+    ]
+    db = FakeDb(picked, retried, typed, *cards)
+    reread, published = [], {}
+    monkeypatch.setattr(config, "AGENT", False)
+    monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(pipeline, "llm", lambda: pytest.fail("the model was asked"))
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: SimpleNamespace(adapter="pandascore_esports") if player_id in (1, 2) else None)
+    monkeypatch.setattr(structured, "refresh", reread.append)
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: published.__setitem__(player_id, card))
+    for minute in range(0, 24 * 60, 30):  # a day of the scheduler's ticks
+        for player_id in pipeline.due_work(NOW + timedelta(minutes=minute)).builds:
+            pipeline.build_card(player_id)
+    assert [(c.status, c.version) for c in cards[:2]] == [("ready", 5), ("ready", 3)]  # each settled once
+    assert published[1] == {"status": "ready", "version": 5, "upcoming": [{"title": "Sentinels v G2"}]}  # nothing pending
+    assert reread == [2]  # the agent's page gives way to the source's
+    assert (cards[2].status, cards[2].card["error"]) == ("failed", "No live source has this player, so there's no page to show yet.")
+
+
+@pytest.mark.parametrize("agent, pending", [(True, ["profile", "news"]), (False, None)])
+def test_a_pick_waits_for_the_profile_and_news_only_with_the_agent(monkeypatch, agent, pending):
+    db = FakeDb()
+    monkeypatch.setattr(config, "AGENT", agent)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "record", lambda player_id, ref: None)
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: None)
+    ref = SimpleNamespace(system="pandascore_esports", athlete_id="8742", name="TenZ", team_ids=["1"], team_names=["Sentinels"], profile_url=None, game="Valorant")
+    _, created = pipeline.start_from_pick(SimpleNamespace(sport="esports"), ref)
+    [card] = [r for r in db.rows if isinstance(r, PlayerCard)]
+    assert created and card.status == "ready" and card.card.get("pending") == pending
+
+
 # ---------------------------------------------------------------- one build at a time
 
 

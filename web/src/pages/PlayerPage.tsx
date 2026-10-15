@@ -178,7 +178,8 @@ export function PlayerPage() {
           </ErrorBoundary>
 
           <p className="tiny muted">
-            Page built {relative(card.built_at, now)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
+            {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
+            {card.built_at && `Page built ${relative(card.built_at, now)} from ${card.sources?.length ?? 0} sources. `}{card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
           </p>
         </>
       )}

@@ -331,6 +331,24 @@ def test_a_query_with_nothing_to_search_by_lists_no_one_and_offers_no_research(m
     assert out["researchable"] and asked == ["lebron"]
 
 
+# ---------------------------------------------------------------- without the research agent
+
+
+def test_without_the_agent_search_lists_only_athletes_a_source_has(monkeypatch):
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): a page comes from a live source or not at all, so an
+    # athlete only the agent could build isn't listed, and no research is offered.
+    from sports_follow import config
+
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True)
+    carwin = SearchResult(key="espn:mma:2335", name="Shane Carwin", sport="MMA", detail="", live_scores=False)
+    searching(monkeypatch, espn=[warne, carwin])
+    out = search.run(None, "shane")
+    assert sorted(r["name"] for r in out["results"]) == ["Shane Carwin", "Shane Warne"] and out["researchable"]
+    monkeypatch.setattr(config, "AGENT", False)
+    out = search.run(None, "shane")
+    assert [r["name"] for r in out["results"]] == ["Shane Warne"] and not out["researchable"]
+
+
 # ---------------------------------------------------------------- native spellings
 
 

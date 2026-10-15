@@ -400,8 +400,11 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
-    """What this server offers the app: its name, the model, the ways to sign in, who to write to about privacy."""
-    return {"name": APP_NAME, "model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    """What this server offers the app: its name, the model and whether it researches players no source has
+    (config.AGENT), the ways to sign in, who to write to about privacy."""
+    from .config import AGENT
+
+    return {"name": APP_NAME, "model": MODEL, "research": AGENT, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -478,7 +481,12 @@ async def research_used(fan: str) -> int:
 async def take_research(fan: str, address: str | None, used_up: str) -> list[str]:
     """Count one AI research against the fan's UTC day, their address's day and this hour across all
     fans. Returns the counts taken, for give_back_research; when any is used up, nothing is counted and
-    the fan gets a 429 (`used_up` when it's their own three)."""
+    the fan gets a 429 (`used_up` when it's their own three). With the agent off (config.AGENT) there's
+    no research to count: a player no source has can't be followed, a 404."""
+    from .config import AGENT
+
+    if not AGENT:
+        raise HTTPException(404, "No live source has this player yet, so there's no page to follow. Pick an athlete from the search results.")
     now = datetime.now(timezone.utc)
     limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
     if address:
@@ -572,6 +580,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     matching birth date; one no source confirms is built by the research agent, which counts as an
     AI research.
     """
+    from .config import AGENT
+
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
@@ -626,10 +636,11 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         raise
     if created:
         # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
-        # of minutes. Without one: the agent builds the whole page.
+        # of minutes (none with the agent off). Without one: the agent builds the whole page.
         if ref is not None:
             await enqueue("refresh_structured", player_id)
-        await enqueue("build_card", player_id)
+        if ref is None or AGENT:
+            await enqueue("build_card", player_id)
     return player_id
 
 

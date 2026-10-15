@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useAccount } from '../account'
 import { api, type AthletePreview, type SearchResult } from '../api'
 import { PlayerBand, ResultsList, SectionHead, StatGrid, UpcomingList } from '../components/Blocks'
 import { BackIcon, PlusIcon } from '../components/Icons'
@@ -53,6 +54,8 @@ export function AthletePage() {
     following: false, followers: 0, live_scores: true, inactive: false, exact: true,
   })
   const noSource = preview?.live === false
+  // Without the research agent (GET /api/config), a page comes from a live source or not at all.
+  const research = useAccount().config?.research !== false
 
   return (
     <>
@@ -62,15 +65,17 @@ export function AthletePage() {
         meta={about}
         back={<Link to={hint.back ?? '/search'} className="btn icon" aria-label="Back to search"><BackIcon width={20} height={20} /></Link>}
         actions={
-          <button type="button" className="btn primary" disabled={!name || Boolean(actions.pending)} onClick={follow}>
+          <button type="button" className="btn primary" disabled={!name || Boolean(actions.pending) || (noSource && !research)} onClick={follow}>
             {actions.pending ? <span className="spinner" /> : <PlusIcon width={16} height={16} />}Follow
           </button>
         }
       >
         <p className="small soft" style={{ fontWeight: 600 }}>
           {noSource
-            ? 'No live source has this athlete yet, so the research agent builds their page (1 to 3 minutes). That uses one of your AI researches for today.'
-            : 'Live scores start right away. News and background follow in about two minutes.'}
+            ? research
+              ? 'No live source has this athlete yet, so the research agent builds their page (1 to 3 minutes). That uses one of your AI researches for today.'
+              : "No live source has this athlete yet, so there's no page to follow."
+            : research ? 'Live scores start right away. News and background follow in about two minutes.' : 'Live scores, games and stats start right away.'}
         </p>
       </PlayerBand>
       {(error || actions.error) && <div className="error-box">{error || actions.error}</div>}
