@@ -370,7 +370,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   a player's next match appears only once the draw is made (a day or two ahead). Singles only.
 - Chess: Lichess relays most elite and many open events, but not every tournament. A player's events
   are found from their Lichess FIDE page and broadcast search; Lichess rate-limits hard, so reads are
-  one request a second and a rate limit fails the refresh instead of dropping results.
+  one request a second and a rate limit on a broadcast fails the refresh instead of dropping results.
+  The FIDE pages share one limit with every server in a datacenter, so they're read a few times a day
+  and, when refused, the last copy stands in; FIDE records come from FIDE search, which has no limit.
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
 - Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);

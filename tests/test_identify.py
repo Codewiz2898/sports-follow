@@ -42,7 +42,6 @@ RECORDED = {
     SEARCH.format("Ahmed%20Salah"): "espn/search-ahmed-salah",
     ATHLETE.format("soccer/athletes/135729"): "espn/soccer-athlete-ahmed-salah-hosni",
     f"{FIDE}?q=Ahmed%20Salah": "lichess/fide-search-ahmed-salah",
-    f"{FIDE}/10605746": "lichess/fide-player-ahmed-salah-as",
     SEARCH.format("Nikola%20Joki%C4%87"): "espn/search-nikola-jokic",
     SEARCH.format("Max%20Verstappen"): "espn/search-max-verstappen",
     SEARCH.format("Jos%20Butler"): "espn/search-jos-butler",
@@ -50,10 +49,8 @@ RECORDED = {
     f"{FIDE}?q=butler": "lichess/fide-search-butler",
     SEARCH.format("Jos%20Sutmuller"): "espn/search-jos-sutmuller",
     f"{FIDE}?q=Jos%20Sutmuller": "lichess/fide-search-jos-sutmuller",
-    f"{FIDE}/1007858": "lichess/fide-player-jos-sutmuller",
     SEARCH.format("Gukesh%20Dommaraju"): "espn/search-gukesh-dommaraju",
     f"{FIDE}?q=Gukesh%20Dommaraju": "lichess/fide-search-gukesh-dommaraju",
-    f"{FIDE}/46616543": "lichess/fide-player-gukesh",
 }
 
 
@@ -143,7 +140,7 @@ def test_a_longer_name_holding_the_typed_one_isnt_the_one_typed(web):
     # both words; the strongest active one, Ahmed As Salah, is rated 2049 and untitled, so he isn't taken
     # either, and the agent decides.
     assert structured.identify("Ahmed Salah") is None
-    assert web.asked == [SEARCH.format("Ahmed%20Salah"), ATHLETE.format("soccer/athletes/135729"), f"{FIDE}?q=Ahmed%20Salah", f"{FIDE}/10605746"]
+    assert web.asked == [SEARCH.format("Ahmed%20Salah"), ATHLETE.format("soccer/athletes/135729"), f"{FIDE}?q=Ahmed%20Salah"]
 
 
 # ---------------------------------------------------------------- typos
@@ -213,7 +210,7 @@ def test_a_name_only_an_amateur_on_fides_list_has_goes_to_the_agent(web):
     # FIDE lists one, active and rated 2079 but untitled: a fan typing the name may mean anyone, so only a
     # titled or 2200+ active player is taken to be the one meant.
     assert structured.identify("Jos Sutmuller") is None
-    assert web.asked == [SEARCH.format("Jos%20Sutmuller"), f"{FIDE}?q=Jos%20Sutmuller", f"{FIDE}/1007858"]
+    assert web.asked == [SEARCH.format("Jos%20Sutmuller"), f"{FIDE}?q=Jos%20Sutmuller"]
 
 
 # ---------------------------------------------------------------- legal names
@@ -225,4 +222,4 @@ def test_a_chess_player_listed_by_an_initial_is_found_by_their_full_name(web):
     # list's other Dommaraju, Chaithanya Ramkumar, has no "Gukesh" in his name and isn't a candidate.
     found = structured.identify("Gukesh Dommaraju")
     assert found and (found[0].system, found[1].athlete_id, found[1].name) == ("lichess_chess", "46616543", "Gukesh D")
-    assert web.asked == [SEARCH.format("Gukesh%20Dommaraju"), f"{FIDE}?q=Gukesh%20Dommaraju", f"{FIDE}/46616543"]
+    assert web.asked == [SEARCH.format("Gukesh%20Dommaraju"), f"{FIDE}?q=Gukesh%20Dommaraju"]
