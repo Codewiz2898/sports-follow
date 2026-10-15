@@ -10,9 +10,11 @@ label), so nothing in this package imports a source at load time.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from functools import lru_cache
-from typing import Any
+from typing import Any, overload
 
+from .. import controls
 from ..config import SPORTS
 from . import basketball, chess, cricket, esports, football, tennis
 from .base import Found, Seen, Sport
@@ -28,8 +30,39 @@ def pick(every: tuple[Sport, ...], keys: set[str]) -> tuple[Sport, ...]:
     return tuple(s for s in every if not keys or s.key in keys)
 
 
-# The sports this build runs.
-ENABLED: tuple[Sport, ...] = pick(ALL, SPORTS)
+# The sports this build may run (SPORTS_FOLLOW_SPORTS): the admin panel turns them off and on within these.
+ALLOWED: tuple[Sport, ...] = pick(ALL, SPORTS)
+
+
+class Running(Sequence[Sport]):
+    """The sports that run now (ENABLED): those this build may run, less those the admin panel has turned
+    off (controls.py). Read again on each use, so turning one off or on needs no restart."""
+
+    def now(self) -> tuple[Sport, ...]:
+        off = controls.current().sports_off
+        return tuple(s for s in ALLOWED if s.key not in off)
+
+    @overload
+    def __getitem__(self, i: int) -> Sport: ...
+    @overload
+    def __getitem__(self, i: slice) -> tuple[Sport, ...]: ...
+    def __getitem__(self, i: int | slice) -> Sport | tuple[Sport, ...]:
+        return self.now()[i]
+
+    def __len__(self) -> int:
+        return len(self.now())
+
+    def __iter__(self) -> Iterator[Sport]:
+        return iter(self.now())
+
+    def __contains__(self, sport: object) -> bool:
+        return sport in self.now()
+
+    def __repr__(self) -> str:
+        return f"Running{self.now()!r}"
+
+
+ENABLED: Sequence[Sport] = Running()
 
 
 def on(name: str | None) -> bool:
@@ -133,4 +166,4 @@ def names_of(sport: Sport) -> list[str]:
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]
+__all__ = ["ALL", "ALLOWED", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]
