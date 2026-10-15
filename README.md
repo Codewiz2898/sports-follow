@@ -223,12 +223,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
-  before the first render and kept on the device. How a sport is drawn is its view,
-  `web/src/sports/<sport>.tsx` (its live board, its ground as line art behind Today's cards (`backdrop`),
-  how its line reads, its score in a few characters for a live player's pill (`short`)), plus one line in
-  `VIEWS`; a sport without one shows the plain score and no line art. The Android app (`mobile/`) takes
-  the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text on it,
-  softer text on it, and itself as text on ink).
+  before the first render and kept on the device. How a sport is drawn is in three places, each with one
+  line in its list: its facts, `web/src/sports/facts/<sport>.ts` (in `FACTS`: the scoreboard kinds it
+  draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
+  `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
+  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`) and `mobile/src/sports/<sport>.tsx` (in
+  `BOARDS`). A sport without them shows the plain score and no line art. The Android app (`mobile/`)
+  takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
+  on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
   no restart: it turns sports and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the

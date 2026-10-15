@@ -1,7 +1,7 @@
 """The web app takes the list of sports from the API rather than keeping its own, and names no source
 (CLAUDE.md, "Code organization"). tests/test_sports.py and tests/test_sources.py hold shared Python to
-none. In web/src only a sport's view (web/src/sports/<sport>.tsx: its live board and line art) names a sport,
-and only its own. Where a file still names something it should take from the API (a source, today), it
+none. In web/src only a sport's own modules (web/src/sports/<sport>.tsx, its live board, and
+web/src/sports/facts/<sport>.ts, its line art and wording) name a sport, and only their own. Where a file still names something it should take from the API (a source, today), it
 has a limit instead: how many times it names it now. A file over its limit has gained a name; a file
 under it should have its limit lowered here, so code moved toward the rule can't drift back.
 
@@ -85,8 +85,9 @@ MOBILE = WEB.parent.parent / "mobile" / "src"
 
 
 def test_the_android_app_names_no_sport_and_no_source():
-    """The Android app (mobile/src) starts out taking everything from the API, so it has no limits: no
-    file names a sport or a source. A sport's own view there, when one comes, gets the web's VIEWS rule."""
+    """The Android app (mobile/src) takes everything from the API and the shared facts, so it has no limits:
+    no file names a sport or a source, not even a sport's own board (mobile/src/sports/<sport>.tsx), which
+    gets its key from its facts."""
     wanted = set().union(*(names_of(s) for s in sports.ALL)) | {k.lower() for k in KNOWN}
     found = named(wanted, MOBILE)
     assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)

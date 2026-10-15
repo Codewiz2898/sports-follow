@@ -21,6 +21,9 @@ export function Rail({ title, note, all, max, head, columns = 1, gap = GAP, chil
   const cards = Children.toArray(children)
   const count = cards.length
   const shown = open || !all || max == null ? cards : cards.slice(0, max)
+  // Where each card starts, as each one is laid out (in any order, so with gaps until all are); one past the
+  // end, from a row that had more cards, is harmless: Android stops at the end.
+  const offsets = starts.filter((x) => x != null).sort((a, b) => a - b)
 
   const allCard = all && count >= ALL_FROM ? (
     <Pressable key="all" onPress={() => setOpen(!open)} accessibilityRole="button" accessibilityState={{ expanded: open }} style={[s.all, open && { width: '100%', minHeight: 96 }]}>
@@ -47,7 +50,7 @@ export function Rail({ title, note, all, max, head, columns = 1, gap = GAP, chil
           style={s.row}
           contentContainerStyle={[s.rowContent, { gap }]}
           decelerationRate="fast"
-          snapToOffsets={starts.length ? starts : undefined}
+          snapToOffsets={offsets.length ? offsets : undefined}
         >
           {[...shown, allCard].filter(Boolean).map((card, i) => (
             <View key={i} onLayout={(e) => { const x = e.nativeEvent.layout.x - GUTTER; setStarts((p) => (p[i] === x ? p : Object.assign([...p], { [i]: x }))) }}>

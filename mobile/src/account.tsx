@@ -1,6 +1,6 @@
 // Who this phone is signed in as (sports_follow/accounts.py), as the web's account.tsx: asked once at start,
 // which also renews the session. Signing in, out or deleting the account starts the app over: every list and
-// cached answer belonged to the fan this phone was a moment ago (the root layout remounts on `epoch`).
+// cached answer belonged to the fan this phone was a moment ago (the fan's providers start over on `epoch`).
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'

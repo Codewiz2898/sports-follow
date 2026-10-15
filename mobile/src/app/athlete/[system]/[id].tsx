@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { Linking, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { safeHref } from '../../../../../web/src/format'
+import { previewAbout } from '../../../../../web/src/search'
 import { useAccount } from '../../../account'
 import { api, type AthletePreview, type SearchResult } from '../../../api'
 import { PlayerBand, ResultsList, StatGrid, UpcomingList } from '../../../blocks'
@@ -46,13 +47,10 @@ export default function AthleteScreen() {
   }, [system, id, league, sport])
 
   const name = preview?.name ?? hint?.name ?? ''
-  const born = preview?.born ? `born ${preview.born.slice(0, 4)}` : hint?.born ? `born ${hint.born}` : null
   const athleteSport = preview?.sport ?? hint?.sport ?? sport
   const tone = toneOf(sports, athleteSport)
   // Who they are, after the sport (the band names the sport on its own).
-  const about = preview
-    ? [...preview.teams, preview.league && ['nba', 'wnba', 'atp', 'wta'].includes(preview.league) ? preview.league.toUpperCase() : null, preview.country, born].filter(Boolean).join(' · ')
-    : hint?.detail ?? ''
+  const about = previewAbout(preview, hint)
   const detail = [athleteSport, about].filter(Boolean).join(' · ')
   // A registry athlete found in a live source follows by that source's id; one no source has, by registry id.
   const follow = () => actions.follow({

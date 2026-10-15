@@ -3,7 +3,7 @@
 // and the Android app (mobile/), so it touches nothing of a browser's.
 
 import { relative } from './format'
-import type { Research, SearchResponse, SearchResult, SportInfo, StarterSport } from './types'
+import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport } from './types'
 
 export interface Section { key: string; title: string; items: SearchResult[] }
 
@@ -81,4 +81,14 @@ export function starterNames(sports: StarterSport[] | null, n: number): string[]
     for (const s of sports ?? []) if (i < s.players.length && out.length < n) out.push(s.players[i].name)
   }
   return out
+}
+
+/** An athlete's preview, who they are after the sport (the band names the sport on its own): their teams, the
+ * league when it's one fans know by its letters (the NBA, the WTA), their country, and when they were born
+ * (`born`: the preview's, else the search result's year). Before the preview loads, the result's detail. */
+export function previewAbout(preview: AthletePreview | null, hint: SearchResult | null): string {
+  const born = preview?.born ? `born ${preview.born.slice(0, 4)}` : hint?.born ? `born ${hint.born}` : null
+  if (!preview) return hint?.detail ?? ''
+  const league = preview.league && ['nba', 'wnba', 'atp', 'wta'].includes(preview.league) ? preview.league.toUpperCase() : null
+  return [...preview.teams, league, preview.country, born].filter(Boolean).join(' · ')
 }

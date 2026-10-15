@@ -11,7 +11,7 @@ function TennisBoard({ state, clock, pal }: BoardProps<TennisState>) {
       {state.players.map((p) => (
         <View key={p.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 6 }}>
-            <Title pal={pal} style={{ color: p.winner ? pal.text : pal.text }}>{p.name}</Title>
+            <Title pal={pal} style={{ color: p.winner ? pal.text : pal.muted }}>{p.name}</Title>
             {p.seed ? <Text style={[t.tiny, { color: pal.muted }]}> ({p.seed})</Text> : null}
             {p.serving ? <View accessibilityLabel="serving" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colour.live, marginLeft: 8 }} /> : null}
           </View>

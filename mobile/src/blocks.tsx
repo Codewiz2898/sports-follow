@@ -8,7 +8,7 @@ import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewSt
 import { Image } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
-import { comingCard, liveLine, playerLine, resultCard, statusLine, WON, wordSize, type GameResult } from '../../web/src/lines'
+import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
 import { Backdrop } from './art'
@@ -369,7 +369,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
     <Surface style={b.list}>
       {items.map((r, i) => {
         const wl = outcome(r.result, teams)
-        const score = /^(Won|Lost|Drew)\s+/.test(r.result) ? r.result.replace(/^(Won|Lost|Drew)\s+/, '') : null
+        const score = bareScore(r.result)
         const url = safeHref(r.source_url)
         return (
           <View key={`${r.title}-${r.date ?? ''}`} style={[b.listItem, i < items.length - 1 && b.listLine, { flexDirection: 'row', gap: 12, alignItems: 'flex-start' }]}>

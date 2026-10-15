@@ -26,11 +26,6 @@ interface Following {
 const FollowingContext = createContext<Following | null>(null)
 const NO_PROGRESS: Record<number, string[]> = {}
 
-/** The fan's players as the server lists them, and any this app followed that the list doesn't have yet. */
-function withLocal(players: Card[], prev: Card[]): Card[] {
-  return [...players, ...prev.filter((c) => !players.some((p) => p.player_id === c.player_id))]
-}
-
 export function FollowingProvider({ children }: { children: ReactNode }) {
   const { epoch } = useAccount()
   const [cards, setCards] = useState<Card[]>([])
@@ -43,21 +38,26 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   // Counts follows and unfollows begun and finished: a reload that overlapped one may have read the list
   // from before it, so its answer is dropped and the next one wins.
   const writes = useRef(0)
+  // Which fan this is (account.tsx's epoch): an answer asked for by an earlier one is dropped.
+  const fan = useRef(epoch)
+  fan.current = epoch
   const versions = useRef('')
   const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
 
+  // The list as the server has it now: a player unfollowed elsewhere (or a whole account signed out) goes.
   const reload = useCallback(async () => {
     const before = writes.current
+    const asked = fan.current
     try {
       const { players } = await api.following()
-      if (writes.current !== before) return
-      setCards((prev) => withLocal(players, prev))
+      if (writes.current !== before || fan.current !== asked) return
+      setCards(players)
       setLoaded(true)
       setFailed(false)
       const now = players.map((c) => `${c.player_id}:${c.version}`).sort().join(',')
       if (now !== versions.current) { versions.current = now; setHeard((n) => n + 1) }
     } catch {
-      setFailed(true)
+      if (fan.current === asked) setFailed(true)
     }
   }, [])
 
@@ -66,6 +66,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setCards([])
     setLoaded(false)
+    setFailed(false)
     versions.current = ''
     const start = () => {
       clearInterval(timer.current)

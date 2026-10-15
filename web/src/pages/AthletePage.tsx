@@ -6,6 +6,7 @@ import { PlayerBand, ResultsList, SectionHead, StatGrid, UpcomingList } from '..
 import { BackIcon, PlusIcon } from '../components/Icons'
 import { useSearchActions } from '../components/Search'
 import { safeHref } from '../format'
+import { previewAbout } from '../search'
 
 /**
  * An athlete from search, before following: who they are, their next game, their last game with
@@ -39,12 +40,9 @@ export function AthletePage() {
   }, [system, id, league, sport, navigate])
 
   const name = preview?.name ?? hint.result?.name ?? ''
-  const born = preview?.born ? `born ${preview.born.slice(0, 4)}` : hint.result?.born ? `born ${hint.result.born}` : null
   const athleteSport = preview?.sport ?? hint.result?.sport ?? sport
   // Who they are, after the sport (the band names the sport on its own).
-  const about = preview
-    ? [...preview.teams, preview.league && ['nba', 'wnba', 'atp', 'wta'].includes(preview.league) ? preview.league.toUpperCase() : null, preview.country, born].filter(Boolean).join(' · ')
-    : hint.result?.detail ?? ''
+  const about = previewAbout(preview, hint.result ?? null)
   const detail = [athleteSport, about].filter(Boolean).join(' · ')
   // A registry athlete found in a live source follows by that source's id; one no source has, by registry id.
   const follow = () => actions.follow({

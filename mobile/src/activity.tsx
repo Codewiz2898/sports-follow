@@ -37,6 +37,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
     setItems([])
+    setNext(null)
+    setLoaded(false)
+    setMutedIds(new Set())
     setSeen(null)
     setSeenRead(false)
     AsyncStorage.getItem(SEEN).then((v) => { if (v) setSeen(Number(v) || 0) }).catch(() => {}).finally(() => setSeenRead(true))
@@ -65,11 +68,16 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   // New moments, when the follow list came back changed.
   useEffect(() => {
     if (!heard || !who) return
-    api.activity().then((r) => setItems((prev) => {
-      const newest = prev[0]?.id ?? 0
-      return [...r.items.filter((i) => i.id > newest), ...prev]
-    })).catch(() => {})
-  }, [heard, who])
+    let stale = false
+    api.activity().then((r) => {
+      if (stale) return
+      setItems((prev) => {
+        const newest = prev[0]?.id ?? 0
+        return [...r.items.filter((i) => i.id > newest), ...prev]
+      })
+    }).catch(() => {})
+    return () => { stale = true }
+  }, [heard, who, epoch])
 
   const more = useCallback(async () => {
     if (next == null) return
