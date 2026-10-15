@@ -16,11 +16,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from time import perf_counter
+from typing import Any
 
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -188,6 +189,22 @@ async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> 
         log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
 
 
+STARTERS_DONE = "starters:refreshed"  # set once a refresh finishes; a worker starting without it queues one
+
+
+async def refresh_starters(ctx) -> None:
+    """Each sport's top players for new fans, found in their sources with their next games: once a day,
+    and when a worker starts with no refresh in the last day (startup), say on a fresh server. One at a
+    time: a restart's refresh and 04:40's don't both ask the sources."""
+    if not await ctx["redis"].set("starters:refreshing", "1", nx=True, ex=2400):
+        return
+    try:
+        await in_lane('refresh', starters.refresh)
+        await ctx["redis"].set(STARTERS_DONE, "1", ex=23 * 3600)
+    finally:
+        await ctx["redis"].delete("starters:refreshing")
+
+
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
     ended = await asyncio.to_thread(accounts.purge_expired)
@@ -234,6 +251,10 @@ async def startup(ctx) -> None:
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
+    redis = ctx.get("redis")
+    if redis is not None and not await redis.exists(STARTERS_DONE):
+        # A deploy restarts the worker several times a day: only one that finds no recent refresh queues one.
+        await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
 
 
 async def wind_down(ctx) -> None:
@@ -284,10 +305,12 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers)]
+    functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
+        cron(_logged(refresh_starters), hour=4, minute=40, second=0, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),

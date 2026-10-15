@@ -6,9 +6,10 @@
     .venv/bin/python -m sports_follow.players remove 17                    # a player's page, by its id
     .venv/bin/python -m sports_follow.players remove Q1234                 # or a registry id, or a source id (espn_cricket:253802)
     .venv/bin/python -m sports_follow.players restore Q1234                # take the decision back
-    .venv/bin/python -m sports_follow.players starter add Q1234            # offer them to new fans (starters.py)
+    .venv/bin/python -m sports_follow.players starter add Q1234            # pin them for new fans (starters.py)
     .venv/bin/python -m sports_follow.players starter remove Q1234
-    .venv/bin/python -m sports_follow.players starter list
+    .venv/bin/python -m sports_follow.players starter list                 # the pins, and each sport's top players
+    .venv/bin/python -m sports_follow.players starter refresh              # find the top players now (daily anyway)
 
 What's decided is kept in athlete_override, which every registry import respects (registry.upsert and the
 stale and unseen deletes), so it holds on a running server without a deploy and the weekly import doesn't
@@ -19,8 +20,10 @@ in Redis, deletes their registry rows and blocks them: imports never write them 
 following leave out their ids in the sources. A name typed for research isn't blocked; the agent decides
 who that is. Removing shows what it will delete and asks first, unless given --yes.
 
-Starters are the athletes a new fan is offered in each sport, in the order they were added (starters.py).
-Adding one pins them too, so no import drops them; removing the athlete takes their starter row with them.
+Starters are the athletes a new fan is offered in each sport (starters.py): who's playing now, the most
+followed, and the best known, found by themselves; pinned starters come first, in the order they were
+added. Pinning one keeps them in the registry too, so no import drops them; removing the athlete takes their
+starter row with them.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, logs, registry, search, sports, starters
-from .adapters import ADAPTERS, KNOWN, AdapterError
+from .adapters import KNOWN, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, EventPlayer, Follow, Moment, Player, PlayerIdentity
 
@@ -211,7 +214,7 @@ def check_source(person: registry.Person) -> str:
     if system is None:
         raise Refused(f"no live source runs for {person.name} ({person.sport}) in this build, so new fans can't follow them live")
     try:
-        found = registry.resolve(person) if system == registry.live_system(person.sport) else ADAPTERS[system].player(person.ids[system], person.league)
+        found = registry.find_in_source(person)
     except AdapterError as exc:
         raise Refused(f"couldn't reach {system} to check {person.name}: {exc}") from exc
     if found is None:
@@ -278,8 +281,9 @@ def main(argv: list[str], ask: Any = input) -> int:
     b.add_argument("ref")
     b.add_argument("--sport")
     s = sub.add_parser("starter", help="the athletes a new fan is offered in each sport").add_subparsers(dest="action", required=True)
-    s.add_parser("list", help="every starter, by sport and order")
-    for action, text in (("add", "offer a registry athlete to new fans, after the sport's others"), ("remove", "stop offering them")):
+    s.add_parser("list", help="the pinned starters, by sport and order, and each sport's top players")
+    s.add_parser("refresh", help="find each sport's top players and their next games now (the worker does it daily)")
+    for action, text in (("add", "pin a registry athlete for new fans, after the sport's other pins"), ("remove", "unpin them")):
         x = s.add_parser(action, help=text)
         x.add_argument("ref", help="a registry id (Q1234), a player id or system:id")
         x.add_argument("--sport")
@@ -326,7 +330,14 @@ def main(argv: list[str], ask: Any = input) -> int:
                     why = " (not offered: its registry row is gone)" if a is None else "" if search.offered(db, [a], None) else " (not offered: no running source has their id)"
                     print(f"{s.sport:10}  {s.position:3}  {s.qid:20}  {a.name if a else '?'}{why}")
                 if not rows:
-                    print("No starters yet: new fans are offered nobody.")
+                    print("Nothing pinned: new fans are offered who's playing, the most followed and the best known.")
+                for sport in sports.ENABLED:
+                    top = starters.top_pool(sport.key)
+                    names: dict[str, str] = {q: n for q, n in db.execute(select(Athlete.qid, Athlete.name).where(Athlete.sport == sport.key, Athlete.qid.in_([e["qid"] for e in top])))} if top else {}
+                    print(f"{sport.key:10}  top: {', '.join(str(names.get(e['qid']) or e['qid']) for e in top) or 'none (refresh, or no running source)'}")
+        elif args.command == "starter" and args.action == "refresh":
+            for sport, n in starters.refresh().items():
+                print(f"{sport:10}  {n} top players playing lately or soon")
         elif args.command == "starter" and args.action == "add":
             with session() as db:
                 people = [registry.Person.of(a) for a in starter_athletes(find(db, args.ref, args.sport), args.sport)]

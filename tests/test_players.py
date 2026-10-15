@@ -22,7 +22,8 @@ from sqlalchemy.orm import sessionmaker
 from types import SimpleNamespace
 
 from sports_follow import adapters, players, registry, sports, starters
-from sports_follow.adapters import Adapter, PlayerRef, Roster, Rostered, pubg
+from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
+from sports_follow.adapters.budget import RateLimited
 from sports_follow.models import Athlete, AthleteOverride, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -50,7 +51,7 @@ def db(monkeypatch):
         finally:
             s.close()
 
-    for module in (players, registry):
+    for module in (players, registry, starters):
         monkeypatch.setattr(module, "session", unit)
     cleared: list[int] = []
     monkeypatch.setattr(players, "forget_cards", cleared.extend)
@@ -195,6 +196,18 @@ def live_source(monkeypatch):
     return asked
 
 
+@pytest.fixture(autouse=True)
+def pools(monkeypatch):
+    """The top pools and live cards starters.py keeps in Redis, in memory here."""
+    state = SimpleNamespace(top={}, cards={})
+    monkeypatch.setattr(starters, "CACHE_SECONDS", -1)  # every offer worked out afresh
+    monkeypatch.setattr(starters, "_cache", {})
+    monkeypatch.setattr(starters, "top_pool", lambda sport: state.top.get(sport, []))
+    monkeypatch.setattr(starters, "store_top", lambda sport, entries: state.top.__setitem__(sport, entries))
+    monkeypatch.setattr(starters, "hot_cards", lambda ids: {i: state.cards[i] for i in ids if i in state.cards})
+    return state
+
+
 def chess_starters(db) -> str:
     """Two chess players a live source knows by id, and one it doesn't. Returns the source's system."""
     system = registry.live_system("chess")
@@ -292,3 +305,109 @@ def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, cap
     assert asked == [("second_esports", "77")] and live_source == []  # never searched for by name in the first
     [row] = starters.offer(db, "fan")[0]["players"]
     assert (row["system"], row["athlete_id"]) == ("second_esports", "77")
+
+
+NOW = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+
+
+def test_starters_mix_whos_playing_the_most_followed_and_the_best_known(db, pools):
+    system = chess_starters(db)
+
+    def page(pid: int, name: str, fans: int) -> None:
+        db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Chess"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0),
+                    *[Follow(fan_id=f"f{i}", player_id=pid, alert_rules={}) for i in range(fans)]])
+
+    page(1, "Live Larry", 3)
+    page(2, "Soon Sam", 2)
+    page(3, "Idle Ida", 1)
+    db.commit()
+    # The worker's live cards: one on now, one in two hours. The morning's top pool: one tomorrow, one within the hour.
+    pools.cards = {1: {"live": {"is_live": True, "headline": "Round 3"}}, 2: {"upcoming": [{"title": "Round 4", "start_utc": (NOW + timedelta(hours=2)).isoformat()}]}}
+    pools.top["chess"] = [{"qid": "Q10", "start_utc": (NOW + timedelta(hours=30)).isoformat(), "title": "Tata Steel", "competition": "Tata Steel"},
+                          {"qid": "Q11", "start_utc": (NOW + timedelta(hours=1)).isoformat(), "title": "Norway Chess", "competition": "Norway Chess"}]
+    [offer] = starters.offer(db, "f0", NOW)
+    # The pools take turns (playing, followed, top); someone in two keeps their first place, and playing now
+    # outranks being followed: Soon Sam came in as followed and plays in two hours.
+    assert [(r["name"], r["why"]) for r in offer["players"]] == [
+        ("Live Larry", "live"), ("Gukesh D", "top"), ("R Praggnanandhaa", "soon"), ("Soon Sam", "soon"), ("Idle Ida", "followed")]
+    assert [r["following"] for r in offer["players"]] == [True, False, False, True, True]  # f0 follows every page
+    assert offer["players"][1]["next"]["title"] == "Tata Steel" and offer["players"][3]["next"]["title"] == "Round 4"
+
+
+def test_with_nobody_followed_or_pinned_the_best_known_are_offered(db, pools):
+    chess_starters(db)
+    pools.top["chess"] = [{"qid": "Q11", "start_utc": (NOW + timedelta(days=3)).isoformat(), "title": "Cup", "competition": "Cup"}]
+    [offer] = starters.offer(db, "fan", NOW)
+    assert [(r["name"], r["why"]) for r in offer["players"]] == [("R Praggnanandhaa", "top")]
+
+
+def test_the_top_pool_is_the_best_known_with_a_game_soon(db, pools, monkeypatch):
+    system = registry.live_system("chess")
+    if system is None:
+        pytest.skip("no live chess source in this build")
+    monkeypatch.setattr(starters, "STARTERS_HOME_COUNTRY", "India")
+    registry.upsert(db, [athlete("Q20", "chess", "Norway Star", {system: "a"}, sitelinks=50, country="Norway"),
+                         athlete("Q21", "chess", "Home Hero", {system: "b"}, sitelinks=30, country="India"),  # counts 60
+                         athlete("Q22", "chess", "Played Out", {system: "c"}, sitelinks=40),
+                         athlete("Q23", "chess", "Far Off", {system: "d"}, sitelinks=35),
+                         athlete("Q24", "chess", "Retired", {system: "e"}, sitelinks=90, current=False),
+                         athlete("Q25", "chess", "Not Found", sitelinks=80),
+                         athlete("Q26", "chess", "Roster Only", {system: "f"}, sitelinks=0)])  # no Wikipedia knows them
+    db.commit()
+
+    def game(hours: float, status: str = "scheduled") -> Fixture:
+        return Fixture(source_id="g", title="A game", competition="Cup", start_utc=NOW + timedelta(hours=hours), venue=None, status=status, team_ids=[], locator={})
+
+    games = {"Q20": [game(5)], "Q21": [game(-1, "live")], "Q22": [game(-30, "final")], "Q23": [game(24 * 40)]}
+    source = SimpleNamespace(fixtures=lambda ref: games[ref])
+    asked: list[str] = []
+    monkeypatch.setattr(registry, "find_in_source", lambda person: asked.append(person.qid) or ((source, person.qid) if person.ids else None))
+    assert starters.refresh(NOW)["chess"] == 3
+    # Best known first (Home Hero counts double); Played Out played yesterday, so is kept with no next game;
+    # Far Off's only game is past the window, and Not Found isn't in the source.
+    assert [(e["qid"], e["start_utc"]) for e in pools.top["chess"]] == [
+        ("Q21", (NOW - timedelta(hours=1)).isoformat()), ("Q20", (NOW + timedelta(hours=5)).isoformat()), ("Q22", None)]
+    assert "Q26" not in asked and "Q24" not in asked  # unknown to Wikipedia, or retired: never asked about
+
+    def unreachable(ref):
+        if ref == "Q21":
+            raise AdapterError("source down for this one")
+        return games[ref]
+
+    source.fixtures = unreachable
+    starters.refresh(NOW)
+    assert [e["qid"] for e in pools.top["chess"]] == ["Q20", "Q22"]  # left out, the rest still asked
+
+    def broken(ref):
+        if ref == "Q20":
+            raise KeyError("a field the source dropped")
+        return games[ref]
+
+    source.fixtures = broken
+    starters.refresh(NOW)
+    assert [e["qid"] for e in pools.top["chess"]] == ["Q21", "Q22"]  # any error leaves one athlete out, not the sport
+
+    def spent(ref):
+        raise RateLimited("allowance spent")
+
+    source.fixtures = spent
+    monkeypatch.setattr(starters, "LIMITED_PAUSE", 0)
+    assert starters.refresh(NOW)["chess"] == 0  # waits once, then stops asking: every other call would be refused too
+
+
+def test_a_top_players_game_that_is_over_isnt_shown_and_a_live_card_wins(db, pools):
+    system = chess_starters(db)
+    pools.top["chess"] = [{"qid": "Q10", "start_utc": (NOW - timedelta(hours=6)).isoformat(), "title": "This morning", "competition": "Cup"},
+                          {"qid": "Q11", "start_utc": (NOW + timedelta(days=2)).isoformat(), "title": "Saturday", "competition": "Cup"}]
+    # Praggnanandhaa has a page, nobody follows it, and its card says he's playing now.
+    db.add(Player(id=9, slug="pragg", name="R Praggnanandhaa", sport="Chess", wikidata_qid="Q11"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=9, status="ready", card={"live": {"is_live": True, "headline": "Round 5"}}),
+                PlayerIdentity(player_id=9, system=system, external_id="pragg", confidence=1.0)])
+    db.commit()
+    players_offered = starters.offer(db, "fan", NOW)[0]["players"]
+    gukesh, pragg = sorted(players_offered, key=lambda r: r["name"])
+    assert (gukesh["why"], gukesh["next"]) == ("top", None)  # this morning's game is over: no "Next game" on the tile
+    assert (pragg["why"], pragg["next"]["live"]) == ("live", "Round 5")  # his card knows better than Saturday's fixture

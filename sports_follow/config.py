@@ -75,6 +75,10 @@ RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 
 # (adapters.base.LiveSearch): a source may take one request at a time, with its live games in the same line.
 SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_PER_MINUTE", 20))
 
+# The country whose athletes count double among the best-known players new fans are offered (starters.py),
+# as the registry writes it ("India"). Empty: nobody counts double.
+STARTERS_HOME_COUNTRY = os.environ.get("SPORTS_FOLLOW_STARTERS_HOME_COUNTRY", "India").strip()
+
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters
 # read unofficial endpoints whose terms forbid automated and commercial use.

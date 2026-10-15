@@ -216,11 +216,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
   for following.
-- **Starter players**, the few a new fan is offered in each sport (the welcome, an empty Today, search's
-  "Try"), are rows too, set with the same command: `starter add <registry id>` (it checks the sport's
-  live source has them, and pins them), `starter remove` (which leaves them pinned; `restore` unpins),
-  `starter list`. A sport that's turned off offers none, and removing a player takes their starter row
-  with them (`sports_follow/starters.py`).
+- **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
+  "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
+  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
+  with a game soon, which the worker finds in their sources once a day. The operator can pin a few
+  ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
+  them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
+  player takes their pin with them.
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
@@ -316,6 +320,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are |
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |

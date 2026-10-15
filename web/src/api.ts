@@ -242,11 +242,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
+/** A player offered to a new fan, and why (starters.py): pinned by the operator, playing (live, started by
+ * the clock, or soon), among the most followed, or among the best known with a game soon. */
+export type Starter = SearchResult & { why: 'pinned' | 'live' | 'started' | 'soon' | 'followed' | 'top' }
+
 /** A sport's starters: the few players a new fan is offered there (GET /api/starters), as search results. */
 export interface StarterSport {
   key: string
   label: string
-  players: SearchResult[]
+  players: Starter[]
 }
 
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
