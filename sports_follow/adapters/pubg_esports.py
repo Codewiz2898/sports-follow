@@ -396,8 +396,8 @@ class PubgEsports(Adapter):
         return ref.athlete_id if self.id_pattern.fullmatch(ref.athlete_id) else pro_id((ref.team_ids or [""])[0], ref.name)
 
     def rekey(self, ref: PlayerRef) -> PlayerRef | None:
-        """A pro followed by an event account, under their id now (pro_id), so their lines reach their
-        fans; None for one followed by it already."""
+        """A pro bound by an event account, under their id now (pro_id), so their lines reach their fans
+        (structured.rekey_bound); None for one bound by it already."""
         pro = self._pro(ref)
         return replace(ref, athlete_id=pro) if pro and pro != ref.athlete_id else None
 

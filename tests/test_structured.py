@@ -368,7 +368,7 @@ def finished(monkeypatch, scorecard: bool) -> tuple[Event, PlayerCard, list]:
     returns the event, the card and the final polls applied."""
     source = FinishedSource(scorecard)
     player = Player(id=1, slug="p1", name="P1", sport="Hurling", status="active", teams=["A"])
-    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={}, confidence=0.8,
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
                         locator={"system": source.system, "athlete_id": "A1", "name": "P1", "team_ids": ["T1"], "team_names": ["A"]})
     event = Event(id=10, key="fake_source:1", sport="Hurling", title="A vs B", status="live", start_utc=NOW - timedelta(hours=2))
     live = {"is_live": True, "event_id": 10, "event": "A vs B", "score": "A 2 – 1 B", "clock": "90'+3"}
@@ -399,21 +399,34 @@ def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
     assert card_row.card["upcoming"] == []
 
 
-def test_a_player_the_source_names_otherwise_now_is_bound_again_by_that_id(monkeypatch, redis):
-    # BHA-216: a source that has changed the id it gives a player (rekey) moves their binding to it, so the
-    # lines it keys by that id reach their fans; a player it hasn't renamed stays as bound.
-    finished(monkeypatch, scorecard=True)
-    source = structured.ADAPTERS["fake_source"]
-    recorded, read = [], []
+class RenamingSource:
+    """A source that now names A1 and B1 (its old ids) A2 and B2."""
+
+    system = "fake_source"
+
+    def rekey(self, ref):
+        return replace(ref, athlete_id=ref.athlete_id[0] + "2") if ref.athlete_id.endswith("1") else None
+
+
+def test_every_player_bound_to_a_source_that_renamed_them_moves_to_the_new_id(monkeypatch, redis, caplog):
+    # BHA-216: followed or not, so no old id stays on a page in search beside the registry's row. A player
+    # whose new id another holds (fans had followed both of a pro's rows) stays, named once a day to merge.
+    def bound(player_id, athlete_id):
+        return SourceBinding(player_id=player_id, purpose="fixtures", adapter="fake_source", confidence=0.8, locator={"system": "fake_source", "athlete_id": athlete_id, "name": "P", "team_ids": ["T"], "team_names": ["T"]})
+
+    holders = iter([None, 9])  # nobody holds A2; player 9 holds B2
+    db = FakeDb(bound(1, "A1"), bound(2, "B1"), bound(3, "C2"), answers={"PlayerIdentity.player_id": lambda: next(holders)})
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    recorded = []
     monkeypatch.setattr(structured, "record", lambda player_id, ref, confidence=1.0: recorded.append((player_id, ref.athlete_id, ref.name, confidence)) or True)
-    monkeypatch.setattr(source, "fixtures", lambda ref, fixtures=source.fixtures: read.append(ref.athlete_id) or fixtures(ref))
-    monkeypatch.setattr(source, "rekey", lambda ref: replace(ref, athlete_id="A2") if ref.athlete_id == "A1" else None, raising=False)
-    structured.refresh(1)
-    assert recorded == [(1, "A2", "P1", 0.8)] and read == ["A2"]
-    recorded.clear()
-    monkeypatch.setattr(source, "rekey", lambda ref: None)
-    structured.refresh(1)
-    assert recorded == []
+    assert structured.rekey_bound(RenamingSource()) == 1
+    assert recorded == [(1, "A2", "P", 0.8)]
+    assert "player 2 (B1) is player 9 (B2); merge them" in caplog.text
+    caplog.clear()
+    holders = iter([None, 9])
+    structured.rekey_bound(RenamingSource())
+    assert "merge them" not in caplog.text  # once a day
+    assert structured.rekey_bound(SimpleNamespace(system="other_source")) == 0  # a source that never renamed anyone
 
 
 def test_a_game_moved_later_is_disarmed_by_its_own_sports_lead(monkeypatch):
