@@ -257,7 +257,9 @@ def main(argv: list[str], ask: Any = input) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="what's been added and removed")
     a = sub.add_parser("add", help="pin a registry athlete (by id), or add one no source lists (--sport and --name)")
-    a.add_argument("qid", nargs="?", help="a registry id to pin: Q1234, pandascore:34470")
+    # A registry id is a Wikidata id, or the id of a source that lists its own athletes (roster_prefix).
+    prefixes = [f"{p}…" for p in dict.fromkeys(getattr(x, "roster_prefix", None) for x in KNOWN.values()) if p]
+    a.add_argument("qid", nargs="?", help=f"a registry id to pin: {', '.join(['Q1234', *prefixes])}")
     a.add_argument("--sport")
     a.add_argument("--name")
     a.add_argument("--alias", action="append", default=[])

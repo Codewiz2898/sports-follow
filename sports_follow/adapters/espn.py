@@ -221,6 +221,12 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
     return None
 
 
+def research(adapters: list[Adapter]) -> str:
+    """ESPN's API as the research agent's prompt points to it, with the running adapters' leagues as examples."""
+    leagues = [league for a in adapters for league in getattr(a, "research_leagues", ())]
+    return f"{SITE}/{{sport}}/{{league}}/scoreboard, .../summary?event={{id}}" + (f"; leagues like {', '.join(leagues)}" if leagues else "")
+
+
 PROVIDER = Provider(
     name="ESPN",
     url="https://www.espn.com",
@@ -229,6 +235,7 @@ PROVIDER = Provider(
     licensed=False,
     search=LiveSearch(find=search, by_word=True),
     recognise=recognise,
+    research=research,
     budgets=(BUDGET,),
 )
 
@@ -238,6 +245,7 @@ class EspnAdapter:
 
     espn_uid: str  # the sport's prefix in ESPN's uids: "s:600~" football, "s:200~" cricket
     espn_leagues: dict[str, str] | None = None  # ESPN league id -> the league the adapter reads, where it reads only some
+    research_leagues: tuple[str, ...] = ()  # its leagues the research agent is shown as examples: "basketball/nba"
     provider = PROVIDER
 
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
