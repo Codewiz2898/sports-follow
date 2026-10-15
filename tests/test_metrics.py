@@ -250,6 +250,21 @@ def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_righ
         assert 'job="' in rule["expr"] or 'job=~"' in rule["expr"], rule["uid"]  # never another app's series
 
 
+def test_the_uptime_rule_reads_the_check_apply_alerts_makes():
+    """The uptime check (apply-alerts.sh) is Grafana's probes asking /api/health from outside; its rule reads
+    their probe_success by the check's job, which apply-alerts.sh names: renaming one stops the other."""
+    import json
+    import re
+    from pathlib import Path
+
+    grafana = Path(__file__).resolve().parent.parent / "deploy" / "grafana"
+    job = re.search(r"^UPTIME_JOB=(\S+)$", (grafana / "apply-alerts.sh").read_text(), re.M)
+    assert job
+    rule = next(r for r in json.loads((grafana / "rules.json").read_text()) if r["uid"] == "sf-unreachable")
+    assert f'probe_success{{job="{job[1]}"}}' in rule["expr"]
+    assert (rule["op"], rule["threshold"]) == ("lt", 1)  # no probe had a healthy answer in the window
+
+
 # ---------------------------------------------------------------- the readings' queries, on a real database
 
 

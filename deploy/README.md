@@ -401,12 +401,17 @@ Alerts come by **email from Grafana Cloud**, on its free tier.
   backups, off-site backups, containers and the certificate.
 - **The rules:** they live in `grafana/rules.json` and run in Grafana Cloud, so they still work when the
   server is down. That's one of the things they catch.
+- **The uptime check:** Grafana's Synthetic Monitoring asks `https://<domain>/api/health` every minute
+  from two of its probes, nearest to India first, as a fan's phone would. It catches what the server
+  can't see from inside: DNS, Caddy, the certificate or the firewall. That's 86,400 checks a month, within
+  the free tier's 100,000.
 
 Each one emails when it starts, again every 6 hours while it lasts, and "Resolved" when it clears:
 
 | Rule | Emails when |
 |---|---|
 | The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
+| Fans can't reach the app | for 3 minutes, no probe outside the server got a healthy answer from `/api/health` |
 | The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
 | Disk | any disk is over 80% full for 10 minutes |
 | Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |
@@ -456,10 +461,14 @@ first failures after a deploy count:
    GRAFANA_SA_TOKEN=<the token>
    ALERT_EMAIL=<where alerts go>
    ```
-4. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
+4. **Uptime check:** in the stack's Grafana, open **Testing & synthetics → Synthetics** and click **Get
+   started**, once. `apply-alerts.sh` then makes the check with the same token. It reads the app's address
+   from the production environment's `APP_URL` variable (through `gh`), or from `APP_URL=https://<domain>`
+   in `grafana-admin.env`.
+5. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
    ```bash
    deploy/push-secrets.sh deploy@<server-ip>   # grafana.env to the server; Alloy starts
-   deploy/grafana/apply-alerts.sh --test       # the rules, the email contact point and policy, and a test email
+   deploy/grafana/apply-alerts.sh --test       # the rules, the uptime check, the email contact point and policy, and a test email
    ```
 
 Run `apply-alerts.sh` again after changing `rules.json`. A rule whose query changed starts over: if it

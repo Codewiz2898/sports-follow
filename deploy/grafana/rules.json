@@ -10,6 +10,15 @@
     "no_data": "OK"
   },
   {
+    "uid": "sf-unreachable",
+    "title": "Fans can't reach the app",
+    "for": "0s",
+    "expr": "max(max_over_time(probe_success{job=\"sports-follow-uptime\"}[3m]))",
+    "op": "lt",
+    "threshold": 1,
+    "summary": "For 3 minutes, none of Grafana's probes outside the server got a healthy answer from /api/health: DNS, Caddy, the certificate or the firewall, or the app itself (the other alerts say if it's inside). Grafana's Synthetics page shows each probe's error."
+  },
+  {
     "uid": "sf-checks-stale",
     "title": "The server checks stopped running",
     "for": "5m",
