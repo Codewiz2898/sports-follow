@@ -21,7 +21,9 @@ log = logging.getLogger("sports_follow.mail")
 
 RESEND_URL = "https://api.resend.com/emails"
 KEY_PATH = Path.home() / ".config" / "sports-follow" / "resend-key"
-MAIL_FROM = os.environ.get("SPORTS_FOLLOW_MAIL_FROM", "")  # "stann <signin@your-domain>"
+# The address sign-in codes come from ("signin@your-domain"), sent as "<APP_NAME> <address>" so the name in
+# the inbox follows a rename. One given as "Name <address>" is sent as it is.
+MAIL_FROM = os.environ.get("SPORTS_FOLLOW_MAIL_FROM", "").strip()
 MAIL_LOG = os.environ.get("SPORTS_FOLLOW_MAIL_LOG") == "1"
 
 _client = httpx.Client(timeout=15)
@@ -46,6 +48,10 @@ def configured(https: bool) -> bool:
     return bool(_key() and MAIL_FROM) or (MAIL_LOG and not https)
 
 
+def _sender() -> str:
+    return MAIL_FROM if "<" in MAIL_FROM else f"{APP_NAME} <{MAIL_FROM}>"
+
+
 def send_code(email: str, code: str) -> None:
     subject = f"{code} is your {APP_NAME} code"
     text = (
@@ -67,7 +73,7 @@ def send_code(email: str, code: str) -> None:
         log.warning("Sign-in code for %s: %s (SPORTS_FOLLOW_MAIL_LOG; nothing was emailed)", email, code)
         return
     try:
-        answer = _client.post(RESEND_URL, headers={"authorization": f"Bearer {_key()}"}, json={"from": MAIL_FROM, "to": [email], "subject": subject, "text": text, "html": body})
+        answer = _client.post(RESEND_URL, headers={"authorization": f"Bearer {_key()}"}, json={"from": _sender(), "to": [email], "subject": subject, "text": text, "html": body})
     except httpx.HTTPError as exc:
         raise MailError(f"Resend: {exc}") from exc
     if answer.status_code >= 300:

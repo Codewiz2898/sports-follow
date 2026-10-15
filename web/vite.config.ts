@@ -12,7 +12,8 @@ import { defineConfig, type Plugin } from 'vite'
  */
 function appName(): Plugin {
   const name: string = JSON.parse(readFileSync(new URL('../sports_follow/app.json', import.meta.url), 'utf8')).name
-  if (!name) throw new Error('sports_follow/app.json has no name')
+  // It goes in as written: into HTML, a JSON string and a quoted JS string (tests/test_app_name.py).
+  if (!name || /['"`&<>\\]/.test(name)) throw new Error(`sports_follow/app.json: the name ${JSON.stringify(name)} is empty or has a quote, &, < or > in it`)
   const fill = (text: string) => text.replaceAll('%APP_NAME%', name)
   const filled = ['manifest.webmanifest', 'sw.js']
   return {

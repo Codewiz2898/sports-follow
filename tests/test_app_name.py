@@ -31,7 +31,9 @@ def without_comments(ts: str) -> str:
 
 
 def test_the_name_is_written_once():
-    assert APP_NAME and APP_NAME == json.loads((PACKAGE / "app.json").read_text())["name"]
+    assert APP_NAME and APP_NAME == json.loads((PACKAGE / "app.json").read_text(encoding="utf-8"))["name"]
+    # The web build puts it in as written, into HTML, a JSON string and a quoted JS string (vite.config.ts).
+    assert not re.search(r"""['"`&<>\\]""", APP_NAME)
 
 
 def test_the_web_apps_files_are_filled_with_the_name_at_build_time():
@@ -68,9 +70,13 @@ def test_the_api_and_the_sign_in_email_say_the_name(api, monkeypatch):  # noqa: 
     assert api.call("GET", "/api/config").json()["name"] == APP_NAME
     sent = []
     monkeypatch.setattr(mail, "_key", lambda: "key")
-    monkeypatch.setattr(mail, "MAIL_FROM", f"{APP_NAME} <signin@example.com>")
+    monkeypatch.setattr(mail, "MAIL_FROM", "signin@example.com")
     monkeypatch.setattr(mail._client, "post", lambda url, headers, json: sent.append(json) or SimpleNamespace(status_code=200, text=""))
     mail.send_code("fan@example.com", "123456")
+    assert sent[0]["from"] == f"{APP_NAME} <signin@example.com>"
     assert sent[0]["subject"] == f"123456 is your {APP_NAME} code"
     assert APP_NAME in sent[0]["text"] and APP_NAME in sent[0]["html"]
+    monkeypatch.setattr(mail, "MAIL_FROM", "Sign-in <signin@example.com>")  # a sender given whole is sent as it is
+    mail.send_code("fan@example.com", "123456")
+    assert sent[1]["from"] == "Sign-in <signin@example.com>"
 
