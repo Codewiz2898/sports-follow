@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from sports_follow import moments
 from sports_follow.adapters import sportmonks, sportmonks_football as sm
 from sports_follow.adapters import budget
 
@@ -106,14 +107,29 @@ def test_a_live_match_has_score_clock_scorers_lines_and_moments():
     assert snap.lines[str(UNUSED)].headline == "On the bench"
     assert {"label": "Red", "value": "1"} in snap.lines[str(KEEPER)].stats  # a second yellow is a red
 
-    # Newest first; the coach's card and the ruled-out goal aren't moments.
+    # Newest first; the coach's card isn't a moment, and the goal VAR ruled out is marked so (its alert is corrected).
     assert [(m["clock"], m["kind"], m["text"]) for m in snap.moments] == [
+        ("62'", "DISALLOWED", "Ozan Tufan (Trabzonspor)"),
         ("60'", "RED", "A. Keeper (Galatasaray), second yellow"),
         ("45+2'", "GOAL", "Mohamed Salah (Trabzonspor), penalty"),
         ("30'", "GOAL", "A. Keeper (Galatasaray), own goal"),
         ("4'", "GOAL", "Mohamed Salah (Trabzonspor), assist Ozan Tufan"),
     ]
     assert snap.moments[-1]["athlete_ids"] == [str(STAR), str(SUB)]
+
+
+def test_a_goal_ruled_out_corrects_the_goals_alert():
+    # Ozan Tufan's 62' goal was told, keyed by its minute; Sportmonks has since rescinded it.
+    snap = sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=LINEUPS, events=EVENTS))
+
+    def seen(athlete: int) -> moments.Seen:
+        line = snap.lines[str(athlete)]
+        return moments.Seen(snap.status, snap.state, {"headline": line.headline, "stats": line.stats}, snap.score_label, snap.clock_label, events=snap.moments)
+
+    [f] = moments.detect("Football", "Ozan Tufan", str(SUB), seen(SUB), seen(SUB), [("goal", "goal@62'")])
+    assert (f.kind, f.title, f.detail) == ("correction", "Goal ruled out: Ozan Tufan", "goal:goal@62'")
+    # Mohamed Salah's goals stand.
+    assert moments.detect("Football", "Mohamed Salah", str(STAR), seen(STAR), seen(STAR), [("goal", "goal@4'"), ("goal", "goal@45+2'")]) == []
 
 
 def test_clock_in_stoppage_time_and_breaks():

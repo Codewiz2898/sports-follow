@@ -229,7 +229,7 @@ def test_quiet_hours_in_the_devices_timezone():
 
 def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypatch, caplog):
     now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
-    goal = SimpleNamespace(id=1, player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3))
+    goal = SimpleNamespace(id=1, player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3), corrects=None)
     answers = iter([[1], [goal]])  # the claim, then the claimed moments
 
     @contextmanager
@@ -346,14 +346,20 @@ def test_a_goal_says_what_it_did():
 
 
 def _told(polls: list[Seen]) -> list[tuple[str, str]]:
-    """What a fan hears over these polls: each moment once, by its key, as notify.record stores them."""
-    stored, told = set(), []
+    """What a fan hears over these polls: each moment once, by its key, as notify.record stores them, with
+    what was stored before to take back (notify.told); a correction only of a moment that was stored."""
+    stored: list[tuple[str, str]] = []
+    told = []
     for before, now in zip(polls, polls[1:]):
-        for f in detect("Football", "Mohamed Salah", "173896", before, now):
-            if (f.kind, f.detail) not in stored:
-                stored.add((f.kind, f.detail))
-                told.append((f.title, f.body))
+        for f in detect("Football", "Mohamed Salah", "173896", before, now, list(stored)):
+            if (f.kind, f.detail) in stored or (f.kind == "correction" and tuple(f.detail.split(":", 1)) not in stored):
+                continue
+            stored.append((f.kind, f.detail))
+            told.append((f.title, f.body))
     return told
+
+
+RULED_OUT = ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 25'")
 
 
 def test_a_goal_after_one_var_rules_out_is_told():
@@ -361,11 +367,12 @@ def test_a_goal_after_one_var_rules_out_is_told():
     # one. Keyed by the count, the 70' goal was "goal1" again and never told.
     ruled_out, real = goal("23'", id="101"), goal("70'", id="102")
     polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [ruled_out], clock="23'"), scored(0, 0, [], goals=0, clock="25'"), scored(1, 0, [real], clock="70'")]
-    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), RULED_OUT, ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 70'")]
     # A source without play ids (Sportmonks): by the goal's minute.
     polls = [scored(0, 0, [], goals=0), scored(1, 0, [goal("23'")]), scored(0, 0, [], goals=0), scored(1, 0, [goal("70'")])]
-    assert [body for _, body in _told(polls)] == ["Egypt 1 – 0 South Africa · 23'", "Egypt 1 – 0 South Africa · 70'"]
-    # The count dropping and coming back for the same goal (a glitch in the line) isn't a new goal.
+    assert [body for _, body in _told(polls)] == ["Egypt 1 – 0 South Africa · 23'", "Egypt 0 – 0 South Africa · 90'", "Egypt 1 – 0 South Africa · 70'"]
+    # The count dropping and coming back for the same goal (a glitch in the line) isn't a new goal, and,
+    # the goal still in the events, isn't one ruled out either.
     polls = [scored(0, 0, [], goals=0), scored(1, 0, [ruled_out]), scored(1, 0, [ruled_out], goals=0), scored(1, 0, [ruled_out])]
     assert len(_told(polls)) == 1
     # The assist on a goal VAR rules out doesn't hide the next one.
@@ -373,7 +380,27 @@ def test_a_goal_after_one_var_rules_out_is_told():
         return Seen("live", state=FOOTBALL, line=line("Started", Assists=str(n)), score="Egypt 1 – 0 South Africa", events=plays)
 
     polls = [assisted(0, []), assisted(1, [goal("23'", id="1", athlete_ids=["9", "173896"])]), assisted(0, []), assisted(1, [goal("70'", id="2", athlete_ids=["9", "173896"])])]
-    assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah", "Assist: Mohamed Salah"]
+    assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah", "Goal ruled out: no assist for Mohamed Salah", "Assist: Mohamed Salah"]
+
+
+def test_a_goal_var_rules_out_is_corrected_once():
+    told = [("goal", "goal@101")]
+    before = scored(1, 0, [goal("23'", id="101")], clock="23'")
+    [f] = detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'"), told)
+    assert (f.kind, f.level, f.title, f.body, f.detail, f.priority) == ("correction", "key", *RULED_OUT, "goal:goal@101", 85)
+    # Never told (scored and ruled out between two polls), or corrected already: nothing to take back.
+    assert detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'")) == []
+    assert detect("Football", "Mohamed Salah", "173896", before, scored(0, 0, [], goals=0, clock="25'"), [*told, ("correction", "goal:goal@101")]) == []
+    # Of two goals, the one gone from the events.
+    two = scored(2, 0, [goal("60'", id="102"), goal("23'", id="101")], goals=2)
+    assert kinds(detect("Football", "Mohamed Salah", "173896", two, scored(1, 0, [goal("23'", id="101")]), [*told, ("goal", "goal@102")])) == [("correction", "goal:goal@102")]
+    # Still in the events, credited to someone else: not ruled out.
+    assert detect("Football", "Mohamed Salah", "173896", before, scored(1, 0, [goal("23'", id="101", athlete_ids=["9"])], goals=0), told) == []
+    # The source marks it ruled out (Sportmonks keeps it, rescinded) before its count goes down: corrected
+    # then, and not again when the count follows.
+    marked = goal("23'", kind="DISALLOWED")
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(0, 0, [marked], clock="25'"), scored(0, 0, [marked], goals=0, clock="26'"), scored(0, 0, [marked], goals=0, clock="30'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), RULED_OUT]
 
 
 def test_priorities_rank_moments():

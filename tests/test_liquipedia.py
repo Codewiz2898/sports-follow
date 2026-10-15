@@ -276,6 +276,7 @@ def test_the_poller_tells_a_lobby_from_the_players_team(monkeypatch, redis):
 
     monkeypatch.setattr(structured, "session", lambda: db)
     monkeypatch.setattr(structured.notify, "record", record)
+    monkeypatch.setattr(structured.notify, "told", lambda db, player_id, event_id: [])
     monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)
     binding = {"adapter": "liquipedia_esports", "locator": {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, "cadence": 300}
     for x in (_lobby(0, date="2026-10-12 18:00:00"), _lobby(1), _lobby(2), _lobby(3), _lobby(3, finished=True)):

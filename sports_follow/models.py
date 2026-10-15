@@ -315,7 +315,7 @@ class Moment(Base):
     key: Mapped[str] = mapped_column(String(200), unique=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
     event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
-    kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | ...
+    kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | correction | ...
     level: Mapped[str] = mapped_column(String(10))  # key | minor
     priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")  # 0-100, moments.PRIORITY
     title: Mapped[str] = mapped_column(String(200))
@@ -324,6 +324,8 @@ class Moment(Base):
     created_at: Mapped[datetime] = _now()
     # When a sender claimed it (notify.send). Unclaimed moments are swept up by the tick.
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The moment a correction takes back (a goal VAR rules out): it goes only to the fans who were sent that one.
+    corrects: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)
 
 
 class Notification(Base):

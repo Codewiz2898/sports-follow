@@ -1,5 +1,5 @@
-"""Football: goals with what they did, assists and cards, a result from the player's side, form in apps
-and goals."""
+"""Football: goals with what they did, assists and cards, a goal VAR rules out, a result from the player's
+side, form in apps and goals."""
 
 from __future__ import annotations
 
@@ -136,6 +136,27 @@ class Football(Sport):
                     found.append(Found(kind, level, title.format(who=who), where, f"{kind}{n}"))
         if (was_line or {}).get("headline") == "On the bench" and (now.line or {}).get("headline") not in (None, "On the bench"):
             found.append(Found("on", "minor", f"{who} comes on", where))
+        return found
+
+    def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
+        """A goal fans were told about that VAR has ruled out, and the assist on it: one the source marks
+        so (DISALLOWED in its events), or, as the player's count goes down, the newest told ones gone from
+        its events. A goal still in the events isn't ruled out (the count dipping for a poll, or the goal
+        credited to someone else), nor is one already corrected."""
+        corrected = {d for k, d in told if k == "correction"}
+        found = []
+        for kind, label, at, title in (("goal", "Goals", 0, "Goal ruled out: {who}"), ("assist", "Assists", 1, "Goal ruled out: no assist for {who}")):
+            mine = [d for k, d in told if k == kind and f"{kind}:{d}" not in corrected]
+            marked = {_play_key(kind, 0, e) for e in now.events if e.get("kind") == "DISALLOWED" and (e.get("athlete_ids") or [])[at:at + 1] == [athlete_id]}
+            gone = [d for d in mine if d in marked]
+            if now.line is not None:
+                # As many as the count went down by (less those marked), newest first, of the ones the
+                # events no longer list as anyone's goal.
+                got = number(stat(now.line, label))
+                standing = {_play_key(kind, 0, e) for e in now.events if e.get("kind") == "GOAL"} | {f"{kind}{n}" for n in range(1, got + 1)}
+                down = number(stat(before.line, label)) - got - len(gone)
+                gone += [d for d in reversed(mine) if d not in standing and d not in gone][:max(down, 0)]
+            found += [Found("correction", "key", title.format(who=who), joined(now.score, now.clock), f"{kind}:{d}") for d in gone]
         return found
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

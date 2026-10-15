@@ -8,7 +8,7 @@ however many polls see the same fifty, fans hear about it once. Its level decide
            triple-doubles, chess games starting, a chess player winning, in trouble or turning a
            game around, the line-up (starting or on the bench), esports series and lobbies
            starting, a chicken dinner (Booyah), going top of a lobby, every result, upsets,
-           injuries, transfers
+           injuries, transfers, a goal ruled out
     minor  coming on, yellow cards, 20 points, double-doubles, each set, each esports map (with a Dota
            player's kills, deaths and assists once OpenDota has them), each
            battle royale game's placement, a chess player better, worse or level again, milestones
@@ -19,6 +19,10 @@ results only, or off.
 
 What counts as a moment in each sport is that sport's (sports/: start, final, during, left_out); this
 module runs them in order and keeps what every sport shares: line-ups, levels, priorities.
+
+A source can take a moment back: VAR rules out a goal fans were told about. The sport says so
+(taken_back) with a correction, which replaces the game's notification for the fans who were sent the
+moment it takes back, and reaches no one else (alerts.py).
 
 Each moment also has a priority, 0 to 100: how much it's worth interrupting someone for. A hundred
 outranks a fifty, a late equaliser outranks a fourth goal in a rout, a duck outranks being out for 20.
@@ -42,6 +46,7 @@ PRIORITY = {
     "final": 80, "start": 40, "lineup": 50, "goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30,
     "fifty": 70, "hundred": 90, "out": 60, "wickets": 70, "points": 30, "double": 30, "triple": 85,
     "set": 30, "map": 30, "kda": 30, "game": 30, "dinner": 90, "lead": 75, "upset": 90, "swing": 30, "news": 60,
+    "correction": 85,
 }
 
 
@@ -63,12 +68,15 @@ def news_kind(value: str | None) -> str | None:
     return text if text in NEWS_KINDS else None
 
 
-def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen) -> list[Found]:
+def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen, told: list[tuple[str, str]] | None = None) -> list[Found]:
     """What happened to this player between two polls.
 
     before=None is a first look at a game already under way (the worker just started, or the fan
     followed mid-innings): only a result is reported from it, so nobody hears "reaches 50" for runs
     scored an hour ago. A line-up is still news on a first look, as long as the game hasn't started.
+
+    `told` is what was found for the player in this game before (each moment's kind and detail, oldest
+    first, as notify.told reads them back): what the sport may take back.
     """
     rules = sports.of(sport)
     found: list[Found] = []
@@ -84,6 +92,7 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
         found += rules.after_final(who, athlete_id, now)
     if before is not None:
         found += rules.during(who, athlete_id, before, now)
+        found += rules.taken_back(who, athlete_id, before, now, told or [])
     for f in found:
         f.priority = f.priority or PRIORITY.get(f.kind, 50)
     return found

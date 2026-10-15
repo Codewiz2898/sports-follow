@@ -193,9 +193,10 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     moments = []
     for e in reversed(events):
         kind = (e.get("type") or {}).get("developer_name")
-        if e.get("rescinded") or not e.get("player_name") or kind not in (*_GOALS, "YELLOWCARD", "REDCARD", "YELLOWREDCARD"):
-            continue  # a coach's card has no player
-        tag = "GOAL" if kind in _GOALS else "YELLOW" if kind == "YELLOWCARD" else "RED"
+        if not e.get("player_name") or kind not in (*_GOALS, "YELLOWCARD", "REDCARD", "YELLOWREDCARD") or (e.get("rescinded") and kind not in _GOALS):
+            continue  # a coach's card has no player; a card taken back is none
+        # A goal VAR rules out stays, marked, so the goal's alert is corrected (sports.football).
+        tag = ("DISALLOWED" if e.get("rescinded") else "GOAL") if kind in _GOALS else "YELLOW" if kind == "YELLOWCARD" else "RED"
         text = f"{e['player_name']} ({names.get(e.get('participant_id'), '')})".replace(" ()", "")
         if kind == "OWNGOAL":
             text += ", own goal"
