@@ -52,7 +52,8 @@ TOP_CANDIDATES = 30  # the best-known athletes a sport's refresh looks at
 TOP_SECONDS = 300  # and the longest it spends on them: a source taking one request at a time (Lichess) is shared with live games
 TOP_TTL = 3 * 86400  # a refresh's pool outlasts a day or two of failed refreshes
 LIMITED_PAUSE = 65  # seconds a sport's refresh waits, once, when a source's allowance is spent: a minute's comes back
-FOLLOWED_LOOKED_AT = 200  # the most-followed players of a sport whose cards are read for "playing"
+FOLLOWED_LOOKED_AT = 50  # the most-followed players of a sport whose live cards are read for "playing"
+CACHE_SECONDS = 60  # what a sport offers, the same for every fan, is worked out at most this often (a process)
 
 
 # ---------------------------------------------------------------- pinned: the operator's picks
@@ -130,7 +131,9 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
     kept: dict[str, int] = {}
     for sport in sports.ENABLED:
         with session() as db:
-            rows = db.scalars(select(Athlete).where(Athlete.sport == sport.key, Athlete.current).order_by(_known().desc(), Athlete.id).limit(TOP_CANDIDATES)).all()
+            # Only athletes some Wikipedia knows: a sport's roster-imported pros (esports) all have none, and
+            # among ties the order would be the import's, and the checks would spend a scarce allowance.
+            rows = db.scalars(select(Athlete).where(Athlete.sport == sport.key, Athlete.current, Athlete.sitelinks > 0).order_by(_known().desc(), Athlete.id).limit(TOP_CANDIDATES)).all()
             people = [registry.Person.of(a) for a in rows]
         entries: list[dict[str, Any]] = []
         waited = False
@@ -156,6 +159,10 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
                 continue
             except AdapterError as exc:
                 log.info("starters: %s (%s) left out: %s", person.name, sport.key, exc)
+                queue.pop(0)
+                continue
+            except Exception:
+                log.exception("starters: %s (%s) left out", person.name, sport.key)
                 queue.pop(0)
                 continue
             queue.pop(0)
@@ -229,6 +236,8 @@ def _playing(db: Session, followed: list[Player], top: list[Offered], fan: str |
             on.append((p, nxt, "live"))
         elif nxt and (why := _on(_when(nxt.get("start_utc")), now)) == "soon":
             on.append((p, nxt, why))  # a followed player's card knows whether a started game is live
+    on.sort(key=lambda o: (o[2] != "live", str(o[1].get("start_utc") or "")))
+    on = on[:POOL]
     rows = {r.player_id: r for r in search.offered_players(db, [p for p, _, _ in on], fan)}
     playing: list[Offered] = []
     for p, nxt, why in on:
@@ -236,14 +245,14 @@ def _playing(db: Session, followed: list[Player], top: list[Offered], fan: str |
             r.next = nxt
             playing.append((r, why))
     for r, _ in top:
-        why = _on(_when((r.next or {}).get("start_utc")), now)
+        why = "live" if (r.next or {}).get("live") else _on(_when((r.next or {}).get("start_utc")), now)
         if why is not None:
             playing.append((r, why))
     order = {"live": 0, "started": 1, "soon": 2}
     return sorted(playing, key=lambda o: (order[o[1]], (o[0].next or {}).get("start_utc") or ""))
 
 
-def _top(db: Session, sport: str, fan: str | None) -> list[Offered]:
+def _top(db: Session, sport: str, fan: str | None, now: datetime) -> list[Offered]:
     entries = top_pool(sport)
     if not entries:
         return []
@@ -252,7 +261,9 @@ def _top(db: Session, sport: str, fan: str | None) -> list[Offered]:
     out: list[Offered] = []
     for a, r in search.offered_pairs(db, [by_qid[e["qid"]] for e in entries if e["qid"] in by_qid], fan):
         game = games[a.qid]
-        if game.get("start_utc") and not (r.next or {}).get("live"):  # a card that says live knows better than the morning's list
+        start = _when(game.get("start_utc"))
+        # The morning's next game, unless their own card says what's next, or it's over by now.
+        if r.next is None and start is not None and start >= now - STARTED:
             r.next = {"title": game["title"], "start_utc": game["start_utc"], "competition": game["competition"]}
         out.append((r, "top"))
     return out
@@ -265,29 +276,48 @@ def _taking_turns(pools: list[list[Offered]]) -> Iterable[Offered]:
                 yield pool[i]
 
 
+_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def _sport_offer(db: Session, sport: sports.Sport, now: datetime) -> list[dict[str, Any]]:
+    """What a sport offers anyone, in order: pinned, then the pools in turn, up to PER_SPORT."""
+    pinned = [(r, "pinned") for r in search.offered(db, _pinned(db, sport.key), None)]
+    followed_players = _most_followed(db, sport)
+    followed = [(r, "followed") for r in search.offered_players(db, followed_players[:POOL], None)]
+    top = _top(db, sport.key, None, now)
+    playing = _playing(db, followed_players, top, None, now)
+    at: dict[Any, int] = {}  # where each player already is in the list
+    players: list[dict[str, Any]] = []
+    for r, why in [*pinned, *_taking_turns([playing[:POOL], followed, top[:POOL]])]:
+        who = r.player_id or r.key
+        if who in at:
+            # Offered twice: playing now says more than being followed or known, wherever they came first.
+            if why in PLAYING and players[at[who]]["why"] in ("followed", "top"):
+                players[at[who]] |= {"why": why, "next": r.next}
+            continue
+        if len(players) < PER_SPORT:
+            at[who] = len(players)
+            players.append({**search.public(r), "why": why})
+    return players
+
+
 def offer(db: Session, fan: str | None, now: datetime | None = None) -> list[dict[str, Any]]:
     """What a new fan is offered: each running sport with anyone to offer, in the order the app lists
-    sports, with its starters as result rows ({"key", "label", "players"}), each saying why ("why")."""
+    sports, with its starters as result rows ({"key", "label", "players"}), each saying why ("why") and
+    whether this fan follows them. What a sport offers is the same for everyone, so it's worked out at
+    most every CACHE_SECONDS; the fan's own follows are filled in each time."""
     now = now or datetime.now(timezone.utc)
     out = []
     for sport in sports.ENABLED:
-        pinned = [(r, "pinned") for r in search.offered(db, _pinned(db, sport.key), fan)]
-        followed_players = _most_followed(db, sport)
-        followed = [(r, "followed") for r in search.offered_players(db, followed_players[:POOL], fan)]
-        top = _top(db, sport.key, fan)
-        playing = _playing(db, followed_players, top, fan, now)
-        at: dict[Any, int] = {}  # where each player already is in the list
-        players: list[dict[str, Any]] = []
-        for r, why in [*pinned, *_taking_turns([playing[:POOL], followed, top[:POOL]])]:
-            who = r.player_id or r.key
-            if who in at:
-                # Offered twice: playing now says more than being followed or known, wherever they came first.
-                if why in PLAYING and players[at[who]]["why"] in ("followed", "top"):
-                    players[at[who]] |= {"why": why, "next": r.next}
-                continue
-            if len(players) < PER_SPORT:
-                at[who] = len(players)
-                players.append({**search.public(r), "why": why})
-        if players:
-            out.append({"key": sport.key, "label": sport.label, "players": players})
+        cached = _cache.get(sport.key)
+        if cached is None or time.monotonic() - cached[0] > CACHE_SECONDS:
+            cached = (time.monotonic(), _sport_offer(db, sport, now))
+            _cache[sport.key] = cached
+        if cached[1]:
+            out.append({"key": sport.key, "label": sport.label, "players": [dict(p) for p in cached[1]]})
+    ids = [p["player_id"] for s in out for p in s["players"] if p.get("player_id")]
+    mine = set(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan, Follow.player_id.in_(ids)))) if fan and ids else set()
+    for s in out:
+        for p in s["players"]:
+            p["following"] = p.get("player_id") in mine
     return out

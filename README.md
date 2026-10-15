@@ -296,6 +296,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are |
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |
