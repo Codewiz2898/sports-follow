@@ -448,7 +448,9 @@ def roster_rows(system: str, entries: list[Rostered], sport: str | None = None) 
 def import_roster(adapter: Adapter) -> int:
     """One source's athletes into the registry (adapter.roster). After a complete run, its rows it didn't
     see again are dropped, in the leagues it read; rows of leagues it didn't read are left alone, so a run
-    of a few games is safe."""
+    of a few games is safe. A row not seen again goes after the run's grace, or at once if it holds an id
+    of a shape the source no longer gives (id_pattern): it names the athlete as the source used to, and
+    they're among this run's rows as it names them now."""
     started = db_now()
     total = 0
 
@@ -462,11 +464,12 @@ def import_roster(adapter: Adapter) -> int:
 
     run = adapter.roster(keep)
     if run.complete:
-        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started - run.grace, Athlete.qid.not_in(operator_kept(adapter.sport))]
+        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started, Athlete.qid.not_in(operator_kept(adapter.sport))]
         if run.leagues is not None:
             unseen.append(Athlete.league.in_(run.leagues))
         with session() as db:
-            gone = db.execute(delete(Athlete).where(*unseen)).rowcount
+            renamed = [qid for qid, ids in db.execute(select(Athlete.qid, Athlete.ids).where(*unseen)) if (ids or {}).get(adapter.system) and not adapter.id_pattern.fullmatch(str(ids[adapter.system]))]
+            gone = len(db.execute(delete(Athlete).where(*unseen, or_(Athlete.updated_at < started - run.grace, Athlete.qid.in_(renamed))).returning(Athlete.id)).all())
         if gone:
             log.info("registry %s: %d %s athletes no longer listed removed", adapter.sport, gone, adapter.provider.name)
     log.info("registry %s: %d %s athletes kept", adapter.sport, total, adapter.provider.name)

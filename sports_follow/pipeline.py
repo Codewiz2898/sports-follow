@@ -546,7 +546,8 @@ def fan_message(raw: str) -> str:
         # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.
         return "Today's AI budget for this app is used up, so new pages can't be built until midnight. Scores from live sources keep updating."
     if "http 402" in text or "credits" in text:
-        return "The AI service behind this app is out of credit, so the page couldn't be built. Try again once credit is added."
+        # Out of credit with the model provider: the app's account is ours to know, not the fan's.
+        return "AI research isn't available right now. Try again later."
     if "rate" in text and "limit" in text:
         return "The AI service is busy right now. Try again in a minute."
     if "unreachable" in text or "network" in text:

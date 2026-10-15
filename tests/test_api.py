@@ -993,6 +993,18 @@ def test_a_typed_name_with_a_control_character_is_refused(api):
     assert not any(k.startswith("research") for k in api.redis.data)  # and nothing was counted
 
 
+@pytest.mark.parametrize("name", ["Kane<script>alert(1)</script>", "Kane<img src=x onerror=alert(2)>", "Kane >"])
+def test_a_typed_name_with_markup_is_refused(api, name):
+    answer = api.call("POST", "/api/follows", fan="fan", body={"query": name})
+    assert answer.status_code == 400 and "<" in answer.json()["detail"]
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert not [s for s in api.statements if isinstance(s, Insert)]  # no player, alias or follow kept
+
+
+def test_a_typed_name_with_an_apostrophe_or_ampersand_is_still_a_name(api):
+    assert api.call("POST", "/api/follows", fan="fan", body={"query": "N'Golo Kanté & co"}).status_code == 200
+
+
 @pytest.mark.parametrize("method, body", [
     ("POST", {"subscription": "x"}),
     ("POST", {"subscription": {**SUBSCRIPTION, "keys": "zz"}}),
@@ -1054,8 +1066,9 @@ def test_a_source_that_doesnt_answer_is_still_a_502(api, monkeypatch):
     ("liquipedia_esports", "pubgmobile:Team_SouL_p1", True),
     ("liquipedia_esports", "pubgmobile:X]] OR [[pagename::Y", False),  # the page goes into a LiquipediaDB condition
     ("liquipedia_esports", "Jonathan", False),
-    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", True),
-    ("pubg_esports", "account.x", False),
+    ("pubg_esports", "flc_tgltn", True),  # a pro: team tag and name (BHA-216)
+    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", False),  # one event's account, as pros were followed by once
+    ("pubg_esports", "flc_tgltn?x=1", False),
 ])
 def test_each_source_takes_ids_of_its_own_shape(system, athlete_id, ok):
     assert server._source_id_ok(system, athlete_id) is ok

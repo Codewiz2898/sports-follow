@@ -146,8 +146,9 @@ def _import_registry() -> None:
 
 def _warm_sources() -> None:
     """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date,
-    and a source whose roster is read more often than the weekly import (PUBG's, from that index, every
-    six hours: roster_every) adds its players to the registry."""
+    a source that has changed how it names its athletes has the players bound to it moved to the new ids
+    (structured.rekey_bound), and a source whose roster is read more often than the weekly import (PUBG's,
+    from that index, every six hours: roster_every) adds its players to the registry."""
     from .adapters import ADAPTERS
 
     for adapter in list(ADAPTERS.values()):
@@ -158,6 +159,14 @@ def _warm_sources() -> None:
             log.info("warm %s: %s lobbies indexed", adapter.system, warm())
         except Exception:
             log.exception("warm %s failed", adapter.system)
+    for adapter in list(ADAPTERS.values()):
+        if getattr(adapter, "rekey", None) is None:
+            continue
+        try:
+            if moved := structured.rekey_bound(adapter):
+                log.info("rekey %s: %d players moved to the ids it gives now", adapter.system, moved)
+        except Exception:
+            log.exception("rekey %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
         every = getattr(adapter, "roster_every", None)
         if every and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds

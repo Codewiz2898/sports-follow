@@ -689,6 +689,10 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
         query = str(body.get("query") or "").strip()
         if not 2 <= len(query) <= 80 or not query.isprintable():
             raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
+        # The name is kept as typed and shown to every fan of the player: no markup in it, even though
+        # the web app only ever shows it as text.
+        if "<" in query or ">" in query:
+            raise HTTPException(400, "A player's name can't have < or > in it.")
         known = await in_db(lambda db: db.scalar(select(PlayerCard).join(PlayerAlias, PlayerAlias.player_id == PlayerCard.player_id).where(PlayerAlias.alias == pipeline.slugify(query))))
         player = None
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
