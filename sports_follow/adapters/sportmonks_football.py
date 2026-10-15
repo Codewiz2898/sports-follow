@@ -21,6 +21,9 @@ from . import sportmonks
 from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
+# Every match of the plan's leagues on some days (schedule): enough for the score and the stage.
+SCHEDULE_INCLUDE = "participants;scores;state;league;round"
+SCHEDULE_PAGE = 50  # rows a page of it, Sportmonks' most: a week of the five leagues is about one
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type;metadata"
 # Every match in play, league-wide: enough for its score, clock, scorers and the players in it.
 LIVE_INCLUDE = "participants;scores;state;periods;league;lineups;events.type"
@@ -90,13 +93,22 @@ def _detail(x: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------- parsers (pure)
 
 
+def _place(side: dict[str, Any]) -> int | None:
+    """A side's place in its league table, as Sportmonks sends it with the side (meta.position), if it does."""
+    place = (side.get("meta") or {}).get("position")
+    return place if isinstance(place, int) and place > 0 else None
+
+
 def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
-    """Fixtures (…/fixtures/between/…/{team}) -> fixtures, with the result for finished ones."""
+    """Fixtures (…/fixtures/between/…, a team's or every one) -> fixtures, with the result for finished
+    ones, and both sides' places in their table where Sportmonks sends them (the sport ranks league games
+    by them: sports.football)."""
     out = []
     for x in rows:
         home, away = _sides(x)
         if not home.get("id") or not away.get("id"):
             continue
+        places = [_place(home), _place(away)]
         status = _status(x.get("state"), _start(x))
         goals = _goals(x)
         result = None
@@ -114,6 +126,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             locator={"fixture": str(x["id"])},
             detail=_detail(x),
             result=result,
+            facts={"table": places} if any(places) else {},
         ))
     return out
 
@@ -399,6 +412,13 @@ class SportmonksFootball(Adapter):
         if not data.get("data"):
             raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
         return parse_match(data["data"])
+
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """Every match of the plan's leagues between two days, whoever plays it (fixtures/between with no
+        team): the top five leagues' 50 or so a week, SCHEDULE_PAGE a request, up to sportmonks.MAX_PAGES.
+        Counted against the Fixture entity, as every list of fixtures is."""
+        rows = sportmonks.get_all(f"/football/fixtures/between/{start.isoformat()}/{end.isoformat()}", ttl=1800, include=SCHEDULE_INCLUDE, per_page=SCHEDULE_PAGE)
+        return parse_fixtures(rows)
 
     def live_now(self) -> list[LiveGame]:
         """Every match in the plan's leagues in play now, with its starting elevens: one request (livescores/inplay,

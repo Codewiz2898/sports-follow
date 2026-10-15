@@ -5,8 +5,10 @@ player's own numbers while they play, upcoming games, news, recent results and s
 Today screen puts all of your players together: on a phone a row of them along the top (the live
 score, or when they next play), then their live games, a row of the other games on anywhere ("Also
 live", outlined, with players to follow from each), a row of every result since yesterday and a row of
-every game in the next two weeks, each scrolling sideways. The Following page has a tile for each
-player in their sport's colour.
+every game in the next two weeks, each scrolling sideways and ending in the big games of the
+competitions the sources cover that none of your players are in, outlined too (a fan who follows nobody
+sees only those: "Big results", "Big games coming up"). The Following page has a tile for each player in
+their sport's colour.
 
 ## How it's built
 
@@ -196,6 +198,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
+  `schedule` for Today's big results and big games coming up (its competitions' games between two days,
+  whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
+  sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
+  most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
+  none),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
@@ -219,8 +226,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
   line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
-  finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), its form summary,
-  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link previews are drawn in them). Shared code
+  finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
+  its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
+  finish; for Today's big results and big games coming up), its form summary,
+  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link
+  previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
