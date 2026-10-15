@@ -13,6 +13,7 @@
   --danger: #b42318;
   --display: Anton, Impact, 'Arial Narrow', sans-serif;
   --body: Manrope, 'Helvetica Neue', Arial, sans-serif;
+  --logo: Fredoka, 'Arial Rounded MT Bold', sans-serif;  /* the logo's type only (scripts/make_icons.py) */
   --radius-card: 22px;
   --radius-tile: 20px;
   --gutter: 16px;
@@ -79,8 +80,9 @@ p { margin: 0; }
   .tabbar { display: none; }
 }
 
-.brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 26px; text-transform: uppercase; transform: skewX(-7deg); }
-.brand::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--live); }
+/* The logo: the fan badge (the app icon's mark) and "stann" in Fredoka. */
+.brand { align-self: flex-start; display: flex; align-items: center; gap: 10px; font-family: var(--logo); font-weight: 600; font-size: 30px; line-height: 1; letter-spacing: -0.01em; }
+.brand img { width: 36px; height: 36px; }
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 700; color: var(--muted); }
 .side-nav a:hover { color: var(--text); }
