@@ -87,7 +87,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 
   Every other sport still gets everything from the agent.
 - **Live polling is armed by the schedule.** Fixtures are stored as events keyed by the source's id.
-  30 minutes before one starts it is armed; one `poll_event` job then polls it (every minute before
+  30 minutes before one starts it is armed, or earlier for a sport whose team sheets come out sooner
+  (`Sport.team_sheet_before`: football's 75 minutes), so "starts" and "on the bench" are told when the
+  line-ups are published; one `poll_event` job then polls it (every minute before
   kick-off, every 8–15 s in play), appends event states and player lines, and pushes every followed
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
   Sportmonks football matches share one `poll_lane` job instead: each round fetches every armed and
@@ -239,6 +241,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between agent live checks during a game (sports without an adapter) |
 | `SPORTS_FOLLOW_FIXTURES_MAX_AGE` | `1800` | seconds before a bound player's fixtures and stats are re-read |
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job or lane runs before handing over |
+| `SPORTS_FOLLOW_ARM_BEFORE` | `1800` | seconds before its start that a game is armed and polled; a polled game of a sport whose team sheets come out earlier is armed sooner (`Sport.team_sheet_before`) |
 | `SPORTS_FOLLOW_KEEP_TIMELINE_DAYS` | `14` | days a finished game keeps every poll's state and line before the daily prune cuts it to what's read |
 | `SPORTS_FOLLOW_KEEP_MOMENTS_DAYS` | `90` | days moments and the push log are kept; never fewer than the activity list's 30 |
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |

@@ -116,6 +116,9 @@ class Sport:
     roster = False  # its athletes come from its sources' own lists instead (adapters' roster())
     no_line = "No stats"  # a finished game's word for a player its line-up doesn't have
     games = ("game", "games")  # a form note's word: "Last 5 games"
+    # How long before the start its team sheets are published (seconds): its games are armed, and
+    # polled, at least this early, so "starts" or "on the bench" is told when the line-up is out.
+    team_sheet_before = 0
 
     # ---- how the app shows it (GET /api/sports, /api/sports.css)
 

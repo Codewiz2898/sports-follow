@@ -98,6 +98,7 @@ class Football(Sport):
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
     athletes = 260_000
     no_line = "Not in the matchday squad"
+    team_sheet_before = 75 * 60  # the Premier League's since 2024-25; most leagues publish about an hour ahead
     draws = True
     colour = {"sport": "#12c46c", "on": "#0b1a10", "on_soft": "rgba(11, 26, 16, 0.8)", "ink": "#12c46c"}
     pattern = r"soccer|football"
