@@ -31,7 +31,7 @@ from typing import Any
 from sqlalchemy import exists, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import bus, structured
+from . import bus, shutdown, structured
 from .adapters import ADAPTERS, AdapterError, PlayerRef
 from .db import session
 from .models import Event, EventPlayer, Follow, Player, SourceBinding
@@ -156,7 +156,7 @@ def _scorecards(budget: int, done: dict[str, int], down: set[str]) -> int:
         # More than a run reads, so a source that's down this run doesn't hold up the others.
         todo = [(ep.event_id, ep.player_id) for ep, _ in db.execute(_missing_scorecards(_waiting(rests)).limit(budget * 5))]
     for event_id, player_id in todo:
-        if budget <= 0:
+        if budget <= 0 or shutdown.stopping.is_set():
             break
         if player_id not in athlete:
             continue
@@ -195,7 +195,7 @@ def _pages(budget: int, done: dict[str, int], down: set[str]) -> int:
     with session() as db:
         todo = [(b.id, b.player_id) for b in _followed_bindings(db) if _pending(b.history, now)]
     for binding_id, player_id in todo:
-        if budget <= 0:
+        if budget <= 0 or shutdown.stopping.is_set():
             break
         with session() as db:
             binding = db.get(SourceBinding, binding_id)

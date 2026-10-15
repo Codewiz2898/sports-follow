@@ -454,14 +454,6 @@
                     "endColumn": 47,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportPossiblyUnboundVariable",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 37,
-                    "lineCount": 1
-                }
             }
         ],
         "./sports_follow/history.py": [

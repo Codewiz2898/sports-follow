@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from sports_follow import tracing
+from sports_follow import bus, shutdown, tracing
 from sports_follow.adapters import budget
 
 
@@ -18,6 +20,17 @@ def source_budgets(monkeypatch):
     store = budget.MemoryStore()
     monkeypatch.setattr(budget, "STORE", store)
     return store
+
+
+@pytest.fixture(autouse=True)
+def stopping(monkeypatch):
+    """The worker's stop flag (shutdown.py) and the locks it frees (bus.release_held), fresh for each
+    test: a test that sets the flag, as the worker's shutdown hook does, never stops another test's
+    loops, and a lock one test leaves taken isn't another's to free."""
+    event = threading.Event()
+    monkeypatch.setattr(shutdown, "stopping", event)
+    monkeypatch.setattr(bus, "_held", {})
+    return event
 
 
 @pytest.fixture

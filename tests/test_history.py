@@ -204,3 +204,20 @@ def test_a_scorecard_that_cant_be_read_doesnt_hold_up_the_rest(monkeypatch, lane
     history.run()
     assert [lane.db.results[(i, 2)].result["scorecard"] for i in range(3)] == [False, True, True]
     assert list(lane.redis.hashes[history.RESTING]) == ["0:2"]
+
+
+def test_a_run_reads_nothing_more_once_the_worker_stops(monkeypatch, lane, stopping):
+    # BHA-51: a deploy during a run. It ends after the read under way, frees its lock, and the next
+    # worker's run carries on with the rest.
+    scorecards_waiting(lane)
+    source = use(monkeypatch, FakeSource())
+    read = source.snapshot
+
+    def read_then_stop(locator, final=False):
+        stopping.set()
+        return read(locator, final)
+
+    source.snapshot = read_then_stop
+    history.run()
+    assert source.scorecards_read == [0] and source.pages_read == []
+    assert not bus.is_locked(history.LOCK)

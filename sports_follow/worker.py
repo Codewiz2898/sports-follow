@@ -20,7 +20,7 @@ from time import perf_counter
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -43,6 +43,9 @@ tracing.setup("sports-follow-worker")
 FIELDS = ("player_id", "event_id", "system")
 # A quiet job's closing line (the tick's, every minute) is logged only past this many seconds, or on failure.
 QUIET_UNDER = 10
+# How long a stopping worker gives its jobs to end and free their own locks before it frees the rest
+# itself: well inside the ten seconds Docker waits between asking a container to stop and killing it.
+STOP_WAIT = 5
 
 
 def _logged(fn, quiet: bool = False, deep: bool = True):
@@ -156,7 +159,7 @@ def _warm_sources() -> None:
             log.exception("warm %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
         every = getattr(adapter, "roster_every", None)
-        if every and bus.try_lock(f"registry-{adapter.system}", every):  # held, not released: at most every `every` seconds
+        if every and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds
             registry.import_roster(adapter)
 
 
@@ -215,6 +218,22 @@ async def startup(ctx) -> None:
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
 
 
+async def wind_down(ctx) -> None:
+    """The worker is stopping (a deploy, a restart). arq has cancelled the running jobs and queued them
+    again, but their threads run on: they end at their next step (shutdown.stopping) and free their locks.
+    Whatever is still held after STOP_WAIT, say a build waiting on the model, is freed here, so the next
+    worker starts that work at once instead of finding it locked for up to twenty minutes (BHA-51)."""
+    shutdown.stopping.set()
+    deadline = time.monotonic() + STOP_WAIT
+    while bus.held() and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+    freed = bus.release_held()
+    if freed:
+        log.warning("stopping: freed %d lock(s) jobs still held: %s", len(freed), ", ".join(sorted(freed)), extra={"locks": len(freed)})
+    else:
+        log.info("stopping: every job ended and freed its locks")
+
+
 async def _in_tick_pool(fn):
     """The tick works on threads of its own: whatever the jobs are doing, the scheduler keeps its minute."""
     return await asyncio.get_running_loop().run_in_executor(_tick_pool, logs.carried(fn))
@@ -260,6 +279,7 @@ class WorkerSettings:
     timezone = timezone.utc
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
     on_startup = startup
+    on_shutdown = wind_down
     # A poll job or lane holds its slot for up to POLL_SESSION while games are on; builds hold one for minutes.
     max_jobs = MAX_JOBS
     job_timeout = 900
