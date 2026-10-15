@@ -260,7 +260,8 @@ export interface StarterSport {
 }
 
 /** A game a source has on now, whoever follows it (GET /api/live, live.py): its live block shaped like a
- * card's, and a few players to follow from it, best first. */
+ * card's, a few players to follow from it, best first, and the events it is here (a followed player's live
+ * card names its game by one: Today shows it once, as theirs). */
 export interface LiveGame {
   key: string
   title: string
@@ -268,6 +269,7 @@ export interface LiveGame {
   start_utc?: string | null
   live: LiveStatus
   players: SearchResult[]
+  event_ids?: number[]
 }
 
 export interface LiveSport {

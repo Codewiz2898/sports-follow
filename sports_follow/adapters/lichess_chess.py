@@ -325,6 +325,7 @@ def live_boards(round_data: dict[str, Any], system: str, now: datetime | None = 
             start_utc=_dt(rnd.get("startsAt")),
             snapshot=snap,
             players=refs,
+            fixtures=[f"{rnd.get('id')}-{p.athlete_id}" for p in refs],  # as fixture_for names each player's
         ))
     return out
 

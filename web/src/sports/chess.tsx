@@ -63,7 +63,8 @@ function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
           }))}
         </div>
       )}
-      <div className="stack" style={{ gap: 10, flex: 1, minWidth: 180 }}>
+      {/* Compact (Today), the players can sit narrower beside a small board: Also live's card fits both in a row. */}
+      <div className="stack" style={{ gap: 10, flex: 1, minWidth: compact ? 140 : 180 }}>
         {player(top, flip ? 'white' : 'black')}
         <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>
           {state.match ? `Match ${state.match.score}` : state.result ? state.result.replace('-', '–') : clock}

@@ -102,6 +102,9 @@ class LiveGame:
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
     league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+    # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
+    # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
+    fixtures: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -253,6 +256,8 @@ class Adapter:
     #   def live_now(self) -> list[LiveGame]
     # the games in play now, whoever follows them, each game's players in the order the source would put
     # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
+    # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
+    # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""
