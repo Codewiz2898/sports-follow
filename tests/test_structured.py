@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -367,7 +368,7 @@ def finished(monkeypatch, scorecard: bool) -> tuple[Event, PlayerCard, list]:
     returns the event, the card and the final polls applied."""
     source = FinishedSource(scorecard)
     player = Player(id=1, slug="p1", name="P1", sport="Hurling", status="active", teams=["A"])
-    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={}, confidence=0.8,
                         locator={"system": source.system, "athlete_id": "A1", "name": "P1", "team_ids": ["T1"], "team_names": ["A"]})
     event = Event(id=10, key="fake_source:1", sport="Hurling", title="A vs B", status="live", start_utc=NOW - timedelta(hours=2))
     live = {"is_live": True, "event_id": 10, "event": "A vs B", "score": "A 2 – 1 B", "clock": "90'+3"}
@@ -396,6 +397,23 @@ def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
     assert polls == [] and event.status == "final"
     assert card_row.card["live"] == {"is_live": False, "player_stats": []} and not card_row.is_live
     assert card_row.card["upcoming"] == []
+
+
+def test_a_player_the_source_names_otherwise_now_is_bound_again_by_that_id(monkeypatch, redis):
+    # BHA-216: a source that has changed the id it gives a player (rekey) moves their binding to it, so the
+    # lines it keys by that id reach their fans; a player it hasn't renamed stays as bound.
+    finished(monkeypatch, scorecard=True)
+    source = structured.ADAPTERS["fake_source"]
+    recorded, read = [], []
+    monkeypatch.setattr(structured, "record", lambda player_id, ref, confidence=1.0: recorded.append((player_id, ref.athlete_id, ref.name, confidence)) or True)
+    monkeypatch.setattr(source, "fixtures", lambda ref, fixtures=source.fixtures: read.append(ref.athlete_id) or fixtures(ref))
+    monkeypatch.setattr(source, "rekey", lambda ref: replace(ref, athlete_id="A2") if ref.athlete_id == "A1" else None, raising=False)
+    structured.refresh(1)
+    assert recorded == [(1, "A2", "P1", 0.8)] and read == ["A2"]
+    recorded.clear()
+    monkeypatch.setattr(source, "rekey", lambda ref: None)
+    structured.refresh(1)
+    assert recorded == []
 
 
 def test_a_game_moved_later_is_disarmed_by_its_own_sports_lead(monkeypatch):

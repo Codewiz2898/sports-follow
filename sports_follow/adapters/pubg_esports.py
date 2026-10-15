@@ -6,8 +6,10 @@ tournament names. So:
 - A lobby is one session of a tournament's matches (games less than LOBBY_GAP apart) played by the same
   teams: a tournament day, or one group of it. It's one event, with the same battle royale state as
   Liquipedia's lobbies (standings, each game's winner), so the app's board and alerts work unchanged.
-- A team is the tag its players carry ("TWIS" for TWIS_Lu, TWIS_xmpl…). A player is their account
-  ("account.…"), named without the tag.
+- A team is the tag its players carry ("TWIS" for TWIS_Lu, TWIS_xmpl…). A player is that tag and their
+  name without it ("twis_xmpl", pro_id): PUBG gives a pro a new account ("account.…") for each event, and
+  an event's accounts go to other players later, so the name they play under is who they are, and the
+  lobbies of every account they played on are theirs.
 - Standings use the standard PUBG esports points: placement (POINTS) plus one a finish. Some events
   change them; the Credits page says which are used.
 - Every player has their own line: finishes, damage, assists and knocks over the lobby, beside their
@@ -20,8 +22,10 @@ reads Redis, not PUBG.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -67,6 +71,19 @@ def team_tag(names: list[str]) -> str:
 def display_name(name: str, tag: str) -> str:
     """ "TWIS_Lu" -> "Lu"."""
     return name[len(tag) + 1:] if name.startswith(f"{tag}_") and len(name) > len(tag) + 1 else name
+
+
+def pro_id(team: str, name: str) -> str | None:
+    """A pro's id, the same at every event: their team's tag and their name ("FLC", "TGLTN" -> "flc_tgltn").
+    None for a player with no name to go by."""
+    if not naming.words(name):
+        return None
+    return re.sub(r"[^a-z0-9_-]+", "", naming.fold(f"{team}_{name}"))[:64]
+
+
+def pro_of(player: dict[str, Any], team: str) -> str | None:
+    """Who a roster's player is (pro_id), from their in-game name ("FLC_TGLTN") and the roster's tag."""
+    return pro_id(team, display_name(player.get("name") or "", team))
 
 
 def event_name(tournament: str) -> str:
@@ -195,20 +212,20 @@ def parse_fixture(lobby: dict[str, Any], now: datetime | None = None) -> Fixture
 
 
 def player_lines(lobby: dict[str, Any], table: list[dict[str, Any]]) -> dict[str, Line]:
-    """Each player's own numbers over the lobby, beside their team's standing, keyed by account."""
+    """Each player's own numbers over the lobby, beside their team's standing, keyed by pro (pro_id)."""
     totals: dict[str, dict[str, Any]] = {}
     for m in lobby["matches"]:
         for r in m["rosters"]:
             for p in r["players"]:
-                t = totals.setdefault(p["id"], {"team": r["team"], "kills": 0, "damage": 0, "assists": 0, "knocks": 0, "games": 0})
+                t = totals.setdefault(pro_of(p, r["team"]) or p["id"], {"team": r["team"], "kills": 0, "damage": 0, "assists": 0, "knocks": 0, "games": 0})
                 for k in ("kills", "damage", "assists", "knocks"):
                     t[k] += p[k]
                 t["games"] += 1
     by_team = {r["id"]: r for r in table}
     lines = {}
-    for account, t in totals.items():
+    for pro, t in totals.items():
         team = by_team.get(t["team"]) or {}
-        lines[account] = Line(
+        lines[pro] = Line(
             headline=f"{t['kills']} finish{'es' if t['kills'] != 1 else ''} · {t['damage']:,} dmg",
             stats=[
                 {"label": "Team place", "value": esports.ordinal(team.get("place"))}, {"label": "Team points", "value": str(int(team.get("points") or 0))},
@@ -237,41 +254,41 @@ def parse_lobby(lobby: dict[str, Any], now: datetime | None = None) -> Snapshot:
 
 
 def players_of(lobbies: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Everyone in these lobbies, by account, as last seen: name without the tag, in-game name, team tag."""
+    """Everyone in these lobbies, by pro (pro_id), as last seen: name without the tag, in-game name, team tag."""
     seen: dict[str, dict[str, Any]] = {}
     for lobby in sorted(lobbies, key=lambda lb: lb["matches"][-1]["at"]):
         for m in lobby["matches"]:
             for r in m["rosters"]:
                 for p in r["players"]:
-                    if p.get("id"):
-                        seen[p["id"]] = {"name": display_name(p.get("name") or "", r["team"]), "in_game": p.get("name"), "team": r["team"], "at": m["at"]}
+                    pro = pro_of(p, r["team"])
+                    if pro:
+                        seen[pro] = {"name": display_name(p.get("name") or "", r["team"]), "in_game": p.get("name"), "team": r["team"], "at": m["at"]}
     return seen
+
+
+def registry_key(pro: str) -> str:
+    """A pro's registry id ("pubg:" and 15 characters; registry ids are at most 20)."""
+    return f"pubg:{hashlib.sha1(pro.encode()).hexdigest()[:15]}"
 
 
 def rostered(players: dict[str, dict[str, Any]]) -> list[Rostered]:
     """The players seen in recent tournaments, for the registry (pure): the name without the team tag,
-    the in-game name an alias, keyed by the account."""
-    out = []
-    for account, info in players.items():
-        if not account or not naming.words(info.get("name") or ""):
-            continue
-        team = [info["team"]] if info.get("team") else []
-        ref = PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=team, team_names=team, league="pubg", game=GAME)
-        out.append(Rostered(key=f"pubg:{account.split('.', 1)[-1][:15]}", ref=ref, aliases=[info.get("in_game") or ""], current=True))  # played in the last fortnight
-    return out
+    the in-game name an alias, one row a pro however many accounts they played on."""
+    return [Rostered(key=registry_key(pro), ref=ref_of(pro, info), aliases=[info.get("in_game") or ""], current=True) for pro, info in players.items()]  # played in the last fortnight
 
 
-def ref_of(account: str, info: dict[str, Any]) -> PlayerRef:
-    return PlayerRef(system="pubg_esports", athlete_id=account, name=info["name"], team_ids=[info["team"]], team_names=[info["team"]], league="pubg", game=GAME)
+def ref_of(pro: str, info: dict[str, Any]) -> PlayerRef:
+    team = [info["team"]] if info.get("team") else []
+    return PlayerRef(system="pubg_esports", athlete_id=pro, name=info["name"], team_ids=team, team_names=team, league="pubg", game=GAME)
 
 
-def player_form(lobbies: list[dict[str, Any]], account: str) -> tuple[list[dict[str, str]], str]:
+def player_form(lobbies: list[dict[str, Any]], pro: str) -> tuple[list[dict[str, str]], str]:
     """A player's numbers over these lobbies (finished ones): their own, and their team's placings."""
     mine = []
     for lobby in lobbies:
         table = standings(lobby)
-        line = player_lines(lobby, table).get(account)
-        team = next((r for m in lobby["matches"] for r in m["rosters"] if any(p["id"] == account for p in r["players"])), None)
+        line = player_lines(lobby, table).get(pro)
+        team = next((r for m in lobby["matches"] for r in m["rosters"] if any(pro_of(p, r["team"]) == pro for p in r["players"])), None)
         row = next((t for t in table if team and t["id"] == team["team"]), None)
         if line and row:
             stats = {s["label"]: s["value"] for s in line.stats}
@@ -297,7 +314,7 @@ class PubgEsports(Adapter):
     name = "PUBG"
     provider = pubg.PROVIDER
     covers = "PUBG"
-    id_pattern = re.compile(r"account\.[0-9a-f]{32}")
+    id_pattern = re.compile(r"[a-z0-9_-]{1,64}")  # a pro (pro_id); never an event account ("account.…"), as pros were followed by once (rekey)
     sport = "esports"
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
@@ -370,8 +387,19 @@ class PubgEsports(Adapter):
         self._index = (datetime.now(timezone.utc).timestamp(), lobbies)
         return lobbies
 
-    def _mine(self, account: str) -> list[dict[str, Any]]:
-        return [lb for lb in self.lobbies() if any(p["id"] == account for m in lb["matches"] for r in m["rosters"] for p in r["players"])]
+    def _mine(self, pro: str | None) -> list[dict[str, Any]]:
+        return [lb for lb in self.lobbies() if pro and any(pro_of(p, r["team"]) == pro for m in lb["matches"] for r in m["rosters"] for p in r["players"])]
+
+    def _pro(self, ref: PlayerRef) -> str | None:
+        """Who a followed player is: their id, or for a pro followed by an event account (before pros were
+        one athlete each), the team and name they were followed with."""
+        return ref.athlete_id if self.id_pattern.fullmatch(ref.athlete_id) else pro_id((ref.team_ids or [""])[0], ref.name)
+
+    def rekey(self, ref: PlayerRef) -> PlayerRef | None:
+        """A pro followed by an event account, under their id now (pro_id), so their lines reach their
+        fans; None for one followed by it already."""
+        pro = self._pro(ref)
+        return replace(ref, athlete_id=pro) if pro and pro != ref.athlete_id else None
 
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
@@ -406,7 +434,7 @@ class PubgEsports(Adapter):
         return ref_of(athlete_id, info) if info else None
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
-        return sorted((parse_fixture(lb) for lb in self._mine(ref.athlete_id)), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+        return sorted((parse_fixture(lb) for lb in self._mine(self._pro(ref))), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def history_pages(self, ref: PlayerRef, anchor: Any) -> list[dict[str, Any]]:
         return []
@@ -440,4 +468,5 @@ class PubgEsports(Adapter):
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
         now = datetime.now(timezone.utc)
-        return player_form([lb for lb in self._mine(ref.athlete_id) if _status(lb, now) == "final"], ref.athlete_id)
+        pro = self._pro(ref)
+        return player_form([lb for lb in self._mine(pro) if _status(lb, now) == "final"], pro) if pro else ([], "")

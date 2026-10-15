@@ -309,8 +309,15 @@ def _refresh(player_id: int) -> None:
             return
         adapter = ADAPTERS.get(row.adapter)
         ref = PlayerRef(**row.locator)
+        confidence = row.confidence
     if adapter is None:
         return
+    # A source that names the player otherwise now than when they were bound (rekey) has the binding moved
+    # to that id, which its live lines are keyed by. One another player already holds it for stays as it was.
+    rekey = getattr(adapter, "rekey", None)
+    moved = rekey(ref) if rekey else None
+    if moved is not None and record(player_id, moved, confidence):
+        ref = moved
 
     now = _now()
     fixtures = adapter.fixtures(ref)

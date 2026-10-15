@@ -1054,8 +1054,9 @@ def test_a_source_that_doesnt_answer_is_still_a_502(api, monkeypatch):
     ("liquipedia_esports", "pubgmobile:Team_SouL_p1", True),
     ("liquipedia_esports", "pubgmobile:X]] OR [[pagename::Y", False),  # the page goes into a LiquipediaDB condition
     ("liquipedia_esports", "Jonathan", False),
-    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", True),
-    ("pubg_esports", "account.x", False),
+    ("pubg_esports", "flc_tgltn", True),  # a pro: team tag and name (BHA-216)
+    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", False),  # one event's account, as pros were followed by once
+    ("pubg_esports", "flc_tgltn?x=1", False),
 ])
 def test_each_source_takes_ids_of_its_own_shape(system, athlete_id, ok):
     assert server._source_id_ok(system, athlete_id) is ok

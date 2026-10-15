@@ -183,7 +183,10 @@ class Adapter:
     game_names (every name its games go by) and game_of_league(league, country); and a roster for the
     registry: roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep) -> Roster, which
     hands keep() its athletes (Rostered) a page at a time, and roster_every (seconds) for a source whose
-    list is read more often than the weekly import."""
+    list is read more often than the weekly import; and for a source that has changed how it names its
+    athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
+    same), which structured.py moves the binding to. Its id_pattern then refuses the old ids, and the
+    registry drops its rows holding one."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     sport: str  # the sport it serves (sports.Sport.key): "cricket"
