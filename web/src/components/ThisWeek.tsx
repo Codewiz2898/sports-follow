@@ -5,6 +5,7 @@ import { daysAgo, day, parseDate, shortName } from '../format'
 import { useFollowing } from '../following'
 import { sportKey } from '../sports'
 import { Rail } from './Rail'
+import { ShareButton } from './Share'
 
 const SETTLE_MS = 1500  // one poll can bring several moments: fetch once they've all arrived
 
@@ -46,17 +47,24 @@ function longest(word: string): number {
   return Math.max(...word.split(/(?<=-)|\s+/).map((w) => w.length))
 }
 
-/** One big moment: a block of the player's sport colour, its word big, then their name and the line. */
+/**
+ * One big moment: a block of the player's sport colour, its word big, then their name and the line. Its
+ * Share button shares the game (/player/<id>?g=<event id>), whose link previews this moment.
+ */
 function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
+  const game = poster.event_id != null ? `?g=${poster.event_id}` : ''
   return (
-    <Link to={`/player/${poster.player_id}`} className="poster" data-sport={sportKey(poster.sport)}>
-      <span className="poster-tag">Yours</span>
-      <span className="dsp word" style={{ '--letters': longest(poster.word) } as CSSProperties}>{poster.word}</span>
-      <span className="stack" style={{ gap: 2 }}>
-        <span className="dsp who">{shortName(poster.player)}</span>
-        <span className="line">{[poster.line, when(poster.at, now)].filter(Boolean).join(' · ')}</span>
-      </span>
-    </Link>
+    <div className="poster-wrap">
+      <Link to={`/player/${poster.player_id}`} className="poster" data-sport={sportKey(poster.sport)}>
+        <span className="poster-tag">Yours</span>
+        <span className="dsp word" style={{ '--letters': longest(poster.word) } as CSSProperties}>{poster.word}</span>
+        <span className="stack" style={{ gap: 2 }}>
+          <span className="dsp who">{shortName(poster.player)}</span>
+          <span className="line">{[poster.line, when(poster.at, now)].filter(Boolean).join(' · ')}</span>
+        </span>
+      </Link>
+      <ShareButton path={`/player/${poster.player_id}${game}`} title={`${poster.word}: ${poster.player}`} label={`Share ${shortName(poster.player)}'s ${poster.word.toLowerCase()}`} className="poster-share" />
+    </div>
   )
 }
 

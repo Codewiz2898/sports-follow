@@ -130,6 +130,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
   package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
   are set.
+- **Links that preview.** A player's page shared in WhatsApp or X shows a card, not a bare address: the
+  server writes each page's Open Graph and Twitter card tags into it (`sports_follow/share.py`), since the
+  crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
+  now, live, last or next; a game of theirs (`/player/<id>?g=<event id>`, the link a This week poster
+  shares) says its big moment in the sport's own words, as This week does (`week.game`); every other
+  page says what the app is. Each has a 1200 × 630 picture drawn by the server with Pillow
+  (`/api/players/<id>/share.png`, `?g=` for a game; `/api/share.png` for the app): a block of the sport's
+  colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
+  Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
+  team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
+  address gets a new one once the score moves. The player page and each This week poster have a Share
+  button: the phone's share sheet where the browser has one, else the link copied; every link it gives
+  carries `s=share`, for when the app counts visits.
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
   points, a set, the start and the result; news from a rebuild adds injuries, transfers and
@@ -204,7 +217,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), its form summary,
-  how search shows its athletes, and its colours (a player's photo is recoloured with them). Shared code
+  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -319,7 +332,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
-| `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it |
+| `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |

@@ -160,6 +160,25 @@ def test_posters_read_off_results_count_toward_the_limit_the_newest_first(db):
     assert len(posters) == 12  # Today shows every one the server sends (BHA-226)
 
 
+def test_a_shared_game_is_its_poster_whenever_it_was_and_whoever_follows(db):
+    # A link to a game (share.py) previews the poster This week makes of it, long after the week, for anyone.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 10'", 85, ago=timedelta(days=40))
+    moment(db, 2, 1, 10, "goal", "Goal: Mohamed Salah (2)", "Egypt 2 – 0 South Africa · 60'", 85, ago=timedelta(days=40))
+    game = week.game(db, 1, 10)
+    assert game is not None and (game["word"], game["line"], game["title"], game["competition"]) == ("Brace", "v South Africa", "Egypt v South Africa", None)
+    # No moment makes one: read off the result.
+    finished(db, 2, 20, "112 (98)", "India won by 40 runs", ago=timedelta(days=30))
+    game = week.game(db, 2, 20)
+    assert game is not None and (game["id"], game["word"], game["line"]) == (None, "Hundred", "112 (98) v Australia")
+    # A goal VAR ruled out makes none, nor does a game the player isn't in, or one with nothing to show.
+    moment(db, 3, 1, 11, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 Ghana · 33'", 85)
+    moment(db, 4, 1, 11, "correction", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 Ghana · 35'", 85, corrects=3)
+    assert week.game(db, 1, 11) is None
+    assert week.game(db, 3, 10) is None and week.game(db, 1, 20) is None
+    finished(db, 1, 11, "Started", "Drew 0–0")
+    assert week.game(db, 1, 11) is None
+
+
 def story(db, player_id: int, headline: str, kind: str | None, breaking: bool = True, hours: int = 2, source: str = "Sportstar") -> None:
     """A story the research agent brought back for the player, down the real path: stored, then a moment
     when it's new, recent and marked as just happened (pipeline.news_moments)."""

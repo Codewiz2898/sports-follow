@@ -32,7 +32,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Respo
 from fastapi import Path as InPath
 from fastapi.routing import APIRoute
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -40,10 +40,10 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -455,6 +455,42 @@ async def player_photo(name: str) -> Response:
         raise HTTPException(404, "No such photo.")
     data, media_type = found
     return Response(data, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+# ---------------------------------------------------------------- link previews (share.py)
+
+
+async def _preview(player_id: int, game: int | None) -> share.Preview | None:
+    """The preview of a player's page, or of a game of theirs (a This week poster's link); None for no such
+    player. A game with no poster (not theirs, nothing to show yet) previews their page."""
+    card = await read_card(player_id)
+    if card is None:
+        return None
+    poster = await in_db(week.game, player_id, game) if game is not None else None
+    return (share.of_game(card, poster) if poster else None) or share.of_card(card)
+
+
+async def _picture(picture: share.Picture) -> Response:
+    """A preview's picture. Its address carries a digest of what it shows, so a crawler sees a new address
+    once it changes; a few minutes' cache is for the crawlers that ask again at once."""
+    data = await run_in_threadpool(share.png, picture)
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/players/{player_id}/share.png")
+async def player_picture(player_id: RowId, g: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None) -> Response:
+    """The picture a link to the player's page shows in WhatsApp, X and the rest: who they are and what
+    they're doing now; with ?g=<event id>, that game's big moment."""
+    preview = await _preview(player_id, g)
+    if preview is None:
+        raise HTTPException(404, "No such player.")
+    return await _picture(preview.picture)
+
+
+@app.get("/api/share.png")
+async def app_picture() -> Response:
+    """The picture a link to any other page shows: the app's own."""
+    return await _picture(share.APP)
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
@@ -1427,15 +1463,44 @@ def _route_of(method: str, path: str) -> str | None:
 NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest"}
 MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png"}
 
+# A player's page, and a game of theirs (?g=<event id>): served with their own link preview.
+PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
+GAME = re.compile(r"[0-9]{1,10}")
+
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
-    @app.get("/{path:path}")
-    def spa(path: str) -> FileResponse:
-        """Files the build puts at the root (service worker, manifest, icons); every other path is the app."""
-        root = WEB_DIST.resolve()
-        file = (root / path).resolve()
-        if not (path and file.is_file() and root in file.parents):
-            file = root / "index.html"
+
+def _site(request: Request) -> str:
+    """The app's public address, for a preview's links: SPORTS_FOLLOW_SITE_URL, else this request's."""
+    return SITE_URL or f"{request.url.scheme}://{request.url.netloc}"
+
+
+async def _page_preview(path: str, request: Request) -> share.Preview | None:
+    """The link preview of the page at `path`: a player's, a game of theirs, or None for the app's own."""
+    m = PLAYER_PAGE.fullmatch(path)
+    if not m or int(m[1]) > MAX_ID:
+        return None
+    game = request.query_params.get("g", "")
+    try:
+        return await _preview(int(m[1]), int(game) if GAME.fullmatch(game) and 0 < int(game) <= MAX_ID else None)
+    except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+        log.warning("link preview of /%s", path, exc_info=True)
+        return None
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def spa(path: str, request: Request) -> Response:
+    """Files the build puts at the root (service worker, manifest, icons); every other path is the app, with
+    the page's link preview in its head (share.py), since the crawlers that read those run no JavaScript.
+    Nothing here without a build (`npm run build` in web/)."""
+    root = WEB_DIST.resolve()
+    index = root / "index.html"
+    file = (root / path).resolve()
+    if path and file.is_file() and root in file.parents and file != index:
         cache = "no-cache" if file.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(file, media_type=MEDIA.get(file.suffix), headers={"Cache-Control": cache})
+    if not index.is_file():
+        raise HTTPException(404, "Not Found")
+    page = await run_in_threadpool(index.read_text, encoding="utf-8")
+    return HTMLResponse(share.page(page, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache"})
