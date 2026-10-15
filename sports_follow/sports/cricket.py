@@ -220,11 +220,10 @@ class Cricket(Sport):
 
     def notable(self, fixture: Fixture) -> Notable | None:
         """Every match its sources list is one, as big as its stage (a final 95, a semi-final 85, a playoff
-        70; the round's name or, for a series, the series') or who plays it (an international 55, any other
-        40). Once it's over, 15 more for a close finish: a tie or a super over, CLOSE_RUNS runs or fewer,
+        70, by the round's name: "Final", "Qualifier 1") or who plays it (an international 55, any other 40). Once it's over, 15 more for a close finish: a tie or a super over, CLOSE_RUNS runs or fewer,
         CLOSE_WICKETS wickets or fewer, or CLOSE_BALLS balls to spare. Its word is the margin ("By 6
         wickets"), under it who beat whom."""
-        level, why = stage(fixture.detail, fixture.competition)
+        level, why = stage(fixture.detail)  # not the competition's: a "… Finals Series" is every round of it
         rank = STAGE_RANK.get(level) or (NATIONS if fixture.facts.get("national") else LEAGUE)
         r = fixture.result
         if fixture.status != "final" or not r:

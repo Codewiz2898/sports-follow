@@ -185,9 +185,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
-  whoever plays them, a week back and a fortnight on; `sports_follow/league.py`; each game ranked by its
+  whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
-  most, only while fans look: Sportmonks football 4 requests a read, cricket 1, PandaScore about 6, PUBG
+  most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry

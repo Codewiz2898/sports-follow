@@ -323,8 +323,8 @@ export const api = {
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
   starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
   live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
-  // The fan's UTC offset, so "since yesterday" is by their days.
-  league: () => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`),
+  // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.
+  league: (fresh = false) => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`, fresh ? { cache: 'no-store' } : undefined),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
   /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */

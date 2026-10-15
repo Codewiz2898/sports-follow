@@ -62,7 +62,7 @@ class Db:
 
 
 def test_a_read_keeps_what_its_sport_ranks_finished_or_to_come(sources, redis, monkeypatch):
-    """A week back to a fortnight on; a game on now is Live now's, a postponed one is nobody's, and one its
+    """Three days back to a fortnight on; a game on now is Live now's, a postponed one is nobody's, and one its
     sport doesn't rank isn't kept."""
     sources.pitch.games = [
         fixture("1", "final", NOW - timedelta(days=1), result={"home": {"score": "2"}, "away": {"score": "1"}}),
@@ -74,7 +74,7 @@ def test_a_read_keeps_what_its_sport_ranks_finished_or_to_come(sources, redis, m
     ]
     monkeypatch.setattr(sports.BY_KEY["football"], "notable", lambda f: None if f.detail == "small" else Notable(40, word="2–1" if f.status == "final" else "", why="Leaders"))
     assert league.read("pitch", NOW) == 2
-    assert sources.pitch.asked == [(date(2026, 10, 9), date(2026, 10, 30))]
+    assert sources.pitch.asked == [(date(2026, 10, 13), date(2026, 10, 30))]
     kept = json.loads(redis["league:games:pitch"])
     assert kept["as_of"] == NOW.isoformat()
     assert [(g["key"], g["status"], g["word"], g["why"], g["sport"]) for g in kept["games"]] == [("pitch:1", "final", "2–1", "Leaders", "football"), ("pitch:2", "scheduled", "", "Leaders", "football")]
@@ -157,7 +157,7 @@ def test_a_read_hours_old_is_served_and_read_again_a_days_old_one_isnt_served(so
     assert [g["key"] for g in served["results"]["games"]] == ["pitch:a"]
 
 
-def test_every_fan_is_served_the_same_until_a_source_is_read_again(sources, redis, monkeypatch):
+def test_a_time_zones_fans_share_a_ranking_until_a_source_is_read_again_and_events_are_looked_up_every_time(sources, redis, monkeypatch):
     monkeypatch.setattr(league, "datetime", SimpleNamespace(now=lambda tz=None: NOW, fromisoformat=datetime.fromisoformat))
     keep(redis, "pitch", [game("pitch:a", "final", NOW - timedelta(hours=3), 40)])
     looked = []
@@ -167,11 +167,17 @@ def test_every_fan_is_served_the_same_until_a_source_is_read_again(sources, redi
             looked.append(1)
             return super().execute(query)
 
+    ranked = []
+    monkeypatch.setattr(league, "_ranked", lambda games, now, tz, rank=league._ranked: ranked.append(tz) or rank(games, now, tz))
     first, _ = league.cached(Counting())
-    assert league.cached(Counting())[0] is first and len(looked) == 1
+    assert [g["event_ids"] for g in first["results"]["games"]] == [[]]
+    # A follow a moment ago made the game's event: the next look, from the same ranking, has it.
+    again, _ = league.cached(Counting({"pitch:a": 7}))
+    assert [g["event_ids"] for g in again["results"]["games"]] == [[7]] and ranked == [0] and len(looked) == 2
+    league.cached(Counting(), tz=330)  # another time zone is ranked for itself
     keep(redis, "pitch", [game("pitch:b", "final", NOW - timedelta(hours=1), 40)], as_of=NOW + timedelta(seconds=1))
-    again, _ = league.cached(Counting())
-    assert [g["key"] for g in again["results"]["games"]] == ["pitch:b"] and len(looked) == 2
+    later, _ = league.cached(Counting())
+    assert [g["key"] for g in later["results"]["games"]] == ["pitch:b"] and ranked == [0, 330, 0]
 
 
 # ---------------------------------------------------------------- each sport says how big a game is
@@ -215,6 +221,7 @@ def test_cricket_ranks_internationals_and_finals_and_a_close_finish_says_so():
     assert rank(cricket("West Indies won by 5 wickets (with 2 balls remaining)")) == Notable(70, word="By 5 wickets", line="West Indies beat India", why="Last over")
     assert rank(cricket("Match tied (West Indies won the Super Over)", super_over=True)) == Notable(70, word="Super over", line="West Indies beat India", why="Super over")
     assert rank(cricket("India won by 57 runs", winner=0, competition="Triangular Series Final (UAE)", detail="Final")) == Notable(95, word="By 57 runs", line="India beat West Indies", why="Final")
+    assert rank(cricket("India won by 9 runs", winner=0, competition="Big Bash Finals Series", detail="12th Match")) == Notable(55, word="By 9 runs", line="India beat West Indies")
     assert rank(cricket("No result", winner=None)) is None
     assert rank(fixture("9", "scheduled", NOW, competition="Indian Premier League", detail="Qualifier 1")) == Notable(70, why="Playoffs")
 

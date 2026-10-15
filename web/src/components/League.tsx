@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { api, type Card, type League, type LeagueGame } from '../api'
 import { ahead, countdown, dateOnly, dayLabel, parseDate, shortWhen } from '../format'
 import { Backdrop, sportKey } from '../sports'
@@ -12,20 +12,25 @@ export const TAIL = 6  // league games in a rail after the fan's own, before its
  * The big results and big games coming up in the competitions the sources cover, whoever follows them (GET
  * /api/league, league.py): the same for every fan. Looked at once, again in a moment while the server says
  * a source is being read, and every EVERY while the page is in view. Null until the first answer.
+ *
+ * `theirs` says which events the fan's players are in (theirEvents, as a key), once their games have
+ * loaded: when it changes (a player just followed, from Today), it looks again past any kept copy, so a
+ * league game that's now theirs, whose event was only just made, shows once, as theirs.
  */
-export function useLeague(): League | null {
+export function useLeague(theirs: string | null = null): League | null {
   const [league, setLeague] = useState<League | null>(null)
+  const again = useRef<((tries: number, fresh?: boolean) => void) | null>(null)
   useEffect(() => {
     let current = true
     let timer: number | undefined
     let latest = 0  // the newest look: an older one's answer starts no second loop
     let at = 0
-    const look = (tries: number) => {
+    const look = (tries: number, fresh = false) => {
       window.clearTimeout(timer)
       if (document.hidden) return  // nobody's looking; showing the tab again looks, if it's been a while
       const mine = ++latest
       at = Date.now()
-      api.league()
+      api.league(fresh)
         .then((r) => {
           if (!current || mine !== latest) return
           setLeague(r)
@@ -35,9 +40,16 @@ export function useLeague(): League | null {
     }
     const shown = () => { if (!document.hidden && Date.now() - at > EVERY) look(0) }
     document.addEventListener('visibilitychange', shown)
+    again.current = look
     look(0)
-    return () => { current = false; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
+    return () => { current = false; again.current = null; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
   }, [])
+  const known = useRef<string | null>(null)
+  useEffect(() => {
+    if (theirs == null) return
+    if (known.current != null && known.current !== theirs) again.current?.(0, true)
+    known.current = theirs
+  }, [theirs])
   return league
 }
 

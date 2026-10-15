@@ -39,7 +39,7 @@ FRESH = 3 * 3600  # seconds a source's read is served before a fan's look asks f
 ASK = 3600  # and at most this often, so a source that's down isn't asked on every look
 SERVE = 2 * 86400  # a read older than this isn't served: a source down for days
 KEEP = 3 * 86400  # and Redis drops it after this
-BACK, AHEAD = 7, 14  # days a read covers before today (the latest day with results) and after it (Coming up's)
+BACK, AHEAD = 3, 14  # days a read covers before today (the latest day with results) and after it (Coming up's)
 RESULTS, COMING = 40, 40  # the most games each list serves
 CACHE = 60  # seconds the API keeps what it served (cached)
 
@@ -153,13 +153,18 @@ def _gather(now: datetime) -> tuple[list[dict[str, Any]], list[str], tuple[str |
     return games, stale, tuple(seen)
 
 
-def _serve(db: Session, games: list[dict[str, Any]], now: datetime, tz: int) -> dict[str, Any]:
+def _ranked(games: list[dict[str, Any]], now: datetime, tz: int) -> dict[str, Any]:
     results, day = _results(games, now, tz)
-    coming = _coming(games, now)
-    keys = {g["key"] for g in (*results, *coming)}
+    return {"day": day.isoformat() if day else None, "results": results, "coming": _coming(games, now)}
+
+
+def _with_events(db: Session, ranked: dict[str, Any]) -> dict[str, Any]:
+    """The answer, each game with the ids of the event it is here: looked up afresh every time, so a game a
+    fan's player is in from a moment ago (a follow from Today) is theirs."""
+    keys = {g["key"] for g in (*ranked["results"], *ranked["coming"])}
     events = {key: event_id for key, event_id in db.execute(select(Event.key, Event.id).where(Event.key.in_(keys)))} if keys else {}
-    return {"results": {"day": day.isoformat() if day else None, "games": [_shown(g, events) for g in results]},
-            "coming": {"games": [_shown(g, events) for g in coming]}}
+    return {"results": {"day": ranked["day"], "games": [_shown(g, events) for g in ranked["results"]]},
+            "coming": {"games": [_shown(g, events) for g in ranked["coming"]]}}
 
 
 def offer(db: Session, now: datetime | None = None, tz: int = 0) -> tuple[dict[str, Any], list[str]]:
@@ -168,18 +173,18 @@ def offer(db: Session, now: datetime | None = None, tz: int = 0) -> tuple[dict[s
     and the sources whose last read is over FRESH old, for the caller to ask a read of."""
     now = now or datetime.now(timezone.utc)
     games, stale, _ = _gather(now)
-    return _serve(db, games, now, tz), stale
+    return _with_events(db, _ranked(games, now, tz)), stale
 
 
-_served: dict[int, dict[str, Any]] = {}  # by UTC offset: when, of which reads, what
+_served: dict[int, dict[str, Any]] = {}  # by UTC offset: when, of which reads, the ranked games
 
 
 def cached(db: Session, tz: int = 0) -> tuple[dict[str, Any], list[str]]:
-    """offer(), every fan in a time zone served the same for up to CACHE seconds, and served anew as soon as
-    a source's read is."""
+    """offer(), its games ranked for every fan in a time zone once a CACHE (and anew as soon as a source's
+    read is), their events looked up every time."""
     now = datetime.now(timezone.utc)
     games, stale, seen = _gather(now)
     kept = _served.get(tz)
     if kept is None or kept["seen"] != seen or time.monotonic() - kept["at"] > CACHE:
-        kept = _served[tz] = {"at": time.monotonic(), "seen": seen, "value": _serve(db, games, now, tz)}
-    return cast(dict[str, Any], kept["value"]), stale
+        kept = _served[tz] = {"at": time.monotonic(), "seen": seen, "value": _ranked(games, now, tz)}
+    return _with_events(db, cast(dict[str, Any], kept["value"])), stale

@@ -176,7 +176,9 @@ export function TodayPage() {
   const { cards, loaded, failed } = useFollowing()
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
-  const league = useLeague()
+  // The events the fan's players are in, once their games have loaded: a change looks at the league again.
+  const theirKey = useMemo(() => (loaded ? [...theirEvents(cards)].sort((a, b) => a - b).join(',') : null), [cards, loaded])
+  const league = useLeague(theirKey)
   const railKey = useMemo(() => [cards, league], [cards, league])  // a rail that failed tries again on either
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })

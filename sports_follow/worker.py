@@ -213,7 +213,7 @@ async def read_live(ctx, system: str) -> None:
 
 
 async def read_league(ctx, system: str) -> None:
-    """A source's competitions' games, a week back and a fortnight on, for Today's big results and big games
+    """A source's competitions' games, three days back and a fortnight on, for Today's big results and big games
     coming up (league.read): queued by the API when a fan looks and the last read is a few hours old. In the
     refresh lane: no fan waits on it, so it stops short of the allowance kept for live games."""
     await in_lane('refresh', league.read, system)
