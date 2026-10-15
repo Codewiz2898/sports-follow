@@ -17,10 +17,18 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..adapters.base import Snapshot
+    from ..adapters.base import Fixture, Snapshot
     from ..models import Athlete
 
 ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+
+
+def ordinal(n: int | None) -> str:
+    """ "1st", "12th", "23rd"; "?" for no place."""
+    if not n:
+        return "?"
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 Line = dict[str, Any]  # {"headline": "38 PTS · 16 REB · 2 AST", "stats": [{"label", "value"}]}
 
 
@@ -68,6 +76,42 @@ class Poster:
     line: str = ""
     of: Found | None = field(default=None, compare=False)
     priority: int = field(default=0, compare=False)
+
+
+@dataclass
+class Notable:
+    """A game no fan's player need be in, as big as its sport rates it (Sport.notable), for Today's "Big
+    results" and "Big games coming up" (league.py): how big, on one scale for every sport, so the biggest of
+    all of them come first; and what its card says."""
+
+    rank: int  # 1 to 100: 90 a final, 75 a semi-final or a top-of-the-table game, 40 a game of a big league
+    word: str = ""  # a finished game's big word: its score ("4–1"), its margin ("By 6 wickets"), its winner
+    line: str = ""  # under it, who played and how it went: "Arsenal beat Chelsea"; the game's title if ""
+    why: str = ""  # what makes it big, in a word or two: "Final", "1st v 2nd", "Last ball"
+
+
+# How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
+# final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
+# those are read first.
+_STAGES = (
+    (re.compile(r"\bgrand[ -]?finals?\b", re.I), 3, "Grand final"),
+    (re.compile(r"\b(?:upper|lower|winners'?|losers'?)[ -]bracket[ -]finals?\b", re.I), 2, "Bracket final"),
+    (re.compile(r"\bsemi[ -]?finals?\b|\bsemis\b", re.I), 2, "Semi-final"),
+    (re.compile(r"\bquarter[ -]?finals?\b", re.I), 1, "Quarter-final"),
+    (re.compile(r"\bfinals?\b", re.I), 3, "Final"),
+    (re.compile(r"\bplay-?offs?\b|\bknock-?outs?\b|\beliminator\b|\bqualifier \d\b|\bround of (?:16|32)\b|\blast (?:16|8)\b", re.I), 1, "Playoffs"),
+)
+
+
+def stage(*texts: str | None) -> tuple[int, str]:
+    """How late in its competition a game is, from what its source calls its stage or round (several
+    texts: the first that says wins): 3 a final, 2 a semi-final (or a bracket's final), 1 another knockout
+    round, 0 a league or group game; and the word for it on a card ("Final", "Semi-final")."""
+    for text in texts:
+        for pattern, level, word in _STAGES:
+            if text and pattern.search(text):
+                return level, word
+    return 0, ""
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
@@ -275,6 +319,14 @@ class Sport:
         Moments are found only while a game is polled live, so a game first seen after it ended has none;
         where they're there they say more ("Late equaliser", "Upset") and win. None for a game without a
         high, and for a sport no module knows."""
+        return None
+
+    # ---- league-wide games: Today's big results and big games coming up (league.py)
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """How big a game its sources list league-wide is (Adapter.schedule), from what the source says of
+        it: its tier and facts, its stage (detail) and, once it's over, its result. None leaves it out. A
+        sport whose sources list no schedule has none."""
         return None
 
     # ---- live games and cards (structured.py)
