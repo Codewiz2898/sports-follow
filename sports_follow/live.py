@@ -102,8 +102,10 @@ def _dump(game: LiveGame, players: list[dict[str, Any]], fame: int) -> dict[str,
 
 def read(system: str, now: datetime | None = None) -> int:
     """Ask a source what it has on now, rank each game's players, and keep it for the API
-    (worker.read_live). Returns how many games."""
-    adapter = ADAPTERS[system]
+    (worker.read_live). Returns how many games: none from a source turned off since the read was asked for."""
+    adapter = ADAPTERS.get(system)
+    if adapter is None:
+        return 0
     games = cast(Any, adapter).live_now()
     with session() as db:
         blocked = registry.blocked(db)

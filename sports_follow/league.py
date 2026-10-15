@@ -77,8 +77,10 @@ def _dump(system: str, sport: str, f: Fixture, n: Notable) -> dict[str, Any]:
 def read(system: str, now: datetime | None = None) -> int:
     """Ask a source for its competitions' games from BACK days ago to AHEAD days on, keep those its sport
     ranks, finished or to come (a game on now is Live now's), for the API (worker.read_league). Returns how
-    many it kept."""
-    adapter = ADAPTERS[system]
+    many it kept: none from a source turned off since the read was asked for (the admin panel)."""
+    adapter = ADAPTERS.get(system)
+    if adapter is None:
+        return 0
     sport = sports.of(adapter.sport)
     now = now or datetime.now(timezone.utc)
     today = now.date()
