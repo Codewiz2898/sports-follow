@@ -60,7 +60,7 @@ VARIANTS = {
 }
 # badge-96: the small white mark Android shows in the status bar for a notification.
 PNGS = [("icon", 192), ("icon", 512), ("maskable", 192), ("maskable", 512), ("monochrome", 512), ("maskable", 180, "apple-touch-icon"), ("monochrome", 96, "badge-96"),
-        ("adaptive", 432), ("adaptive-monochrome", 432)]
+        ("adaptive", 432), ("adaptive-monochrome", 432), ("mark", 192)]
 
 
 def circles(v: dict, scale: float = 1.0) -> list[tuple[float, float, float]]:

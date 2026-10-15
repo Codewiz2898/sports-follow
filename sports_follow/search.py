@@ -566,6 +566,9 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
         "last": None,
         "stats": [],
         "stats_note": "",
+        # Whether this preview reads the athlete's games: a source whose fixtures take many reads (chess
+        # broadcasts) shows stats only until the athlete is followed.
+        "fixtures": adapter.preview_fixtures,
     }
     recent = []
     if adapter.preview_fixtures:

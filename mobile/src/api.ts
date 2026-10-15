@@ -1,18 +1,18 @@
-// The API client. It asks the same API as the web app (web/src/api.ts), over the network to stann.in rather
-// than a page's own origin, and with the web app's types (web/src/types.ts). EXPO_PUBLIC_API_URL, when Metro
-// bundles the app, points it elsewhere: `EXPO_PUBLIC_API_URL=http://10.0.2.2:8421 npm start` for the local
-// stack from the emulator.
-// The fan is the same cookie as on the web: React Native keeps cookies, so the app is one fan from its first
-// request on.
+// The API client: every call the web app makes (web/src/endpoints.ts), asked of stann.in over the network
+// rather than a page's own origin, with the web app's types (web/src/types.ts). EXPO_PUBLIC_API_URL, when
+// Metro bundles the app, points it elsewhere: `EXPO_PUBLIC_API_URL=http://10.0.2.2:8421 npm start` for the
+// local stack from the emulator. The fan is the same cookie as on the web: React Native keeps cookies, so
+// the app is one fan from its first request on.
 
 import Constants from 'expo-constants'
-import type { Card, FollowTarget, LiveSport, SearchResponse, SportCatalog } from '../../web/src/types'
+import { endpoints } from '../../web/src/endpoints'
+import type { SportCatalog } from '../../web/src/types'
 
 export type * from '../../web/src/types'
 
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://stann.in').replace(/\/$/, '')
 
-/** A refusal from the API: its message for the fan, and the HTTP status. */
+/** A refusal from the API: its message for the fan, and the HTTP status (0: the server couldn't be reached). */
 export class ApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
@@ -28,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(API_URL + path, {
       ...init,
       credentials: 'include', // the fan's cookie, as on the web (React Native sends it by default too)
-      headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}) },
+      headers: { accept: 'application/json', ...(init?.headers as Record<string, string> | undefined) },
     })
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
@@ -46,16 +46,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  ...endpoints(request),
   sports: () => request<SportCatalog>('/api/sports'),
-  following: () => request<{ players: Card[] }>('/api/me/following'),
-  follow: (target: FollowTarget) => request<{ player_id: number; card: Card }>('/api/follows', { method: 'POST', body: JSON.stringify(target) }),
-  unfollow: (playerId: number) => request<{ ok: boolean }>(`/api/follows/${playerId}`, { method: 'DELETE' }),
-  card: (playerId: number) => request<Card>(`/api/players/${playerId}/card`),
-  live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
-  search: (q: string, signal?: AbortSignal) => request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`, { signal }),
 }
 
-/** A URL the API gives relative to itself ("/api/photos/…"), made whole. */
+/** A URL the API gives relative to itself ("/api/photos/…", "/player/7"), made whole. */
 export function absolute(url?: string | null): string | undefined {
   if (!url) return undefined
   return url.startsWith('/') ? API_URL + url : url

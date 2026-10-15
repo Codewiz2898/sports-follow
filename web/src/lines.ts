@@ -131,3 +131,39 @@ export function comingCard(event: UpcomingEvent, now: number): { big: string; ey
   const time = start && !dateOnly(event.start_utc) ? start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'Time TBC'
   return { big, eyebrow: [left ? shortWhen(event.start_utc, now) : time, event.competition].filter(Boolean).join(' · ') }
 }
+
+// ---------------------------------------------------------------- a player's page
+
+/** The next game that hasn't started (a fixture with no date yet counts; one with a day but no time, all that day). */
+export function nextGame(card: Card, now: number): UpcomingEvent | undefined {
+  return (card.upcoming ?? []).find((u) => !parseDate(u.start_utc) || ahead(u.start_utc, now))
+}
+
+/** When the page last looked for a game: for a player bound to a source, the newest of its schedule read
+ * (every half hour) and its live polls; otherwise the agent's live check. */
+export function lastChecked(card: Card): string | null {
+  const f = card.freshness ?? {}
+  const stamps = (card.provenance ? [f.live, f.fixtures, card.provenance.upcoming?.at] : [f.live]).filter((at): at is string => Boolean(parseDate(at)))
+  return stamps.sort((a, b) => parseDate(b)!.getTime() - parseDate(a)!.getTime())[0] ?? null
+}
+
+/** Under a live player's board: how its scores come in. */
+export function liveUpdates(card: Card): string {
+  return card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia every few minutes as results are recorded.'
+    : card.live.source === 'PUBG' ? 'Standings update from PUBG after each match.'
+      : card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.`
+        : 'Live games refresh on their own about every minute.'
+}
+
+/** At the foot of a player's page: how late its live data can be. */
+export function liveLag(card: Card): string {
+  return card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."
+    : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.'
+      : 'Live data can lag the game by a minute or two.'
+}
+
+/** A result's score once a badge says won, drew or lost ("Won 133–128" is 133–128); null for a sentence
+ * ("West Indies won by 5 wkts"). */
+export function bareScore(result: string): string | null {
+  return /^(Won|Lost|Drew)\s+/.test(result) ? result.replace(/^(Won|Lost|Drew)\s+/, '') : null
+}

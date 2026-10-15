@@ -1,33 +1,40 @@
-// The root: the sports and the fan's players for every screen, and a stack with the tabs at the bottom of it
-// and a player's page over them.
+// The root: who's signed in, the sports, the fan's players and their activity for every page; one stack of
+// pages, as the web app's routes (main.tsx), with the floating tab bar over all of them.
 
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { View } from 'react-native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { AccountProvider } from '../account'
+import { ActivityProvider } from '../activity'
+import { SportsProvider } from '../catalog'
 import { FollowingProvider } from '../following'
-import { SportsProvider } from '../sports'
-import { colour, font } from '../theme'
+import { TabBar } from '../tabbar'
+import { colour } from '../theme'
+
+/** The fan's own state (which starts over when this phone signs in or out: account.tsx's epoch). */
+function Fan() {
+  return (
+    <FollowingProvider>
+      <ActivityProvider>
+        <View style={{ flex: 1, backgroundColor: colour.bg }}>
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colour.bg }, animation: 'slide_from_right' }} />
+          <TabBar />
+        </View>
+      </ActivityProvider>
+    </FollowingProvider>
+  )
+}
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
-      <SportsProvider>
-        <FollowingProvider>
-          <Stack
-            screenOptions={{
-              contentStyle: { backgroundColor: colour.paper },
-              headerStyle: { backgroundColor: colour.paper },
-              headerShadowVisible: false,
-              headerTintColor: colour.ink,
-              headerTitleStyle: { fontFamily: font.heavy, fontSize: 16 },
-            }}
-          >
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="player/[id]" options={{ title: '' }} />
-          </Stack>
-        </FollowingProvider>
-      </SportsProvider>
+      <AccountProvider>
+        <SportsProvider>
+          <Fan />
+        </SportsProvider>
+      </AccountProvider>
     </SafeAreaProvider>
   )
 }

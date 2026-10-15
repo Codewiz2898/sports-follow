@@ -26,14 +26,7 @@ export function useStarters(): { sports: StarterSport[] | null; failed: boolean 
   return { sports, failed }
 }
 
-/** Up to n starters' names, a sport at a time in turn: search's "Try" names. */
-export function starterNames(sports: StarterSport[] | null, n: number): string[] {
-  const out: string[] = []
-  for (let i = 0; out.length < n && (sports ?? []).some((s) => i < s.players.length); i++) {
-    for (const s of sports ?? []) if (i < s.players.length && out.length < n) out.push(s.players[i].name)
-  }
-  return out
-}
+export { starterNames } from '../search'
 
 /**
  * Follow, or unfollow, a result with one tap: whether it's followed, whether a tap is on its way, and the

@@ -26,9 +26,7 @@ TOKENS = re.compile(r"""//[^\n]*|/\*.*?\*/|(["'`])((?:\\.|(?!\1)[^\\\n])*)\1""",
 SPORT_LIMITS: dict[str, int] = {}
 VIEWS = "sports/"  # web/src/sports/<sport>.tsx: each sport's own view
 
-SOURCE_LIMITS = {
-    "pages/AthletePage.tsx": 2,
-}
+SOURCE_LIMITS: dict[str, int] = {}
 
 
 def named(wanted: set[str], root: Path = WEB) -> dict[str, list[tuple[int, str]]]:

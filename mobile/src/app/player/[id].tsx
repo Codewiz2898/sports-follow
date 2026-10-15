@@ -1,198 +1,328 @@
-// A player's page (GET /api/players/{id}/card): who they are in their sport's colour, the live game, what's
-// next, recent results, season numbers and news. Results history, form and each sport's scoreboard come with
-// the rest of the screens (BHA-231).
+// One player's page, the web's PlayerPage.tsx: a band of their sport's colour edge to edge with follow and alerts,
+// then Overview (the live board or next game, the last game, form, numbers, news, about), Matches, Stats and
+// News. Always from the full card, read again every 30 s while the page is open (every 3 s while it's built).
 
-import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { dateTime, dayLabel, playedOn, safeHref, shortWhen } from '../../../../web/src/format'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { LEVELS, levelText } from '../../../../web/src/alerts'
+import { day, outcome, playedOn, relative, shortName } from '../../../../web/src/format'
+import { bareScore, highlight, lastChecked, liveLag, liveUpdates, nextGame } from '../../../../web/src/lines'
+import { useAccount } from '../../account'
+import { useActivity } from '../../activity'
 import { api, type Card } from '../../api'
-import { Avatar, Button, Empty, LiveCard, SectionTitle } from '../../components'
+import { BuildProgress, formMarks, FormStrip, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SourceNote, StatGrid, UpcomingList } from '../../blocks'
+import { toneOf, useSports } from '../../catalog'
+import { useNow } from '../../clock'
 import { useFollowing } from '../../following'
-import { useSports, useTone } from '../../sports'
-import { colour, font, GUTTER, type } from '../../theme'
+import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../../icons'
+import { ResultsHistory, Segmented, StatsWithForm } from '../../results'
+import { colour, font, num, t } from '../../theme'
+import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner, WL } from '../../ui'
+import { Page } from '../../page'
+
+type Tab = 'overview' | 'matches' | 'stats' | 'news'
+type MatchesView = 'upcoming' | 'results'
 
 const EVERY_MS = 30_000
 const BUILDING_MS = 3_000
 
 export default function PlayerScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
-  const playerId = Number(id)
+  const params = useLocalSearchParams<{ id: string }>()
+  const playerId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
+  const insets = useSafeAreaInsets()
   const sports = useSports()
+  const following = useFollowing()
+  const isFollowing = following.isFollowing(playerId)
+  const research = useAccount().config?.research !== false // without the agent a failed page isn't tried again
+  const { muted, setMuted } = useActivity()
+  const now = useNow()
   const [card, setCard] = useState<Card | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null) // a follow, retry or alert change the server refused
+  const [tab, setTab] = useState<Tab>('overview')
+  const [matches, setMatches] = useState<MatchesView | null>(null)
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
 
-  const load = useCallback(() => api.card(playerId).then((c) => { setCard(c); setError(null); return c }).catch((e: Error) => { setError(e.message); return null }), [playerId])
-
-  // Every 30 s while the page is in front; every 3 s while the page is still being built.
+  // The card, and again every 30 s while the page is in front (every 3 s while it's being built).
   useFocusEffect(useCallback(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
+    if (!Number.isFinite(playerId)) { setError('No such player.'); return }
     let gone = false
-    const tick = async () => {
-      const c = await load()
-      if (!gone) timer = setTimeout(tick, c?.status === 'building' ? BUILDING_MS : EVERY_MS)
-    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = () => api.card(playerId)
+      .then((c) => { if (!gone) { setCard((prev) => (!prev || c.version >= prev.version ? c : prev)); setError(null) } return c })
+      .catch((e: Error) => { if (!gone) setError((prev) => prev ?? e.message); return null })
+      .then((c) => { if (!gone) timer = setTimeout(tick, c?.status === 'building' ? BUILDING_MS : EVERY_MS) })
     tick()
     return () => { gone = true; clearTimeout(timer) }
-  }, [load]))
-
-  const refresh = async () => {
-    setRefreshing(true)
-    await load()
-    setRefreshing(false)
-  }
+  }, [playerId]))
 
   if (!card) {
     return (
-      <View style={styles.screen}>
-        <Stack.Screen options={{ title: '' }} />
-        {error ? <Empty title="Can't open this page"><Text style={type.body}>{error}</Text></Empty> : null}
-      </View>
+      <Page>
+        {error ? <ErrorBox>{error}</ErrorBox> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}><Spinner /><Text style={[t.body, t.muted]}>Loading…</Text></View>}
+      </Page>
     )
   }
 
+  const p = card.player
+  const tone = toneOf(sports, p.sport)
+  const retired = p.status === 'retired'
+  const level = following.byId(playerId)?.alerts ?? card.alerts ?? 'key'
+  // A follow, retry or alert change the server turns down says why, under the band.
+  const attempt = (work: () => Promise<unknown>) => {
+    setFailure(null)
+    return work().catch((e: Error) => setFailure(e.message))
+  }
+  const retry = () => attempt(async () => setCard(await following.follow({ player_id: playerId })))
+  const toggleFollow = async () => {
+    setBusy(true)
+    await attempt(async () => {
+      if (isFollowing) { await following.unfollow(playerId); setAlertsOpen(false) } else await following.follow({ player_id: playerId })
+    })
+    setBusy(false)
+  }
+  const tabs: [Tab, string][] = retired
+    ? [['overview', 'Overview'], ['stats', 'Career'], ['matches', 'Results'], ['news', 'News']]
+    : [['overview', 'Overview'], ['matches', 'Matches'], ['stats', 'Stats'], ['news', 'News']]
+  const onBand = { fg: tone.on, border: tone.on, bg: 'transparent' }
+  const filled = { fg: tone.sport, border: tone.on, bg: tone.on }
+  const eventId = card.live.is_live ? card.live.event_id : null
+
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}>
-      <Stack.Screen options={{ title: card.player.name }} />
-      <Hero card={card} />
-      {card.status === 'building' ? <Text style={[type.small, styles.note]}>Building this page: {card.pending?.length ? card.pending.join(', ') : 'profile and news'} still to come.</Text> : null}
-      {card.status === 'failed' ? <Text style={[type.small, styles.error]}>{card.error || "This page couldn't be built."}</Text> : null}
+    <Page top={false} bar={tone.sport}>
+      <PlayerBand
+        topInset={insets.top}
+        name={p.name}
+        sport={p.sport}
+        photo={p.photo}
+        meta={[...(p.teams ?? []).slice(0, 2), p.role, retired && 'Retired'].filter(Boolean).join(' · ')}
+        back={<Btn kind="icon" accessibilityLabel="Back" colours={{ bg: tone.on }} icon={<BackIcon size={20} color={tone.sport} />} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
+        actions={
+          <>
+            {isFollowing ? (
+              <Btn kind="icon" accessibilityLabel={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} colours={{ bg: tone.on }} icon={<BellIcon size={20} color={tone.sport} />} onPress={() => setAlertsOpen((o) => !o)} style={alertsOpen ? { borderWidth: 3, borderColor: tone.sport } : undefined} />
+            ) : null}
+            <Btn label={isFollowing ? 'Following' : 'Follow'} icon={isFollowing ? <CheckIcon size={16} color={tone.sport} /> : <PlusIcon size={16} color={tone.on} />} colours={isFollowing ? filled : onBand} busy={busy} onPress={toggleFollow} />
+          </>
+        }
+      >
+        {alertsOpen && isFollowing ? (
+          <View style={s.alertPanel}>
+            <View style={s.row}>
+              <Text style={t.title}>Alerts for {shortName(p.name)}</Text>
+              <Text onPress={() => router.push({ pathname: '/notifications', params: { tab: 'settings' } })} style={[t.small, t.link]}>Settings</Text>
+            </View>
+            <Segmented full options={LEVELS.map((l) => [l.value, l.short])} value={level} onChange={(l) => { attempt(() => following.setAlerts(playerId, l)) }} />
+            <Text style={[t.small, t.muted]}>{levelText(level, sports.info(p.sport)).hint}</Text>
+            {eventId != null ? (
+              <Btn small label={muted.has(eventId) ? 'Unmute this game' : 'Mute this game'} style={{ alignSelf: 'flex-start' }} onPress={() => { attempt(() => setMuted(eventId, !muted.has(eventId))) }} />
+            ) : null}
+          </View>
+        ) : null}
+      </PlayerBand>
+      {failure ? <ErrorBox>{failure}</ErrorBox> : null}
 
-      {card.live?.is_live ? (
+      {card.status !== 'ready' ? (
+        <BuildProgress card={card} messages={[]} onRetry={research ? retry : undefined} research={research} />
+      ) : (
         <>
-          <SectionTitle>Live</SectionTitle>
-          <LiveCard title={card.live.event ?? card.player.name} live={card.live} sport={card.player.sport} />
-        </>
-      ) : null}
+          {card.pending ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Spinner />
+              <Text style={[t.small, t.muted, { flex: 1 }]}>Scores and fixtures are live. Still gathering news and background, about two minutes.</Text>
+            </View>
+          ) : null}
+          {card.pending_error ? <Text style={[t.small, t.muted]}>News and background couldn't be gathered: {card.pending_error}</Text> : null}
 
-      {card.upcoming?.length ? (
-        <>
-          <SectionTitle>Next</SectionTitle>
-          <View style={styles.box}>
-            {card.upcoming.slice(0, 3).map((u, i) => (
-              <View key={`${u.event_id ?? u.title}-${i}`} style={[styles.line, i > 0 && styles.divided]}>
-                <View style={styles.lineMain}>
-                  <Text style={type.bold} numberOfLines={2}>{u.title}</Text>
-                  <Text style={type.small} numberOfLines={1}>{[u.competition, u.venue].filter(Boolean).join(' · ')}</Text>
-                </View>
-                <Text style={styles.when}>{i === 0 ? dateTime(u.start_utc) : shortWhen(u.start_utc)}</Text>
-              </View>
+          <View style={s.tabs} accessibilityRole="tablist">
+            {tabs.map(([id, label]) => (
+              <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected: tab === id }} onPress={() => { setTab(id); setMatches(null) }} style={[s.tab, tab === id && s.tabOn]}>
+                <Text style={[s.tabText, tab === id && { color: colour.text }]}>{label}</Text>
+              </Pressable>
             ))}
           </View>
-        </>
-      ) : null}
 
-      {card.recent_results?.length ? (
-        <>
-          <SectionTitle>Results</SectionTitle>
-          <View style={styles.box}>
-            {card.recent_results.slice(0, 5).map((r, i) => (
-              <View key={`${r.event_id ?? r.title}-${i}`} style={[styles.line, i > 0 && styles.divided]}>
-                <View style={styles.lineMain}>
-                  <Text style={type.bold} numberOfLines={2}>{r.result}</Text>
-                  <Text style={type.small} numberOfLines={1}>{r.title}</Text>
-                  {r.player_contribution ? <Text style={type.small} numberOfLines={2}>{r.player_contribution}</Text> : null}
-                </View>
-                <Text style={styles.when}>{dayLabel(playedOn(r))}</Text>
-              </View>
-            ))}
-          </View>
-        </>
-      ) : null}
+          {tab === 'overview' ? <Overview card={card} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
+          {tab === 'matches' ? <Matches card={card} view={matches} setView={setMatches} /> : null}
+          {tab === 'stats' ? <View style={{ gap: 10 }}><StatsWithForm card={card} /></View> : null}
+          {tab === 'news' ? <NewsList items={card.news ?? []} empty="No recent news found." /> : null}
 
-      {card.season_stats?.length ? (
-        <>
-          <SectionTitle>{card.season_stats_note || sports.info(card.player.sport).stats_title}</SectionTitle>
-          <View style={styles.stats}>
-            {card.season_stats.slice(0, 8).map((s) => (
-              <View key={s.label} style={styles.stat}>
-                <Text style={[type.number, styles.statValue]} numberOfLines={1}>{s.value}</Text>
-                <Text style={type.eyebrow} numberOfLines={2}>{s.label}</Text>
-              </View>
-            ))}
-          </View>
+          <Text style={[t.tiny, t.muted]}>
+            {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
+            {card.built_at ? `Page built ${relative(card.built_at, now)} from ${card.sources?.length ?? 0} sources. ` : ''}{liveLag(card)}{' '}
+            <Text onPress={() => router.push('/credits')} style={t.link}>Credits</Text>
+          </Text>
         </>
-      ) : null}
-
-      {card.news?.length ? (
-        <>
-          <SectionTitle>News</SectionTitle>
-          <View style={styles.box}>
-            {card.news.slice(0, 5).map((n, i) => {
-              const href = safeHref(n.url)
-              return (
-                <Pressable key={`${n.url}-${i}`} disabled={!href} onPress={() => href && Linking.openURL(href)} style={[styles.news, i > 0 && styles.divided]}>
-                  <Text style={type.bold}>{n.headline}</Text>
-                  <Text style={type.small}>{n.source}</Text>
-                </Pressable>
-              )
-            })}
-          </View>
-        </>
-      ) : null}
-    </ScrollView>
+      )}
+    </Page>
   )
 }
 
-function Hero({ card }: { card: Card }) {
-  const tone = useTone(card.player.sport)
+/** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
+function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
+  const research = useAccount().config?.research !== false
   const sports = useSports()
-  const following = useFollowing()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const followed = following.isFollowing(card.player_id)
-
-  const toggle = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      if (followed) await following.unfollow(card.player_id)
-      else await following.follow({ player_id: card.player_id })
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const { muted, setMuted } = useActivity()
+  const now = useNow()
+  const p = card.player
+  const retired = p.status === 'retired'
+  const next = nextGame(card, now)
+  const checked = lastChecked(card)
+  const results = card.recent_results ?? []
+  const marks = formMarks(results, p.teams)
+  const last = results[0]
+  const wl = last && outcome(last.result, p.teams)
+  const word = last && highlight(sports.info(p.sport).key, last.player_contribution)
+  const score = last && bareScore(last.result)
+  const sportName = sports.name(p.sport) || 'this sport'
 
   return (
-    <View style={[styles.hero, { backgroundColor: tone.block }]}>
-      <View style={styles.heroTop}>
-        <Avatar card={card} size={72} />
-        <View style={styles.heroText}>
-          <Text style={[styles.heroSport, { color: tone.soft }]}>{[sports.name(card.player.sport), card.player.role].filter(Boolean).join(' · ')}</Text>
-          <Text style={[type.display, styles.heroName, { color: tone.on }]}>{card.player.name}</Text>
-          {card.player.teams?.length ? <Text style={[styles.heroTeams, { color: tone.soft }]} numberOfLines={2}>{card.player.teams.join(' · ')}</Text> : null}
+    <>
+      {card.live.is_live ? (
+        <>
+          <LiveScoreboard live={card.live} playerName={shortName(p.name)} sport={p.sport} teams={p.teams} />
+          {card.live.event_id != null && muted.has(card.live.event_id) ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[t.small, t.muted]}>Alerts from this game are muted.</Text>
+              <Btn kind="link" label="Unmute" onPress={() => { setMuted(card.live.event_id!, false).catch((e: Error) => onError(e.message)) }} />
+            </View>
+          ) : null}
+          <View style={s.row}>
+            <Text style={[t.tiny, t.muted, { flex: 1 }]}>{liveUpdates(card)}</Text>
+            <RefreshButton card={card} />
+          </View>
+        </>
+      ) : retired ? null : next ? (
+        <NextCard event={next} sport={p.sport}><RefreshButton card={card} colour={colour.bg} /></NextCard>
+      ) : card.live.available === false ? (
+        <Surface pad style={{ gap: 4 }}>
+          <Text style={t.title}>No live scores for {sportName} yet</Text>
+          <Text style={[t.small, t.muted]}>{research ? 'News, results and upcoming games on this page update a few times a day.' : "News, results and upcoming games on this page are as they were found, and aren't updated now."}</Text>
+        </Surface>
+      ) : (
+        <Surface pad style={s.row}>
+          <View style={{ gap: 4, flexShrink: 1 }}>
+            <Text style={t.title}>Not playing right now</Text>
+            <Text style={[t.small, t.muted]}>{checked ? `Checked ${relative(checked, now)}` : 'No upcoming games found'}</Text>
+          </View>
+          <RefreshButton card={card} />
+        </Surface>
+      )}
+      {!card.live.is_live && !retired && next && card.live.available === false ? (
+        <Text style={[t.tiny, t.muted]}>No live scores for {sportName} yet: {research ? 'results and news update a few times a day.' : "results and news aren't updated now."}</Text>
+      ) : null}
+
+      {last ? (
+        <View style={s.game}>
+          <View style={s.row}>
+            <Eyebrow>Last game</Eyebrow>
+            <Text style={[t.tiny, t.muted, { fontFamily: font[700], textAlign: 'right', flexShrink: 1 }]}>{[last.competition, day(playedOn(last))].filter(Boolean).join(' · ')}</Text>
+          </View>
+          <View style={[s.row, { justifyContent: 'flex-start' }]}>
+            {wl ? <WL mark={wl} /> : null}
+            <Text style={[t.title, { flex: 1 }]}>{last.title}</Text>
+            {score ? <Text style={num(26)}>{score}</Text> : null}
+          </View>
+          {!score ? <Text style={[t.small, { fontFamily: font[800] }]}>{last.result}</Text> : null}
+          <LineStats text={last.player_contribution} sport={p.sport} />
+          <View style={s.row}>
+            {word ? <Pill label={word} color={colour.text} outline /> : <View />}
+            <Btn kind="link" label="All results" onPress={() => show('matches', 'results')} />
+          </View>
         </View>
+      ) : null}
+
+      {marks.length >= 3 ? (
+        <Surface pad style={s.row}>
+          <View style={{ gap: 2 }}>
+            <Eyebrow>Form</Eyebrow>
+            <Text style={[t.small, { fontFamily: font[700] }]}>Last {marks.length}, newest first</Text>
+          </View>
+          <FormStrip marks={marks} />
+        </Surface>
+      ) : null}
+
+      {card.season_stats?.length ? (
+        <View style={{ gap: 10 }}>
+          <SectionHead title={retired ? 'Career' : 'Numbers'} right={<Btn kind="link" label="All stats" onPress={() => show('stats')} />} />
+          <StatGrid stats={card.season_stats.slice(0, 6)} />
+          <SourceNote provenance={card.provenance?.season_stats} note={card.season_stats_note} />
+        </View>
+      ) : null}
+
+      {(card.news ?? []).length > 0 ? (
+        <View style={{ gap: 10 }}>
+          <SectionHead title="News" right={(card.news ?? []).length > 2 ? <Btn kind="link" label="All news" onPress={() => show('news')} /> : undefined} />
+          <NewsList items={(card.news ?? []).slice(0, 2)} brief empty="" />
+        </View>
+      ) : null}
+
+      {p.summary ? (
+        <View style={{ gap: 10 }}>
+          <SectionHead title="About" />
+          <Text style={t.body}>{p.summary}</Text>
+          {p.disambiguation ? <Text style={[t.tiny, t.muted]}>{p.disambiguation}</Text> : null}
+        </View>
+      ) : null}
+    </>
+  )
+}
+
+/** Ask the source again, for when a game should be on and isn't showing. */
+function RefreshButton({ card, colour: ink = colour.text }: { card: Card; colour?: string }) {
+  const [refreshing, setRefreshing] = useState<string | null>(null)
+  const refresh = async () => {
+    setRefreshing('Checking…')
+    try {
+      const r = await api.refresh(card.player_id)
+      setRefreshing(r.queued ? (card.provenance ? 'Re-reading fixtures and stats…' : 'Checking the live score…') : r.reason ?? null)
+    } catch (e) {
+      setRefreshing((e as Error).message)
+    }
+    setTimeout(() => setRefreshing(null), 45000)
+  }
+  return (
+    <Pressable onPress={refresh} disabled={Boolean(refreshing)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, opacity: refreshing ? 0.55 : 1 }}>
+      <RefreshIcon size={14} color={ink} />
+      <Text style={[t.small, t.link, { color: ink }]}>{refreshing ?? 'Refresh'}</Text>
+    </Pressable>
+  )
+}
+
+/** Fixtures and results, one at a time, results when asked for. With no fixtures, a line says so above the results. */
+function Matches({ card, view: chosen, setView }: { card: Card; view: MatchesView | null; setView: (v: MatchesView) => void }) {
+  const retired = card.player.status === 'retired'
+  if (retired || !(card.upcoming ?? []).length) {
+    return (
+      <View style={{ gap: 10 }}>
+        {!retired ? <Text style={[t.small, t.muted]}>No games scheduled.</Text> : null}
+        <ResultsHistory card={card} />
       </View>
-      {card.player.summary ? <Text style={[styles.summary, { color: tone.on }]} numberOfLines={4}>{card.player.summary}</Text> : null}
-      <Button label={followed ? 'Following' : 'Follow'} kind={followed ? 'plain' : 'primary'} onPress={toggle} busy={busy} style={styles.heroButton} />
-      {error ? <Text style={[styles.summary, { color: tone.on }]}>{error}</Text> : null}
+    )
+  }
+  const view = chosen ?? 'upcoming'
+  return (
+    <View style={{ gap: 10 }}>
+      <Segmented<MatchesView> options={[['upcoming', 'Upcoming'], ['results', 'Results']]} value={view} onChange={setView} />
+      {view === 'upcoming' ? (
+        <>
+          <UpcomingList items={card.upcoming ?? []} empty="No upcoming games found." />
+          <SourceNote provenance={card.provenance?.upcoming} />
+        </>
+      ) : <ResultsHistory card={card} />}
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colour.paper },
-  content: { padding: GUTTER, paddingBottom: 40 },
-  note: { marginTop: 10 },
-  error: { marginTop: 10, color: colour.liveText },
-  hero: { borderRadius: 22, padding: 16, gap: 12 },
-  heroTop: { flexDirection: 'row', gap: 14, alignItems: 'center' },
-  heroText: { flex: 1, gap: 2 },
-  heroSport: { fontFamily: font.heavy, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' },
-  heroName: { fontSize: 34, lineHeight: 36 },
-  heroTeams: { fontFamily: font.bold, fontSize: 13 },
-  summary: { fontFamily: font.body, fontSize: 14, lineHeight: 20 },
-  heroButton: { alignSelf: 'flex-start' },
-  box: { backgroundColor: colour.surface, borderRadius: 22, paddingHorizontal: 14 },
-  line: { flexDirection: 'row', gap: 12, paddingVertical: 12, alignItems: 'flex-start' },
-  lineMain: { flex: 1, gap: 2 },
-  divided: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colour.line },
-  when: { fontFamily: font.heavy, fontSize: 12, color: colour.muted, textAlign: 'right', maxWidth: 120 },
-  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  stat: { backgroundColor: colour.surface, borderRadius: 18, padding: 12, width: '48%', gap: 4 },
-  statValue: { fontSize: 30, lineHeight: 32, color: colour.ink },
-  news: { paddingVertical: 12, gap: 2 },
+const s = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  alertPanel: { gap: 8, padding: 14, borderRadius: 18, backgroundColor: colour.surface },
+  tabs: { flexDirection: 'row', gap: 18, borderBottomWidth: 2, borderBottomColor: colour.line },
+  tab: { height: 44, justifyContent: 'center', borderBottomWidth: 3, borderBottomColor: 'transparent', marginBottom: -2 },
+  tabOn: { borderBottomColor: colour.text },
+  tabText: { fontFamily: font[800], fontSize: 13, letterSpacing: 1, textTransform: 'uppercase', color: colour.muted },
+  game: { gap: 14, padding: 18, borderRadius: 22, backgroundColor: colour.surface },
 })

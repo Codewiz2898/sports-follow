@@ -87,7 +87,7 @@ export function AthletePage() {
 
       {preview && !noSource && (
         <>
-          {preview.system !== 'lichess_chess' && (
+          {preview.fixtures !== false && (
             <>
               <section className="section" aria-label="Next">
                 <SectionHead title="Next" />
@@ -106,7 +106,7 @@ export function AthletePage() {
               {[preview.stats_note, `from ${preview.source}`].filter(Boolean).join(' · ')}
               {safeHref(preview.source_url) && <> · <a href={safeHref(preview.source_url)} target="_blank" rel="noreferrer" className="link">Profile</a></>}
             </p>
-            {preview.system === 'lichess_chess' && <p className="tiny muted">Their tournaments and live boards are found once you follow.</p>}
+            {preview.fixtures === false && <p className="tiny muted">Their tournaments and live boards are found once you follow.</p>}
           </section>
         </>
       )}
