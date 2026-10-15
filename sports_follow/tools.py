@@ -149,7 +149,7 @@ def fetch_url(url: str, max_chars: int = DEFAULT_CHARS) -> str:
     if urlparse(url).scheme not in ("http", "https"):
         raise ToolError("only http(s) URLs can be fetched")
     max_chars = max(1000, min(int(max_chars or DEFAULT_CHARS), MAX_CHARS))
-    # A source's own API (the prompt suggests ESPN's and Lichess's) spends that source's budget, so the
+    # A source's own API (the prompt points to the running ones', Provider.research) spends its budget, so the
     # agent can't take what live polls need, and its 429s pause the source for everyone.
     spends = budget.for_url(url)
     try:

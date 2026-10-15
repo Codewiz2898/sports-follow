@@ -620,6 +620,14 @@ def live_system(sport: str | None) -> str | None:
     return adapter.system if adapter else None
 
 
+def follow_system(sport: str | None, ids: dict[str, str]) -> str | None:
+    """The source an athlete with these source ids is followed through: their sport's live source, or,
+    where a sport's sources sit side by side, each for its own games (esports), the one their row came from."""
+    if sports.of(sport).side_by_side:
+        return next((s for s in ids if s in ADAPTERS), None)
+    return live_system(sport)
+
+
 def sport_of(system: str) -> str | None:
     """The Wikidata sport a running adapter serves ("football" for both football sources)."""
     adapter = ADAPTERS.get(system)

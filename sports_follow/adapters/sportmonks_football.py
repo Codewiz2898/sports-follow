@@ -21,7 +21,7 @@ from . import sportmonks
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
-MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type"
+MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type;metadata"
 PLAYER_INCLUDE = "teams.team;nationality"
 
 # Match states (…/football/states): everything else is "scheduled".
@@ -41,6 +41,7 @@ _LINE_STATS = [("GOALS", "Goals"), ("ASSISTS", "Assists"), ("SHOTS_TOTAL", "Shot
                ("FOULS", "Fouls"), ("OFFSIDES", "Offsides"), ("YELLOWCARDS", "Yellow"), ("REDCARDS", "Red"), ("MINUTES_PLAYED", "Minutes")]
 _SEASON_STATS = [("APPEARANCES", "Apps"), ("GOALS", "Goals"), ("ASSISTS", "Assists"), ("MINUTES_PLAYED", "Minutes"), ("YELLOWCARDS", "Yellow cards"), ("REDCARDS", "Red cards")]
 _STARTER, _BENCH = 11, 12  # lineup type ids
+_LINEUP_CONFIRMED = 572  # metadata type: {"confirmed": true} once the clubs have published their team sheets
 _GOALS = {"GOAL", "OWNGOAL", "PENALTY"}
 
 
@@ -140,8 +141,9 @@ def _values(row: dict[str, Any]) -> dict[str, Any]:
 
 def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
     """Each squad player's line, keyed by Sportmonks player id. Before kick-off there are none: a
-    published team sheet isn't a line yet."""
-    if status == "scheduled":
+    published team sheet isn't a line yet. Nor are Sportmonks' predicted line-ups, if the clubs' sheets
+    are still unconfirmed at kick-off: a guessed starter would be told as one."""
+    if status == "scheduled" or _predicted(x):
         return {}
     lines: dict[str, Line] = {}
     for row in x.get("lineups") or []:
@@ -228,9 +230,18 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
 
 
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
-    """The team sheet, published about an hour before kick-off: who starts and who's on the bench."""
+    """The team sheet, published about an hour before kick-off: who starts and who's on the bench. Until
+    then Sportmonks fills the line-ups with its own prediction (eleven starters a side, days ahead), marked
+    unconfirmed: that's nobody's team sheet, so it says nothing (seen 15 Oct 2026)."""
+    if _predicted(x):
+        return {}
     roles = {_STARTER: "starting", _BENCH: "bench"}
     return {str(r["player_id"]): roles[r.get("type_id")] for r in x.get("lineups") or [] if r.get("player_id") and r.get("type_id") in roles}
+
+
+def _predicted(x: dict[str, Any]) -> bool:
+    """Whether the line-ups are Sportmonks' prediction, not the clubs' published team sheets."""
+    return any(m.get("type_id") == _LINEUP_CONFIRMED and (m.get("values") or {}).get("confirmed") is False for m in x.get("metadata") or [])
 
 
 def parse_player(p: dict[str, Any], today: date | None = None) -> PlayerRef:

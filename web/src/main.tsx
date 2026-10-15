@@ -20,6 +20,7 @@ import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
 import { loadSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
+import { WelcomePage } from './pages/WelcomePage'
 import './styles.css'
 
 /** Desktop search: results drop down under the sidebar box. ↑ ↓ move, Enter opens, Shift+Enter follows, Esc closes, / focuses. */
@@ -181,6 +182,7 @@ function App() {
         <ErrorBoundary resetKey={pathname}>
           <Routes>
             <Route path="/" element={<TodayPage />} />
+            <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />

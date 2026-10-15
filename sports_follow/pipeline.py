@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 import re
 import unicodedata
@@ -754,10 +754,18 @@ def rebuild_due(card: PlayerCard, now: datetime) -> bool:
     return wanted and not bus.is_locked(f"build:{card.player_id}") and not _backing_off(card.player_id, now)
 
 
+def to_arm(games: Iterable[tuple[int, str | None, datetime | None, bool]], now: datetime) -> list[int]:
+    """Of scheduled games (id, sport, start, whether a source polls it), those to arm now: each within its
+    sport's lead. A game no source polls gets agent live checks once armed, which can't see a team sheet,
+    so it keeps the usual lead."""
+    return [game for game, sport, start, polled in games if start is not None and start <= now + structured.arm_before(sport if polled else None)]
+
+
 def due_work(now: datetime | None = None) -> Due:
     """What the scheduler should enqueue now. Only followed players get work.
 
-    Events move scheduled -> armed at T-30 min. An armed or live event with a live binding gets one
+    Events move scheduled -> armed at T-30 min, or earlier for a sport whose team sheets come out sooner
+    (football's, at T-75 min: structured.arm_before). An armed or live event with a live binding gets one
     poll job, shared by every player in it, or, from a source that fetches many events in one
     request, a place in that source's lane; players without a binding get agent live checks.
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
@@ -765,18 +773,18 @@ def due_work(now: datetime | None = None) -> Due:
     keep failing waits longer each time (structured.retry_at), and none is refreshed while their
     source is down to what its live games need (structured.spare).
     """
-    from .config import ARM_BEFORE_START, FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
+    from .config import FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
 
     now = now or _now()
     due = Due()
     lives: set[int] = set()
     with session() as db:
         followed = select(Follow.player_id).distinct()
-        db.execute(
-            update(Event)
-            .where(Event.status == "scheduled", Event.start_utc.is_not(None), Event.start_utc <= now + timedelta(seconds=ARM_BEFORE_START), Event.start_utc >= now - timedelta(hours=6))
-            .values(status="armed")
-        )
+        window = (Event.status == "scheduled", Event.start_utc.is_not(None), Event.start_utc <= now + structured.arm_before_any(), Event.start_utc >= now - timedelta(hours=6))
+        soon = db.execute(select(Event.id, Event.sport, Event.start_utc, Event.live_binding.is_not(None)).where(*window)).all()
+        arm = to_arm(soon, now)
+        if arm:
+            db.execute(update(Event).where(Event.id.in_(arm), *window).values(status="armed"))
         db.execute(
             update(Event)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))

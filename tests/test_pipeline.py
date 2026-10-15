@@ -441,3 +441,34 @@ def test_a_typed_name_a_source_knows_lands_on_the_player_holding_that_athlete(mo
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
     assert pipeline._start_from_source(3, adapter, ref) == 2
     assert db.deleted == [typed]
+
+
+# ---------------------------------------------------------------- arming (BHA-43)
+
+
+def test_a_football_match_is_armed_when_its_team_sheets_come_out(monkeypatch):
+    # Line-ups are out 75 minutes before kick-off (the Premier League's rule since 2024-25); armed at 30
+    # minutes, "starts" or "on the bench" reached fans 45 minutes late. Other sports keep the 30 minutes.
+    monkeypatch.setattr(structured, "ARM_BEFORE_START", 30 * 60)
+    games = [(1, "Football", NOW + timedelta(minutes=74), True), (2, "Football", NOW + timedelta(minutes=76), True),
+             (3, "Chess", NOW + timedelta(minutes=74), True), (4, "Chess", NOW + timedelta(minutes=29), True), (5, None, NOW + timedelta(minutes=29), False),
+             (6, "Football", NOW + timedelta(minutes=74), False)]  # no source polls it: agent live checks can't see a team sheet
+    assert pipeline.to_arm(games, NOW) == [1, 4, 5]
+    assert structured.arm_before_any() == timedelta(minutes=75)
+
+
+def test_the_tick_arms_what_is_due(monkeypatch):
+    soon = iter([[(7, "Football", NOW + timedelta(minutes=60), True), (8, "Cricket", NOW + timedelta(minutes=60), True)]])
+    db = FakeDb(answers={"Event.id": lambda: next(soon, [])})  # the games starting soon; nothing armed or live yet
+    armed = []
+    real_execute = db.execute
+
+    def execute(stmt):
+        if isinstance(stmt, Update) and "event.id IN" in str(stmt):
+            armed.extend(stmt.compile().params["id_1"])
+        return real_execute(stmt)
+
+    db.execute = execute
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
+    pipeline.due_work(NOW)
+    assert armed == [7]

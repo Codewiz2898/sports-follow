@@ -384,6 +384,10 @@ class PandascoreEsports(Adapter):
             "note": "Run by the OpenDota community, best effort.",
         }]
 
+    def credit(self, snap: Snapshot) -> str:
+        # The inside of a Dota 2 map comes from OpenDota (_dota): credit both.
+        return f"{self.name} and OpenDota" if snap.state.get("dota") else self.name
+
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
         params = {"search[name]": name, "filter[videogame_id]": ",".join(str(i) for i in GAME_IDS.values()), "page[size]": 10}
         rows = pandascore.get_json("/players", ttl=24 * 3600, **params)

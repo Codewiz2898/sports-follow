@@ -396,3 +396,12 @@ def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
     assert polls == [] and event.status == "final"
     assert card_row.card["live"] == {"is_live": False, "player_stats": []} and not card_row.is_live
     assert card_row.card["upcoming"] == []
+
+
+def test_a_game_moved_later_is_disarmed_by_its_own_sports_lead(monkeypatch):
+    # BHA-43: an armed football match is polled from 75 minutes out; moved a little later it stays armed,
+    # moved hours later it isn't polled all that time.
+    monkeypatch.setattr(structured, "ARM_BEFORE_START", 30 * 60)
+    assert structured.arm_before("Football") == timedelta(minutes=75)
+    assert structured.arm_before("Chess") == structured.arm_before(None) == timedelta(minutes=30)
+    assert structured.arm_before("golf") == timedelta(minutes=30)  # a sport no module knows

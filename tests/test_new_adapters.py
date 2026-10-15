@@ -234,6 +234,32 @@ def test_chess_rate_limit_fails_the_whole_read(monkeypatch):
         lichess_chess.LichessChess().fixtures(ref)
 
 
+def test_every_lichess_request_goes_to_an_address_lichess_has(monkeypatch):
+    # 15 Oct 2026: API was set twice, the second time ending in "/", so every request went to
+    # https://lichess.org/api//… and Lichess answered 404: chess had no fixtures, games, ratings or search.
+    from sports_follow.adapters.base import PlayerRef
+
+    urls = []
+
+    def fake_get_json(url, ttl, text=False):
+        urls.append(url)
+        return "" if text else {"currentPageResults": [], "rounds": [], "tour": {}}
+
+    monkeypatch.setattr(lichess_chess, "get_json", fake_get_json)
+    chess = lichess_chess.LichessChess()
+    ref = PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"], "https://lichess.org/fide/1503014/Carlsen_Magnus")
+    for read in (lambda: chess.fixtures(ref), lambda: chess.find_player("Magnus Carlsen"), lambda: chess.snapshot({"round": "abc", "game": "x"})):
+        try:
+            read()
+        except Exception:  # noqa: BLE001 — empty answers may not parse; only the addresses matter here
+            pass
+    assert urls
+    assert all(url.startswith("https://lichess.org/") and "//" not in url.split("://", 1)[1] for url in urls), urls
+    assert any(url.startswith("https://lichess.org/api/fide/player") for url in urls)
+    # The addresses the reads above don't reach (a tournament's rounds, its PGN, a player's stats): API ends in "/".
+    assert lichess_chess.API.endswith("/") and 'f"{API}/' not in Path(lichess_chess.__file__).read_text()
+
+
 def test_tournament_pgn_gives_every_round_in_one_read():
     with gzip.open(FIXTURES / "lichess/tour-ewc-playoffs.pgn.gz", "rt") as f:
         rounds = lichess_chess.parse_pgn_rounds(f.read())

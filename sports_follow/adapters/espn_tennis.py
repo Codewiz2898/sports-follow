@@ -211,6 +211,7 @@ class EspnTennis(espn.EspnAdapter, Adapter):
     covers = "Tennis"
     espn_uid = SPORT_UID
     espn_leagues = TOURS
+    research_leagues = ("tennis/atp",)
 
     def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
         return (league or description).upper()  # "ATP"

@@ -3,8 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
-
-const SUGGESTIONS = ['Virat Kohli', 'Magnus Carlsen', 'Caitlin Clark', 'Carlos Alcaraz', 'Nikola Jokić', 'Mohamed Salah']
+import { starterNames, useStarters } from '../components/Starters'
 
 /** Follow a player: search every source as you type, pick the exact athlete, or hand a name to the research agent. */
 export function SearchPage() {
@@ -13,6 +12,7 @@ export function SearchPage() {
   const [sport, setSport] = useState(params.get('sport') ?? '')
   const { data, fresh, loading, error } = useSearch(query, sport)
   const actions = useSearchActions()
+  const tries = starterNames(useStarters().sports, 6)  // the starters, a sport at a time (starters.py)
 
   // The query lives in the URL, so back from a preview returns to the same results.
   useEffect(() => {
@@ -46,12 +46,16 @@ export function SearchPage() {
         <SearchResults data={data} query={query} loading={loading} actions={actions} />
       ) : (
         <section className="section" aria-label="Try">
-          <SectionHead title="Try" />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {SUGGESTIONS.map((name) => (
-              <button key={name} type="button" className="btn small" onClick={() => setQuery(name)}>{name}</button>
-            ))}
-          </div>
+          {tries.length > 0 && (
+            <>
+              <SectionHead title="Try" />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {tries.map((name) => (
+                  <button key={name} type="button" className="btn small" onClick={() => setQuery(name)}>{name}</button>
+                ))}
+              </div>
+            </>
+          )}
           <p className="small muted" style={{ marginTop: 4 }}>Pick an athlete and their live scores start at once; the research agent adds news and background in a couple of minutes. Names no source knows can be researched with AI, a few a day.</p>
         </section>
       )}

@@ -38,7 +38,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -440,6 +440,13 @@ async def _following(fan: str) -> list[dict[str, Any]]:
 @app.get("/api/me/following")
 async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
     return {"players": await _following(fan)}
+
+
+@app.get("/api/starters")
+async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Who a new fan is offered to follow, by sport (starters.py): the welcome's picker, an empty Today's,
+    and search's "Try" names. Rows are search results, so following one is the same call."""
+    return {"sports": await in_db(starters.offer, fan)}
 
 
 # ---------------------------------------------------------------- AI research allowance
