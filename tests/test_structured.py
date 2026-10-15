@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -396,6 +397,36 @@ def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
     assert polls == [] and event.status == "final"
     assert card_row.card["live"] == {"is_live": False, "player_stats": []} and not card_row.is_live
     assert card_row.card["upcoming"] == []
+
+
+class RenamingSource:
+    """A source that now names A1 and B1 (its old ids) A2 and B2."""
+
+    system = "fake_source"
+
+    def rekey(self, ref):
+        return replace(ref, athlete_id=ref.athlete_id[0] + "2") if ref.athlete_id.endswith("1") else None
+
+
+def test_every_player_bound_to_a_source_that_renamed_them_moves_to_the_new_id(monkeypatch, redis, caplog):
+    # BHA-216: followed or not, so no old id stays on a page in search beside the registry's row. A player
+    # whose new id another holds (fans had followed both of a pro's rows) stays, named once a day to merge.
+    def bound(player_id, athlete_id):
+        return SourceBinding(player_id=player_id, purpose="fixtures", adapter="fake_source", confidence=0.8, locator={"system": "fake_source", "athlete_id": athlete_id, "name": "P", "team_ids": ["T"], "team_names": ["T"]})
+
+    holders = iter([None, 9])  # nobody holds A2; player 9 holds B2
+    db = FakeDb(bound(1, "A1"), bound(2, "B1"), bound(3, "C2"), answers={"PlayerIdentity.player_id": lambda: next(holders)})
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    recorded = []
+    monkeypatch.setattr(structured, "record", lambda player_id, ref, confidence=1.0: recorded.append((player_id, ref.athlete_id, ref.name, confidence)) or True)
+    assert structured.rekey_bound(RenamingSource()) == 1
+    assert recorded == [(1, "A2", "P", 0.8)]
+    assert "player 2 (B1) is player 9 (B2); merge them" in caplog.text
+    caplog.clear()
+    holders = iter([None, 9])
+    structured.rekey_bound(RenamingSource())
+    assert "merge them" not in caplog.text  # once a day
+    assert structured.rekey_bound(SimpleNamespace(system="other_source")) == 0  # a source that never renamed anyone
 
 
 def test_a_game_moved_later_is_disarmed_by_its_own_sports_lead(monkeypatch):

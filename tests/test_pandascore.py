@@ -326,3 +326,11 @@ def test_the_token_goes_in_a_header_and_a_429_pauses_reads(monkeypatch):
         raise AssertionError("expected the pause")
     except pandascore.RateLimited:
         assert len(seen) == 2  # paused: nothing sent
+
+
+def test_live_now_lists_every_series_on_by_its_teams(monkeypatch):
+    asked = []
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or [LIVE, _match("finished", 2, 0, id=99)])
+    [game] = ps.PandascoreEsports().live_now()
+    assert asked == ["/matches/running"]
+    assert game.snapshot.status == "live" and game.players == [] and len(game.teams) == 2  # a match names no players: live.py asks the registry

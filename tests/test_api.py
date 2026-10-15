@@ -10,7 +10,8 @@ are fans, but fans from before keep their ids (BUG-013). The card is private and
 fan's own fields (BUG-038). Ids no row can have, odd bodies and source ids of the wrong shape are
 refused plainly, never a 500 (BUG-039, BUG-078). The research counter never goes below zero (BUG-079).
 Each request is logged once, under an id its jobs take along (BHA-192), and is the root span of a
-trace they continue (BHA-193).
+trace they continue (BHA-193). An exception that escapes a route is that line's, with its stack, and the
+web app's errors are logged with their page, build, request id and source, so many an hour (BHA-196).
 Redis, the database and the job queue are fakes.
 """
 
@@ -26,12 +27,12 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, structured
+from sports_follow import alerts, bus, db as db_module, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -413,6 +414,126 @@ def test_a_proxys_request_id_is_kept_and_the_query_string_never_logged(api, capl
     lines = _request_lines(caplog)
     assert [line.context["rid"] for line in lines] == [kept.headers["x-request-id"], made.headers["x-request-id"]]
     assert all(line.path == "/api/sports" and "private" not in line.getMessage() for line in lines)
+
+
+# ---------------------------------------------------------------- errors (BHA-196)
+
+
+def test_an_exception_in_a_route_is_its_requests_line_with_the_stack_and_a_500(api, monkeypatch, caplog, spans):
+    def broken(db, query):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(pipeline, "resolve_or_create", broken)
+    caplog.set_level(logging.INFO, "sports_follow")
+
+    async def go():
+        # Nothing goes on to uvicorn, which would log the stack again: this transport would raise it here.
+        transport = httpx.ASGITransport(app=server.app, client=(PUBLIC, 50000), raise_app_exceptions=True)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/api/follows", json={"query": "Brand New Name"}, headers={"Cookie": f"sf_fan={server.sign_fan('fan')}"})
+
+    answer = asyncio.run(go())
+    assert (answer.status_code, answer.text) == (500, "Internal Server Error") and logs.given_id(answer.headers["x-request-id"])
+    [line] = _request_lines(caplog)
+    assert line.levelno == logging.ERROR and line.status == 500 and line.route == "/api/follows" and line.exc_info[0] is RuntimeError
+    assert line.error == "RuntimeError" and line.place.startswith("sports_follow.") and line.context["rid"] == answer.headers["x-request-id"]
+    [request] = [s for s in spans.get_finished_spans() if s.kind == SpanKind.SERVER]
+    assert request.status.status_code == StatusCode.ERROR and [e.name for e in request.events] == ["exception"]
+
+
+def test_an_exception_after_the_answer_started_is_logged_once_and_ends_the_connection(caplog):
+    """A stream that fails part way: its line has the stack, and uvicorn's own line about it is left out."""
+    async def stream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
+        await send({"type": "http.response.body", "body": b"data: 1\n\n", "more_body": True})
+        raise ConnectionError("redis went away")
+
+    caplog.set_level(logging.INFO, "sports_follow")
+    logs.setup()
+
+    async def go():
+        transport = httpx.ASGITransport(app=server.RequestLog(stream), raise_app_exceptions=True)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/api/me/stream")
+
+    with pytest.raises(ConnectionError) as raised:
+        asyncio.run(go())
+    [line] = _request_lines(caplog)
+    assert line.levelno == logging.ERROR and line.status == 200 and line.exc_info[1] is raised.value and line.error == "ConnectionError"
+    uvicorns = logging.getLogger("uvicorn.error").makeRecord("uvicorn.error", logging.ERROR, __file__, 1, "Exception in ASGI application", (), (ConnectionError, raised.value, raised.value.__traceback__))
+    assert not logs._said(uvicorns)
+
+
+# A source map for the build "index-B3kd8.js": its first line's columns 0, 10 and 20 come from PlayerPage.tsx
+# (lines 1 and 5) and from react-dom (line 10).
+SOURCE_MAP = {"version": 3, "sources": ["../../src/pages/PlayerPage.tsx", "../../node_modules/react-dom/x.js"], "names": [], "mappings": "AAAA,UAIE,UCKF"}
+
+
+def _web_lines(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "sports_follow.web"]
+
+
+def test_a_web_app_error_is_logged_with_its_page_build_source_and_the_failed_calls_id(api, monkeypatch, caplog, tmp_path):
+    (tmp_path / "index-B3kd8.js.map").write_text(json.dumps(SOURCE_MAP))
+    monkeypatch.setattr(web_errors, "MAPS", tmp_path)
+    web_errors._read.cache_clear()
+    caplog.set_level(logging.INFO, "sports_follow")
+    stack = "TypeError: c is undefined\n    at Xe (https://stann.in/assets/index-B3kd8.js:1:25)\n    at Ye (https://stann.in/assets/index-B3kd8.js?v=2:1:12)"
+    render = api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "render", "name": "TypeError", "message": "c is undefined, from https://stann.in/search?q=private", "stack": stack,
+        "page": "/search?q=private+words", "version": "index-B3kd8",
+    })
+    call = api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "api", "name": "ApiError", "message": "Request failed (502)", "page": "/player/7", "version": "index-B3kd8",
+        "call": "get /api/players/7/card?fresh=1", "status": 502, "request_id": "ab12cd34ef56ab78",
+    })
+    assert render.status_code == call.status_code == 204
+    one, two = _web_lines(caplog)
+    assert (one.error, one.place, one.kind, one.page, one.version) == ("TypeError", "web/src/pages/PlayerPage.tsx", "render", "/search", "index-B3kd8")
+    assert one.exc.splitlines() == ["TypeError: c is undefined", "    at Xe (web/node_modules/react-dom/x.js:10:1)", "    at Ye (web/src/pages/PlayerPage.tsx:5:3)"]
+    assert "private" not in one.getMessage() + str(vars(one)) and one.context["fan"] == logs.fan("fan")
+    assert (two.error, two.place, two.call, two.call_status, two.call_rid) == ("HTTP 502", "GET /api/players/{player_id}/card", "GET /api/players/7/card", 502, "ab12cd34ef56ab78")
+    # A stack from a build this server doesn't have stays as it came; a request id that isn't one is left out.
+    api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "error", "name": "Error", "message": "boom", "stack": "Error: boom\n    at https://stann.in/assets/index-0ld.js:1:5", "page": "/", "request_id": "not an id",
+    })
+    old = _web_lines(caplog)[-1]
+    assert old.exc.splitlines()[1] == "    at assets/index-0ld.js:1:5" and old.place == "assets/index-0ld.js" and not hasattr(old, "call_rid")
+
+
+def test_a_web_report_of_any_shape_is_logged_or_refused_never_a_500(api, monkeypatch, caplog, tmp_path):
+    """An address urllib can't read, a stack naming builds this server doesn't have: logged as they are.
+    A failed call is grouped by its route, whatever its ids look like."""
+    (tmp_path / "index-B3kd8.js.map").write_text(json.dumps(SOURCE_MAP))
+    monkeypatch.setattr(web_errors, "MAPS", tmp_path)
+    web_errors._read.cache_clear()
+    caplog.set_level(logging.INFO, "sports_follow")
+    made_up = "\n".join(f"    at x (https://stann.in/assets/{name}.js:1:5)" for name in ["index-B3kd8", "a1", "a2", "a3", "a4", "a5"] * 10)
+    for body in [
+        {"kind": "error", "message": "boom", "page": "//[", "stack": made_up},
+        {"kind": "api", "page": "/", "call": "GET //[x", "status": 500},
+        {"kind": "api", "page": "/", "call": "GET /api/athletes/espn_soccer/abc-12", "status": 503},
+        {"kind": "render", "page": "/", "stack": "/src" * 4000},
+    ]:
+        assert api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body=body).status_code == 204
+    assert web_errors._read.cache_info().misses == 1  # made-up builds cost a look, not a read
+    assert [r.place for r in _web_lines(caplog)][1:3] == ["GET //[x", "GET /api/athletes/{system}/{athlete_id}"]
+    assert db_module.engine.hide_parameters  # a failed query's stack never has its values (a fan's id)
+
+
+def test_the_web_app_sends_only_so_many_errors_an_hour(api, monkeypatch, caplog):
+    monkeypatch.setattr(web_errors, "PER_FAN", 2)
+    monkeypatch.setattr(web_errors, "PER_ADDRESS", 3)
+    caplog.set_level(logging.INFO, "sports_follow")
+
+    def send(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/errors", fan=fan, address=address, body={"kind": "error", "message": "boom", "page": "/"}).status_code
+
+    assert [send("fan"), send("fan"), send("fan")] == [204, 204, 429]
+    assert [send("other"), send("other")] == [204, 429]  # the address's third, then its fourth
+    assert send("third", "81.2.69.143") == 204  # another address isn't held up
+    assert len(_web_lines(caplog)) == 4
+    assert api.call("POST", "/api/errors", fan="fan", body={"kind": "nonsense", "page": "/"}).status_code == 422
 
 
 # ---------------------------------------------------------------- writes (BUG-029)
@@ -828,6 +949,21 @@ def test_the_card_is_private_and_its_etag_changes_with_anything_in_it(api):
     assert failed.status_code == 200 and failed.json()["status"] == "failed"
 
 
+def test_the_follow_list_carries_every_result_the_card_keeps():
+    # Today's results rail shows each of a player's games since yesterday, so the list sends all the card
+    # keeps (newest first, as the card has them), and the newest stays first for the tiles. News stays at three.
+    results = [{"title": f"Game {i}", "result": "Won 1–0", "start_utc": f"2026-10-1{5 - i}T18:00:00Z", "event_id": 100 + i} for i in range(structured.RECENT_LIMIT)]
+    card = {"player_id": 1, "version": 3, "status": "ready", "recent_results": results, "news": [{"headline": str(i)} for i in range(5)]}
+    summary = server._summary(card)
+    assert summary["recent_results"] == results and summary["recent_results"][0]["title"] == "Game 0"
+    assert len(summary["news"]) == 3
+    # An agent that wrote more than it was asked for sends no more than a bound player's card keeps.
+    many = [*results, *results]
+    assert server._summary({**card, "recent_results": many})["recent_results"] == results
+    # A card without results (one still building) sends an empty list, as before.
+    assert server._summary({"player_id": 2, "status": "building"})["recent_results"] == []
+
+
 # ---------------------------------------------------------------- ids and bodies (BUG-039)
 
 
@@ -870,6 +1006,18 @@ def test_following_by_id_takes_a_whole_number_only(api, player_id, status):
 def test_a_typed_name_with_a_control_character_is_refused(api):
     assert api.call("POST", "/api/follows", fan="fan", body={"query": "Brand\x00New Name"}).status_code == 400
     assert not any(k.startswith("research") for k in api.redis.data)  # and nothing was counted
+
+
+@pytest.mark.parametrize("name", ["Kane<script>alert(1)</script>", "Kane<img src=x onerror=alert(2)>", "Kane >"])
+def test_a_typed_name_with_markup_is_refused(api, name):
+    answer = api.call("POST", "/api/follows", fan="fan", body={"query": name})
+    assert answer.status_code == 400 and "<" in answer.json()["detail"]
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert not [s for s in api.statements if isinstance(s, Insert)]  # no player, alias or follow kept
+
+
+def test_a_typed_name_with_an_apostrophe_or_ampersand_is_still_a_name(api):
+    assert api.call("POST", "/api/follows", fan="fan", body={"query": "N'Golo Kanté & co"}).status_code == 200
 
 
 @pytest.mark.parametrize("method, body", [
@@ -933,8 +1081,9 @@ def test_a_source_that_doesnt_answer_is_still_a_502(api, monkeypatch):
     ("liquipedia_esports", "pubgmobile:Team_SouL_p1", True),
     ("liquipedia_esports", "pubgmobile:X]] OR [[pagename::Y", False),  # the page goes into a LiquipediaDB condition
     ("liquipedia_esports", "Jonathan", False),
-    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", True),
-    ("pubg_esports", "account.x", False),
+    ("pubg_esports", "flc_tgltn", True),  # a pro: team tag and name (BHA-216)
+    ("pubg_esports", "account.c0e530e9b7244b358def282782f893af", False),  # one event's account, as pros were followed by once
+    ("pubg_esports", "flc_tgltn?x=1", False),
 ])
 def test_each_source_takes_ids_of_its_own_shape(system, athlete_id, ok):
     assert server._source_id_ok(system, athlete_id) is ok
@@ -1000,3 +1149,60 @@ def test_a_device_moves_to_another_fan_only_with_its_own_keys(api):
     assert subscribe("fan-b", "new-key", "new-auth").status_code == 200 and api.devices[endpoint] == ("fan-b", "new-key", "new-auth")
     trims = [s for s in api.statements if isinstance(s, Delete) and s.table.name == "push_subscription"]
     assert len(trims) == 3  # the device cap, after each subscription that went through
+
+
+def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
+    """GET /api/starters answers from starters.offer for this fan (whose follows mark the rows); starters.py
+    and tests/test_players.py hold what's offered."""
+    asked = []
+    offer = [{"key": "chess", "label": "Chess", "players": [{"key": "lichess_chess:gukesh", "name": "Gukesh D", "following": True}]}]
+    monkeypatch.setattr(starters, "offer", lambda db, fan: asked.append(fan) or offer)
+    answer = api.call("GET", "/api/starters", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {"sports": offer} and asked == ["fan"]
+
+
+# ---------------------------------------------------------------- without the research agent
+
+
+def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_a_model(api, monkeypatch):
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): an esports pro picked in search is followed from PandaScore
+    # with no build queued, and a name or registry athlete no source has is refused, counted nowhere.
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "AGENT", False)
+    tenz = PlayerRef("pandascore_esports", "8742", "TenZ", ["1"], ["Sentinels"], game="Valorant")
+    monkeypatch.setitem(ADAPTERS, tenz.system, KNOWN[tenz.system])  # PandaScore runs only with its token
+    monkeypatch.setattr(ADAPTERS[tenz.system], "player", lambda athlete_id, league=None: tenz)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, True))
+    answer = api.call("POST", "/api/follows", fan="fan", body={"system": tenz.system, "athlete_id": tenz.athlete_id})
+    assert answer.status_code == 200 and answer.json()["player_id"] == 5
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def nowhere(person):
+        return None
+
+    monkeypatch.setattr(server, "_resolve", nowhere)
+    monkeypatch.setattr(pipeline, "start_from_registry", lambda person: pytest.fail("a page for the agent was started"))
+    for body, said in [({"qid": "Q99", "sport": "football"}, "No live source has Some One's games"), ({"query": "Brand New Name"}, "Pick an athlete from the search results")]:
+        answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
+        assert answer.status_code == 404 and answer.json()["detail"].startswith(said), body
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert api.call("GET", "/api/config").json()["research"] is False
+
+
+def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch):
+    """GET /api/live answers from live.offer at once, and asks one read a minute of each source whose last
+    read is too old: a page never waits on a source, and one that's down isn't asked on every look
+    (tests/test_live.py holds what's offered)."""
+    games = [{"key": "football", "label": "Football", "games": [{"key": "pitch:100", "title": "A vs B", "players": []}]}]
+    monkeypatch.setattr(live, "offer", lambda db, fan: (games, ["pitch"]))
+    answer = api.call("GET", "/api/live", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {"sports": games, "refreshing": True}
+    assert api.queue.jobs[-1] == ("read_live", "pitch") and api.queue.options["_job_id"] == "read_live:pitch"
+    # The read failed, or hasn't come yet: the next looks within a minute don't ask again, but still say one's coming.
+    assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is True
+    assert [j for j in api.queue.jobs if j[0] == "read_live"] == [("read_live", "pitch")]

@@ -40,6 +40,5 @@ export const tennis: SportView = {
   key: 'tennis',
   kinds: ['tennis'],
   Board: TennisBoard as SportView['Board'],
-  mark: <><circle cx="50" cy="50" r="46" /><path d="M18 12c14 22 14 54 0 76M82 12c-14 22-14 54 0 76" /></>,
   inHeadline: ['Sets'],
 }

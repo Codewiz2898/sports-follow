@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
-from .base import ORDINAL, Found, Line, Seen, Sport, num, number, stat, values
+from .base import ORDINAL, Found, Line, Poster, Seen, Sport, num, number, stat, values
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -56,6 +57,12 @@ class Tennis(Sport):
         if not (me and me.get("winner") and other and other.get("seed")) or (me.get("seed") and me["seed"] < other["seed"]):
             return []
         return [Found("upset", "key", f"Upset: {who} beats [{other['seed']}] {other.get('name')}", now.score)]
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """An upset: "beat Sinner, the No. 2 seed"."""
+        if m := re.match(r"Upset: .+ beats \[(\d+)\] (.+)$", f.title):
+            return Poster("Upset", f"beat {m[2]}, the No. {m[1]} seed")
+        return None
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         if now.line is None:

@@ -51,8 +51,21 @@ class Found:
     level: str  # key | minor
     title: str
     body: str
-    detail: str = ""  # tells two moments of one kind apart in the key ("50", "i2:100", "goal2", "set3")
+    # Tells two moments of one kind apart in the key ("50", "i2:100", "goal2", "set3"). A correction's is
+    # the kind and detail of the moment it takes back ("goal:goal@101").
+    detail: str = ""
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY (moments.py)
+
+
+@dataclass
+class Poster:
+    """A player's game this week as Today's "This week" rail draws it (week.py): a word or two in big type
+    ("Hundred", "Hat-trick"), a short line under the player's name ("112 (98) v Australia"), and the moment
+    it was read from, which dates it."""
+
+    word: str
+    line: str = ""
+    of: Found | None = field(default=None, compare=False)
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
@@ -73,6 +86,10 @@ def crossed(before: int, now: int, marks: tuple[int, ...]) -> list[int]:
 
 def joined(*parts: str | None) -> str:
     return " · ".join(p for p in parts if p)
+
+
+def spaced(*parts: str | None) -> str:
+    return " ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------- form: what sports' summaries read
@@ -123,7 +140,9 @@ class Sport:
     # ---- how the app shows it (GET /api/sports, /api/sports.css)
 
     # Its colour, as CSS custom properties on [data-sport]: the block colour, text on it, softer text on
-    # it, and the colour itself as text on the dark ink. A sport without one wears ink.
+    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A player's photo
+    # is recoloured from "deep" (its darks) to the block colour (its lights); without "deep", from the text
+    # on it, which must then be the darker.
     colour: dict[str, str] = {}
     # Which free-text sport names it is (a page's "Women's football", the agent's "T20 cricket"): a
     # regular expression over the lower-case name, and one that rules a name out ("american football").
@@ -220,6 +239,32 @@ class Sport:
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """What happened to the player between two polls: goals, fifties, sets."""
         return []
+
+    def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
+        """What the source has taken back since the last poll (a goal VAR rules out), of the moments found
+        for the player in this game so far (`told`: each one's kind and detail, oldest first). Each is a
+        "correction" whose detail names the moment it takes back; it replaces the game's notification for
+        the fans who were sent that moment, and reaches no one else (alerts.py). A moment taken back that
+        the source shows again may be found again here, under a new detail."""
+        return []
+
+    def poster(self, found: list[Found], versus: str) -> Poster | None:
+        """A player's game this week as a poster in Today's "This week" (week.py), from the moments found for
+        them in it, oldest first (none a source took back): by default its biggest high (high), the newest
+        of equals. `versus` is the other side of the game ("v Australia"), or "" when the game's title
+        doesn't say. None for a game without one."""
+        best = None
+        for f in sorted(found, key=lambda f: f.priority):  # stable: of equals, the newest comes last
+            if (made := self.high(f, versus)) is not None:
+                made.of = made.of or f
+                best = made
+        return best
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """One moment as a poster, if it's one of the player's highs, read off the title and body this sport
+        wrote it with: the title says what the kind can't (a cricketer's "takes 5 wickets" is a "Five-for").
+        None for a set, a yellow card, a line-up, being out, the news. A sport no module knows has none."""
+        return None
 
     # ---- live games and cards (structured.py)
 

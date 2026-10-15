@@ -22,13 +22,13 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from . import naming, pipeline, registry, sports, structured
-from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, budget, providers, source_name
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, Provider, SearchResult, budget, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -118,6 +118,11 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
     rows = db.execute(q).all()
     if not rows:
         return []
+    return _results(db, rows, fan, query)
+
+
+def _results(db: Session, rows: Sequence[Any], fan: str | None, query: str) -> list[SearchResult]:
+    """Players on Sports Follow as result rows: (player, card status, card, likeness, alias found by)."""
     ids = [r[0].id for r in rows]
     followers, mine = _fans(db, ids, fan)
     idents = {pid: (system, ext) for pid, system, ext in db.execute(select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(ids), PlayerIdentity.system.in_(list(ADAPTERS))))}
@@ -146,7 +151,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
             exact=naming.same(query, player.name),
             aka=alias.replace("-", " ") if alias and not naming.prefix_match(query, player.name) else None,
             status=status,
-            next=_next(card or {}),
+            next=next_up(card or {}),
             qid=qid,
             matched=bool(alias) or naming.prefix_match(query, player.name),
             _rank=(float(similarity or 0),),
@@ -165,11 +170,7 @@ def from_athlete(a: Athlete, query: str) -> SearchResult:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
     rules = sports.of(a.sport)
-    if rules.side_by_side:
-        # Its sources sit side by side, each for its own games (esports): the one this row came from.
-        system = next((s for s in a.ids or {} if s in ADAPTERS), None)
-    else:
-        system = registry.live_system(a.sport)
+    system = registry.follow_system(a.sport, a.ids or {})
     live_id = (a.ids or {}).get(system) if system else None
     parts = rules.search_detail(a)
     aka = _aka(query, a.name, list(a.aliases or []))
@@ -193,7 +194,8 @@ def from_athlete(a: Athlete, query: str) -> SearchResult:
     )
 
 
-def _next(card: dict[str, Any]) -> dict[str, Any] | None:
+def next_up(card: dict[str, Any]) -> dict[str, Any] | None:
+    """What's next on a card: its live game, or the first one not yet played."""
     live = card.get("live") or {}
     if live.get("is_live"):
         return {"live": live.get("headline") or live.get("score") or "Live now", "title": live.get("event")}
@@ -279,6 +281,8 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     """Search every source in parallel and merge. sport narrows to one of SPORTS. may_ask is asked once,
     just before the first of the sources' own searches would go out: False leaves them out (a client over
     its limit, server.search) and the answer comes from Sports Follow and the registry."""
+    from .config import AGENT
+
     query = " ".join(query.split())[:80]
     sport = sport if sport in SPORTS else None
     ask = functools.cache(may_ask)
@@ -287,7 +291,9 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # the query's letters (pipeline.slugify).
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
     mine = [r for r in local(db, query, fan, sport) if sports.on(r.sport)]
-    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport)]
+    # Without the research agent (config.AGENT) only athletes in a sport with a running source can be
+    # followed: the others are left out before anything is decided on them (asking the sources, "did you mean").
+    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport) and (AGENT or r.live_scores)]
     found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
@@ -325,6 +331,10 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     if blocked:
         results = [r for r in results if (r.system, r.athlete_id) not in blocked]
         suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
+    if not AGENT:
+        # And of the sources' own hits and the spellings offered, likewise.
+        results = [r for r in results if r.player_id or r.live_scores]
+        suggestions = [r for r in suggestions if r.player_id or r.live_scores]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
     # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
     results = [r for i, r in enumerate(results) if i < LIVE_LIMIT + LOCAL_LIMIT or r.exact]
@@ -335,11 +345,11 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     return {
         "query": query,
         "sport": sport,
-        "results": [_public(r) for r in results],
-        "suggestions": [_public(r) for r in suggestions],
+        "results": [public(r) for r in results],
+        "suggestions": [public(r) for r in suggestions],
         "namesakes": namesakes if namesakes > 1 else 0,
         "partial": partial,
-        "researchable": bool(slugify(query)),
+        "researchable": AGENT and bool(slugify(query)),
     }
 
 
@@ -395,7 +405,7 @@ def _ours(db: Session, rows: list[SearchResult], fan: str | None) -> None:
     for r, pid in theirs:
         if pid in cards:
             status, card = cards[pid]
-            r.player_id, r.following, r.followers, r.status, r.next = pid, pid in mine, int(followers.get(pid, 0)), status, _next(card or {})
+            r.player_id, r.following, r.followers, r.status, r.next = pid, pid in mine, int(followers.get(pid, 0)), status, next_up(card or {})
 
 
 def _collect(jobs: dict[str, Any]) -> tuple[list[list[SearchResult]], list[str]]:
@@ -454,7 +464,41 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]
 
 
-def _public(r: SearchResult) -> dict[str, Any]:
+def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[SearchResult]:
+    """Registry athletes as the app's result rows, not found by a query but offered (starters.py): filled
+    in for those already on Sports Follow, so following one is the same call as from search. Only those a
+    running source covers by id, or who have a page, so following one never needs AI research."""
+    return [r for _, r in offered_pairs(db, athletes, fan)]
+
+
+def offered_pairs(db: Session, athletes: list[Athlete], fan: str | None) -> list[tuple[Athlete, SearchResult]]:
+    """offered, each row with the athlete it stands for."""
+    rows = [from_athlete(a, "") for a in athletes]
+    _ours(db, rows, fan)
+    return [(a, r) for a, r in zip(athletes, rows) if r.player_id or (r.system and r.athlete_id)]
+
+
+def offered_refs(db: Session, sport: str, refs: list[PlayerRef], fan: str | None) -> list[SearchResult]:
+    """Players a source names (a game on now's, live.py) as result rows, in the order given: followed by
+    the source's id, and filled in for those already on Sports Follow."""
+    rows = [
+        SearchResult(key=f"{r.system}:{r.athlete_id}", name=r.name, sport=sport, detail=" · ".join(n for n in r.team_names[:1] if n),
+                     system=r.system, athlete_id=r.athlete_id, league=r.league, live_scores=True)
+        for r in refs
+    ]
+    _ours(db, rows, fan)
+    return rows
+
+
+def offered_players(db: Session, players: list[Player], fan: str | None) -> list[SearchResult]:
+    """Players on Sports Follow as offered result rows (starters.py), in the order given: those whose page
+    is ready or being built, with what's next from their card."""
+    ids = [p.id for p in players]
+    cards = {pid: (status, card) for pid, status, card in db.execute(select(PlayerCard.player_id, PlayerCard.status, PlayerCard.card).where(PlayerCard.player_id.in_(ids), PlayerCard.status != "failed")).all()} if ids else {}
+    return _results(db, [(p, *cards[p.id], 0.0, None) for p in players if p.id in cards], fan, "")
+
+
+def public(r: SearchResult) -> dict[str, Any]:
     out = asdict(r)
     for hidden in ("_rank", "matched", "popularity"):
         out.pop(hidden, None)

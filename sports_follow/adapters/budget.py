@@ -330,7 +330,9 @@ def known() -> list[Budget]:
 
 def for_url(url: str) -> Budget | None:
     """The budget a request to this URL spends, if a known source's requests go there. Budget.urls are
-    https:// prefixes ending at a "/", matched against the URL's host and path."""
+    https:// prefixes ending at a "/", matched against the URL's host and path; the longest wins (part
+    of an API may sit behind a limit of its own)."""
     parts = urlparse(url)
     where = f"https://{parts.hostname or ''}{parts.path or '/'}"
-    return next((b for b in known() if any(where.startswith(u) for u in b.urls)), None)
+    found = [(len(u), b) for b in known() for u in b.urls if where.startswith(u)]
+    return max(found, key=lambda match: match[0])[1] if found else None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Seen, Sport, crossed, num, number, stat, values
+from .base import Found, Line, Poster, Seen, Sport, crossed, num, number, stat, values
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -69,6 +69,16 @@ class Basketball(Sport):
         if tens_was < 3 <= tens_now:
             found.append(Found("triple", "key", f"{who}: triple-double", where))
         return found
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """30 points or more ("40 points v Utah Jazz"), or a triple-double with its line ("22 PTS · 11 REB ·
+        10 AST", the start of the body)."""
+        if m := re.search(r": (\d+) points$", f.title):
+            return Poster(f"{m[1]} points", versus) if int(m[1]) >= 30 else None
+        if f.title.endswith(": triple-double"):
+            line = re.match(r"\d+ PTS · \d+ REB · \d+ AST", f.body)
+            return Poster("Triple-double", line[0] if line else versus)
+        return None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if not str(ln.get("headline") or "").startswith("Did not play")]

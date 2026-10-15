@@ -225,9 +225,12 @@ def request_span(method: str, path: str):
     return span(method, {"http.request.method": method, "url.path": path}, kind=SpanKind.SERVER)
 
 
-def answered(current: trace.Span | None, method: str, route: str | None, status: int, **attributes: Any) -> None:
+def answered(current: trace.Span | None, method: str, route: str | None, status: int, failure: BaseException | None = None, **attributes: Any) -> None:
+    """A request's span once it's answered: its route, status and the exception that escaped it, if one did."""
     if current is None:
         return
+    if failure is not None:
+        current.record_exception(failure)
     if route:
         current.update_name(f"{method} {route}")
         current.set_attribute("http.route", route)

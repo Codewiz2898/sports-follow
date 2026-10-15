@@ -1,4 +1,4 @@
-// Generate the Android app: a Trusted Web Activity (TWA) that opens the Sports Follow web app full
+// Generate the Android app: a Trusted Web Activity (TWA) that opens the web app full
 // screen, from twa-manifest.json, with Google's Bubblewrap library (the same one its CLI uses).
 //
 //   npm install && node generate.mjs                      # icons from https://<host>
@@ -8,7 +8,8 @@
 //   ./gradlew assembleDebug -PlaunchUrl=http://localhost:8421/   # a test build for `adb reverse`
 //   ./gradlew bundleRelease                                        # the Play Store bundle
 //
-// The generated project is not committed: this file and twa-manifest.json are the source.
+// The generated project is not committed: this file and twa-manifest.json are the source, with the
+// app's name from sports_follow/app.json (the one place it's written).
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -17,6 +18,9 @@ import { ConsoleLog, TwaGenerator, TwaManifest } from '@bubblewrap/core'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const config = JSON.parse(await fs.readFile(path.join(here, 'twa-manifest.json'), 'utf8'))
+const { name } = JSON.parse(await fs.readFile(path.join(here, '..', 'sports_follow', 'app.json'), 'utf8'))
+if (!name) throw new Error('sports_follow/app.json has no name')
+config.name = config.launcherName = name
 const site = (process.env.SITE || `https://${config.host}`).replace(/\/$/, '')
 
 // Icon and manifest paths in twa-manifest.json are relative to the site, so one config serves a

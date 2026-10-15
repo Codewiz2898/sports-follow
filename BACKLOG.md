@@ -44,7 +44,7 @@ for cricket, football and chess first; about $150–350 a month.
   build runs (Lichess with its CC BY-SA 4.0 licence), Wikidata, FIDE ratings, Stockfish, the AI model
   that writes profiles and news, news publishers, "not official records" and "not affiliated"
   notices, and the software with its licences (checked against the installed packages by a test).
-  Photo credits join it when item 6 lands.
+  It lists every player photo shown too, with its author and licence (item 6).
 - [x] Hosting setup (`deploy/`): one server runs the whole app with Docker Compose (Caddy for HTTPS,
   the API serving the web app, the worker with Stockfish, Postgres, Redis, the llm-providers gateway,
   daily database dumps), licensed sources only. Scripts set up the server, send the secrets without
@@ -168,7 +168,7 @@ is offered last and capped at 3 per fan per day.
 - **FIDE list** for chess ratings and the 1.9M players Wikidata doesn't have, once FIDE gives written
   permission for commercial use; until then chess falls back to Lichess's FIDE search.
 - **Licensed roster feed** to keep current teams right between Wikidata edits (transfers, debuts).
-- **Photos**: see item 6.
+- **Photos**: built, see item 6.
 - A **review queue** for registry-to-source matches the birth date can't settle.
 - **Namesakes Wikidata lacks**: a full name the registry knows well doesn't ask ESPN, so an obscure
   namesake only ESPN has (the Malaysian-league footballer Nikola Jokić) no longer shows beside the star.
@@ -228,12 +228,15 @@ by lock index if chess traffic outgrows it.
 
 ### 6. Player headshots
 
-**Today.** Players show initials. The registry already stores each athlete's Wikimedia Commons photo
-(Wikidata P18) as a file name: 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known
-ones (75%, those with 20+ Wikipedia editions). Nothing is displayed yet.
+**Built (BHA-13), on the profile only.** A followed player's page, and the preview before following, show
+their Wikimedia Commons photo (Wikidata P18), recoloured in their sport's colour, with its credit
+(`sports_follow/photos.py`). The home page, lists and search keep initials: the user chose (15 Oct 2026)
+real photos for the profile only, and each sport's own line art for the home page. The registry has a
+photo for 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known ones (75%, those with 20+
+Wikipedia editions). Next: crop to the face rather than showing the photo from near its top (BHA-67).
 
-**Done when** a player's page, search results and the Following list show a photo with its credit
-where a properly licensed one exists, and initials otherwise.
+**Done when** a player's page and the preview before following show a photo with its credit where a
+properly licensed one exists, and nothing otherwise; the home page, lists and search show none.
 
 **Wikidata / Commons (recommended).**
 - Fetch each file's licence, author and attribution text from the Commons API (`extmetadata`) and
@@ -298,7 +301,7 @@ reached, the app says so plainly rather than looking broken.
   those ids.
 - The demo fan must be left out of the launch metrics (retention, follows per user), or seeding skews them.
 
-### 8. Esports (step 1 built; battle royale built, waiting on a Liquipedia key)
+### 8. Esports (step 1 built and on in the public build with PUBG; battle royale built, waiting on a Liquipedia key)
 
 **Built (step 1).** `adapters/pandascore_esports.py` follows a pro's
 team in PandaScore's team titles (Valorant, CS2, LoL, Dota 2, Mobile Legends, Rainbow Six, Overwatch,
@@ -328,8 +331,11 @@ their game on their next refresh.
 
 **To finish step 1**
 - Follow a pro whose team plays soon and watch one series through: the start, map and result alerts.
-- Add `pandascore_esports` to `SPORTS_FOLLOW_SOURCES` in `deploy/settings.env` once PandaScore
-  confirms the free plan allows a commercial app; until then a public build leaves it off.
+- PandaScore's written word that the free plan allows a commercial app. The public build runs
+  `pandascore_esports` and `pubg_esports` from 15 Oct 2026 (decided before that word came), once their
+  tokens are on the server (deploy/README.md, "Esports"). Their pages don't need the AI: with
+  `SPORTS_FOLLOW_AGENT=0` (no OpenRouter key) pros are followed from the registry and search, and scores,
+  series, results and alerts come from the sources alone.
 
 **Before step 1.** No esports source. A pro gamer typed into "Research with AI" got an AI-built page
 with no scores or alerts, as in any sport without a source. Search barely found them: only 2,844 people

@@ -2,8 +2,10 @@
 
 Follow any athlete in any sport. Each followed player gets one shared page: live score and the
 player's own numbers while they play, upcoming games, news, recent results and season stats. The
-Today screen puts all of your players together: live games first, then the day's big result, the next
-game, and a tile for each player in their sport's colour.
+Today screen puts all of your players together: on a phone a row of them along the top (the live
+score, or when they next play), then live games, a row of every result since yesterday and a row of
+every game in the next two weeks, each scrolling sideways. The Following page has a tile for each
+player in their sport's colour.
 
 ## How it's built
 
@@ -22,6 +24,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
+                                ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
@@ -48,6 +51,27 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`python -m sports_follow.registry esports`, part of the weekly run). A run by hand takes the weekly
   run's lock, so it refuses to start while that one is going; a sport (or esports source) that fails
   keeps last week's rows and the rest still run.
+- **Player photos from Wikimedia Commons, on the profile only.** A player's page, and the preview of an
+  athlete before following, show their Commons photo; the home page, lists and search don't (the home page
+  is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
+  the Commons API about the registry's photo file of each followed and starter athlete it hasn't got, 50 to
+  a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY, CC BY-SA,
+  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 330-pixel
+  thumbnails, author, licence and file page go in the `photo` table, and the app gets them from our own
+  origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
+  file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
+  which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
+  follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone
+  from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
+  credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
+  linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
+  data provider's photos (their terms don't license them), and never generated likenesses.
+  The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
+  detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker
+  only), and keeps its box on the photo row. The app gets the head-and-shoulders square around it
+  (`crop`) with the photo, and the profile shows that square; a photo with no face found is shown from
+  near its top.
+  `python -m sports_follow.photos` runs the job once.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
@@ -118,8 +142,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
-  in it; "Mute this game" stops it. Sound is rationed (once every 3 minutes a game, 6 times an hour a
-  phone) except for the biggest moments. `sports_follow/notify.py` claims each batch once, logs every
+  in it; "Mute this game" stops it. A goal VAR rules out is corrected on that notification, for the
+  fans who were sent it, and told again if the source shows it again (a goal the source credits to
+  another player instead is left as it was).
+  Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
+  moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it by Web Push (VAPID) to each device at once, and the tick sweeps up
   any batch a restart dropped. Quiet hours are per device and make notifications arrive silently.
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
@@ -153,7 +180,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
   `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
-  `snapshots` for batched live polling, `spare` for background reads.
+  `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
+  `sports_follow/live.py`), `spare` for background reads, `rekey` for a source that changes
+  how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
+  drops its rows with an id of the old shape).
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
   serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
@@ -172,7 +202,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
-  line-up, what happens during a game), its form summary and how search shows its athletes. Shared code
+  line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
+  player's highs on Today's "This week" and in what words (`poster`: a "Five-for")), its form summary,
+  how search shows its athletes, and its colours (a player's photo is recoloured with them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -181,8 +213,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
   before the first render and kept on the device. How a sport is drawn is its view,
-  `web/src/sports/<sport>.tsx` (its live board, the mark behind its hero card, how its line reads),
-  plus one line in `VIEWS`; a sport without one shows the plain score and mark.
+  `web/src/sports/<sport>.tsx` (its live board, its ground as line art behind Today's cards (`backdrop`),
+  how its line reads, its score in a few characters for a live player's pill (`short`)), plus one line in
+  `VIEWS`; a sport without one shows the plain score and no line art.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
   and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry
@@ -192,6 +225,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
   for following.
+- **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
+  "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
+  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
+  with a game soon, which the worker finds in their sources once a day. The operator can pin a few
+  ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
+  them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
+  player takes their pin with them.
+- **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
+  reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
+  `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
+  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `android/generate.mjs` gives it to the
+  Android app. `tests/test_app_name.py` fails if any of them writes the name out itself.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
   database and `alembic check`; and the web app's type-check and build. In `web/src`,
@@ -256,7 +303,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
 | `SPORTS_FOLLOW_COOKIE_SECRET` | from `~/.config/sports-follow/cookie-secret`, made on first start | the key fan cookies are signed with (at least 32 characters; `SPORTS_FOLLOW_COOKIE_SECRET_FILE` names another file). Every API process needs the same one, and it must never change: under a new key every fan starts over |
 | `SPORTS_FOLLOW_RESEND_KEY` | from `SPORTS_FOLLOW_RESEND_KEY_FILE`, else `~/.config/sports-follow/resend-key` | Resend API key for sign-in emails; without it (and `MAIL_FROM`) email sign-in is off |
-| `SPORTS_FOLLOW_MAIL_FROM` | none | the sender of sign-in emails, e.g. `Sports Follow <signin@your-domain>` (a domain verified in Resend) |
+| `SPORTS_FOLLOW_MAIL_FROM` | none | the address sign-in emails come from, e.g. `signin@your-domain` (a domain verified in Resend); they're sent from the app's name at that address |
 | `SPORTS_FOLLOW_LOG_FORMAT` | `text` | `json` writes each log line as one JSON object on stdout, for a server's log collector (the production setting); every line from a request or a job carries its id (`rid`, also in each answer's `X-Request-ID`), and fans appear only as a hash |
 | `SPORTS_FOLLOW_LOG_LEVEL` | `INFO` | the lowest level of this app's own lines that is logged (other libraries' lines from `WARNING`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none: nothing leaves the server | where traces and log lines go over OTLP (HTTP), e.g. a Grafana Cloud OTLP gateway; OpenTelemetry's own setting, so any backend works (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `_LOGS_ENDPOINT` for one alone). Each API request, worker job and live-poll round is a span, with its source requests, queries, Redis commands and model calls; a request and the jobs it queues are one trace; each log line goes too, with its request's or job's fields and its trace. On the server it's in `otlp.env` (deploy/README.md, "Traces and logs") |
@@ -268,6 +315,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
+| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one network gets at most 20 a day |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
@@ -281,11 +329,13 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are |
 | `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
-| `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game) |
+| `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
+| `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
-| `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages |
+| `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages (none with `SPORTS_FOLLOW_AGENT=0`) |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2). Naming a few imports just those, and removes only their stale players |
 | `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
@@ -307,7 +357,7 @@ One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 the Play Store. It opens the site full screen with Chrome's engine, so the app updates with the site
 and gets web push notifications as Android notifications. `android/twa-manifest.json` is the source
 (package `io.github.codewiz2898.sportsfollow`, colors, icons, version); `android/generate.mjs` builds
-the Gradle project from it with Bubblewrap's library. The generated project isn't committed.
+the Gradle project from it with Bubblewrap's library, named from `sports_follow/app.json`. The generated project isn't committed.
 
 Needs JDK 17 and the Android SDK (platform 36, build tools 36.1.0):
 
@@ -337,8 +387,11 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   use; a public launch should use a licensed feed, which fits in as another adapter.
 - The registry's current teams are Wikidata's, which can lag a transfer by weeks; the live source's team
   is what fixtures use. Chess ratings aren't in it (the FIDE list needs FIDE's permission for commercial
-  use), so chess rows show title and country. Photos are stored as Commons file names but not shown yet:
-  each needs its licence and credit fetched first.
+  use), so chess rows show title and country.
+- Photos are fetched only for followed and starter players, so the preview of another athlete shows one
+  only once someone follows them. Each is the one file Wikidata names (its preferred one, when it names
+  several), however old. When a photo has several faces, the profile shows the largest, which is usually
+  the player's but can be someone standing nearer the camera.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance
   and no sport filter, and Lichess allows one request at a time.
 - Search reads names in Latin letters only (accents folded; "Đoković" and "mueller" also find Djokovic
@@ -358,7 +411,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   a player's next match appears only once the draw is made (a day or two ahead). Singles only.
 - Chess: Lichess relays most elite and many open events, but not every tournament. A player's events
   are found from their Lichess FIDE page and broadcast search; Lichess rate-limits hard, so reads are
-  one request a second and a rate limit fails the refresh instead of dropping results.
+  one request a second and a rate limit on a broadcast fails the refresh instead of dropping results.
+  The FIDE pages share one limit with every server in a datacenter, so they're read a few times a day
+  and, when refused, the last copy stands in; FIDE records come from FIDE search, which has no limit.
 - Other sports still come from the agent alone, with its generic scoreboard and events deduplicated
   by sport, title and date.
 - Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);

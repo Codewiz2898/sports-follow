@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Sports Follow",
-  "short_name": "Sports Follow",
+  "name": "%APP_NAME%",
+  "short_name": "%APP_NAME%",
   "description": "Follow any athlete in any sport: live scores, their own numbers while they play, fixtures, results and news.",
   "start_url": "/",
   "scope": "/",

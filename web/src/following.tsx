@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, subscribe, type AlertLevel, type Card, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
+import { ahead, parseDate } from './format'
 import { wanted } from './notifications'
 
 interface FollowingState {
@@ -192,4 +193,11 @@ export function useFollowing(): FollowingState {
   const value = useContext(Ctx)
   if (!value) throw new Error('useFollowing outside FollowingProvider')
   return value
+}
+
+/** The fan's players as Today's strip and the Following page show them: live first, then whoever plays
+ * soonest, then the rest in the order they were followed. */
+export function tileOrder(cards: Card[], now: number) {
+  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).filter((u) => ahead(u.start_utc, now)).map((u) => parseDate(u.start_utc)!.getTime()))
+  return [...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live) || nextAt(a) - nextAt(b))
 }

@@ -10,6 +10,25 @@
     "no_data": "OK"
   },
   {
+    "uid": "sf-unreachable",
+    "title": "Fans can't reach the app",
+    "for": "0s",
+    "expr": "max(max_over_time(probe_success{job=\"sports-follow-uptime\"}[3m]))",
+    "op": "lt",
+    "threshold": 1,
+    "summary": "For 3 minutes, none of Grafana's probes outside the server got a healthy answer from /api/health: DNS, Caddy, the certificate or the firewall, or the app itself (the other alerts say if it's inside). Grafana's Synthetics page shows each probe's error."
+  },
+  {
+    "uid": "sf-uptime-silent",
+    "title": "The uptime check stopped reporting",
+    "for": "5m",
+    "expr": "absent_over_time(probe_success{job=\"sports-follow-uptime\"}[15m])",
+    "op": "gt",
+    "threshold": 0,
+    "summary": "No results from the uptime check for 20 minutes, so \"Fans can't reach the app\" can't fire: Synthetic Monitoring isn't switched on, the check was disabled or removed, or the free tier's checks ran out. Run deploy/grafana/apply-alerts.sh (README.md, \"Alerts\").",
+    "no_data": "OK"
+  },
+  {
     "uid": "sf-checks-stale",
     "title": "The server checks stopped running",
     "for": "5m",

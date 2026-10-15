@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -133,6 +134,47 @@ class AthleteOverride(Base):
     ids: Mapped[dict] = mapped_column(JSONB, default=dict)  # their ids in the sources: {"espn_cricket": "253802"}
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
+
+
+class Starter(Base):
+    """A registry athlete offered to a new fan, who follows nobody yet, in their sport's starter picker
+    (starters.py; the operator sets them with `players starter`). Removing the athlete takes the row too."""
+
+    __tablename__ = "starter"
+    __table_args__ = (UniqueConstraint("qid", "sport"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id
+    sport: Mapped[str] = mapped_column(String(20))
+    position: Mapped[int] = mapped_column(Integer)  # the order within the sport, first shown first
+    created_at: Mapped[datetime] = _now()
+
+
+class Photo(Base):
+    """A player's photo from Wikimedia Commons, by the registry's file name (Athlete.image): what Commons
+    says about it, and its thumbnail once its licence lets fans see it (photos.py)."""
+
+    __tablename__ = "photo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file: Mapped[str] = mapped_column(String(300), unique=True)
+    name: Mapped[str | None] = mapped_column(String(200))  # whose photo it is, as the Credits page names them
+    status: Mapped[str] = mapped_column(String(10))  # ok | unfree | missing | failed
+    reason: Mapped[str | None] = mapped_column(Text)  # why it isn't shown: "licence not kept: GFDL"
+    licence: Mapped[str | None] = mapped_column(String(100))  # "CC BY-SA 4.0", "public domain"
+    licence_url: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(200))
+    page: Mapped[str | None] = mapped_column(Text)  # the file's page on Commons, where its credit links
+    source_sha1: Mapped[str | None] = mapped_column(String(40))  # the upload's: a new one is a new photo
+    digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the thumbnail: its address
+    media_type: Mapped[str | None] = mapped_column(String(30))
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # the WIDTH-pixel thumbnail
+    # Its size in pixels once the job has looked for the face in it (faces.py; 0 if it didn't decode), and
+    # the face's box, {x, y, w, h} as fractions of the width and height; None when it found none.
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    face: Mapped[dict | None] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Team(Base):
@@ -301,7 +343,7 @@ class Moment(Base):
     key: Mapped[str] = mapped_column(String(200), unique=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
     event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
-    kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | ...
+    kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | correction | ...
     level: Mapped[str] = mapped_column(String(10))  # key | minor
     priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")  # 0-100, moments.PRIORITY
     title: Mapped[str] = mapped_column(String(200))
@@ -310,6 +352,8 @@ class Moment(Base):
     created_at: Mapped[datetime] = _now()
     # When a sender claimed it (notify.send). Unclaimed moments are swept up by the tick.
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The moment a correction takes back (a goal VAR rules out): it goes only to the fans who were sent that one.
+    corrects: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)
 
 
 class Notification(Base):

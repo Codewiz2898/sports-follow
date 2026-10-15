@@ -7,6 +7,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from sports_follow import adapters, moments, registry, search, sports
 from sports_follow.adapters import ALL, KNOWN, pick
 
@@ -28,6 +30,24 @@ def test_a_sport_no_module_knows_still_gets_a_start_and_a_result():
     assert [f.kind for f in moments.detect("Golf", "Rory", "1", before, now)] == ["start"]
     done = moments.Seen("final", score="Won by 2", line={"headline": "-14", "stats": []})
     assert [(f.kind, f.title) for f in moments.detect("Golf", "Rory", "1", now, done)] == [("final", "Rory: Won by 2")]
+
+
+def test_a_sport_that_says_how_a_score_is_taken_back_gets_corrections(monkeypatch):
+    # Nothing shared names football: a sport's own taken_back is all a correction needs (alerts.py and
+    # notify.py route it by its kind, "correction").
+    class Darts(sports.Sport):
+        key = "darts"
+
+        def taken_back(self, who, athlete_id, before, now, told):
+            legs = moments.number(moments.stat(now.line, "Legs"))
+            return [moments.Found("correction", "key", f"Leg taken back: {who}", now.score, f"leg:{d}") for k, d in told if k == "leg" and int(d) > legs]
+
+    monkeypatch.setattr(sports, "of", lambda name: Darts())
+    legs = lambda n: {"headline": f"{n} legs", "stats": [{"label": "Legs", "value": str(n)}]}  # noqa: E731
+    before, now = moments.Seen("live", line=legs(3)), moments.Seen("live", line=legs(2), score="2–2")
+    [f] = moments.detect("Darts", "Luke Littler", "1", before, now, [("leg", "2"), ("leg", "3")])
+    assert (f.kind, f.level, f.title, f.detail, f.priority) == ("correction", "key", "Leg taken back: Luke Littler", "leg:3", 85)
+    assert moments.detect("Darts", "Luke Littler", "1", before, now) == []  # nothing told, nothing to take back
 
 
 def test_a_source_serves_one_sport_and_a_game_finds_the_source_that_covers_it(monkeypatch):
@@ -102,8 +122,28 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
 def test_each_sport_brings_its_colour(api):
     res = api.call("GET", "/api/sports.css")
     assert res.headers["content-type"].startswith("text/css")
-    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; }" in res.text
+    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; --photo-dark: #0d2a7a; --photo-light: #133be0; }" in res.text
     assert all(f"[data-sport='{s.key}']" in res.text for s in sports.ALL)
+
+
+def _rgb(colour: str) -> tuple[float, ...]:
+    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+@pytest.mark.parametrize("sport", [s for s in sports.ALL if s.colour], ids=lambda s: s.key)
+def test_a_photo_is_recoloured_from_the_sports_deep_colour_to_its_block_colour(sport):
+    """The page multiplies the grey photo by --photo-light and screens --photo-dark over it (styles.css,
+    .duo): black must come out as the deep colour, white as the block colour, and grey in between."""
+    dark, light = sports.photo_tones(sport)
+    d, pre, block = _rgb(dark), _rgb(light), _rgb(sport.colour["sport"])
+    assert all(dc < bc for dc, bc in zip(d, block)) or sum(d) < sum(block), "the photo's darks must be the darker"
+
+    def shown(grey: float) -> tuple[float, ...]:
+        return tuple(1 - (1 - grey * p) * (1 - dc) for p, dc in zip(pre, d))
+
+    assert shown(0) == pytest.approx(d)
+    assert shown(1) == pytest.approx(block, abs=1 / 255)
+    assert shown(0.5) == pytest.approx(tuple((dc + bc) / 2 for dc, bc in zip(d, block)), abs=1 / 255)
 
 
 WEB = PACKAGE.parent / "web" / "src"

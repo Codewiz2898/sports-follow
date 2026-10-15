@@ -134,6 +134,8 @@ def _bucket(url: str) -> str:
     out: a match ("Cricket fixtures/{id}") and a list of fixtures ("Cricket fixtures") are counted apart."""
     if not url.startswith(CRICKET):
         parts = url.strip("/").split("/")
+        if len(parts) > 1 and parts[1] == "livescores":
+            return FIXTURES  # livescores are fixtures to Sportmonks, and count against that entity
         return parts[1].removesuffix("s").capitalize() if len(parts) > 1 else "Other"
     path = url.removeprefix(CRICKET).strip("/")
     return "Cricket " + "/".join("{id}" if part.isdigit() else part for part in path.split("/"))

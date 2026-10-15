@@ -44,11 +44,24 @@ export const cricket: SportView = {
   key: 'cricket',
   kinds: ['cricket'],
   Board: CricketBoard as SportView['Board'],
-  mark: <><circle cx="50" cy="50" r="46" /><path d="M30 10c10 26 10 54 0 80M38 12l-6 3M40 26l-7 2M41 40h-7M41 54l-7-1M40 68l-7-2M38 82l-6-3" /></>,
+  // The ground from above: the boundary, the 30-yard circle, and the pitch with its creases and stumps.
+  backdrop: (
+    <>
+      <ellipse cx="50" cy="50" rx="48" ry="44" />
+      <ellipse cx="50" cy="50" rx="30" ry="27" strokeDasharray="2 2" />
+      <rect x="46.5" y="38" width="7" height="24" />
+      <path d="M44 41.5h12M44 58.5h12M47 40v-4M47 64v-4M53 40v-4M53 64v-4M48 39.5h4M48 60.5h4M49 39.5h.01M50 39.5h.01M51 39.5h.01M49 60.5h.01M50 60.5h.01M51 60.5h.01" />
+    </>
+  ),
   highlight: (line) => {
     const runs = Math.max(0, ...[...(line ?? '').matchAll(/(?:^|&\s*)(\d+)\*?\s*\(/g)].map((m) => Number(m[1])))
     return runs >= 100 ? 'Hundred' : runs >= 50 ? 'Fifty' : null
   },
   noLine: "hasn't batted or bowled yet",
   inHeadline: ['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded'],
+  // The player's own line ("61* (44)"), else the batting side's score as the board has it ("IND 189/5").
+  short: (state: CricketState, live) => {
+    const i = state.innings.find((x) => x.batting)
+    return live.headline || (i ? `${i.abbr || i.team} ${i.runs}${i.wickets < 10 ? `/${i.wickets}` : ''}` : null)
+  },
 }

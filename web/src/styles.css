@@ -17,13 +17,14 @@
   --radius-card: 22px;
   --radius-tile: 20px;
   --gutter: 16px;
+  --page-x: var(--gutter);  /* the page's side padding (.main): 40px on a desktop */
 }
 
 /* A sport's block colour, the ink that reads on it, that ink for secondary text (still 4.5:1 or better),
    and the sport's colour when it is text on an ink surface. Each sport's own come from the server
    (/api/sports.css, linked in index.html, before this file: so this default has no specificity); a sport without
    one wears ink. */
-:where([data-sport]) { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; }
+:where([data-sport]) { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; --photo-dark: #0d0d0d; --photo-light: #f2f2ee; }
 .soft { color: var(--on-sport-soft); }
 
 * { box-sizing: border-box; }
@@ -40,6 +41,7 @@ button { font: inherit; color: inherit; }
 /* The ring is ink, or paper inside ink surfaces, or the block's ink inside a sport colour. */
 :focus-visible { outline: 3px solid var(--focus, var(--text)); outline-offset: 2px; border-radius: 8px; }
 .tabbar, .next-card, .toast, .notice.action { --focus: var(--bg); }
+.next-card.coming { --focus: var(--text); }  /* the card is the link: its ring is on the paper around it */
 .player-band { --focus: var(--on-sport); }
 h1, h2, h3 { margin: 0; text-wrap: balance; }
 p { margin: 0; }
@@ -76,7 +78,8 @@ p { margin: 0; }
     display: flex; flex-direction: column; gap: 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
     padding: 28px 20px; background: var(--raised);
   }
-  .main { max-width: 1040px; padding: 32px 40px 56px; margin: 0; }
+  :root { --page-x: 40px; }
+  .main { max-width: 1040px; padding: 32px var(--page-x) 56px; margin: 0; }
   .tabbar { display: none; }
 }
 
@@ -87,6 +90,10 @@ p { margin: 0; }
 .side-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 700; color: var(--muted); }
 .side-nav a:hover { color: var(--text); }
 .side-nav a.active { background: var(--surface); color: var(--text); }
+/* The sidebar's "Following · N": the whole heading opens the Following page. */
+.side-head { display: flex; align-items: center; gap: 6px; align-self: flex-start; min-height: 32px; margin: 2px -8px -6px; padding: 0 8px; border-radius: 10px; }
+.side-head:hover { color: var(--text); background: var(--surface); }
+.side-head.active { color: var(--text); }
 .nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: var(--live); color: #fff; font-size: 11px; font-weight: 800; }
 .tabbar .nav-count { margin-left: -2px; }
 
@@ -126,6 +133,26 @@ p { margin: 0; }
 .avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; background: var(--sport); color: var(--on-sport); font-size: 14px; font-weight: 800; letter-spacing: 0.02em; }
 .avatar.sm { width: 32px; height: 32px; border-radius: 9px; font-size: 11px; }
 .avatar.lg { width: 64px; height: 64px; border-radius: 18px; font-size: 20px; }
+
+/* A player's photo on their profile (never on the home page), in the sport's colour: a duotone, its darks
+   in --photo-dark and its lights in the sport colour. The grey photo is multiplied by --photo-light and
+   --photo-dark is screened over it; the server works --photo-light out so that comes out exactly
+   (sports.photo_tones). Faces sit high in most photos. */
+.duo { position: relative; overflow: hidden; isolation: isolate; background: var(--photo-light); }
+.duo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; filter: grayscale(1) contrast(1.1); mix-blend-mode: multiply; }
+.duo::after { content: ""; position: absolute; inset: 0; background: var(--photo-dark); mix-blend-mode: screen; pointer-events: none; }
+/* Where the photos job found the face: the square around it (--cw and --ch its size, --cx and --cy its
+   centre, as fractions of the photo) covers the picture, its centre at --at across and halfway down, but
+   never so far that the picture runs past the photo's edges. */
+@supports (width: 1cqw) {  /* a browser without container units keeps the guess above */
+  .duo.framed { container-type: size; }
+  .duo.framed img { position: absolute; max-width: none; --side: max(100cqw, 100cqh); width: calc(var(--side) / var(--cw)); height: calc(var(--side) / var(--ch));
+    left: clamp(100cqw - var(--side) / var(--cw), var(--at, 50cqw) - var(--cx) * var(--side) / var(--cw), 0px);
+    top: clamp(100cqh - var(--side) / var(--ch), 50cqh - var(--cy) * var(--side) / var(--ch), 0px); }
+}
+/* Its credit, as the licence asks: on the block it sits on, linking to the file's page on Commons. */
+.photo-credit { font-size: 10px; font-weight: 700; line-height: 1.3; color: var(--on-sport-soft); overflow-wrap: anywhere; }
+a.photo-credit:hover { text-decoration: underline; }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 44px; padding: 0 18px; border-radius: 999px; border: 2px solid var(--text); background: transparent; color: var(--text); font-weight: 800; font-size: 14px; cursor: pointer; flex-shrink: 0; }
 .btn:hover { background: rgba(13, 13, 13, 0.06); }
@@ -175,23 +202,109 @@ p { margin: 0; }
 .error-box { padding: 14px 16px; border-radius: 14px; background: #fde8e6; color: var(--danger); font-size: 14px; font-weight: 600; }
 
 /* ---------------------------------------------------------------- today */
-/* The day's big moment: a finished game in the player's sport colour, the numbers huge. */
+/* A new fan's first step: a block of colour. */
 .hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--sport); color: var(--on-sport); }
-.hero > * { position: relative; }
-.hero-mark { position: absolute; right: -90px; top: -64px; width: 280px; height: 280px; opacity: 0.14; pointer-events: none; }
-.hero-name { font-size: clamp(36px, 13vw, 60px); overflow-wrap: anywhere; }
-.hero-stats { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 8px; max-width: 460px; }
-.hero-stats .dsp { font-size: 64px; }
-.hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 2px solid color-mix(in srgb, currentColor 18%, transparent); font-weight: 800; }
 
-/* The next game: one ink strip. */
-.strip { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 16px; border-radius: 18px; background: var(--text); color: var(--bg); }
-.strip .when { font-size: 24px; white-space: nowrap; }
-.strip .what { flex: 1; min-width: 0; font-weight: 700; font-size: 13px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.strip .count { font-size: 24px; color: var(--sport-on-ink); white-space: nowrap; }
-.strip .tag { color: var(--sport-on-ink); }
-/* Narrow phones, and 12-hour clocks ("Thu 08:00 PM"): the game drops to its own line. */
-@media (max-width: 420px) { .strip { flex-wrap: wrap; row-gap: 2px; } .strip .what { order: 3; flex-basis: 100%; } .strip .count { margin-left: auto; } }
+/* A game on now that nobody here may follow yet (LiveNow.tsx): outlined in its sport's colour, with players to
+   follow from it as pills that fill in once followed. */
+.live-game { display: flex; flex-direction: column; gap: 8px; width: 236px; min-height: 172px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--surface); box-shadow: inset 0 0 0 3px var(--sport); }
+.live-game .eyebrow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-game .clock { color: var(--text); }
+.live-game .score { font-size: 24px; overflow-wrap: anywhere; }
+.live-game .who { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.follow-pill { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--bg); color: var(--text); font: 700 12px var(--body); cursor: pointer; }
+.follow-pill[aria-pressed='true'] { background: var(--sport); color: var(--on-sport); }
+.follow-pill .spinner { width: 12px; height: 12px; }
+
+/* Rails (Rail.tsx): a row of fixed-width cards that scrolls sideways out to the page's edge. Each card snaps
+   to the page padding and the next one peeks in; no scrollbar. Room above and below for a focus ring. */
+.rail {
+  display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+  scroll-padding-inline: var(--page-x); scroll-behavior: smooth; scrollbar-width: none;
+  margin: -6px calc(-1 * var(--page-x)); padding: 6px var(--page-x);
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail > * { flex: 0 0 auto; scroll-snap-align: start; }
+/* "All N": every card at once, in a grid. */
+.rail.open { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); overflow: visible; margin: 0; padding: 0; }
+.rail.open > *, .rail.open > .result-card.hero { width: auto; }
+.rail-all { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; width: 150px; padding: 16px; border: 0; border-radius: var(--radius-tile); background: transparent; box-shadow: inset 0 0 0 2px var(--text); color: var(--text); text-align: left; cursor: pointer; }
+.rail-all:hover { background: rgba(13, 13, 13, 0.05); }
+.rail-all .dsp { font-size: 34px; }
+.rail.open > .rail-all { min-height: 96px; }
+.rail-arrows { display: none; gap: 8px; }
+.rail-arrow { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--surface); color: var(--text); cursor: pointer; }
+.rail-arrow:hover:not(:disabled) { background: var(--raised); }
+.rail-arrow:disabled { opacity: 0.35; cursor: default; }
+@media (min-width: 1024px) { .rail-arrows { display: flex; } .rail { gap: 12px; } }
+@media (prefers-reduced-motion: reduce) { .rail { scroll-behavior: auto; } }
+
+/* A sport's ground as line art (sports/index.tsx, Backdrop), faint behind a card's text in the card's ink,
+   centred, turned and sized as its game's seed says, and cropped by the card. Lines stay one weight at any size. */
+.backdrop { position: absolute; left: var(--bd-x, 50%); top: var(--bd-y, 50%); width: calc(var(--bd-size, 1.4) * min(100%, 320px)); height: auto; aspect-ratio: 1; transform: translate(-50%, -50%) rotate(var(--bd-turn, 0deg)); opacity: 0.18; pointer-events: none; }
+.backdrop * { vector-effect: non-scaling-stroke; }
+.result-card > :not(.backdrop), .next-card > :not(.backdrop), .board.drawn > :not(.backdrop) { position: relative; }
+.next-card .backdrop, .board .backdrop { color: var(--sport-on-ink); }
+.board.drawn { position: relative; overflow: hidden; }
+
+/* A finished game of the fan's: a block of its sport's colour, one big word, the player and their line. */
+.result-card { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; width: 236px; min-height: 268px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }
+.result-card .eyebrow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on-sport-soft); }
+.result-card .word { font-size: var(--word, 46px); overflow-wrap: anywhere; }
+.result-card .who { font-size: 26px; overflow-wrap: anywhere; }
+.result-card .line { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.result-card .line.strong { font-weight: 800; }
+/* Its win, draw or loss in the block's own ink. */
+.result-card .wl.W { background: var(--on-sport); color: var(--sport); }
+.result-card .wl.D { background: color-mix(in srgb, var(--on-sport) 22%, transparent); color: var(--on-sport); }
+.result-card .wl.L { box-shadow: inset 0 0 0 2px var(--on-sport); color: var(--on-sport); }
+/* The hero: on a day with nothing live, the biggest result leads the page, and the cards after it stand as tall. */
+.result-card.hero { width: 322px; min-height: 356px; padding: 18px; border-radius: 26px; }
+.result-card.hero .who { font-size: 40px; }
+.hero-stats { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 8px; }
+.hero-stats .dsp { font-size: 44px; }
+.hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 2px solid color-mix(in srgb, currentColor 18%, transparent); }
+@media (min-width: 1024px) { .result-card { width: 248px; } .result-card.hero { width: 360px; } }
+
+/* A game still to come, on Today: a small next-card (player page), the countdown or day big. */
+.next-card.coming { position: relative; overflow: hidden; justify-content: space-between; gap: 8px; width: 204px; min-height: 176px; padding: 14px 16px; border-radius: var(--radius-tile); }
+.next-card.coming .eyebrow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-card.coming .what { font-weight: 700; font-size: 13px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.player-chip { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+@media (min-width: 1024px) { .next-card.coming { width: 212px; } }
+
+/* A big moment of the fan's this week (ThisWeek.tsx): a poster of the player's sport colour, its word big,
+   then the player and the line. */
+.poster { container-type: inline-size; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; width: 172px; height: 236px; padding: 14px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }
+.poster-tag { align-self: flex-start; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; }
+/* Its longest word (--letters) on one line, at 52px or as large as the poster's width takes it: an Anton
+   capital is up to half an em wide, and the lean adds a little. */
+.poster .word { font-size: min(52px, 100cqw / (var(--letters, 5) * 0.52)); overflow-wrap: anywhere; }
+.poster .who { font-size: 22px; overflow-wrap: anywhere; }
+.poster .line { font-size: 12px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* All of them at once: posters stay poster-sized, two across on a phone. */
+.week .rail.open { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+
+/* The Wire (Wire.tsx): an ink card of rows, each a tag in the player's sport colour, one line, and when. */
+.wire { list-style: none; margin: 0; padding: 4px 16px; border-radius: 18px; background: var(--text); color: var(--bg); --focus: var(--bg); }
+.wire li + li { border-top: 1px solid rgba(255, 255, 255, 0.16); }
+.wire-row { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; }
+.wire-tag { flex-shrink: 0; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+.wire-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wire-text { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* A story's site, always shown: the line is its headline, not ours. */
+.wire-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; }
+.wire-source, .wire-time { color: #a9abb0; }
+.wire-time { flex-shrink: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset: 3px; }
+
+/* This week and the Wire: one after the other on a phone; side by side on a desktop when there are both,
+   where This week's rail scrolls inside its half rather than out to the page's edge. */
+.week-wire { display: flex; flex-direction: column; gap: 16px; }
+@media (min-width: 1024px) {
+  .week-wire.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+  .week-wire.pair .rail:not(.open) { margin-inline: 0; padding-inline: 0; scroll-padding-inline: 0; }
+}
 
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (min-width: 720px) { .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
@@ -201,13 +314,43 @@ p { margin: 0; }
 .tile .status { font-size: 12px; font-weight: 800; line-height: 1.3; }
 .tile .sport { font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--on-sport-soft); }
 .tile .corner { position: absolute; top: 12px; right: 12px; }
+/* A tile to tap rather than open: a starter to follow (Starters.tsx) or a sport in the welcome; ringed once picked. */
+.tile.pick { border: 0; font: inherit; text-align: left; cursor: pointer; min-height: 104px; }
+.tile.pick .name { font-size: 21px; padding-right: 24px; overflow-wrap: normal; }  /* a long surname stays whole: HARMANPREET */
+.tile.pick.sport .name { font-size: 30px; }
+.tile.pick[aria-pressed='true'] { box-shadow: inset 0 0 0 3px var(--on-sport); }
+.welcome-foot { position: sticky; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); padding: 10px 0; background: var(--bg); }
+@media (min-width: 1024px) { .welcome-foot { bottom: 0; } }
 .tile.add { align-items: center; justify-content: center; background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--text); border: 0; }
 .tile.add .dsp { font-size: 26px; }
 @media (prefers-reduced-motion: reduce) { .tile { transition: none; } .tile:hover { transform: none; } }
 
+/* Your players along the top of Today on a phone (PlayersStrip.tsx): a rail of pills in each player's sport
+   colour, under a heading that is one link to the Following page, its chevron saying "see all". */
+.strip { gap: 0; margin-top: -8px; }
+.strip .rail { gap: 8px; }
+.strip-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.strip-head svg { flex-shrink: 0; }
+/* Positioned, so the screen-reader words inside (.sr-only) sit in the rail and not out past the page's edge. */
+.strip-pill { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 14px; border-radius: 999px; background: var(--sport); color: var(--on-sport); white-space: nowrap; }
+.strip-pill:focus-visible { border-radius: 999px; }
+.strip-pill .dsp { font-size: 19px; line-height: 1; }
+.strip-pill .when { max-width: 140px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+.strip-pill .live-dot { box-shadow: 0 0 0 2px var(--on-sport); }  /* red reads on any sport's colour */
+.strip-pill .spinner { width: 14px; height: 14px; border-color: color-mix(in srgb, var(--on-sport) 25%, transparent); border-top-color: var(--on-sport); }
+.strip-pill.add { background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--text); }
+
+/* The Following page's way back to Today. */
+.back-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 32px; }
+.back-link:hover { color: var(--text); }
+
 /* ---------------------------------------------------------------- player page */
 /* The header is a block of the sport's colour, edge to edge on a phone. */
-.player-band { display: flex; flex-direction: column; gap: 16px; margin: calc(-20px - env(safe-area-inset-top, 0px)) calc(-1 * var(--gutter)) 0; padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter) 22px; background: var(--sport); color: var(--on-sport); border-radius: 0 0 28px 28px; }
+.player-band { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 16px; margin: calc(-20px - env(safe-area-inset-top, 0px)) calc(-1 * var(--gutter)) 0; padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter) 22px; background: var(--sport); color: var(--on-sport); border-radius: 0 0 28px 28px; }
+.player-band > * { position: relative; }
+/* The player's photo, large, below the buttons on the right, fading into the band. */
+.player-band > .band-photo { position: absolute; right: 0; bottom: 0; top: calc(64px + env(safe-area-inset-top, 0px)); width: min(46%, 280px); -webkit-mask-image: linear-gradient(to right, transparent, #000 50%); mask-image: linear-gradient(to right, transparent, #000 50%); pointer-events: none; --at: 62cqw; }  /* a face right of the fade */
+.player-band > .photo-credit { max-width: 62%; margin-top: -6px; }
 @media (min-width: 1024px) { .player-band { margin: 0; padding: 20px 24px 26px; border-radius: 28px; } }
 .player-band .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .player-band .btn { border-color: var(--on-sport); color: var(--on-sport); }
@@ -249,6 +392,12 @@ p { margin: 0; }
 .board.compact .score { font-size: 40px; }
 .board .clock { font-size: 22px; color: #ff6b5f; }
 .board .live-note { color: #ff8a80; font-size: 13px; font-weight: 700; }
+/* Today's board: the player's line in one row under the score, and the game's newest moment. */
+.live-line { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.live-line .who { font-size: 20px; color: var(--sport-on-ink); }
+.live-line .what { font-size: 13px; font-weight: 700; }
+.live-line .missed { font-size: 12px; font-weight: 600; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.live-line .missed b { color: var(--text); font-weight: 800; }
 .player-line { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 16px; background: var(--sport); color: var(--on-sport); flex-wrap: wrap; }
 .player-line .eyebrow { color: var(--on-sport-soft); }
 .player-line .lead { font-size: 44px; }
@@ -327,6 +476,7 @@ div.result-main { cursor: default; }
 .notice.action { background: var(--text); color: var(--bg); }
 .notice.action .btn { color: inherit; }
 @media (min-width: 1024px) { .mobile-only { display: none !important; } }
+@media (max-width: 1023.98px) { .desktop-only { display: none !important; } }
 /* Installed on a phone: no browser bar above, so the page starts below the status bar. */
 @media (display-mode: standalone) { .main { padding-top: calc(16px + env(safe-area-inset-top, 0px)); } }
 

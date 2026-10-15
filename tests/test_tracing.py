@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from opentelemetry.trace import SpanKind, StatusCode
 
-from sports_follow import logs, tracing, worker
+from sports_follow import logs, tracing, web_errors, worker
 
 ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = ("OTEL_SDK_DISABLED", "OTEL_TRACES_EXPORTER", "OTEL_LOGS_EXPORTER", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -100,6 +100,26 @@ def test_a_shipped_line_has_its_units_fields_and_its_trace(spans, shipped):
     assert {k: line.attributes[k] for k in ("rid", "job", "player_id", "status")} == {"rid": "ab12cd34ef56ab78", "job": "build_card", "player_id": 7, "status": 502}
     assert not {"context", "route", "trace_id", "span_id"} & set(line.attributes)  # flattened; no empty values; the trace in its own fields
     assert (line.trace_id, line.span_id) == (context.trace_id, context.span_id)
+
+
+def test_a_shipped_error_has_what_failed_where_and_its_stack(shipped):
+    """The Errors dashboard's fields (BHA-196): a stack once, the web app's as the server's are."""
+    logs.setup()
+
+    def fail():
+        worker_log = logging.getLogger("sports_follow.worker")
+        try:
+            web_errors._path(123)
+        except AttributeError:
+            worker_log.warning("job failed", exc_info=True)
+            worker_log.warning("job failed, again", exc_info=True)
+        logging.getLogger("sports_follow.web").warning("web render: TypeError", extra={"error": "TypeError", "place": "web/src/main.tsx", "exc": "TypeError: x\n    at web/src/main.tsx:1:1"})
+
+    _alone(fail)
+    first, again, web = [r.log_record.attributes for r in shipped.get_finished_logs()]
+    assert (first["error"], first["place"]) == ("AttributeError", "sports_follow.web_errors:_path") and "urllib" in first["exception.stacktrace"]
+    assert not {"exception.stacktrace", "error", "place"} & set(again) and not any(k.startswith("_") for k in again)
+    assert web["exception.stacktrace"].startswith("TypeError: x") and "exc" not in web
 
 
 def test_a_job_continues_the_trace_of_the_request_that_queued_it(spans, caplog):

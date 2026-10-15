@@ -147,7 +147,8 @@ deploy/seed-registry.sh deploy@<server-ip>
 ```
 
 **6. Check it:** `https://<domain>/api/health` answers `{"ok":true,"db":true,"redis":true}`, the app
-opens, search finds players, and `/credits` lists Sportmonks and Lichess only.
+opens, search finds players, and `/credits` lists Sportmonks and Lichess only, with PandaScore and PUBG
+once their tokens are sent ([Esports](#secrets), below).
 
 **7. Turn on the alerts, the off-site backups and the GitHub deploys** (below).
 
@@ -226,6 +227,24 @@ pbpaste > ~/.config/sports-follow/openrouter-key && chmod 600 ~/.config/sports-f
 deploy/push-secrets.sh deploy@<server-ip>
 ```
 After that, the Mac's development key can be revoked without taking the app down.
+
+**Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
+only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and
+`pubg-token` (PandaScore's free plan is enough; PUBG's at developer.pubg.com), then send them and restart:
+```bash
+deploy/push-secrets.sh deploy@<server-ip>
+ssh deploy@<server-ip> 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml up -d --force-recreate api worker'
+```
+Then the pros go into search. PUBG's come by themselves: the worker reads them from its tournament index
+every six hours, the first time within ten minutes of starting. PandaScore's come with the weekly import
+(Mondays), or now, in an hour or two (paced, so live series keep their share of the hourly 1,000):
+`c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
+`/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
+
+**Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
+the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
+AI research, and pages the agent built before (sports with no source here) stay as they were, no longer
+updated. With the key but out of credit, source pages work too; they say why news is missing.
 
 **On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
 instead of running `push-secrets.sh`:
@@ -382,12 +401,18 @@ Alerts come by **email from Grafana Cloud**, on its free tier.
   backups, off-site backups, containers and the certificate.
 - **The rules:** they live in `grafana/rules.json` and run in Grafana Cloud, so they still work when the
   server is down. That's one of the things they catch.
+- **The uptime check:** Grafana's Synthetic Monitoring asks `https://<domain>/api/health` every minute
+  from two of its probes, nearest to India first, as a fan's phone would. It catches what the server
+  can't see from inside: DNS, Caddy, the certificate or the firewall. That's at most 89,280 checks a
+  month, within the free tier's 100,000.
 
 Each one emails when it starts, again every 6 hours while it lasts, and "Resolved" when it clears:
 
 | Rule | Emails when |
 |---|---|
 | The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
+| Fans can't reach the app | for 3 minutes, no probe outside the server got a healthy answer from `/api/health` |
+| The uptime check stopped reporting | no results from it for 20 minutes (it also says so until it's set up) |
 | The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
 | Disk | any disk is over 80% full for 10 minutes |
 | Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |
@@ -437,10 +462,14 @@ first failures after a deploy count:
    GRAFANA_SA_TOKEN=<the token>
    ALERT_EMAIL=<where alerts go>
    ```
-4. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
+4. **Uptime check:** in the stack's Grafana, open **Testing & synthetics → Synthetics** and click **Get
+   started**, once. `apply-alerts.sh` then makes the check with the same token. It reads the app's address
+   from the production environment's `APP_URL` variable (through `gh`), or from `APP_URL=https://<domain>`
+   in `grafana-admin.env`.
+5. **Turn it on:** run `chmod 600 ~/.config/sports-follow/grafana*.env`, then:
    ```bash
    deploy/push-secrets.sh deploy@<server-ip>   # grafana.env to the server; Alloy starts
-   deploy/grafana/apply-alerts.sh --test       # the rules, the email contact point and policy, and a test email
+   deploy/grafana/apply-alerts.sh --test       # the rules, the uptime check, the email contact point and policy, and a test email
    ```
 
 Run `apply-alerts.sh` again after changing `rules.json`. A rule whose query changed starts over: if it
@@ -461,6 +490,12 @@ silent server sends one "stopped sending metrics" email and no false "Resolved" 
   right, and "Resolved" follows within about 10.
 - **The server going quiet:** `sudo systemctl stop alloy`. The email comes after about 11 minutes. Then
   `sudo systemctl start alloy`.
+- **Fans can't reach the app:** this takes the app away from fans while it lasts, so pick a quiet time.
+  ```bash
+  cd /opt/sports-follow && docker compose -f deploy/compose.yaml stop caddy
+  ```
+  "Fans can't reach the app" arrives in about 4 to 5 minutes. Then `docker compose -f deploy/compose.yaml
+  start caddy` within 10 minutes, or the containers alert fires too. "Resolved" follows within about 5.
 
 `server-check.sh` can still push to an ntfy topic as well, but the emails cover the same ground. For that,
 save the topic's URL in `~/.config/sports-follow/alert-url` and run `push-secrets.sh`. The checks' log:
@@ -480,6 +515,14 @@ over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it th
 - **Log lines:** every line the app writes to stdout, with its fields as attributes: `rid`, the fan's
   hash, `job`, `player_id`, `route`, `status`, `duration_ms`. A line logged inside a trace carries its
   trace id, so Grafana links the line to the trace and the trace to its lines.
+- **Errors:** a line with an exception has its stack (`exception_stacktrace`), what failed (`error`, its
+  class) and where (`place`, the innermost function of the app's own code it passed through, e.g.
+  `sports_follow.adapters.sportmonks:get`). An exception that escapes a route is that request's line, and
+  a failed job's closing line has its stack. Each stack is logged once. The web app sends its own errors
+  (uncaught ones, failed renders, calls answered with a 5xx) to `/api/errors`. Those lines are logged by
+  the API on `sports_follow.web`, with the page, the app's build (`version`) and a failed call's request
+  id (`call_rid`). Their stacks are mapped back to `web/src` through the build's source maps, which the
+  image keeps in `web/sourcemaps` and doesn't serve.
 - **Metrics:** every minute, the API's requests by route, the worker's jobs, pushes, moments, card
   builds and refreshes, and source requests by host; and what the worker reads each minute: live games
   and how long since each was polled, the job queue, cards by status, each source's allowance used and
@@ -509,6 +552,8 @@ over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it th
    and query `{service_name="sports-follow-api"}`.
 
 **Finding things:**
+- **What's failing:** the **Errors** dashboard (below). Each group's lines are in Loki as
+  `{service_name=~"sports-follow.*"} | error="<error>" | place="<place>"`.
 - **A request a fan reports:** its id is in the answer's `X-Request-ID` header. In Loki, query
   `{service_name=~"sports-follow.*"} | rid="<id>"` for its lines and its jobs' lines. Open the trace from
   any of them.
@@ -525,7 +570,7 @@ whole traces (Alloy's tail sampling) in between.
 
 ## Dashboards
 
-Four dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+Five dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
 from the traces, log lines and metrics (above), so they need nothing more on the server:
 
 | Dashboard | Shows | From |
@@ -534,6 +579,7 @@ from the traces, log lines and metrics (above), so they need nothing more on the
 | **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
 | **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
 | **Notifications** | moments found by kind; pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines and metrics, the "opened" requests |
+| **Errors** | errors from the API, the worker and the web app, grouped by what failed and where, with how many lines and when each was first and last seen; the error lines with their stacks | lines with an exception, and the web app's error lines |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
 trace** (a correlation from Tempo to Loki). The dashboards find their Loki and Tempo data sources
@@ -551,7 +597,9 @@ Traces' panels may miss the last few minutes on a long range; a shorter range sh
 
 ## Operating
 
-On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`:
+On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`.
+To find out why something went wrong (a fan's missing push, a stuck card, a stale score), Claude sessions
+follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what's safe to run here.
 
 | | |
 |---|---|
@@ -560,7 +608,7 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | One request or job's lines | `c logs api worker \| grep <id>`: JSON lines, each with the `rid` of its request or job; a request's id is in its answer's `X-Request-ID` header, and the jobs it queued log under it too |
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
-| Registry import now | `c exec worker python -m sports_follow.registry` |
+| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |

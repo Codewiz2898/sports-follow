@@ -1,6 +1,22 @@
 // Types mirror sports_follow/schema.py and the card built in sports_follow/pipeline.py and structured.py.
 
+import { report } from './errors'
+
 export interface Stat { label: string; value: string }
+
+/** A player's photo from Wikimedia Commons, served from our own copy (sports_follow/photos.py), and the
+ * credit its licence asks for, shown with it: "Photo: <author>, <licence>, Wikimedia Commons, recoloured". */
+export interface Photo {
+  url: string
+  credit: string
+  page: string  // the file's page on Commons, where the credit links
+  author: string
+  licence: string
+  licence_url?: string | null
+  // The square around the face the profile shows, head and shoulders, when one was found (photos.framing):
+  // fractions of the photo's width and height.
+  crop?: { x: number; y: number; w: number; h: number }
+}
 
 export interface PlayerProfile {
   name: string
@@ -11,6 +27,7 @@ export interface PlayerProfile {
   teams: string[]
   summary?: string
   disambiguation?: string | null
+  photo?: Photo | null
 }
 
 // A live score's sport-specific state ("kind" says whose: football, cricket, battle_royale…): its fields
@@ -162,6 +179,7 @@ export interface AthletePreview {
   born?: string | null
   country?: string | null
   live?: boolean
+  photo?: Photo | null
 }
 
 export interface Pick { system: string; athlete_id: string; league?: string | null; qid?: string | null }
@@ -173,6 +191,12 @@ export interface PlayerMoment { id: number; title: string; body: string; url: st
 
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, pushed or not. */
 export interface ActivityItem extends PlayerMoment { priority: number; player: string; event: string | null; muted: boolean; at: string }
+
+/** One of the fan's players' big moments this week, as its sport words it for a poster on Today (GET /api/me/week). */
+export interface WeekPoster { id: number; player_id: number; player: string; sport: string; event_id: number | null; word: string; line: string; url: string; at: string }
+
+/** A row of Today's Wire (GET /api/me/week): a line-up, or a story about one of the fan's players by its own headline, with the site that ran it. */
+export interface WireRow { id: number; player_id: number; player: string; sport: string; tag: string; text: string; source: string | null; url: string; at: string }
 
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
@@ -186,23 +210,27 @@ export type StreamEvent =
 
 /** One credit on the Credits page (sports_follow/credits.py). */
 export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }
-export interface Credits { data: Credit[]; also: Credit[]; software: Credit[]; notices: string[] }
+export interface PhotoCredit { name: string; credit: string; page: string; author: string; licence: string; licence_url?: string | null }
+export interface Credits { data: Credit[]; also: Credit[]; photos?: PhotoCredit[]; software: Credit[]; notices: string[] }
 
 /** Who this device is signed in as (GET /api/me/account; sports_follow/accounts.py). */
 export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number }
 export type Me = Account | { signed_in: false; reason?: 'signed_out' }
 /** What this server offers (GET /api/config). */
-export interface ServerConfig { model: string; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
+// research: false when the server runs without the research agent: pages come from live sources alone.
+export interface ServerConfig { name: string; model: string; research?: boolean; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
 
 /** A refusal from the API: its message for the fan, and the HTTP status. */
 export class ApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
     super(message)
+    this.name = 'ApiError'
     this.status = status
   }
 }
 
+/** A call to the API. A server error (5xx) is reported (errors.ts) with the request id the answer names. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
@@ -211,12 +239,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await res.json()
       if (typeof body.detail === 'string') message = body.detail
     } catch { /* not JSON */ }
-    throw new ApiError(message, res.status)
+    const error = new ApiError(message, res.status)
+    if (res.status >= 500) report({ kind: 'api', call: `${init?.method ?? 'GET'} ${path}`, status: res.status, requestId: res.headers.get('x-request-id') }, error)
+    throw error
   }
   return res.json() as Promise<T>
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+/** A player offered to a new fan, and why (starters.py): pinned by the operator, playing (live, started by
+ * the clock, or soon), among the most followed, or among the best known with a game soon. */
+export type Starter = SearchResult & { why: 'pinned' | 'live' | 'started' | 'soon' | 'followed' | 'top' }
+
+/** A sport's starters: the few players a new fan is offered there (GET /api/starters), as search results. */
+export interface StarterSport {
+  key: string
+  label: string
+  players: Starter[]
+}
+
+/** A game a source has on now, whoever follows it (GET /api/live, live.py): its live block shaped like a
+ * card's, and a few players to follow from it, best first. */
+export interface LiveGame {
+  key: string
+  title: string
+  competition: string
+  start_utc?: string | null
+  live: LiveStatus
+  players: SearchResult[]
+}
+
+export interface LiveSport {
+  key: string
+  label: string
+  games: LiveGame[]
+}
 
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
 export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
@@ -236,6 +294,8 @@ export const api = {
   result: (playerId: number, eventId: number) => request<GameDetail>(`/api/players/${playerId}/results/${eventId}`),
   form: (playerId: number, last: number) => request<Form>(`/api/players/${playerId}/form?last=${last}`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
+  starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
+  live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
   /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */
@@ -257,6 +317,7 @@ export const api = {
     request<{ ok: boolean }>('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) }),
   pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
   activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
+  week: () => request<{ posters: WeekPoster[]; wire: WireRow[] }>('/api/me/week'),
   mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
   mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
   config: () => request<ServerConfig>('/api/config'),

@@ -16,11 +16,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from time import perf_counter
+from typing import Any
 
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, structured, tracing
+from . import accounts, bus, db, engine, history, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -51,8 +52,9 @@ STOP_WAIT = 5
 def _logged(fn, quiet: bool = False, deep: bool = True):
     """A job whose lines carry its own id, or that of the request that queued it (server.enqueue), its
     name and its player, game or source, and which ends with one line: how long it waited in the queue,
-    how long it ran and how it ended. It's a span too, in the trace of the request that queued it, or
-    of its own; a job that isn't deep has only that span, none for the requests and queries it makes."""
+    how long it ran and how it ended (a failed job's line has the exception's stack, unless a line of the
+    job's own logged it). It's a span too, in the trace of the request that queued it, or of its own; a
+    job that isn't deep has only that span, none for the requests and queries it makes."""
     signature = inspect.signature(fn)
 
     @functools.wraps(fn)
@@ -64,13 +66,13 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
         queued = ctx.get("enqueue_time")
         waited = (datetime.now(timezone.utc) - queued).total_seconds() if isinstance(queued, datetime) else None
 
-        def ended(outcome: str, how: str) -> None:
+        def ended(outcome: str, how: str, failure: Exception | None = None) -> None:
             took = perf_counter() - started
             metrics.job(fn.__name__, outcome, took, waited)
             if quiet and outcome == "ok" and took < QUIET_UNDER:
                 return
             queue = "" if waited is None else f", after {waited:.1f}s in the queue"
-            log.log(logging.INFO if outcome == "ok" else logging.WARNING, "%s %s in %.1fs%s", fn.__name__, how, took, queue, extra={
+            log.log(logging.INFO if outcome == "ok" else logging.WARNING, "%s %s in %.1fs%s", fn.__name__, how, took, queue, exc_info=failure, extra={
                 "outcome": outcome, "duration_ms": round(took * 1000, 1), "waited_ms": None if waited is None else round(waited * 1000),
                 "job_id": ctx.get("job_id"), "attempt": ctx.get("job_try"),
             })
@@ -84,7 +86,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
                 tracing.failed(span, "cancelled")
                 raise
             except Exception as exc:
-                ended("failed", f"failed ({type(exc).__name__}: {exc})")
+                ended("failed", f"failed ({type(exc).__name__}: {exc})", exc)
                 raise
             ended("ok", "done")
             return result
@@ -145,8 +147,9 @@ def _import_registry() -> None:
 
 def _warm_sources() -> None:
     """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date,
-    and a source whose roster is read more often than the weekly import (PUBG's, from that index, every
-    six hours: roster_every) adds its players to the registry."""
+    a source that has changed how it names its athletes has the players bound to it moved to the new ids
+    (structured.rekey_bound), and a source whose roster is read more often than the weekly import (PUBG's,
+    from that index, every six hours: roster_every) adds its players to the registry."""
     from .adapters import ADAPTERS
 
     for adapter in list(ADAPTERS.values()):
@@ -157,6 +160,14 @@ def _warm_sources() -> None:
             log.info("warm %s: %s lobbies indexed", adapter.system, warm())
         except Exception:
             log.exception("warm %s failed", adapter.system)
+    for adapter in list(ADAPTERS.values()):
+        if getattr(adapter, "rekey", None) is None:
+            continue
+        try:
+            if moved := structured.rekey_bound(adapter):
+                log.info("rekey %s: %d players moved to the ids it gives now", adapter.system, moved)
+        except Exception:
+            log.exception("rekey %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
         every = getattr(adapter, "roster_every", None)
         if every and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds
@@ -178,6 +189,29 @@ async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> 
         log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
 
 
+STARTERS_DONE = "starters:refreshed"  # set once a refresh finishes; a worker starting without it queues one
+
+
+async def refresh_starters(ctx) -> None:
+    """Each sport's top players for new fans, found in their sources with their next games: once a day,
+    and when a worker starts with no refresh in the last day (startup), say on a fresh server. One at a
+    time: a restart's refresh and 04:40's don't both ask the sources."""
+    if not await ctx["redis"].set("starters:refreshing", "1", nx=True, ex=2400):
+        return
+    try:
+        await in_lane('refresh', starters.refresh)
+        await ctx["redis"].set(STARTERS_DONE, "1", ex=23 * 3600)
+    finally:
+        await ctx["redis"].delete("starters:refreshing")
+
+
+async def read_live(ctx, system: str) -> None:
+    """What a source has on now, league-wide, for "Live now" (live.read): queued by the API when a fan looks
+    and it last asked over a minute ago. In the refresh lane: no fan waits on it, so it stops short of the
+    allowance kept for followed players' live games."""
+    await in_lane('refresh', live.read, system)
+
+
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
     ended = await asyncio.to_thread(accounts.purge_expired)
@@ -194,6 +228,13 @@ async def import_registry(ctx) -> None:
 async def prune(ctx) -> None:
     """Rows and hot copies nothing reads any more, once a day (retention.py)."""
     await asyncio.to_thread(retention.prune)
+
+
+async def fetch_photos(ctx) -> None:
+    """Followed and starter players' photos from Wikimedia Commons, every 15 minutes (photos.py)."""
+    if await _missed(ctx, "fetch_photos"):
+        return
+    await asyncio.to_thread(photos.run)
 
 
 def _late(ctx) -> bool:
@@ -217,6 +258,10 @@ async def startup(ctx) -> None:
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
+    redis = ctx.get("redis")
+    if redis is not None and not await redis.exists(STARTERS_DONE):
+        # A deploy restarts the worker several times a day: only one that finds no recent refresh queues one.
+        await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
 
 
 async def wind_down(ctx) -> None:
@@ -267,13 +312,16 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live)]
+    functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
+        cron(_logged(refresh_starters), hour=4, minute=40, second=0, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
+        cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

@@ -205,6 +205,32 @@ def record(player_id: int, ref: PlayerRef, confidence: float = 1.0) -> bool:
     return True
 
 
+def rekey_bound(adapter: Adapter) -> int:
+    """Move every player bound to a source that has changed how it names its athletes (its rekey) to the
+    id it gives them now, followed or not: their live lines are keyed by it, and search lists a player by
+    it, beside the registry's row. A player whose new id another already holds is left as they are and
+    named once a day, for an operator to merge the two. Returns how many moved."""
+    rekey = getattr(adapter, "rekey", None)
+    if rekey is None:
+        return 0
+    with session() as db:
+        rows = db.scalars(select(SourceBinding).where(SourceBinding.adapter == adapter.system, SourceBinding.purpose == "fixtures"))
+        bound = [(row.player_id, PlayerRef(**row.locator), row.confidence) for row in rows if row.player_id is not None]
+    moved = 0
+    for player_id, ref, confidence in bound:
+        new = rekey(ref)
+        if new is None:
+            continue
+        with session() as db:
+            holder = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == new.system, PlayerIdentity.external_id == new.athlete_id))
+        if holder is not None and holder != player_id:
+            if bus.cooldown(f"rekey:{player_id}", 24 * 3600):
+                log.warning("rekey %s: player %s (%s) is player %s (%s); merge them", adapter.system, player_id, ref.athlete_id, holder, new.athlete_id)
+            continue
+        moved += record(player_id, new, confidence)
+    return moved
+
+
 def describe(player_id: int) -> str | None:
     """Who a bound player is, for the research agent: the exact athlete, so it can't research a namesake."""
     with session() as db:
@@ -843,7 +869,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 before = baseline(latest, last, snap, recent)
                 name, sport = people.get(player_id, ("", ""))
                 seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
-                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
+                told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
+                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue

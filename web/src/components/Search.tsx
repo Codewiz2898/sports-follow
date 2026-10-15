@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api, type Research, type SearchResponse, type SearchResult } from '../api'
+import { api, type FollowTarget, type Research, type SearchResponse, type SearchResult } from '../api'
+import { APP_NAME } from '../app'
 import { relative } from '../format'
 import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
@@ -53,7 +54,7 @@ export function sections(data: SearchResponse): Section[] {
     ].filter((s) => s.items.length)
   }
   return [
-    { key: 'ours', title: 'On Sports Follow', items: results.filter((r) => r.player_id) },
+    { key: 'ours', title: `On ${APP_NAME}`, items: results.filter((r) => r.player_id) },
     { key: 'athletes', title: 'Athletes', items: results.filter((r) => !r.player_id && r.live_scores) },
     { key: 'other', title: 'Other sports · AI research only', items: results.filter((r) => !r.player_id && !r.live_scores) },
     { key: 'suggestions', title: 'Did you mean', items: data.suggestions },
@@ -98,16 +99,19 @@ export function useSearchActions(onDone?: () => void) {
     }
   }, [navigate, onDone])
 
-  const follow = useCallback((r: SearchResult) => run(r.key, () => following.follow(
-    r.player_id ? { player_id: r.player_id }
-      : r.system && r.athlete_id ? { system: r.system, athlete_id: r.athlete_id, league: r.league, qid: r.qid }
-        : r.qid ? { qid: r.qid, sport: r.sport.toLowerCase() }  // the server finds them in the live source
-          : { query: r.name },  // a sport only the agent covers: this is an AI research
-  )), [following, run])
+  const follow = useCallback((r: SearchResult) => run(r.key, () => following.follow(followTarget(r))), [following, run])
 
   const research = useCallback((query: string) => run(`research:${query}`, () => following.follow({ query })), [following, run])
 
   return { open, follow, research, pending, error, isFollowing: following.isFollowing }
+}
+
+/** What following a result sends: the player already here, the athlete in their live source, or a name. */
+export function followTarget(r: SearchResult): FollowTarget {
+  return r.player_id ? { player_id: r.player_id }
+    : r.system && r.athlete_id ? { system: r.system, athlete_id: r.athlete_id, league: r.league, qid: r.qid }
+      : r.qid ? { qid: r.qid, sport: r.sport.toLowerCase() }  // the server finds them in the live source
+        : { query: r.name }  // a sport only the agent covers: this is an AI research
 }
 
 // Accents and apostrophes dropped, as the server compares names: "aja" is the start of A'ja.

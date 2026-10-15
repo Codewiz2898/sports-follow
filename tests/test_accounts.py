@@ -8,11 +8,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from sports_follow import accounts, google_signin, mail, server
@@ -182,6 +184,38 @@ def test_one_network_gets_twenty_codes_an_hour_whichever_addresses_they_go_to(ap
     assert api.call("POST", "/api/auth/email/start", body={"email": "other@example.com"}, address="81.2.69.143").status_code == 200
 
 
+def test_one_network_gets_twenty_codes_a_day_however_the_hours_fall(api, store, outbox):
+    def start(i):
+        for key in [k for k in api.redis.data if k.startswith("auth-address:")]:
+            del api.redis.data[key]  # another hour
+        return api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=PUBLIC)
+
+    assert [start(i).status_code for i in range(server.CODES_PER_ADDRESS_DAY)] == [200] * server.CODES_PER_ADDRESS_DAY
+    refused = start(99)
+    assert refused.status_code == 429 and refused.json()["detail"] == "Your network has asked for a lot of codes today. Try again tomorrow."
+
+
+def test_clients_without_a_public_address_share_only_the_hourly_bucket(api, store, outbox):
+    """This machine, or a proxy whose forwarded address isn't trusted: one shared key a day would lock out everyone."""
+    def start(i):
+        for key in [k for k in api.redis.data if k.startswith("auth-address:")]:
+            del api.redis.data[key]
+        return api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address="127.0.0.1")
+
+    assert all(start(i).status_code == 200 for i in range(server.CODES_PER_ADDRESS_DAY + 5))
+
+
+def test_codes_stop_at_the_mail_plans_daily_allowance(api, store, outbox, monkeypatch):
+    """Past it the mail provider refuses anyway: the fan hears "tomorrow" instead of a failed send."""
+    monkeypatch.setattr(server, "MAIL_CODES_PER_DAY", 3)
+    answers = [api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=f"81.2.69.{10 + i}") for i in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert "sent all the sign-in codes it can today" in answers[-1].json()["detail"] and len(outbox) == 3
+    # Tapped again within the minute: refused again, not told "the code sent then is the one".
+    again = api.call("POST", "/api/auth/email/start", body={"email": "fan3@example.com"}, address="81.2.69.13")
+    assert again.status_code == 429
+
+
 def test_an_address_with_twenty_wrong_codes_today_gets_no_more(api, store, outbox):
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     api.redis.data[f"auth-fails:{accounts.email_key('fan@example.com')}:{day}"] = server.FAILS_PER_DAY
@@ -198,6 +232,37 @@ def test_a_code_that_couldnt_be_sent_can_be_asked_for_again_at_once(api, store, 
     monkeypatch.setattr(mail, "send_code", down)
     assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}).status_code == 502
     assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)
+
+
+def test_an_address_the_mail_service_wont_send_to_is_the_fans_to_change(api, store, monkeypatch, caplog):
+    """Resend refuses some addresses (example.com's): a 400 that says so, not a server error (a 5xx counts
+    against the API's alert). Its other refusals and failures stay 502s."""
+    monkeypatch.setattr(mail, "_key", lambda: "re_test")
+    monkeypatch.setattr(mail, "MAIL_FROM", "signin@stann.in")
+    answers: list[tuple[int, str]] = []
+
+    def post(url, headers, json):
+        status, text = answers.pop(0)
+        return httpx.Response(status, text=text)
+
+    monkeypatch.setattr(mail._client, "post", post)
+    caplog.set_level(logging.INFO, "sports_follow.mail")
+    refused = '{"statusCode":422,"name":"validation_error","message":"Invalid `to` field. Please use our testing email address instead of domains like `example.com`."}'
+    answers.append((422, refused))
+    answer = api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)
+    assert answer.status_code == 400 and "that address" in answer.json()["detail"]
+    assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)  # another address may follow at once
+    ours = [
+        (422, '{"statusCode":422,"name":"missing_required_field","message":"Missing `to` field."}'),  # our request's fault
+        (422, '{"statusCode":422,"name":"validation_error","message":"The `from` field is invalid."}'),
+        (422, "not json"),
+        (500, ""),
+    ]
+    for status, text in ours:
+        answers.append((status, text))
+        assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 502
+    levels = [r.levelno for r in caplog.records if r.name == "sports_follow.mail"]
+    assert levels == [logging.INFO] + [logging.WARNING] * len(ours)  # only the server's own failures are warnings
 
 
 def test_without_a_mail_key_email_sign_in_is_off_and_logging_codes_needs_plain_http(api, monkeypatch):

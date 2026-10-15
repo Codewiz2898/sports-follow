@@ -1,5 +1,6 @@
 """Logging (logs.py): the API's own lines reach the log under uvicorn (BHA-191), as JSON on a server, and
-every line carries the id and fields of the request or job it belongs to (BHA-192)."""
+every line carries the id and fields of the request or job it belongs to (BHA-192). A line with an
+exception says what failed and where, with the stack, and a stack is logged once (BHA-196)."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from sports_follow import logs
+from sports_follow import logs, web_errors
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,6 +61,14 @@ async def build_card(ctx, player_id):
     logging.getLogger("sports_follow.pipeline").warning("build %s failed: no answer", player_id)
 
 asyncio.run(worker._logged(build_card)({"job_id": "j1", "job_try": 1}, 7, trace={"rid": "ab12cd34ef56ab78"}))
+
+async def refresh_structured(ctx, player_id):
+    raise ValueError("no such round")
+
+try:
+    asyncio.run(worker._logged(refresh_structured)({"job_id": "j2", "job_try": 1}, 8))
+except ValueError:
+    logging.getLogger("arq.worker").exception("  0.01s ! j2:refresh_structured failed, ValueError: no such round")
 """
 
 
@@ -70,10 +79,14 @@ def test_the_worker_logs_as_json_after_arqs_own_config():
     assert [(line["logger"], line["msg"]) for line in lines] == [
         ("arq.worker", "job x expired"),  # arq's warnings through ours; its line per job replaced by _logged's
         ("sports_follow.pipeline", "build 7 failed: no answer"),
-        ("sports_follow.worker", lines[-1]["msg"]),
+        ("sports_follow.worker", lines[2]["msg"]),
+        ("sports_follow.worker", lines[3]["msg"]),  # and arq's line about a failed job too: ours has the stack
     ]
-    assert [line.get("rid") for line in lines] == [None, "ab12cd34ef56ab78", "ab12cd34ef56ab78"]
-    assert lines[-1]["msg"].startswith("build_card done in ") and lines[-1]["player_id"] == 7 and lines[-1]["job_id"] == "j1"
+    assert [line.get("rid") for line in lines[:3]] == [None, "ab12cd34ef56ab78", "ab12cd34ef56ab78"]
+    assert lines[2]["msg"].startswith("build_card done in ") and lines[2]["player_id"] == 7 and lines[2]["job_id"] == "j1"
+    failed = lines[3]
+    assert failed["msg"].startswith("refresh_structured failed (ValueError: no such round) in ") and failed["outcome"] == "failed"
+    assert failed["error"] == "ValueError" and failed["place"].startswith("sports_follow.") and failed["exc"].endswith("ValueError: no such round")
     assert "Traceback" not in out.stderr
 
 
@@ -114,6 +127,39 @@ def test_a_json_line_has_the_context_the_extras_and_the_traceback():
     assert line["fan"] == logs.fan("fan-a") != "fan-a" and len(line["fan"]) == 12
     assert line["status"] == 502 and line["source"].startswith("<object")  # what JSON can't hold, as text
     assert line["exc"].startswith("Traceback") and "ValueError: no such athlete" in line["exc"]
+
+
+def test_an_exception_is_logged_with_what_failed_and_where_and_its_stack_once():
+    """What failed (`error`) and where in this app (`place`) group a failure's lines (BHA-196). A later line
+    about the same exception (the job that failed with it) says so without the stack, and uvicorn's or
+    arq's own line about it is left out."""
+    caught = []
+
+    def log(logger):
+        try:
+            web_errors._path(123)  # fails in urllib.parse, called from this app's code
+        except AttributeError as exc:
+            caught.append(exc)
+            logger.warning("the page failed", exc_info=True)
+            logger.warning("the job failed", exc_info=exc)
+
+    first, again = [json.loads(line) for line in _formatted(logs.JsonFormatter(), log).splitlines()]
+    assert (first["error"], first["place"]) == ("AttributeError", "sports_follow.web_errors:_path")  # not urllib's frame below it
+    assert first["exc"].startswith("Traceback") and "urllib" in first["exc"]
+    assert again["msg"] == "the job failed" and not {"exc", "error", "place"} & set(again)
+    exc = caught[0]
+
+    def record(name: str) -> logging.LogRecord:
+        return logging.getLogger(name).makeRecord(name, logging.ERROR, __file__, 1, "Exception in ASGI application", (), (type(exc), exc, exc.__traceback__))
+
+    assert not logs._said(record("uvicorn.error")) and logs._said(record("sports_follow.worker"))
+
+
+def test_an_exceptions_class_is_named_with_its_module():
+    from sports_follow.adapters import AdapterError
+
+    assert logs.error_type(ValueError()) == "ValueError" and logs.error_type(AdapterError("x")) == "sports_follow.adapters.base.AdapterError"
+    assert logs.place(ValueError()) is None  # never raised: nowhere
 
 
 def test_a_text_line_ends_with_its_context():

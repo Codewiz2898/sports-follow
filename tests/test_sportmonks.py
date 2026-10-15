@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from sports_follow import moments
 from sports_follow.adapters import sportmonks, sportmonks_football as sm
 from sports_follow.adapters import budget
 
@@ -106,14 +107,38 @@ def test_a_live_match_has_score_clock_scorers_lines_and_moments():
     assert snap.lines[str(UNUSED)].headline == "On the bench"
     assert {"label": "Red", "value": "1"} in snap.lines[str(KEEPER)].stats  # a second yellow is a red
 
-    # Newest first; the coach's card and the ruled-out goal aren't moments.
+    # Newest first; the coach's card isn't a moment, and the goal VAR ruled out is marked so (its alert is corrected).
     assert [(m["clock"], m["kind"], m["text"]) for m in snap.moments] == [
+        ("62'", "DISALLOWED", "Ozan Tufan (Trabzonspor)"),
         ("60'", "RED", "A. Keeper (Galatasaray), second yellow"),
         ("45+2'", "GOAL", "Mohamed Salah (Trabzonspor), penalty"),
         ("30'", "GOAL", "A. Keeper (Galatasaray), own goal"),
         ("4'", "GOAL", "Mohamed Salah (Trabzonspor), assist Ozan Tufan"),
     ]
     assert snap.moments[-1]["athlete_ids"] == [str(STAR), str(SUB)]
+
+
+def test_a_goal_ruled_out_corrects_the_goals_alert():
+    # Ozan Tufan's 62' goal was told, keyed by its minute; Sportmonks has since rescinded it.
+    snap = sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=LINEUPS, events=EVENTS))
+
+    def seen(athlete: int) -> moments.Seen:
+        line = snap.lines[str(athlete)]
+        return moments.Seen(snap.status, snap.state, {"headline": line.headline, "stats": line.stats}, snap.score_label, snap.clock_label, events=snap.moments)
+
+    [f] = moments.detect("Football", "Ozan Tufan", str(SUB), seen(SUB), seen(SUB), [("goal", "goal@62'")])
+    assert (f.kind, f.title, f.detail) == ("correction", "Goal ruled out: Ozan Tufan", "goal:goal@62'")
+    # Mohamed Salah's goals stand.
+    assert moments.detect("Football", "Mohamed Salah", str(STAR), seen(STAR), seen(STAR), [("goal", "goal@4'"), ("goal", "goal@45+2'")]) == []
+
+
+def test_every_goal_stays_in_the_events_however_many_cards():
+    # Fourteen cards after the 4' goal and the ruled-out 5' one: the newest dozen alone would drop both,
+    # and a goal's alert reads its play there (whether it stands, what it was).
+    cards = [{"type": {"developer_name": "YELLOWCARD"}, "minute": 10 + n, "participant_id": AWAY, "player_id": KEEPER, "player_name": "A. Keeper"} for n in range(14)]
+    ruled_out = {"type": {"developer_name": "GOAL"}, "minute": 5, "participant_id": HOME, "player_id": SUB, "player_name": "Ozan Tufan", "rescinded": True}
+    snap = sm.parse_match(_match("INPLAY_2ND_HALF", 1, 0, events=[EVENTS[0], ruled_out, *cards]))
+    assert [(m["clock"], m["kind"]) for m in snap.moments[12:]] == [("5'", "DISALLOWED"), ("4'", "GOAL")]
 
 
 def test_clock_in_stoppage_time_and_breaks():
@@ -246,3 +271,31 @@ def test_the_team_sheet_before_kick_off_and_goal_details():
     assert (opener["team_id"], opener["assist"], opener["own_goal"]) == (str(HOME), "Ozan Tufan", False)
     assert (own_goal["own_goal"], own_goal["assist"]) == (True, None)
     assert penalty["clock"] == "45+2'" and penalty["athlete_ids"] == [str(STAR)]
+
+
+def test_live_now_lists_every_match_in_play_with_its_starting_elevens(monkeypatch):
+    named = [{**row, "player_name": name} for row, name in zip(LINEUPS, ["Mohamed Salah", "Ozan Tufan", "Bench Warmer", "A. Keeper"])]
+    in_play = _match("INPLAY_2ND_HALF", 2, 1, lineups=named, events=EVENTS[:1])
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, sportmonks._bucket(path)))
+        return {"data": [in_play, _match("FT", 1, 0, id=556)]}  # a match just over isn't on now
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    [game] = sm.SportmonksFootball().live_now()
+    assert asked == [("/football/livescores/inplay", "Fixture")]  # Sportmonks counts livescores as fixtures
+    assert (game.source_id, game.title, game.competition, game.teams) == ("555", "Trabzonspor vs Galatasaray", "Super Lig", ["Trabzonspor", "Galatasaray"])
+    assert game.snapshot.status == "live" and game.snapshot.state["home"]["score"] == "2"
+    # The starting elevens only, as the line-ups name them, with their team.
+    assert [(p.system, p.athlete_id, p.name, p.team_names) for p in game.players] == [
+        ("sportmonks_football", str(STAR), "Mohamed Salah", ["Trabzonspor"]), ("sportmonks_football", str(KEEPER), "A. Keeper", ["Galatasaray"])]
+
+
+def test_a_live_matchs_players_come_attackers_first_the_sides_in_turn():
+    def starter(pid: int, team: int, position: int, name: str) -> dict:
+        return {"player_id": pid, "team_id": team, "type_id": 11, "position_id": position, "player_name": name}
+
+    lineups = [starter(1, HOME, 24, "Home Keeper"), starter(2, HOME, 27, "Home Striker"), starter(3, AWAY, 25, "Away Back"), starter(4, AWAY, 27, "Away Striker")]
+    [game] = sm.parse_live([_match("INPLAY_1ST_HALF", 0, 0, lineups=lineups)], "sportmonks_football")
+    assert [p.name for p in game.players] == ["Home Striker", "Away Striker", "Home Keeper", "Away Back"]

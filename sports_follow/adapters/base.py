@@ -89,6 +89,22 @@ class Snapshot:
 
 
 @dataclass
+class LiveGame:
+    """One game a source has on right now, whoever follows it (an adapter's live_now()): its score as a
+    followed player's card would show it, and who's playing, followable by the source's own ids, the
+    source's order (a starting eleven, the top boards)."""
+
+    source_id: str  # the source's event id, as Fixture.source_id
+    title: str  # "Arsenal vs Chelsea", "India v West Indies", "Gukesh D v Carlsen, Magnus"
+    competition: str
+    start_utc: datetime | None
+    snapshot: Snapshot
+    players: list[PlayerRef] = field(default_factory=list)
+    teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
+    league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+
+
+@dataclass
 class Rostered:
     """An athlete as a source's own list has them, for the registry: esports pros come from their
     sources, not Wikidata (registry.import_roster)."""
@@ -183,7 +199,10 @@ class Adapter:
     game_names (every name its games go by) and game_of_league(league, country); and a roster for the
     registry: roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep) -> Roster, which
     hands keep() its athletes (Rostered) a page at a time, and roster_every (seconds) for a source whose
-    list is read more often than the weekly import."""
+    list is read more often than the weekly import; and for a source that has changed how it names its
+    athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
+    same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
+    the old ids, and the registry drops its rows holding one."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     sport: str  # the sport it serves (sports.Sport.key): "cricket"
@@ -229,6 +248,11 @@ class Adapter:
     #   def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]
     # keyed as given, leaving out events the source didn't return. An adapter with it has all its
     # armed and live events polled together, one request a round (structured.poll_lane).
+    #
+    # Optional, for a source that can list everything it has on now, league-wide, in a request or a few:
+    #   def live_now(self) -> list[LiveGame]
+    # the games in play now, whoever follows them, each game's players in the order the source would put
+    # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""

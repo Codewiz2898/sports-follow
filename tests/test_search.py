@@ -331,6 +331,34 @@ def test_a_query_with_nothing_to_search_by_lists_no_one_and_offers_no_research(m
     assert out["researchable"] and asked == ["lebron"]
 
 
+# ---------------------------------------------------------------- without the research agent
+
+
+def test_without_the_agent_search_lists_only_athletes_a_source_has(monkeypatch):
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): a page comes from a live source or not at all, so an
+    # athlete only the agent could build isn't listed, and no research is offered.
+    from sports_follow import config
+
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True)
+    carwin = SearchResult(key="espn:mma:2335", name="Shane Carwin", sport="MMA", detail="", live_scores=False)
+    searching(monkeypatch, espn=[warne, carwin])
+    out = search.run(None, "shane")
+    assert sorted(r["name"] for r in out["results"]) == ["Shane Carwin", "Shane Warne"] and out["researchable"]
+    monkeypatch.setattr(config, "AGENT", False)
+    out = search.run(None, "shane")
+    assert [r["name"] for r in out["results"]] == ["Shane Warne"] and not out["researchable"]
+    # A registry athlete in a sport with a running source stays, even without its id there yet (it's
+    # looked up by name and birth date when followed); one in a sport without one is left out before
+    # anything is decided on it, so the live sources are still asked.
+    monkeypatch.setattr(search.registry, "follow_system", lambda sport, ids: "espn_soccer" if sport == "football" else None)
+    bond = athlete("Q1", "Shane Bond", "cricket", sitelinks=40)  # cricket has no running source, here
+    long = athlete("Q2", "Shane Long", "football", sitelinks=40)  # no source id yet
+    searching(monkeypatch, found=[bond, long])
+    assert [r["name"] for r in search.run(None, "shane")["results"]] == ["Shane Long"]
+    asked = searching(monkeypatch, found=[bond], espn=[warne])  # Bond alone would have spared the live sources
+    assert [r["name"] for r in search.run(None, "shane")["results"]] == ["Shane Warne"] and asked == ["shane"]
+
+
 # ---------------------------------------------------------------- native spellings
 
 

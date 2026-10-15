@@ -6,6 +6,10 @@
     .venv/bin/python -m sports_follow.players remove 17                    # a player's page, by its id
     .venv/bin/python -m sports_follow.players remove Q1234                 # or a registry id, or a source id (espn_cricket:253802)
     .venv/bin/python -m sports_follow.players restore Q1234                # take the decision back
+    .venv/bin/python -m sports_follow.players starter add Q1234            # pin them for new fans (starters.py)
+    .venv/bin/python -m sports_follow.players starter remove Q1234
+    .venv/bin/python -m sports_follow.players starter list                 # the pins, and each sport's top players
+    .venv/bin/python -m sports_follow.players starter refresh              # find the top players now (daily anyway)
 
 What's decided is kept in athlete_override, which every registry import respects (registry.upsert and the
 stale and unseen deletes), so it holds on a running server without a deploy and the weekly import doesn't
@@ -15,6 +19,11 @@ everything that hangs off it (follows, moments, results, bindings: the database 
 in Redis, deletes their registry rows and blocks them: imports never write them again, and search and
 following leave out their ids in the sources. A name typed for research isn't blocked; the agent decides
 who that is. Removing shows what it will delete and asks first, unless given --yes.
+
+Starters are the athletes a new fan is offered in each sport (starters.py): who's playing now, the most
+followed, and the best known, found by themselves; pinned starters come first, in the order they were
+added. Pinning one keeps them in the registry too, so no import drops them; removing the athlete takes their
+starter row with them.
 """
 
 from __future__ import annotations
@@ -30,8 +39,8 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, logs, registry, sports
-from .adapters import KNOWN
+from . import bus, logs, registry, search, sports, starters
+from .adapters import KNOWN, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, EventPlayer, Follow, Moment, Player, PlayerIdentity
 
@@ -116,6 +125,7 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
                 covered.add(p.id)
         _decide(db, a.qid, a.sport, "remove", a.name, ids, note)
         db.execute(delete(Athlete).where(Athlete.id == a.id))
+    starters.remove(db, found.athletes)
     for p in found.players:
         if p.id not in covered:
             # A page no registry row stands for (an agent-built one): its source ids are still blocked.
@@ -186,6 +196,42 @@ def restore(db: Session, ref: str, sport: str | None = None) -> list[AthleteOver
     return rows
 
 
+def starter_athletes(found: Found, sport: str | None = None) -> list[Athlete]:
+    """The registry athletes a reference means as starters: one sport's, unless the id is only in one."""
+    if not found.athletes:
+        raise Refused("starters come from the registry, and no registry athlete has that id")
+    if len(found.athletes) > 1 and not sport:
+        raise Refused(f"that id is in more than one sport ({', '.join(a.sport for a in found.athletes)}); say which with --sport")
+    return found.athletes
+
+
+def check_source(person: registry.Person) -> str:
+    """The source a starter is followed through, or refused when it doesn't have them: a new fan would
+    follow an empty card, or spend an AI research. In the sport's live source, their id is found by name
+    and birth date when Wikidata didn't give it and written to the registry (registry.resolve), so
+    following them is by id; a source side by side with it (esports) is asked for the id their row has."""
+    system = registry.follow_system(person.sport, person.ids)
+    if system is None:
+        raise Refused(f"no live source runs for {person.name} ({person.sport}) in this build, so new fans can't follow them live")
+    try:
+        found = registry.find_in_source(person)
+    except AdapterError as exc:
+        raise Refused(f"couldn't reach {system} to check {person.name}: {exc}") from exc
+    if found is None:
+        raise Refused(f"{system} doesn't have {person.name} ({person.qid}); a starter must be someone new fans can follow live")
+    return system
+
+
+def make_starters(db: Session, athletes: list[Athlete]) -> list[tuple[Athlete, bool]]:
+    """Offer these athletes to new fans, pinned so no import drops them. Returns each athlete and whether
+    they're a new starter."""
+    out = []
+    for a in athletes:
+        pin(db, a.qid, a.sport)
+        out.append((a, starters.add(db, a)))
+    return out
+
+
 def decisions(db: Session) -> list[AthleteOverride]:
     return list(db.scalars(select(AthleteOverride).order_by(AthleteOverride.created_at.desc())))
 
@@ -234,6 +280,13 @@ def main(argv: list[str], ask: Any = input) -> int:
     b = sub.add_parser("restore", help="take back what was decided about a registry id")
     b.add_argument("ref")
     b.add_argument("--sport")
+    s = sub.add_parser("starter", help="the athletes a new fan is offered in each sport").add_subparsers(dest="action", required=True)
+    s.add_parser("list", help="the pinned starters, by sport and order, and each sport's top players")
+    s.add_parser("refresh", help="find each sport's top players and their next games now (the worker does it daily)")
+    for action, text in (("add", "pin a registry athlete for new fans, after the sport's other pins"), ("remove", "unpin them")):
+        x = s.add_parser(action, help=text)
+        x.add_argument("ref", help="a registry id (Q1234), a player id or system:id")
+        x.add_argument("--sport")
     args = parser.parse_args(argv)
     try:
         if args.command == "list":
@@ -270,6 +323,35 @@ def main(argv: list[str], ask: Any = input) -> int:
             with session() as db:
                 for o in restore(db, args.ref, args.sport):
                     print(f"No longer {'removed' if o.action == 'remove' else 'kept'}: {o.name} ({o.sport}, {o.qid}).")
+        elif args.command == "starter" and args.action == "list":
+            with session() as db:
+                rows = starters.listed(db)
+                for s, a in rows:
+                    why = " (not offered: its registry row is gone)" if a is None else "" if search.offered(db, [a], None) else " (not offered: no running source has their id)"
+                    print(f"{s.sport:10}  {s.position:3}  {s.qid:20}  {a.name if a else '?'}{why}")
+                if not rows:
+                    print("Nothing pinned: new fans are offered who's playing, the most followed and the best known.")
+                for sport in sports.ENABLED:
+                    top = starters.top_pool(sport.key)
+                    names: dict[str, str] = {q: n for q, n in db.execute(select(Athlete.qid, Athlete.name).where(Athlete.sport == sport.key, Athlete.qid.in_([e["qid"] for e in top])))} if top else {}
+                    print(f"{sport.key:10}  top: {', '.join(str(names.get(e['qid']) or e['qid']) for e in top) or 'none (refresh, or no running source)'}")
+        elif args.command == "starter" and args.action == "refresh":
+            for sport, n in starters.refresh().items():
+                print(f"{sport:10}  {n} top players playing lately or soon")
+        elif args.command == "starter" and args.action == "add":
+            with session() as db:
+                people = [registry.Person.of(a) for a in starter_athletes(find(db, args.ref, args.sport), args.sport)]
+            # Outside a transaction: it asks the source, and may learn their id.
+            through = {(p.qid, p.sport): check_source(p) for p in people}
+            with session() as db:
+                for a, new in make_starters(db, starter_athletes(find(db, args.ref, args.sport), args.sport)):
+                    print(f"{'Starter' if new else 'Already a starter'}: {a.name} ({a.sport}, {a.qid}), followed live through {through.get((a.qid, a.sport))}.")
+        elif args.command == "starter":
+            with session() as db:
+                found = find(db, args.ref, args.sport)
+                if not starters.remove(db, found.athletes):
+                    raise Refused(f"{args.ref} isn't a starter")
+                print(f"No longer offered to new fans: {', '.join(f'{a.name} ({a.sport})' for a in found.athletes)}.")
     except Refused as exc:
         print(f"Can't: {exc}", file=sys.stderr)
         return 2

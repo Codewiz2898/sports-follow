@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAccount } from '../account'
 import { useActivity } from '../activity'
-import { api, subscribe, type Card, type StreamEvent, type UpcomingEvent } from '../api'
+import { api, subscribe, type Card, type StreamEvent } from '../api'
 import { useNow } from '../clock'
-import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
+import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
-import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
-import { sportKey, sportName } from '../sports'
+import { ahead, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
+import { sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
 
@@ -26,6 +27,7 @@ export function PlayerPage() {
   const following = useFollowing()
   const isFollowing = following.isFollowing(playerId)
   const { listen } = following
+  const research = useAccount().config?.research !== false  // without the agent a failed page isn't tried again
   const [card, setCard] = useState<Card | null>(null)
   const [shown, setShown] = useState<number | null>(null)  // the player whose card has loaded
   const version = useRef(0)
@@ -116,6 +118,7 @@ export function PlayerPage() {
       <PlayerBand
         name={p.name}
         sport={p.sport}
+        photo={p.photo}
         meta={[...(p.teams ?? []).slice(0, 2), p.role, retired && 'Retired'].filter(Boolean).join(' · ')}
         back={<Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>}
         actions={
@@ -154,7 +157,7 @@ export function PlayerPage() {
       {failure && <div className="error-box" role="alert">{failure}</div>}
 
       {card.status !== 'ready' ? (
-        <BuildProgress card={card} messages={progress} onRetry={retry} />
+        <BuildProgress card={card} messages={progress} onRetry={research ? retry : undefined} research={research} />
       ) : (
         <>
           {card.pending && (
@@ -178,7 +181,8 @@ export function PlayerPage() {
           </ErrorBoundary>
 
           <p className="tiny muted">
-            Page built {relative(card.built_at, now)} from {card.sources?.length ?? 0} sources. {card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
+            {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
+            {card.built_at && `Page built ${relative(card.built_at, now)} from ${card.sources?.length ?? 0} sources. `}{card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
           </p>
         </>
       )}
@@ -203,6 +207,8 @@ function lastChecked(card: Card): string | null {
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
 function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
+  // Without the research agent (GET /api/config) a page no source updates stays as it was found.
+  const research = useAccount().config?.research !== false
   const p = card.player
   const retired = p.status === 'retired'
   const now = useNow()
@@ -234,11 +240,11 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
           </span>
         </>
       ) : retired ? null : next ? (
-        <NextCard card={card} next={next} />
+        <NextCard event={next} sport={p.sport}><RefreshButton card={card} /></NextCard>
       ) : card.live.available === false ? (
         <div className="card card-pad stack">
           <span className="title">No live scores for {sportName(p.sport) || 'this sport'} yet</span>
-          <span className="small muted">News, results and upcoming games on this page update a few times a day.</span>
+          <span className="small muted">{research ? 'News, results and upcoming games on this page update a few times a day.' : "News, results and upcoming games on this page are as they were found, and aren't updated now."}</span>
         </div>
       ) : (
         <div className="card card-pad row">
@@ -250,7 +256,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
         </div>
       )}
       {!card.live.is_live && !retired && next && card.live.available === false && (
-        <p className="tiny muted">No live scores for {sportName(p.sport) || 'this sport'} yet: results and news update a few times a day.</p>
+        <p className="tiny muted">No live scores for {sportName(p.sport) || 'this sport'} yet: {research ? 'results and news update a few times a day.' : "results and news aren't updated now."}</p>
       )}
 
       {last && (
@@ -330,28 +336,6 @@ function RefreshButton({ card, style }: { card: Card; style?: CSSProperties }) {
     <button type="button" className="btn link" style={{ color: 'inherit', display: 'inline-flex', gap: 6, ...style }} onClick={refresh} disabled={Boolean(refreshing)}>
       <RefreshIcon width={14} height={14} />{refreshing ?? 'Refresh'}
     </button>
-  )
-}
-
-/** The next game, an ink card with a countdown. */
-function NextCard({ card, next }: { card: Card; next: UpcomingEvent }) {
-  const left = countdown(next.start_utc, useNow())
-
-  return (
-    <section className="next-card" data-sport={sportKey(card.player.sport)} aria-label="Next game">
-      <span className="row">
-        <span className="eyebrow" style={{ color: 'var(--sport-on-ink)' }}>Next game</span>
-        {next.competition && <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{next.competition}</span>}
-      </span>
-      <span className="row" style={{ alignItems: 'flex-end' }}>
-        <span className="title" style={{ fontSize: 20 }}>{next.title}</span>
-        {left && <span className="dsp count">{left}</span>}
-      </span>
-      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.16)', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700 }}>{[next.start_utc ? dateTime(next.start_utc) : 'Date to be confirmed', next.venue].filter(Boolean).join(' · ')}</span>
-        <RefreshButton card={card} />
-      </span>
-    </section>
   )
 }
 

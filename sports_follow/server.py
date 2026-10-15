@@ -17,7 +17,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -30,18 +30,20 @@ from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as InPath
+from fastapi.routing import APIRoute
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
+from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
+from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -71,7 +73,7 @@ async def lifespan(app: FastAPI):
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
 # Nor does it log validation failures, which carry what a client sent.
-app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -96,7 +98,7 @@ class SameOriginWrites:
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] == "http" and scope["method"] in UNSAFE and scope["path"].startswith("/api/") and not _same_origin(Headers(scope=scope)):
-            return await JSONResponse({"detail": "This API only takes changes from the Sports Follow app."}, status_code=403)(scope, receive, send)
+            return await JSONResponse({"detail": f"This API only takes changes from the {APP_NAME} app."}, status_code=403)(scope, receive, send)
         await self.app(scope, receive, send)
 
 
@@ -127,7 +129,11 @@ class RequestLog:
     request, and every job it queues (enqueue), carries it, and the answer names it in X-Request-ID.
     The line gives the route, status and time taken: never the query string (a search's words) or the
     client's address. A passing health check and the web app's files aren't logged. An API request is
-    also a span (tracing.py), the root of its trace, which its jobs continue."""
+    also a span (tracing.py), the root of its trace, which its jobs continue.
+
+    An exception that escapes a route is this line's, with its stack (logs.py groups it), and the answer
+    is a 500 as Starlette's would be; uvicorn has nothing left to log. One that escapes once the answer
+    has started (a stream) goes on to uvicorn, which ends the connection."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -138,12 +144,15 @@ class RequestLog:
         rid = logs.given_id(Headers(scope=scope).get("x-request-id")) or logs.new_id()
         logs.begin(rid=rid)
         status = 500  # unless an answer starts: an exception escaped, and the server answers 500
+        answering = False
+        failure: Exception | None = None
+        streamed = False
         started = time.perf_counter()
 
-        async def answer(message: dict) -> None:
-            nonlocal status
+        async def answer(message: MutableMapping[str, Any]) -> None:
+            nonlocal status, answering
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status, answering = message["status"], True
                 message = {**message, "headers": [*message.get("headers", []), (b"x-request-id", rid.encode())]}
             await send(message)
 
@@ -151,15 +160,22 @@ class RequestLog:
         with tracing.request_span(method, path) as span:
             try:
                 await self.app(scope, receive, answer)
+            except Exception as exc:
+                failure, streamed = exc, answering
+                if not streamed:
+                    await PlainTextResponse("Internal Server Error", status_code=500)(scope, receive, answer)
             finally:
                 route = getattr(scope.get("route"), "path", None)
-                tracing.answered(span, method, route, status, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
+                tracing.answered(span, method, route, status, failure, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
                 ms = (time.perf_counter() - started) * 1000
                 if tracing.measured(path):
                     metrics.request(method, route, status, ms / 1000)
                 if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
-                    request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", method, path, status, ms,
+                    level = logging.ERROR if failure else logging.WARNING if status >= 500 else logging.INFO
+                    request_log.log(level, "%s %s %d %.0fms", method, path, status, ms, exc_info=failure,
                                     extra={"method": method, "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
+        if failure is not None and streamed:
+            raise failure
 
 
 app.add_middleware(RequestLog)  # outermost of ours: requests SameOriginWrites turns away are logged too
@@ -393,15 +409,20 @@ async def read_card(player_id: int) -> dict[str, Any] | None:
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
     return {k: card.get(k) for k in ("player_id", "slug", "status", "version", "built_at", "player", "live", "upcoming", "freshness", "error")} | {
         "news": (card.get("news") or [])[:3],
-        # The newest result: the app's player tiles and Today's big moment show it.
-        "recent_results": (card.get("recent_results") or [])[:1],
+        # The results the card keeps, newest first: structured.RECENT_LIMIT for a bound player, and no more
+        # than that of what the agent wrote for one only it covers. Today's results rail shows them all, the
+        # tiles the newest.
+        "recent_results": (card.get("recent_results") or [])[: structured.RECENT_LIMIT],
     }
 
 
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
-    """What this server offers the app: the model, the ways to sign in, who to write to about privacy."""
-    return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    """What this server offers the app: its name, the model and whether it researches players no source has
+    (config.AGENT), the ways to sign in, who to write to about privacy."""
+    from .config import AGENT
+
+    return {"name": APP_NAME, "model": MODEL, "research": AGENT, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -421,9 +442,19 @@ def sports_css() -> Response:
 
 
 @app.get("/api/credits")
-def credits() -> dict[str, Any]:
-    """Where this build's scores, ratings, evaluations, words and code come from."""
-    return credits_page.credits()
+def credits(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Where this build's scores, ratings, evaluations, words, photos and code come from."""
+    return credits_page.credits(photos=photos.used(db))
+
+
+@app.get("/api/photos/{name}")
+async def player_photo(name: str) -> Response:
+    """A player's photo (photos.py), from our own copy: its address is its content, so it's kept a year."""
+    found = await in_db(photos.serve, name)
+    if found is None:
+        raise HTTPException(404, "No such photo.")
+    data, media_type = found
+    return Response(data, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
@@ -440,6 +471,30 @@ async def _following(fan: str) -> list[dict[str, Any]]:
 @app.get("/api/me/following")
 async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
     return {"players": await _following(fan)}
+
+
+@app.get("/api/live")
+async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Every game the running sources have on now, by sport, each with players this fan can follow from it
+    (live.py). Served from the last read; a source's read older than a minute queues another for the
+    worker, so "refreshing" says newer games may come in a moment."""
+    games, stale = await in_db(live.offer, fan)
+    for system in stale:
+        try:
+            # One read asked for a minute, whether the last one came or failed: a source that's down isn't
+            # asked again on every fan's look.
+            if await state["redis"].set(f"live:asked:{system}", "1", nx=True, ex=live.FRESH):
+                await enqueue("read_live", system, _job_id=f"read_live:{system}")
+        except Exception:
+            log.warning("live: couldn't ask for %s's games", system, exc_info=True)
+    return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
+
+
+@app.get("/api/starters")
+async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Who a new fan is offered to follow, by sport (starters.py): the welcome's picker, an empty Today's,
+    and search's "Try" names. Rows are search results, so following one is the same call."""
+    return {"sports": await in_db(starters.offer, fan)}
 
 
 # ---------------------------------------------------------------- AI research allowance
@@ -476,7 +531,7 @@ async def take_research(fan: str, address: str | None, used_up: str) -> list[str
     limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
     if address:
         limits.append((player_search.research_address_key(address, now), RESEARCH_PER_ADDRESS, 2 * DAY, "Your network has used today's AI researches. Try again tomorrow."))
-    limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, "Sports Follow has done all the AI research it can this hour. Try again later."))
+    limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, f"{APP_NAME} has done all the AI research it can this hour. Try again later."))
     taken: list[str] = []
     for key, limit, ttl, refusal in limits:
         used = await state["redis"].incr(key)
@@ -563,8 +618,10 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research.
+    AI research, and with the agent off (config.AGENT) can't be followed.
     """
+    from .config import AGENT
+
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
@@ -575,6 +632,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
+            if found is None and not AGENT:
+                raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
             if found is None:
                 taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
                 try:
@@ -597,7 +656,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         if adapter is None or not _source_id_ok(system, athlete_id) or not _league_ok(league):
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
-            raise HTTPException(404, "That athlete isn't on Sports Follow.")  # removed by an operator (players.py)
+            raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
         except AdapterError as exc:
@@ -619,15 +678,18 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         raise
     if created:
         # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
-        # of minutes. Without one: the agent builds the whole page.
+        # of minutes (none with the agent off). Without one: the agent builds the whole page.
         if ref is not None:
             await enqueue("refresh_structured", player_id)
-        await enqueue("build_card", player_id)
+        if ref is None or AGENT:
+            await enqueue("build_card", player_id)
     return player_id
 
 
 @app.post("/api/follows")
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    from .config import AGENT
+
     if body.get("system") or body.get("qid"):
         player_id = await _follow_athlete(body, fan, client_address(request))
         return {"player_id": player_id, "card": await read_card(player_id)}
@@ -646,11 +708,18 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
         query = str(body.get("query") or "").strip()
         if not 2 <= len(query) <= 80 or not query.isprintable():
             raise HTTPException(400, "Type a player's name, 2 to 80 characters.")
+        # The name is kept as typed and shown to every fan of the player: no markup in it, even though
+        # the web app only ever shows it as text.
+        if "<" in query or ">" in query:
+            raise HTTPException(400, "A player's name can't have < or > in it.")
         known = await in_db(lambda db: db.scalar(select(PlayerCard).join(PlayerAlias, PlayerAlias.player_id == PlayerCard.player_id).where(PlayerAlias.alias == pipeline.slugify(query))))
         player = None
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
+    if counted and not AGENT:
+        # Without the agent (config.AGENT) a page comes from a live source, picked in search, or not at all.
+        raise HTTPException(404, "No live source has this player, so their page can't be built." if known is not None else "Pick an athlete from the search results: pages here come from live sources.")
     taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
     def save(db: Session) -> tuple[int, bool, dict[str, Any] | None] | None:
@@ -712,6 +781,7 @@ RESEND_AFTER = 60  # seconds before another code to the same address
 CODES_PER_EMAIL = 5  # an hour
 CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
+CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
 FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
 
@@ -790,16 +860,27 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
         return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
     address = client_address(request)
-    await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
-    await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
-    await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, "Sports Follow is sending a lot of codes right now. Try again in a few minutes.")
+    try:
+        await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
+        await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
+        if address:
+            await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
+        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
+    except HTTPException:
+        # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
+        await state["redis"].delete(f"auth-wait:{who}")
+        raise
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
     try:
         await asyncio.to_thread(mail.send_code, email, code)
-    except mail.MailError:
+    except mail.MailError as exc:
         await state["redis"].delete(f"auth-code:{who}", f"auth-wait:{who}")
+        if isinstance(exc, mail.Undeliverable):
+            # The address, not the server: a 400, so a typo isn't counted as the API failing.
+            raise HTTPException(400, "Emails can't be sent to that address. Check it, or use another one.")
         raise HTTPException(502, "Couldn't send the email just now. Try again in a moment.")
     return {"ok": True, "resend_in": RESEND_AFTER}
 
@@ -1023,16 +1104,20 @@ ACTIVITY_DAYS = 30
 @app.get("/api/me/activity")
 def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit: int = 30, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Every moment of the fan's players since they followed them, newest first, whatever reached the
-    phone: the app's activity list. Players set to off are left out. Page with ?before=<next>."""
+    phone: the app's activity list. Players set to off are left out, and a correction (a goal VAR ruled
+    out) unless the list has the moment it takes back. Page with ?before=<next>."""
     limit = max(1, min(limit, 50))
     level = func.coalesce(Follow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+    taken = aliased(Moment)
     query = (
         select(Moment, Player.name, Event.title, NotificationMute.event_id.is_not(None))
         .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
         .join(Player, Player.id == Moment.player_id)
         .outerjoin(Event, Event.id == Moment.event_id)
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
+        .outerjoin(taken, taken.id == Moment.corrects)
         .where(level != "off", Moment.created_at >= Follow.created_at, Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS))
+        .where(or_(Moment.corrects.is_(None), taken.created_at >= Follow.created_at))
         .order_by(Moment.id.desc())
         .limit(limit)
     )
@@ -1046,6 +1131,13 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         for m, name, event, muted in db.execute(query)
     ]
     return {"items": items, "next": items[-1]["id"] if len(items) == limit else None}
+
+
+@app.get("/api/me/week")
+def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Today's "This week" and the Wire (week.py): the big moments of the fan's players over the last seven
+    days, as each sport words them for a poster, biggest first; and their line-ups and news, newest first."""
+    return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
 
 
 @app.delete("/api/follows/{player_id}")
@@ -1183,9 +1275,10 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
     if holder is not None:
         return {"player_id": holder}
     found = await _resolve(person)
-    base = {"qid": person.qid, "born": person.birth_date.isoformat() if person.birth_date else None}
+    athlete = await in_db(registry.get, person.qid, person.sport)
+    photo = await in_db(photos.of_file, athlete.image) if athlete else None
+    base = {"qid": person.qid, "born": person.birth_date.isoformat() if person.birth_date else None, "photo": photo}
     if found is None:
-        athlete = await in_db(registry.get, person.qid, person.sport)
         return {
             **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": sports.label(person.sport),
             "teams": person.teams, "source": "Wikidata", "source_url": f"https://www.wikidata.org/wiki/{person.qid}",
@@ -1223,7 +1316,7 @@ async def athlete_preview(system: str, athlete_id: str, league: str | None = Non
         raise HTTPException(502, "The live source didn't answer. Try again in a moment.")
     if found is None:
         raise HTTPException(404, "No such athlete.")
-    return found
+    return {**found, "photo": await in_db(photos.of_source, system, athlete_id)}
 
 
 # ---------------------------------------------------------------- realtime
@@ -1298,6 +1391,33 @@ def assetlinks() -> list[dict[str, Any]]:
         "relation": ["delegate_permission/common.handle_all_urls"],
         "target": {"namespace": "android_app", "package_name": ANDROID_PACKAGE, "sha256_cert_fingerprints": ANDROID_CERT_SHA256},
     }]
+
+
+# ---------------------------------------------------------------- the web app's errors (BHA-196)
+
+
+@app.post("/api/errors", status_code=204)
+async def web_error(request: Request, report: web_errors.Report, fan: str = Depends(fan_id)) -> None:
+    """An error in the web app (src/errors.ts), logged beside the server's own (web_errors.py). A fan, an
+    address and everyone together send only so many an hour: past that, a 429 and nothing logged."""
+    address = client_address(request)
+    limits = [(f"weberrors:fan:{fan}", web_errors.PER_FAN), ("weberrors:all", web_errors.PER_HOUR)]
+    if address:
+        limits.insert(1, (f"weberrors:address:{address}", web_errors.PER_ADDRESS))
+    for key, limit in limits:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once
+        if used > limit:
+            raise HTTPException(429, "This app has sent all the error reports it may this hour.")
+    await run_in_threadpool(web_errors.record, report, _route_of)
+
+
+def _route_of(method: str, path: str) -> str | None:
+    """The API route a request to `path` goes to ("/api/players/{player_id}/card"), if any."""
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/api/") and route.matches({"type": "http", "path": path, "method": method})[0] == Match.FULL:
+            return route.path
+    return None
 
 
 # ---------------------------------------------------------------- the built frontend (production)

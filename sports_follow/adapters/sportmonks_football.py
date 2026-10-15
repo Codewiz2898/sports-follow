@@ -18,10 +18,12 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import sportmonks
-from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type;metadata"
+# Every match in play, league-wide: enough for its score, clock, scorers and the players in it.
+LIVE_INCLUDE = "participants;scores;state;periods;league;lineups;events.type"
 PLAYER_INCLUDE = "teams.team;nationality"
 
 # Match states (…/football/states): everything else is "scheduled".
@@ -193,9 +195,10 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     moments = []
     for e in reversed(events):
         kind = (e.get("type") or {}).get("developer_name")
-        if e.get("rescinded") or not e.get("player_name") or kind not in (*_GOALS, "YELLOWCARD", "REDCARD", "YELLOWREDCARD"):
-            continue  # a coach's card has no player
-        tag = "GOAL" if kind in _GOALS else "YELLOW" if kind == "YELLOWCARD" else "RED"
+        if not e.get("player_name") or kind not in (*_GOALS, "YELLOWCARD", "REDCARD", "YELLOWREDCARD") or (e.get("rescinded") and kind not in _GOALS):
+            continue  # a coach's card has no player; a card taken back is none
+        # A goal VAR rules out stays, marked, so the goal's alert is corrected (sports.football).
+        tag = ("DISALLOWED" if e.get("rescinded") else "GOAL") if kind in _GOALS else "YELLOW" if kind == "YELLOWCARD" else "RED"
         text = f"{e['player_name']} ({names.get(e.get('participant_id'), '')})".replace(" ()", "")
         if kind == "OWNGOAL":
             text += ", own goal"
@@ -223,10 +226,39 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         clock_label=clock(x),
         state=state,
         lines=parse_lines(x, status),
-        moments=moments[:12],
+        # The newest dozen, and every goal, ruled out or not: a goal's alert reads its minute and assist here.
+        moments=[m for i, m in enumerate(moments) if i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
         source_url=None,  # Sportmonks has no public match pages
         squad=parse_squad(x),
     )
+
+
+_UPFRONT = {27: 0, 26: 1, 25: 2, 24: 3}  # position ids, attackers first: attacker, midfielder, defender, goalkeeper
+
+
+def _taking_turns(sides: list[list[Any]]) -> list[Any]:
+    """The sides' players in turn, the home side's first: a game's best known come from both."""
+    return [side[i] for i in range(max((len(s) for s in sides), default=0)) for side in sides if i < len(side)]
+
+
+def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
+    """Livescores in play -> the games on now, each with its starting players, named as the line-ups name them."""
+    out = []
+    for x in rows:
+        fixtures = parse_fixtures([x])
+        snap = parse_match(x)
+        if not fixtures or snap.status != "live":
+            continue
+        f = fixtures[0]
+        teams = dict(zip(f.team_ids, f.team_names))
+        starters = [r for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")]
+        sides = [sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2)) for team in f.team_ids]
+        players = [
+            PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[str(r.get("team_id"))], team_names=[teams.get(str(r.get("team_id")), "")])
+            for r in _taking_turns(sides)
+        ]
+        out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
+    return out
 
 
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
@@ -367,6 +399,12 @@ class SportmonksFootball(Adapter):
         if not data.get("data"):
             raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
         return parse_match(data["data"])
+
+    def live_now(self) -> list[LiveGame]:
+        """Every match in the plan's leagues in play now, with its starting elevens: one request (livescores/inplay,
+        which Sportmonks counts as Fixture requests)."""
+        rows = sportmonks.get_json("/football/livescores/inplay", ttl=30, include=LIVE_INCLUDE).get("data") or []
+        return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many matches at once, MULTI_MAX to a request (fixtures/multi): the live lane's one fetch a

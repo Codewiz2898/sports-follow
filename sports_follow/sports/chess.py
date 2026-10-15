@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Seen, Sport, stat
+from .base import Found, Line, Poster, Seen, Sport, stat
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -91,7 +91,7 @@ class Chess(Sport):
     engine = True
     draws = True
     source_line_first = True
-    colour = {"sport": "#7c3aed", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#a98bff"}
+    colour = {"sport": "#7c3aed", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#a98bff", "deep": "#3b1680"}
     pattern = r"chess"
     alerts = {
         "key": ("Games turning and results", "A game starting, turning (winning, in trouble, a turnaround) and the result"),
@@ -153,6 +153,14 @@ class Chess(Sport):
         opponent = stat(now.line, "Opponent")
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""
+        if m := re.search(r": Won with (\w+) vs (.+)$", f.title):
+            return Poster("Win", f"with {m[1]} v {m[2]}")
+        if m := re.search(r": Won the match (\S+) vs (.+)$", f.title):
+            return Poster("Match won", f"{m[1]} v {m[2]}")
+        return None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         scored = [p for p in (_points(r.get("result", "")) for r in items) if p]

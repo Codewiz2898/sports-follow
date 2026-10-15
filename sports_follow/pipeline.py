@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, metrics, moments, notify, shutdown, sports, structured
+from . import bus, metrics, moments, notify, photos, shutdown, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -53,6 +53,8 @@ BUILD_RETRY = 30 * 60
 # which is longer than an agent run may take (agent.RUN_LIMIT). arq's timeout doesn't stop the build's
 # thread, so the lock, not the job, says a build is still running.
 BUILD_LOCK = 20 * 60
+# Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
+AGENT_OFF = "The research agent is off and no live source has this player."
 
 _llm = None
 
@@ -253,8 +255,11 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
     """A fan picked this exact athlete in search: their player, created and bound if new.
 
     Returns (player_id, created). A new player's card is published at once from the source with
-    profile and news pending; the caller queues the fixtures refresh and the agent build.
+    profile and news pending (none with the agent off: the source's page is the whole page); the caller
+    queues the fixtures refresh and the agent build.
     """
+    from .config import AGENT
+
     sport = structured.sport_name(adapter, ref)
 
     def create(db: Session) -> tuple[int, dict[str, Any] | None]:
@@ -269,7 +274,7 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         _claim(db, player.id, ref.system, ref.athlete_id, ref.profile_url)
         # The plain name becomes an alias only if it's free: typing it keeps finding whoever had it first.
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
-        card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile", "news"]}
+        card = {**placeholder_card(player), "status": "ready", "version": 1} | ({"pending": ["profile", "news"]} if AGENT else {})
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
         return player.id, card
 
@@ -293,7 +298,7 @@ def placeholder_card(player: Player) -> dict[str, Any]:
         "slug": player.slug,
         "status": "building",
         "version": 0,
-        "player": {"name": player.name, "sport": player.sport or "", "status": player.status, "teams": player.teams or []},
+        "player": {"name": player.name, "sport": player.sport or "", "status": player.status, "teams": player.teams or [], **photos.for_card(player)},
         "live": {"is_live": False, "player_stats": []},
         "news": [],
         "upcoming": [],
@@ -420,7 +425,8 @@ def _card_from_report(player: Player, report: dict[str, Any], version: int, buil
         "status": "ready",
         "version": version,
         "built_at": stamp,
-        "player": report["player"],
+        # The agent's report knows nothing of photos: the player's own (photos.py) stays on the card.
+        "player": {**report["player"], **photos.for_card(player)},
         "live": _timed(report["live"], "as_of"),
         "news": _newest_first(report["news"]),
         "upcoming": [_timed(u, "start_utc") for u in report["upcoming"]],
@@ -533,12 +539,15 @@ def apply_live(player_id: int, update_: dict[str, Any]) -> None:
 
 def fan_message(raw: str) -> str:
     """What a fan sees when a build fails. The raw provider text stays in the worker log."""
+    if raw == AGENT_OFF:
+        return "No live source has this player, so there's no page to show yet."
     text = raw.lower()
     if "budget_exceeded" in text:
         # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.
         return "Today's AI budget for this app is used up, so new pages can't be built until midnight. Scores from live sources keep updating."
     if "http 402" in text or "credits" in text:
-        return "The AI service behind this app is out of credit, so the page couldn't be built. Try again once credit is added."
+        # Out of credit with the model provider: the app's account is ours to know, not the fan's.
+        return "AI research isn't available right now. Try again later."
     if "rate" in text and "limit" in text:
         return "The AI service is busy right now. Try again in a minute."
     if "unreachable" in text or "network" in text:
@@ -611,7 +620,7 @@ def build_card(player_id: int) -> None:
     if not token:
         return
     try:
-        from .config import CARD_MAX_AGE
+        from .config import AGENT, CARD_MAX_AGE
 
         with session() as db:
             player = db.get(Player, player_id)
@@ -627,8 +636,8 @@ def build_card(player_id: int) -> None:
             # now could only find a namesake.
             from_registry = db.scalar(select(PlayerIdentity.id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata")) is not None
         if first_build and not from_registry:
-            # A name one source recognizes gets its page from that source in seconds; the agent then adds
-            # the profile and news. Anything else waits for the agent to say who it is.
+            # A name one source recognizes gets its page from that source in seconds (no model needed); the
+            # agent then adds the profile and news. Anything else waits for the agent to say who it is.
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
             found = structured.identify(name)
             if found:
@@ -636,7 +645,11 @@ def build_card(player_id: int) -> None:
                 if landed is None or landed != player_id:
                     return  # the athlete was already followed under another name: that page serves this fan
                 name = found[1].name
-                bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
+                if AGENT:
+                    bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
+        if not AGENT:
+            _without_agent(player_id)
+            return
         for event in follow_player(llm(), name, structured.describe(player_id)):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)
@@ -666,6 +679,8 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
     Returns the player the name landed on: this one, or an existing player who already holds the
     athlete (followed earlier under another spelling), into which this one is folded.
     """
+    from .config import AGENT
+
     sport = structured.sport_name(adapter, ref)  # "Football", "Cricket", "Chess"; an esports pro's game: "CS2", "BGMI"
     individual = ref.team_ids == [ref.athlete_id]
     moved_from = None
@@ -685,8 +700,9 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
             player, moved_from = _canonicalize(db, player, ref.name)
             card_row = db.get(PlayerCard, player.id)
             if card_row is not None and card_row.status != "ready":
-                card = {**placeholder_card(player), "status": "ready", "version": (card_row.version or 0) + 1, "pending": ["profile", "news"]}
-                card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+                version = (card_row.version or 0) + 1
+                card = {**placeholder_card(player), "status": "ready", "version": version} | ({"pending": ["profile", "news"]} if AGENT else {})
+                card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", version, None
         landed = player.id
     if moved_from is not None:
         bus.sync_redis().delete(bus.card_key(moved_from))
@@ -702,6 +718,26 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
                 card_row.status = "building"
                 card_row.card = {**card_row.card, "status": "building"}
     return landed
+
+
+def _without_agent(player_id: int) -> None:
+    """A build with the research agent off (config.AGENT), once a typed name has been looked up in the
+    sources (build_card). A page that exists stays as it is: one from a source that was waiting for the
+    profile and news stops waiting. A first build no source took can't be made."""
+    with session() as db:
+        card_row = db.get(PlayerCard, player_id)
+        if card_row is None or (card_row.status == "ready" and not (card_row.card or {}).get("pending")):
+            return
+        if card_row.status == "ready" or structured.binding(db, player_id) is not None:
+            # A bound card that isn't ready (none should be) gets the source's sections from the scheduler's refresh.
+            card = {k: v for k, v in (card_row.card or {}).items() if k != "pending"} | {"status": "ready", "version": (card_row.version or 0) + 1}
+            card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+        else:
+            card = None
+    if card is None:
+        mark_failed(player_id, AGENT_OFF)
+        return
+    bus.store_card(player_id, card)
 
 
 def refresh_live(player_id: int) -> None:
@@ -746,11 +782,14 @@ def rebuild_due(card: PlayerCard, now: datetime) -> bool:
 
     A failed card is left alone: it waits for a fan to retry. A ready card whose rebuild failed waits
     for its back_off, and none is queued again while its build is still running, so nothing loops.
+    With the agent off (config.AGENT) a ready card has nothing to gain from one: only a first build and
+    a source's page still waiting for the agent are settled (_without_agent).
     """
-    from .config import CARD_MAX_AGE
+    from .config import AGENT, CARD_MAX_AGE
 
     stale = card.built_at is None or card.built_at < now - timedelta(seconds=CARD_MAX_AGE)
-    wanted = card.status == "building" or (card.status == "ready" and stale)
+    waiting = stale if AGENT else bool((card.card or {}).get("pending"))
+    wanted = card.status == "building" or (card.status == "ready" and waiting)
     return wanted and not bus.is_locked(f"build:{card.player_id}") and not _backing_off(card.player_id, now)
 
 

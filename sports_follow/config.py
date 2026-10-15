@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -9,6 +10,12 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow"
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
+
+# The app's name as fans see it ("stann"). It's written once, in app.json next to this file, because the
+# web build (web/vite.config.ts) and the Android app (android/generate.mjs) read it there too: the page
+# title, the manifest, the service worker's notifications and the launcher are built with it. So it's not
+# an environment setting: a server can't call itself anything its web app wasn't built with.
+APP_NAME: str = json.loads(Path(__file__).with_name("app.json").read_text(encoding="utf-8"))["name"]
 
 # Logs (logs.py): one line per record on stdout, "json" for a server's log collector or "text" to read,
 # and our own lines from this level up (other libraries' from WARNING).
@@ -20,6 +27,9 @@ SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
 # Where fans write about their data: the privacy page shows it (and has no Questions part without it),
 # and data sources see it in the user agent.
 CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "").strip()
+# Sign-in codes a UTC day, to everyone: the mail plan's daily allowance (Resend's free plan sends 100). Past
+# it, a fan hears "try tomorrow" from us rather than a failed send.
+MAIL_CODES_PER_DAY = int(os.environ.get("SPORTS_FOLLOW_MAIL_CODES_PER_DAY", 100))
 
 
 def user_agent(site: str, contact: str) -> str:
@@ -65,6 +75,10 @@ RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 
 # (adapters.base.LiveSearch): a source may take one request at a time, with its live games in the same line.
 SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_PER_MINUTE", 20))
 
+# The country whose athletes count double among the best-known players new fans are offered (starters.py),
+# as the registry writes it ("India"). Empty: nobody counts double.
+STARTERS_HOME_COUNTRY = os.environ.get("SPORTS_FOLLOW_STARTERS_HOME_COUNTRY", "India").strip()
+
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters
 # read unofficial endpoints whose terms forbid automated and commercial use.
@@ -73,9 +87,14 @@ SOURCES = {s.strip() for s in os.environ.get("SPORTS_FOLLOW_SOURCES", "").split(
 # out isn't searched, imported, polled or researched: its sources don't run, it's not a search filter,
 # and the pages of its players already followed stay as they are, without updates.
 SPORTS = {s.strip().lower() for s in os.environ.get("SPORTS_FOLLOW_SPORTS", "").split(",") if s.strip()}
+# The research agent (agent.py, through the llm-providers gateway): each player's profile and news, and the
+# whole page of a player no source has. "0" runs the app without a model, as with no OpenRouter key: fans
+# follow athletes a running source has (from the registry and search), their pages come from that source
+# alone (fixtures, results, stats, live scores and alerts), and nothing offers AI research.
+AGENT = os.environ.get("SPORTS_FOLLOW_AGENT", "1") != "0"
 # Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
 # pages come from the agent without live scores or alerts, and no model calls go to watching games.
-AGENT_LIVE = os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
+AGENT_LIVE = AGENT and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
 
 # The Android app (a Trusted Web Activity wrapping the web app): its package name and the SHA-256
 # fingerprints of its signing certificates (comma separated), published at /.well-known/assetlinks.json.

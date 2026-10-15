@@ -463,3 +463,17 @@ def test_a_livescores_row_without_the_scorecard_is_read_on_its_own(monkeypatch, 
     # Told once, so a livescores that never sends the scorecard (every match read on its own) is noticed.
     assert [r.getMessage() for r in caplog.records if "without" in r.getMessage()] == [
         "Sportmonks livescores sent cricket match 71215 without batting; matches it sends so are read on their own, a request each (told once)"]
+
+
+def test_live_now_lists_every_match_on_with_its_playing_elevens(monkeypatch):
+    def player(pid: int, name: str, team: int, sub: bool = False) -> dict:
+        return {"id": pid, "fullname": name, "lineup": {"team_id": team, "substitution": sub}}
+
+    live = _match("2nd Innings", [FIRST, {**CHASE, "score": 60, "wickets": 3, "overs": 8}],
+                  lineup=[player(OPENER, "Abhishek Sharma", IND), player(SPINNER, "Rashid Khan", AFG), player(SEAMER, "A Sub", IND, sub=True)])
+    asked = []
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: asked.append(sportmonks._bucket(path)) or {"data": [live, _match("Finished", [FIRST, CHASE], id=71216)]})
+    [game] = sc.SportmonksCricket().live_now()
+    assert asked == ["Cricket livescores"]
+    assert (game.title, game.teams, game.snapshot.status) == ("India v Afghanistan", ["India", "Afghanistan"], "live")
+    assert [(p.athlete_id, p.name, p.team_names) for p in game.players] == [(str(OPENER), "Abhishek Sharma", ["India"]), (str(SPINNER), "Rashid Khan", ["Afghanistan"])]
