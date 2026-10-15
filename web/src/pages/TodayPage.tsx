@@ -10,6 +10,8 @@ import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { LiveNow } from '../components/LiveNow'
 import { StartersSection } from '../components/Starters'
+import { ThisWeek, useWeek } from '../components/ThisWeek'
+import { Wire } from '../components/Wire'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useAccount } from '../account'
 import { useFollowing } from '../following'
@@ -19,6 +21,7 @@ import { welcomed } from './WelcomePage'
 const NUDGE = 'sf-save-nudge'
 const FEW = 3  // until a fan follows this many, Today keeps offering starters
 const AHEAD_DAYS = 14  // how far Coming up looks
+const POSTERS = 12  // This week's posters at most (the server sends a few more, for those left out)
 
 /** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
 function SaveNudge() {
@@ -142,6 +145,7 @@ export function LoadFailed() {
 export function TodayPage() {
   const { cards, loaded, failed } = useFollowing()
   const { items: alerts, seen } = useActivity()
+  const week = useWeek()
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
 
@@ -178,6 +182,9 @@ export function TodayPage() {
   const games = liveGames(cards)
   const done = results(cards, now)
   const coming = comingUp(cards, now)
+  // This week leaves out the games the Results rail has.
+  const onResults = new Set((done?.games ?? []).flatMap((g) => g.players.flatMap((p) => (p.result.event_id != null ? [p.result.event_id] : []))))
+  const posters = week.posters.filter((p) => p.event_id == null || !onResults.has(p.event_id)).slice(0, POSTERS)
 
   return (
     <>
@@ -216,6 +223,19 @@ export function TodayPage() {
       </ErrorBoundary>
 
       {cards.length > 0 && cards.length < FEW && <LiveNow />}
+
+      {/* Side by side on a desktop, when there are both. */}
+      {(posters.length > 0 || week.wire.length > 0) && (
+        <div className={`week-wire${posters.length && week.wire.length ? ' pair' : ''}`}>
+          <ErrorBoundary fallback={<BlockError />} resetKey={week}>
+            {posters.length > 0 && <ThisWeek posters={posters} now={now} />}
+          </ErrorBoundary>
+          <ErrorBoundary fallback={<BlockError />} resetKey={week}>
+            <Wire rows={week.wire} now={now} />
+          </ErrorBoundary>
+        </div>
+      )}
+
       {cards.length > 0 && cards.length < FEW && <StartersSection />}
     </>
   )

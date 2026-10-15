@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Found, Line, Seen, Sport
+from .base import Found, Line, Poster, Seen, Sport, joined
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -212,6 +212,20 @@ class Esports(Sport):
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
+
+    def high(self, f: Found, versus: str) -> Poster | None:
+        """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
+        lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""
+        if m := re.search(r" win (\d+)–(\d+)$", f.title):
+            won, lost = int(m[1]), int(m[2])
+            return Poster(f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}", f.body.split(" · ", 1)[0])  # "v GenOne"
+        if m := re.search(r": (.+) win the lobby · ([\d.]+ pts)$", f.title):
+            return Poster("Lobby won", joined(m[1], m[2]))
+        if f.kind == "dinner":
+            word, _, team = f.title.partition(": ")
+            game = re.search(r"Match \d+", f.body)
+            return Poster(word, joined(team, game[0].lower() if game else None))
+        return None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         """Battle royale: placings and points from the lobby results ("3rd of 16 · 87 pts"). Team series:
