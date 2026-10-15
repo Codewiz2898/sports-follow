@@ -798,12 +798,17 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
         return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
     address = client_address(request)
-    await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
-    await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
-    if address:
-        await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
-    await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
-    await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
+    try:
+        await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
+        await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
+        if address:
+            await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
+        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
+    except HTTPException:
+        # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
+        await state["redis"].delete(f"auth-wait:{who}")
+        raise
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
