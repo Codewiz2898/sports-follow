@@ -2,7 +2,7 @@
 keys for an FCM token (fcm.py).
 
 Revision ID: c7f2a9d4e1b3
-Revises: e5c1f7a2d9b8
+Revises: b7d2e4a9c1f3
 Create Date: 2026-10-16
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "c7f2a9d4e1b3"
-down_revision = "e5c1f7a2d9b8"
+down_revision = "b7d2e4a9c1f3"
 branch_labels = None
 depends_on = None
 
