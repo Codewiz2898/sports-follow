@@ -22,7 +22,8 @@ For anything else, start from the request's or job's log lines, then its trace.
 Production is real fans' data and phones, and paid source and model quotas. Without asking:
 
 - Read logs (`c logs`, Grafana, `grafana.py`), traces, metrics and alerts.
-- Run SQL through the read-only `$PSQL` below. It refuses writes.
+- Run SQL through `psql_ro` below, whose session is read-only: a write by mistake is refused. (It
+  guards against accidents only: the `sports` user could switch it off. Don't.)
 - Run Redis reads: `GET`, `TTL`, `EXISTS`, `HGETALL`, `ZRANGE`, `ZCARD`, `--scan` (never `KEYS`), and `SUBSCRIBE`.
 - Run `python -m sports_follow.usage`, `python -m sports_follow.notify stats`, `python -m sports_follow.retention --count`, `deploy/deploy.sh status` and `c ps`.
 
@@ -46,14 +47,20 @@ a fan's id or email, or a client's address, in an issue, PR, commit or chat summ
 |---|---|---|
 | Get in | `ssh deploy@$(dig +short stann.in \| head -1)`, then `cd /opt/sports-follow` and define `c() { docker compose -f deploy/compose.yaml "$@"; }` | this checkout; `docker compose up -d` for Postgres and Redis |
 | Logs | `c logs --since 2h api worker` (JSON lines), or Grafana (below) | the terminals running the API (`uvicorn … --port 8421`) and the worker (`arq sports_follow.worker.WorkerSettings`), as text lines `HH:MM:SS LEVEL logger: message  [rid=… fan=… job=…]` |
-| `$PSQL`, read-only | `c exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U sports sports_follow` | `docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on' sports-follow-postgres psql -U sports sports_follow` |
+| `psql_ro`, read-only | `psql_ro() { c exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U sports sports_follow "$@"; }` | `psql_ro() { docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on' sports-follow-postgres psql -U sports sports_follow "$@"; }` |
 | Redis | `c exec -T redis redis-cli` | `docker exec -i sports-follow-redis redis-cli` |
 | A command of the app's | `c exec -T worker python -m sports_follow.<module> …` | `.venv/bin/python -m sports_follow.<module> …` |
 | What's deployed | `deploy/deploy.sh status`; the Deploy workflow's runs (`gh run list --workflow deploy.yml`) | `git log -1` |
 
-Feed SQL to `$PSQL` on stdin (`$PSQL <<'SQL' … SQL`). The database is its last word: change it for a
-copy (an isolated stack's `sports_follow_<name>`). From the Mac, one command over ssh works too:
-`ssh deploy@<ip> 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml exec -T … ' <<'SQL'`.
+Define `psql_ro` as a shell function, as written (a variable loses the quotes, and with them the
+read-only setting), and feed it SQL on stdin: `psql_ro <<'SQL' … SQL`. The database is the last word of
+the function: change it for a copy (an isolated stack's `sports_follow_<name>`). From the Mac, in one go:
+
+```bash
+ssh deploy@$(dig +short stann.in | head -1) "cd /opt/sports-follow && docker compose -f deploy/compose.yaml exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U sports sports_follow" <<'SQL'
+select status, count(*) from player_card group by status;
+SQL
+```
 
 Only production sends logs, traces and metrics to Grafana Cloud. Locally there's only the terminal.
 
@@ -103,7 +110,7 @@ alerts. Bharath opens it in the browser. From the Mac, [grafana.py](grafana.py) 
   - A fan's rows: `follow`, `push_subscription`, `notification`, `notification_mute`.
 - **A player:** `select id, name, sport, slug from player where name ilike '%…%'`. Their page is
   `/player/<id>`, and their row in each source is `player_identity` (`system`, `external_id`).
-- **A game:** `event.id` (in a card at `card->'live'->>'event_id'`); `event.key` is `<source>:<source's id>`.
+- **A game:** `event.id` (in a card at `card->'live'->>'event_id'`); `event.key` is `<system>:<the source's id>` (`sportmonks_football:19134567`).
 - **An error a fan saw in the app:** the web app reports it (logger `sports_follow.web`) with `page`,
   `version` (the build) and, for a failed call, `call_rid`: the failed request's own `rid`.
 

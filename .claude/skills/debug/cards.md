@@ -69,7 +69,7 @@ A **ready** card whose rebuild fails stays ready: `error` is set, and the next t
   min (`FIXTURES_MAX_AGE`) and the source has room (`structured.spare`). It backs off after failures:
   `source_binding.health` `{checked_at, last_ok, failures, error}`, 2 min doubling to 2 h.
 - Its lock: `lock:structured:<id>` (20 min). A rebind is tried at most every 6 h (`lock:bindtry:<id>`).
-- Its lines: `refresh <id> failed: …`, `refresh <id> crashed`, `refresh <id>: <source> is down to what
+- Its lines: `refresh <id> failed: …`, `refresh <id> crashed`, `refresh <id>: <system> is down to what
   live games need; next tick`, and `bind <id>: …` lines for binding.
 - The refresh button (`POST /api/players/<id>/refresh`) never builds: it queues a structured refresh, at
   most once a minute per player (`refresh:<id>`).

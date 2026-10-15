@@ -1,7 +1,7 @@
 # A live game's score is stale
 
 A game is an `event` row. Its `status` goes `scheduled` → `armed` → `live` → `final` (or `postponed`). A
-source polls it only if it has a `live_binding` (`{"adapter": <source>, "locator": {…}, "cadence": <s>}`).
+source polls it only if it has a `live_binding` (`{"adapter": <system>, "locator": {…}, "cadence": <s>}`).
 An event with no binding is one the agent guessed: only agent live checks see it, and only with
 `SPORTS_FOLLOW_AGENT_LIVE=1`. Each poll that sees a change appends an `event_state` row (the newest is the
 score) and the player's `player_line`.
@@ -28,11 +28,16 @@ select ep.player_id, p.name, i.system, i.external_id, (select count(*) from foll
   never armed.
 - **Polling** an armed or live game with a followed player:
   - A source that reads many games in one request (Sportmonks football, PandaScore, Liquipedia,
-    PUBG) gets a **lane**: one `poll_lane <source>` job, lock `lock:lane:<source>`.
+    PUBG) gets a **lane**: one `poll_lane <system>` job, lock `lock:lane:<system>`.
   - Any other source gets a `poll_event <event_id>` job per game, lock `lock:poll:<event_id>`.
+  - Names: a source's **system** (`sportmonks_football`, `pandascore_esports`, `lichess_chess`…) is in
+    `live_binding.adapter`, `player_identity.system` and the lane lock. Its **budget** (`sportmonks`,
+    `pandascore`, `liquipedia`, `pubg`, `lichess`…) is in the `budget:*` keys; `python -m
+    sports_follow.usage` lists them.
   - A job polls for up to 10 minutes (`POLL_SESSION`), then the next tick queues another.
   - Locks last 120 s past the next round, so a dead job's lock clears itself.
-- **Cadence**, in seconds while live (60 otherwise, and 30 after an error):
+- **Cadence**, in seconds while live and changing. A game that hasn't changed for a minute (half-time,
+  rain) is polled once a minute, as is one not yet live; 30 s after an error.
   - Sportmonks football and Lichess: 15
   - Sportmonks cricket and ESPN: 10 (ESPN cricket 8)
   - PandaScore: 60
@@ -54,12 +59,12 @@ Work down until one matches.
 | The game isn't armed or live | `event.status` | `scheduled` past its start: the tick hasn't armed it. Over 6 h late, it never will be. `final` or `postponed`: polling has stopped. |
 | No `live_binding` | `event.live_binding` is null | No source polls it; only agent live checks would, if on. |
 | Nobody to poll for | the "who it's polled for" query: no row with followers and a `system` | `_watching` finds no followed player with an identity in that source, so each poll ends `idle`. |
-| Last poll long ago | Redis `GET polled_at:<id>`, compared with `date +%s`; the Jobs dashboard's "games behind"; the `sf-live-behind` alert | A game is behind after 3 rounds (at least 3 minutes). |
-| The poll job isn't running | `TTL lock:poll:<id>` or `lock:lane:<source>`; Redis `ZRANGE arq:queue 0 -1 WITHSCORES`; `tick: … polls, … poll lanes` lines | Missing lock and no queued job: the tick isn't queuing it (status, binding, followers). A lock with nothing moving: the job is stuck. Waiting jobs: the worker is full (Jobs dashboard). |
-| The source refuses | Redis `GET budget:<source>:paused` (epoch second it ends, if it's later than now); `poll <id>: …` and `poll lane <source>: …` warning lines | A 429 pauses that source for every lane, live included: 60 s, or 180 s for Lichess. A spent allowance refuses background work first and live last. See redis.md, "Source budgets". |
-| The source answers but nothing changes | `event_state` has no new rows; `poll lane <source>: no data for event <id> (…)` | The source isn't updating the game, or a lane's batch doesn't include it (outside the plan's leagues, say). |
+| Last answer long ago | Redis `GET polled_at:<id>`, compared with `date +%s`; the Jobs dashboard's "games behind"; the `sf-live-behind` alert | `polled_at` is the last poll that got an answer: a poll the source refused or failed doesn't set it. An old `polled_at` while the poll's lock is held means the source is failing (next rows), not that polling stopped. A game is behind after 3 rounds (at least 3 minutes). |
+| The poll job isn't running | `TTL lock:poll:<id>` or `lock:lane:<system>`; Redis `ZRANGE arq:queue 0 -1 WITHSCORES`; `tick: … polls, … poll lanes` lines | Missing lock and no queued job: the tick isn't queuing it (status, binding, followers). A lock with nothing moving: the job is stuck. Waiting jobs: the worker is full (Jobs dashboard). |
+| The source refuses | Redis `GET budget:<budget>:paused` (the epoch second the pause ends, if that's later than now); `poll <id>: …` and `poll lane <system>: …` warning lines | A 429 pauses that budget for every lane, live included: 60 s, or 180 s for Lichess. ESPN never pauses. A spent allowance refuses background work first and live last. See redis.md, "Source budgets". |
+| The source answers but nothing changes | `event_state` has no new rows; `poll lane <system>: no data for event <id> (…)` | The source isn't updating the game, or a lane's batch doesn't include it (outside the plan's leagues, say). |
 | It changes but the card doesn't | `poll <id>: <score> \| <clock> -> N card(s)` lines appear, but the card's `live.as_of` is old | Only `ready` cards are updated. Check `player_card.status`, and the Redis copy `card:<player_id>`. |
-| The poll crashes | `poll <id> crashed` or `poll lane <source> crashed` with a stack | A bug: the Errors dashboard groups it. |
+| The poll crashes | `poll <id> crashed` or `poll lane <system> crashed` with a stack | A bug: the Errors dashboard groups it. |
 
 The trace of a poll is the job's span with a `poll round` or `lane round` span for each round, and the
 source's `GET <host>` request inside it (Tempo: `{span.server.address="api.sportmonks.com"}`).

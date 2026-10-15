@@ -23,11 +23,11 @@ Deleting one left by a crash is fine, but they all expire on their own.
 | `lock:live:<player_id>` | 5 min | an agent live check |
 | `lock:bindtry:<player_id>` | 6 h, never released | a rebind attempt (a cooldown) |
 | `lock:poll:<event_id>` | 120 s past the next round | a `poll_event` job |
-| `lock:lane:<source>` | 120 s past the next round | a `poll_lane` job |
+| `lock:lane:<system>` (`sportmonks_football`…) | 120 s past the next round | a `poll_lane` job |
 | `lock:engine-lane` | 120 s | the chess engine lane |
 | `lock:history-lane` | 10 min | the history lane |
 | `lock:registry-import` | 6 h | the weekly import (or one by hand) |
-| `lock:registry-<source>` | the source's `roster_every` (PUBG 6 h) | a roster import (a cooldown) |
+| `lock:registry-<system>` | the source's `roster_every` (PUBG 6 h) | a roster import (a cooldown) |
 | `lock:retention` | 3 h | the daily prune |
 
 ## Cards and streams
@@ -52,23 +52,27 @@ Deleting one left by a crash is fine, but they all expire on their own.
 
 ## Source budgets: `budget:*` (`adapters/budget.py`)
 
-`<bucket>` is empty for every source but Sportmonks, so most keys have `::` in them
-(`budget:pandascore::3600:<n>`). Sportmonks buckets are like `Fixture` or `Cricket fixtures/5`.
+`<budget>` is the budget's name, not the source's system: `sportmonks` (football and cricket share it),
+`pandascore`, `liquipedia`, `pubg`, `pubg-matches`, `opendota`, `lichess`, `lichess-fide`,
+`lichess-anonymous`, `espn`. `<bucket>` is empty for every budget but Sportmonks, so most keys have `::`
+in them (`budget:pandascore::3600:<n>`). Sportmonks buckets are like `Fixture` or
+`Cricket fixtures/{id}` (literally `{id}`).
 
 | Key | Holds |
 |---|---|
-| `budget:<source>:paused` | The epoch second a pause after a 429 ends. Paused while that's later than now. Every lane waits, live included. |
-| `budget:<source>:<bucket>:<seconds>:<n>` | Requests in the window number `n` (`now // seconds`) |
-| `budget:<source>:<bucket>:left` | What the source last said was left, until its reset |
-| `budget:<source>:<bucket>:fan:<seconds>:<n>` | Fans' share (Liquipedia, PUBG) |
-| `budget:use:<source>:<lane>:<sent\|refused>:<h\|d><n>` | Counts by lane, for `python -m sports_follow.usage` |
+| `budget:<budget>:paused` | The epoch second a pause after a 429 ends. Paused while that's later than now. Every lane waits, live included. |
+| `budget:<budget>:<bucket>:<seconds>:<n>` | Requests in the window number `n` (`now // seconds`) |
+| `budget:<budget>:<bucket>:left` | What the source last said was left, until its reset |
+| `budget:<budget>:<bucket>:fan:<seconds>:<n>` | Fans' share (Liquipedia, PUBG) |
+| `budget:use:<budget>:<lane>:<sent\|refused>:<h\|d><n>` | Counts by lane, for `python -m sports_follow.usage` |
 
 Allowances: Sportmonks 2,000 an hour per entity (1,000 kept for live games and fans), PandaScore 1,000 an
 hour (300 kept), Liquipedia 60 an hour, PUBG 10 a minute, Lichess 120 a minute with a token. A
 background lane stops at the reserve; live and fans go on to the limit.
 
-**Never delete these**: it resets the counts, and the app can overspend a paid quota or get banned
-(Liquipedia). Deleting `paused` sends requests straight back to a source that just said 429.
+**Don't delete these** (and never without Bharath): it resets the counts, and the app can overspend a
+paid quota or get banned (Liquipedia). Deleting `paused` sends requests straight back to a source that
+just said 429.
 
 `python -m sports_follow.usage` prints each source's sent and refused counts by lane, for the hour and the
 day. It only reads. The Sources dashboard shows the same, and the allowance used, left and paused.
@@ -76,7 +80,7 @@ day. It only reads. The Sources dashboard shows the same, and the allowance used
 ## The job queue (arq)
 
 - `arq:queue`: a zset of job id → due time (ms). A job stays in it while it runs. Ids are random, except:
-  - `poll-lane:<source>`, `engine-lane`, `send-moments`, `history-lane`
+  - `poll-lane:<system>`, `engine-lane`, `send-moments`, `history-lane`
   - cron runs: `cron:<function>:<ms>`
 - `arq:in-progress:<job id>`: present while a job runs.
 - `arq:job:<job id>`: the job (pickled, so not readable). While it exists, the same id can't be queued again.

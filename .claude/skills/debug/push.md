@@ -1,7 +1,7 @@
 # A fan didn't get a push
 
 The chain, in order. A push is lost at the first link that's broken, so walk it from the top and stop
-where it breaks. `$PSQL` is the read-only database shell for where you are (SKILL.md, "Where things
+where it breaks. `psql_ro` is the read-only database shell for where you are (SKILL.md, "Where things
 are"), and the queries below go in its stdin.
 
 1. **The moment.** A poll compares the game with the last poll and stores what changed as a `moment`
@@ -16,7 +16,8 @@ are"), and the queries below go in its stdin.
 4. **Their devices.** One push per device, at most the newest 10 (`push_subscription`). Inside a device's
    quiet hours (in its own time zone) the push arrives silently, whatever the moment.
 5. **The push service.** It took the push (`notification.delivered`) or refused it (a warning line).
-   After that, it's the phone's to show.
+   After that, it's the device's to show: with the app open and in front, the service worker shows no
+   notification at all, and the app shows the moment as a toast instead.
 
 ## Who is "fan X"?
 
@@ -28,7 +29,7 @@ characters of the id's SHA-256 (`logs.fan`).
 -- From an email:
 select id, fan_id, email, created_at, last_sign_in_at from account where email = lower('x@example.com');
 -- From a log line's fan hash:
-select distinct fan_id from follow where left(encode(sha256(convert_to(fan_id, 'UTF8')), 'hex'), 12) = '43c0ae82ffd2';
+select distinct fan_id from follow where left(encode(sha256(convert_to(fan_id, 'UTF8')), 'hex'), 12) = '<fan hash>';
 -- From a push endpoint the fan sent (the Alerts page shows none; ask them only as a last resort): push_subscription.endpoint.
 ```
 
@@ -44,7 +45,7 @@ Put the fan's 12-character log hash (or their fan id) in `who` and the player's 
 it. It reads only, and finds the fan's id from the hash itself, so the id never has to be typed out.
 
 ```sql
-with args as (select '43c0ae82ffd2'::text as who, 0 as player, interval '2 days' as back),
+with args as (select '<fan hash>'::text as who, 0 as player, interval '2 days' as back),
 fan as (select coalesce((select f.fan_id from (select fan_id from follow union select fan_id from push_subscription union select fan_id from notification) f, args
                           where left(encode(sha256(convert_to(f.fan_id, 'UTF8')), 'hex'), 12) = args.who limit 1), (select who from args)) as id)
 select 'follow' as what, f.created_at::text as at, coalesce(f.alert_rules->>'level', 'key (default)') as detail
@@ -95,15 +96,15 @@ Find the goal's `moment` line, then match it against the rest:
 | No `follow` row | The fan doesn't follow the player (under this fan id). A fan who followed while signed out and then signed in has their follows under the account's id now (`accounts.adopt`). |
 | `follow` level `results` or `off` | `results` gets only the final result; `off` gets nothing (`moments.wanted`). A goal is a `key` moment, so `key` (the default) and `everything` get it. |
 | The moment's level is `minor` | Only `everything` gets minor moments (a yellow card, coming on). |
-| No `device` rows | Alerts aren't on for any device of this fan, or every device was removed. A device goes when its push service says it's gone (404 or 410), after 5 failures in a row (`notify.MAX_FAILURES`), when the session that turned it on is signed out, or when the account is deleted. Its removal shows in the logs as `push to https://… failed (410)`. |
+| No `device` rows | Alerts aren't on for any device of this fan, or every device was removed. A device goes when its push service says it's gone (404 or 410), after 5 failures in a row (`notify.MAX_FAILURES`), when the fan turns alerts off, when the session that turned it on is signed out or expires (a year unused), when the account is deleted, when it's pushed out by an 11th device (the newest 10 are kept), or when the same browser subscribes under another fan id. Only the push service's refusals are logged (`push to https://… failed (410)`). |
 | `muted event N` matching the moment's `event:` | The fan tapped "Mute this game". |
 | `taken back` naming the goal | A correction took it back (VAR ruled it out). If it went before the correction, the fan got the correction on the same notification; if not, nothing went. |
 | No `push` row, though the rules above all pass | Compare the times: a live moment more than 15 minutes old when sent isn't pushed (`alerts.ttl`: 15 min live, 1 h line-up, 12 h result and news). Otherwise check the moment's `player_id`: the fan follows a different player row for the same person (two pages; `player.wikidata_qid`). |
 | A `push` row whose `moments:` lists the goal's id but whose first line is another moment's | The goal went, as a line of a notification led by a bigger moment in the same game. Each game is one notification, replaced as it goes (tag `e<event>`). |
 | `delivered:0/N` | Every push service refused it. The warning line `push to https://<host>/… failed (<status>)` says why. 404/410 means the device is gone (and was removed); 413 means too big; 401/403 means the VAPID key changed (`notify keys` was run again) and every device must subscribe again; a timeout means the push service didn't answer. |
 | `delivered:N/N` and `QUIET HOURS (silent)` on the device | It arrived silently. `loud` is the plan before each device's quiet hours, which then make it quiet on that device whatever the moment's priority (`notify.quiet`). A silent push still shows in the phone's notification tray, replacing that game's earlier notification, but without sound or vibration (the service worker shows it `silent`). Check this before the next two rows. |
-| `delivered:N/N`, `loud:false` | It arrived silently, by the noise rules. Sound is rationed: one loud push per game every 3 minutes (`GAME_COOLDOWN`), 6 an hour per fan (`LOUD_PER_HOUR`), unless the moment's priority is 90 or more; a game's start is quiet if the fan already heard about that game. |
-| `delivered:N/N`, `loud:true`, outside quiet hours | The push service has it, with sound. If the phone didn't show it: the phone's notification settings for the site or app, battery saver holding it, or the browser profile it was turned on in. `opened:` says whether they tapped it. |
+| `delivered:N/N`, `loud:false` | It arrived silently, by the noise rules. A minor moment is always silent, even for `everything`. Sound is rationed: one loud push per game every 3 minutes (`GAME_COOLDOWN`), 6 an hour per fan (`LOUD_PER_HOUR`), unless the moment's priority is 90 or more; a game's start is quiet if the fan already heard about that game. |
+| `delivered:N/N`, `loud:true`, outside quiet hours | The push service has it, with sound. If the phone didn't show it, the commonest reason is that the app was open and in front on that device: the service worker skips the notification and the app shows a toast (sw.js `show`), and the fan may not have looked. Otherwise: the phone's notification settings for the site or app, battery saver holding it, or the browser profile it was turned on in. `opened:` says whether they tapped it. |
 
 ### No moment
 
