@@ -10,8 +10,9 @@ and each game in it is ranked by its sport (Sport.notable), which leaves out the
 sport turned off isn't read: its sources don't run. Of a sport's sources, the first that lists a schedule
 is read, or every one where they sit side by side (Sport.side_by_side: each covers its own games).
 
-The API serves the finished games since yesterday (UTC), or of the latest day that has some, and those to
-come in the next AHEAD days, each list biggest first of every sport together, at most RESULTS and COMING.
+The API serves the finished games since yesterday, or of the latest day that has some (days where the fan
+is: the app says its UTC offset), and those to come in the next AHEAD days, each list biggest first of
+every sport together, at most RESULTS and COMING.
 Each game says which of Sports Follow's events it is (event_ids, by the source's fixture id), so Today
 shows a game a fan's player is in once, as theirs.
 """
@@ -108,16 +109,19 @@ def _start(game: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(game["start_utc"])
 
 
-def _results(games: list[dict[str, Any]], now: datetime) -> tuple[list[dict[str, Any]], date | None]:
+def _results(games: list[dict[str, Any]], now: datetime, tz: int = 0) -> tuple[list[dict[str, Any]], date | None]:
     """The finished games since yesterday, or failing that of the latest day that had some, and that day
-    (None for since yesterday); biggest first, then newest."""
+    (None for since yesterday), the days as a fan tz minutes east of UTC has them; biggest first, then newest."""
+    def day_of(at: datetime) -> date:
+        return (at + timedelta(minutes=tz)).date()
+
     finished = [g for g in games if g["status"] == "final" and _start(g) <= now]
-    since = now.date() - timedelta(days=1)
-    shown = [g for g in finished if _start(g).date() >= since]
+    since = day_of(now) - timedelta(days=1)
+    shown = [g for g in finished if day_of(_start(g)) >= since]
     day = None
     if not shown and finished:
-        day = max(_start(g).date() for g in finished)
-        shown = [g for g in finished if _start(g).date() == day]
+        day = max(day_of(_start(g)) for g in finished)
+        shown = [g for g in finished if day_of(_start(g)) == day]
     shown.sort(key=lambda g: (-g["rank"], -_start(g).timestamp()))
     return shown[:RESULTS], day
 
@@ -149,8 +153,8 @@ def _gather(now: datetime) -> tuple[list[dict[str, Any]], list[str], tuple[str |
     return games, stale, tuple(seen)
 
 
-def _serve(db: Session, games: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
-    results, day = _results(games, now)
+def _serve(db: Session, games: list[dict[str, Any]], now: datetime, tz: int) -> dict[str, Any]:
+    results, day = _results(games, now, tz)
     coming = _coming(games, now)
     keys = {g["key"] for g in (*results, *coming)}
     events = {key: event_id for key, event_id in db.execute(select(Event.key, Event.id).where(Event.key.in_(keys)))} if keys else {}
@@ -158,23 +162,24 @@ def _serve(db: Session, games: list[dict[str, Any]], now: datetime) -> dict[str,
             "coming": {"games": [_shown(g, events) for g in coming]}}
 
 
-def offer(db: Session, now: datetime | None = None) -> tuple[dict[str, Any], list[str]]:
-    """The big results ({"day", "games"}: day is null for since yesterday) and the big games coming up
-    ({"games"}), each game with the ids of the event it is here; and the sources whose last read is over
-    FRESH old, for the caller to ask a read of."""
+def offer(db: Session, now: datetime | None = None, tz: int = 0) -> tuple[dict[str, Any], list[str]]:
+    """The big results ({"day", "games"}: day is null for since yesterday, days as a fan tz minutes east of
+    UTC has them) and the big games coming up ({"games"}), each game with the ids of the event it is here;
+    and the sources whose last read is over FRESH old, for the caller to ask a read of."""
     now = now or datetime.now(timezone.utc)
     games, stale, _ = _gather(now)
-    return _serve(db, games, now), stale
+    return _serve(db, games, now, tz), stale
 
 
-_served: dict[str, Any] = {"at": 0.0, "seen": None, "value": None}
+_served: dict[int, dict[str, Any]] = {}  # by UTC offset: when, of which reads, what
 
 
-def cached(db: Session) -> tuple[dict[str, Any], list[str]]:
-    """offer(), every fan served the same for up to CACHE seconds, and served anew as soon as a source's
-    read is."""
+def cached(db: Session, tz: int = 0) -> tuple[dict[str, Any], list[str]]:
+    """offer(), every fan in a time zone served the same for up to CACHE seconds, and served anew as soon as
+    a source's read is."""
     now = datetime.now(timezone.utc)
     games, stale, seen = _gather(now)
-    if _served["value"] is None or _served["seen"] != seen or time.monotonic() - _served["at"] > CACHE:
-        _served.update(at=time.monotonic(), seen=seen, value=_serve(db, games, now))
-    return cast(dict[str, Any], _served["value"]), stale
+    kept = _served.get(tz)
+    if kept is None or kept["seen"] != seen or time.monotonic() - kept["at"] > CACHE:
+        kept = _served[tz] = {"at": time.monotonic(), "seen": seen, "value": _serve(db, games, now, tz)}
+    return cast(dict[str, Any], kept["value"]), stale

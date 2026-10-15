@@ -22,7 +22,7 @@ def redis(monkeypatch):
     store: dict[str, str] = {}
     fake = SimpleNamespace(get=store.get, set=lambda key, value, ex=None: store.__setitem__(key, value))
     monkeypatch.setattr(league.bus, "sync_redis", lambda: fake)
-    monkeypatch.setattr(league, "_served", {"at": 0.0, "seen": None, "value": None})
+    monkeypatch.setattr(league, "_served", {})
     return store
 
 
@@ -117,6 +117,18 @@ def test_with_none_since_yesterday_the_latest_day_that_had_results(sources, redi
     served, _ = league.offer(Db(), NOW)
     assert served["results"] == {"day": "2026-10-13", "games": [served["results"]["games"][0], served["results"]["games"][1]]}
     assert [g["key"] for g in served["results"]["games"]] == ["pitch:c", "pitch:b"]
+
+
+def test_since_yesterday_is_where_the_fan_is(sources, redis):
+    """At 23:00 UTC on the 15th it's already the 16th in India (UTC+5:30): a game of the 14th is two days ago
+    there, and a game of 19:00 UTC on the 15th is "yesterday"."""
+    late = datetime(2026, 10, 15, 23, tzinfo=timezone.utc)
+    keep(redis, "pitch", [game("pitch:14th", "final", datetime(2026, 10, 14, 12, tzinfo=timezone.utc), 40), game("pitch:15th", "final", datetime(2026, 10, 15, 19, tzinfo=timezone.utc), 40)], as_of=late)
+    assert [g["key"] for g in league.offer(Db(), late)[0]["results"]["games"]] == ["pitch:15th", "pitch:14th"]
+    assert [g["key"] for g in league.offer(Db(), late, tz=330)[0]["results"]["games"]] == ["pitch:15th"]
+    # And with only the 14th's, that's the latest day there.
+    keep(redis, "pitch", [game("pitch:14th", "final", datetime(2026, 10, 14, 12, tzinfo=timezone.utc), 40)], as_of=late)
+    assert league.offer(Db(), late, tz=330)[0]["results"]["day"] == "2026-10-14"
 
 
 def test_coming_up_is_the_next_fortnight_biggest_first_then_soonest(sources, redis):
@@ -218,7 +230,7 @@ def test_esports_ranks_the_big_events_series_by_their_stage_and_a_series_that_we
     assert rank(series(3, "Grand final · Bo5")) == Notable(90, why="Grand final")
     assert rank(series(3, "Upper Bracket Final · Bo3", (2, 1))) == Notable(83, word="2–1", line="Vitality beat FaZe", why="Bracket final")
     assert rank(series(2, "Group A · Bo3", (2, 0))) == Notable(40, word="2–0", line="Vitality beat FaZe", why="Tier A")
-    assert rank(series(2, "Bo3", (1, 2))) == Notable(48, word="1–2", line="FaZe beat Vitality", why="Decider")
+    assert rank(series(2, "Bo3", (1, 2))) == Notable(48, word="2–1", line="FaZe beat Vitality", why="Decider")  # the winner's score first
     assert rank(series(1, "Grand final · Bo5")) is None  # a smaller event's
     assert rank(series(3, "Bo3", (2, 0), forfeit=True)) is None
 

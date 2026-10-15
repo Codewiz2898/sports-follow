@@ -491,13 +491,13 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 
 @app.get("/api/league")
-async def league_games(response: Response) -> dict[str, Any]:
-    """Today's big results (since yesterday, else the latest day that had some) and big games coming up
-    (the next fortnight) in the competitions the running sources cover, whoever follows them, ranked by
-    each sport (league.py). The same for every fan, so no cookie and a public cache. Served from the last
-    reads; a source's read a few hours old queues another for the worker, so "refreshing" says new games may
-    come in a moment."""
-    games, stale = await in_db(league.cached)
+async def league_games(response: Response, tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0) -> dict[str, Any]:
+    """Today's big results (since yesterday, else the latest day that had some: days where the fan is, tz
+    minutes east of UTC) and big games coming up (the next fortnight) in the competitions the running
+    sources cover, whoever follows them, ranked by each sport (league.py). The same for every fan in a time
+    zone, so no cookie and a public cache. Served from the last reads; a source's read a few hours old queues
+    another for the worker, so "refreshing" says new games may come in a moment."""
+    games, stale = await in_db(league.cached, tz)
     for system in stale:
         try:
             # One read asked for an hour, whether the last one came or failed: a source that's down isn't

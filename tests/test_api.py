@@ -1214,8 +1214,9 @@ def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_agai
     none is, a public cache may keep it a minute (tests/test_league.py holds what's offered)."""
     games = {"results": {"day": None, "games": [{"key": "pitch:100", "title": "A vs B", "event_ids": []}]}, "coming": {"games": []}}
     stale = ["pitch"]
-    monkeypatch.setattr(league, "cached", lambda db: (games, stale))
-    answer = api.call("GET", "/api/league")
+    zones = []
+    monkeypatch.setattr(league, "cached", lambda db, tz: zones.append(tz) or (games, stale))
+    answer = api.call("GET", "/api/league?tz=330")
     assert answer.status_code == 200 and answer.json() == {**games, "refreshing": True}
     assert "set-cookie" not in answer.headers and answer.headers["cache-control"] == "no-cache"
     assert api.queue.jobs[-1] == ("read_league", "pitch") and api.queue.options["_job_id"] == "read_league:pitch"
@@ -1224,3 +1225,5 @@ def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_agai
     stale.clear()
     answer = api.call("GET", "/api/league")
     assert answer.json()["refreshing"] is False and answer.headers["cache-control"] == "public, max-age=60"
+    assert zones == [330, 0, 0]  # the fan's UTC offset in minutes, for their days; none is UTC's
+    assert api.call("GET", "/api/league?tz=9999").status_code == 422

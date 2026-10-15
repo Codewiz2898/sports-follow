@@ -118,6 +118,7 @@ p { margin: 0; }
 /* ---------------------------------------------------------------- building blocks */
 .section { display: flex; flex-direction: column; gap: 10px; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.section-head .eyebrow { white-space: nowrap; }  /* a long title wraps instead: "Next 14 days · 40" stays one line */
 .section-title { font-size: 28px; }
 .card { background: var(--surface); border-radius: var(--radius-card); }
 .card-pad { padding: 16px 18px; }
@@ -241,6 +242,22 @@ a.photo-credit:hover { text-decoration: underline; }
 .live-other .game { margin-block: auto; }
 .live-other .who { display: flex; flex-wrap: wrap; gap: 6px; }
 .also-live .rail.open { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+
+/* A league game on Today, finished or to come, that none of the fan's players are in: outlined as Also live's,
+   so it doesn't pass for theirs, sized as the fan's own cards it follows in a rail. */
+.league-card { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 2px var(--text); }
+.league-card > :not(.backdrop) { position: relative; }
+.league-card .backdrop { color: var(--sport); opacity: 0.2; }
+.league-card.league-result { width: 236px; min-height: 268px; }
+.league-card.league-coming { width: 204px; min-height: 176px; gap: 8px; }
+.league-card .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.league-card .head .eyebrow { flex-shrink: 0; }
+.league-card .word { font-size: var(--word, 46px); overflow-wrap: anywhere; }
+.league-card .count { font-size: 44px; white-space: nowrap; }
+.league-card .line { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.league-card .line.strong { font-weight: 800; }
+.league-card .line.soft { color: var(--muted); }
+@media (min-width: 1024px) { .league-card.league-result { width: 248px; } .league-card.league-coming { width: 212px; } }
 
 /* Rails (Rail.tsx): a row of fixed-width cards that scrolls sideways out to the page's edge. Each card snaps
    to the page padding and the next one peeks in; no scrollbar. Room above and below for a focus ring. */

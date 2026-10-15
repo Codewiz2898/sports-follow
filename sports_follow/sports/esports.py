@@ -245,7 +245,8 @@ class Esports(Sport):
     def notable(self, fixture: Fixture) -> Notable | None:
         """A series or lobby of a big event (Fixture.tier S or A), as big as its tier and, for a series, how
         late in the event it is (its stage, as its detail says: "Grand final · Bo5"), 8 more once it's over
-        if it went the distance. A forfeit isn't one. Its word is the series score, or a lobby's winner."""
+        if it went the distance. A forfeit isn't one. Its word is the series score, the winner's first, or a
+        lobby's winner."""
         r = fixture.result or {}
         if "standings" in r or (fixture.status != "final" and len(fixture.team_ids) > 2):
             rank = LOBBY_RANK.get(fixture.tier)
@@ -269,8 +270,10 @@ class Esports(Sport):
         distance = scores[1] > 0 and (scores[0] - scores[1] == 1) and (not best_of or scores[0] + scores[1] == int(best_of[1]))
         winner = next((t for t in sides if t.get("winner")), None)
         loser = next((t for t in sides if t is not winner), None) if winner else None
+        # The winner's score first, as the line under it says it: "3–2", "EDward Gaming beat AG Super Play".
+        first, second = (winner, loser) if winner and loser else sides
         line = f"{winner['name']} beat {loser['name']}" if winner and loser else ""
-        return Notable(min(100, rank + (8 if distance else 0)), word=f"{sides[0].get('score')}–{sides[1].get('score')}", line=line,
+        return Notable(min(100, rank + (8 if distance else 0)), word=f"{first.get('score')}–{second.get('score')}", line=line,
                        why=why if said or not distance else "Decider")
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
