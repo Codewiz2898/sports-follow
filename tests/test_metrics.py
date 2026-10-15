@@ -73,7 +73,8 @@ def test_a_quiet_job_is_counted_though_its_line_isnt_logged(measured, caplog):
 
 
 class Queue:
-    """arq's queue as Redis holds it: a sorted set of job ids by when each is due (ms), and running jobs' keys."""
+    """arq's queue as Redis holds it: a sorted set of job ids by when each was due (ms), running ones still in
+    it until they finish, and a key for each running one."""
 
     def __init__(self, due: dict[str, float], running: list[str]):
         self.due, self.running = due, running
@@ -92,12 +93,15 @@ class Queue:
         return iter(f"arq:in-progress:{job}" for job in self.running)
 
 
-def test_the_queue_reading_says_how_many_wait_and_for_how_long(monkeypatch):
+def test_the_queue_reading_says_how_many_wait_and_for_how_long_leaving_out_running_jobs(monkeypatch):
     now = 1_000_000.0
-    monkeypatch.setattr(bus, "sync_redis", lambda: Queue({"a": (now - 90) * 1000, "b": (now - 5) * 1000, "later": (now + 60) * 1000}, ["c"]))
+    due = {"poll": (now - 500) * 1000, "a": (now - 90) * 1000, "b": (now - 5) * 1000, "later": (now + 60) * 1000}
+    monkeypatch.setattr(bus, "sync_redis", lambda: Queue(due, ["poll"]))  # a poll session, 500 s in: running, not waiting
     reading = metrics.queue(now)
     assert sorted((v, a["state"]) for v, a in reading["jobs"]) == [(1, "deferred"), (1, "running"), (2, "ready")]
     assert reading["oldest_wait"] == [(90.0, {})]
+    monkeypatch.setattr(bus, "sync_redis", lambda: Queue({"poll": (now - 500) * 1000}, ["poll"]))
+    assert metrics.queue(now)["oldest_wait"] == [(0.0, {})]
 
 
 def test_a_sources_reading_has_its_spend_by_bucket_its_allowance_and_what_it_says_is_left(monkeypatch):
@@ -209,8 +213,15 @@ def test_a_game_is_behind_after_three_of_its_rounds_and_never_under_three_minute
     assert metrics.behind_after({}) == 180
 
 
-def test_the_worker_reports_unsent_moments():
-    assert ("sports_follow.moments.unsent", "unsent") in {(name, part) for name, _, _, _, part in metrics.READINGS}
+def test_a_process_starts_the_counts_alerts_take_increase_of_at_zero(measured):
+    metrics.seed()
+    got = points(measured)
+    assert [p.value for p in got["sports_follow.api.errors"]] == [0]
+    assert sorted((p.attributes["step"], p.attributes["result"], p.value) for p in got["sports_follow.cards.updates"]) == [
+        ("build", "failed", 0), ("build", "ok", 0), ("refresh", "failed", 0), ("refresh", "ok", 0)]
+    assert {p.attributes["push_service"] for p in got["sports_follow.pushes"]} == set(metrics.PUSH_SERVICES)
+    metrics.request("GET", "/api/follows", 502, 0.1)
+    assert [p.value for p in points(measured)["sports_follow.api.errors"]] == [1]
 
 
 def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_right():
@@ -225,11 +236,80 @@ def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_righ
     server = json.loads((grafana / "rules.json").read_text())
     uids = [r["uid"] for r in app + server]
     assert len(uids) == len(set(uids))
-    sent = {name.replace(".", "_") for name, *_ in metrics.READINGS} | {
-        "http_server_request_duration_seconds", "http_client_request_duration_seconds", "sports_follow_pushes", "sports_follow_cards_updates"}
+    # Each name as Grafana Cloud stores it: dots to underscores, _seconds for a unit of s, _total for a
+    # counter, _bucket, _count and _sum for a histogram.
+    gauges = {name.replace(".", "_") + ("_seconds" if unit == "s" else "") for name, unit, *_ in metrics.READINGS}
+    counters = {"sports_follow_api_errors_total", "sports_follow_pushes_total", "sports_follow_cards_updates_total", "sports_follow_moments_total"}
+    histograms = {f"{h}_{part}" for h in ("http_server_request_duration_seconds", "http_client_request_duration_seconds",
+                                          "sports_follow_job_duration_seconds", "sports_follow_job_wait_seconds", "sports_follow_push_wait_seconds")
+                  for part in ("bucket", "count", "sum")}
     for rule in app:
         assert {"uid", "title", "for", "expr", "op", "threshold", "summary"} <= set(rule) and rule["op"] in ("gt", "lt")
         for metric in re.findall(r"\b((?:sports_follow|http)_[a-z_]+)\{", rule["expr"]):
-            base = re.sub(r"_(bucket|count|sum|total)$", "", metric)
-            assert base in sent or base.removesuffix("_seconds") in sent, (rule["uid"], metric)
+            assert metric in gauges | counters | histograms, (rule["uid"], metric)
         assert 'job="' in rule["expr"] or 'job=~"' in rule["expr"], rule["uid"]  # never another app's series
+
+
+# ---------------------------------------------------------------- the readings' queries, on a real database
+
+
+TEST_DB = __import__("os").environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
+TABLES = "moment, event_player, event, follow, player_card, player"
+
+
+@pytest.fixture
+def database(monkeypatch):
+    """The empty, migrated test database (SPORTS_FOLLOW_TEST_DATABASE_URL), emptied after."""
+    from sqlalchemy import create_engine, text
+
+    from sports_follow import db as db_module
+
+    engine = create_engine(TEST_DB)
+    monkeypatch.setattr(db_module, "SessionLocal", db_module.sessionmaker(bind=engine, expire_on_commit=False))
+    with engine.begin() as c:
+        c.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
+        c.execute(text("INSERT INTO player (id, slug, name, sport, status, teams) VALUES (1, 'a', 'A', 'football', 'active', '[]')"))
+        c.execute(text("INSERT INTO follow (fan_id, player_id, alert_rules) VALUES ('fan', 1, '{}')"))
+    yield engine
+    with engine.begin() as c:
+        c.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
+
+
+@pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
+def test_unsent_counts_moments_no_sender_claimed_while_theyre_worth_sending(database):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    from sports_follow.alerts import LATE_TTL
+
+    now = datetime.now(timezone.utc)
+    with database.begin() as c:
+        for key, age, sent in [("stuck", 240, None), ("sent", 240, now), ("fresh", 60, None), ("stale", LATE_TTL + 60, None)]:
+            c.execute(text("INSERT INTO moment (key, player_id, kind, level, priority, title, body, url, created_at, sent_at) "
+                           "VALUES (:k, 1, 'goal', 'key', 90, :k, '', '/', :at, :sent)"), {"k": key, "at": now - timedelta(seconds=age), "sent": sent})
+    assert metrics.unsent(now) == {"unsent": [(1, {})]}  # the stuck one: sent, just found and too old don't count
+
+
+@pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
+def test_live_counts_the_games_of_running_sources_and_whos_behind_by_their_cadence(database, monkeypatch):
+    import json
+
+    from sqlalchemy import text
+
+    from sports_follow import adapters
+
+    now = 1_000_000.0
+    monkeypatch.setattr(adapters, "ADAPTERS", {"fast": object(), "slow": object()})
+    polled = {"polled_at:1": now - 200, "polled_at:2": now - 400, "polled_at:3": now - 30}
+    monkeypatch.setattr(bus, "sync_redis", lambda: SimpleNamespace(mget=lambda keys: [polled.get(k) for k in keys]))
+    with database.begin() as c:
+        for e, adapter, cadence in [(1, "fast", 10), (2, "slow", 300), (3, "espn_soccer", 10)]:  # 3: a source this build doesn't run
+            c.execute(text("INSERT INTO event (id, key, sport, competition, title, participants, status, live_binding) "
+                           "VALUES (:e, :k, 'football', '', :k, '[]', 'live', CAST(:b AS jsonb))"),
+                      {"e": e, "k": f"g{e}", "b": json.dumps({"adapter": adapter, "locator": {}, "cadence": cadence})})
+            c.execute(text("INSERT INTO event_player (event_id, player_id) VALUES (:e, 1)"), {"e": e})
+    reading = metrics.live(now)
+    assert sorted((v, a["source"]) for v, a in reading["games"]) == [(1, "fast"), (1, "slow")]
+    assert sorted((v, a["source"]) for v, a in reading["behind"]) == [(0, "slow"), (1, "fast")]  # 400 s is under slow's 900
+    assert sorted((v, a["source"]) for v, a in reading["poll_age"]) == [(200.0, "fast"), (400.0, "slow")]

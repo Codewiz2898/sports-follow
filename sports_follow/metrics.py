@@ -54,10 +54,42 @@ def _instrument(kind: str, name: str, unit: str, description: str, **advice: Any
 
 
 def request(method: str, route: str | None, status: int, seconds: float) -> None:
-    """One API request answered (server.RequestLog): OpenTelemetry's own HTTP server metric."""
+    """One API request answered (server.RequestLog): OpenTelemetry's own HTTP server metric, and a count of
+    server errors of its own (no route: one series, which seed() starts at 0, for sf-api-errors)."""
     _instrument("histogram", "http.server.request.duration", "s", "API requests by route and status, and how long they took",
                 explicit_bucket_boundaries_advisory=SECONDS).record(
         seconds, {"http.request.method": method, "http.route": route or "unmatched", "http.response.status_code": status})
+    if status >= 500:
+        _api_errors().add(1)
+
+
+def _api_errors() -> Any:
+    return _instrument("counter", "sports_follow.api.errors", "{request}", "API requests answered with a server error (5xx)")
+
+
+# The push services nearly every browser uses (Chrome and Edge, Safari, Firefox): seed() starts their counts at 0.
+PUSH_SERVICES = ("fcm.googleapis.com", "web.push.apple.com", "updates.push.services.mozilla.com")
+
+
+def seed() -> None:
+    """Zero for each count the alert rules take increase() of (app-rules.json), sent at once. A series'
+    first sample counts nothing in increase(), Grafana Cloud records no zero before it, and each
+    process's series are new (its own service.instance.id): without these, the first failures after a
+    deploy would go unseen. At startup, in the API and the worker."""
+    _api_errors().add(0)
+    for step in ("build", "refresh"):
+        for result in ("ok", "failed"):
+            card(step, result, by=0)
+    counter = _instrument("counter", "sports_follow.pushes", "{push}", "Pushes to devices by push service and result")
+    for service in PUSH_SERVICES:
+        for result in ("delivered", "gone", "failed"):
+            counter.add(0, {"push_service": service, "result": result})
+    flush = getattr(otel.get_meter_provider(), "force_flush", None)
+    if flush is not None:
+        try:
+            flush(timeout_millis=5000)
+        except Exception as exc:  # noqa: BLE001 — a slow export mustn't hold up a start
+            log.warning("metrics: the first export failed: %s", exc)
 
 
 def job(name: str, outcome: str, seconds: float, waited: float | None) -> None:
@@ -88,9 +120,9 @@ def moment(kind: str) -> None:
     _instrument("counter", "sports_follow.moments", "{moment}", "Moments found, by kind").add(1, {"kind": kind})
 
 
-def card(step: str, result: str) -> None:
+def card(step: str, result: str, by: int = 1) -> None:
     """A card built (pipeline.build_card) or a player's source read again (structured.refresh): ok or failed."""
-    _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(1, {"step": step, "result": result})
+    _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(by, {"step": step, "result": result})
 
 
 # ---------------------------------------------------------------- read every minute, by the worker
@@ -124,14 +156,15 @@ def live(now: float | None = None) -> dict[str, Reading]:
             select(Event.id, Event.status, Event.live_binding)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))
         ).all() if (binding or {}).get("adapter") in ADAPTERS]
-    source_of = lambda binding: binding["adapter"]  # noqa: E731
-    counts: Counter[tuple[str, str]] = Counter((source_of(binding), status) for _, status, binding in games)
+    counts: Counter[tuple[str, str]] = Counter((binding["adapter"], status) for _, status, binding in games)
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
     polled = redis.mget([f"polled_at:{event_id}" for event_id, _, _ in games]) if games else []
     oldest: dict[str, float] = {}
-    behind: Counter[str] = Counter({source_of(binding): 0 for _, _, binding in games})
+    # Every running source says how many of its games are behind, 0 too: the alert rule then has data
+    # while the worker reports, and keeps its state when the worker goes quiet (sf-app-silent says so).
+    behind: Counter[str] = Counter({name: 0 for name in ADAPTERS})
     for (_, _, binding), at in zip(games, polled):
-        source = source_of(binding)
+        source = binding["adapter"]
         age = now - float(at) if at is not None else None
         if age is not None:
             oldest[source] = max(oldest.get(source, 0.0), age)
@@ -164,20 +197,22 @@ def unsent(now: datetime | None = None) -> dict[str, Reading]:
 
 def queue(now: float | None = None) -> dict[str, Reading]:
     """arq's queue: jobs ready to run but waiting for a slot, jobs set for later, jobs running, and how
-    long the oldest ready one has waited."""
+    long the oldest waiting one has waited. arq leaves a job in its queue until it finishes (with the time
+    it was due), so the running ones are taken out: a ten-minute poll session isn't waiting."""
     from arq.constants import default_queue_name, in_progress_key_prefix
 
     from . import bus
 
     now_ms = (now or time.time()) * 1000
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
-    ready = redis.zcount(default_queue_name, "-inf", now_ms)
-    deferred = redis.zcard(default_queue_name) - ready
-    running = sum(1 for _ in redis.scan_iter(match=f"{in_progress_key_prefix}*", count=500))
-    first = redis.zrangebyscore(default_queue_name, "-inf", now_ms, start=0, num=1, withscores=True)
+    running = {key.removeprefix(in_progress_key_prefix) for key in redis.scan_iter(match=f"{in_progress_key_prefix}*", count=500)}
+    due = redis.zcount(default_queue_name, "-inf", now_ms)
+    first = redis.zrangebyscore(default_queue_name, "-inf", now_ms, start=0, num=1000, withscores=True)  # oldest first
+    waiting = [at for job, at in first if job not in running]
+    ready = due - (len(first) - len(waiting))
     return {
-        "jobs": [(ready, {"state": "ready"}), (deferred, {"state": "deferred"}), (running, {"state": "running"})],
-        "oldest_wait": [(max(0.0, (now_ms - first[0][1]) / 1000) if first else 0.0, {})],
+        "jobs": [(ready, {"state": "ready"}), (redis.zcard(default_queue_name) - due, {"state": "deferred"}), (len(running), {"state": "running"})],
+        "oldest_wait": [(max(0.0, (now_ms - waiting[0]) / 1000) if waiting else 0.0, {})],
     }
 
 

@@ -13,7 +13,7 @@
     "uid": "sf-api-errors",
     "title": "The API is failing requests",
     "for": "0s",
-    "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[10m]))",
+    "expr": "sum(increase(sports_follow_api_errors_total{job=\"sports-follow-api\"}[10m]))",
     "op": "gt",
     "threshold": 3,
     "summary": "{{ printf \"%.0f\" $values.A.Value }} requests answered with a server error (5xx) in the last 10 minutes. The API dashboard lists them; each opens its trace."
@@ -31,16 +31,16 @@
     "uid": "sf-source-failing",
     "title": "A source keeps failing",
     "for": "5m",
-    "expr": "(sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\", error_type!=\"\", error_type!~\"404|429\"}[10m])) / sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\"}[10m]))) and on (server_address) sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\", error_type!=\"\", error_type!~\"404|429\"}[10m])) >= 5",
+    "expr": "(sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\", error_type!=\"\", error_type!~\"4..\"}[10m])) / sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\"}[10m]))) and on (server_address) sum by (server_address) (increase(http_client_request_duration_seconds_count{job=~\"sports-follow-(api|worker)\", error_type!=\"\", error_type!~\"4..\"}[10m])) >= 5",
     "op": "gt",
     "threshold": 0.5,
-    "summary": "For 5 minutes, over half the requests to {{ $labels.server_address }} have failed (not counting 404s and 429s). Its scores and pages go stale. The Sources dashboard has its errors and warnings."
+    "summary": "For 5 minutes, over half the requests to {{ $labels.server_address }} have failed with a server error or no answer at all. Its scores and pages go stale. The Sources dashboard has its errors and warnings."
   },
   {
     "uid": "sf-source-paused",
     "title": "A source keeps telling us to slow down",
     "for": "0s",
-    "expr": "max by (source) (avg_over_time(sports_follow_source_paused{job=\"sports-follow-worker\"}[15m]))",
+    "expr": "max by (source) (avg_over_time(sports_follow_source_paused{job=\"sports-follow-worker\"}[15m]) and count_over_time(sports_follow_source_paused{job=\"sports-follow-worker\"}[15m]) >= 10)",
     "op": "gt",
     "threshold": 0.5,
     "summary": "{{ $labels.source }} has had us paused (it answered 429) for over half of the last 15 minutes: live scores from it are late. Check its plan and the requests by lane on the Sources dashboard."
@@ -67,10 +67,11 @@
     "uid": "sf-live-behind",
     "title": "A live game isn't being polled",
     "for": "2m",
-    "expr": "sum by (source) (sports_follow_live_games_behind{job=\"sports-follow-worker\"})",
+    "expr": "max by (source) (sports_follow_live_games_behind{job=\"sports-follow-worker\"})",
     "op": "gt",
     "threshold": 0,
-    "summary": "{{ printf \"%.0f\" $values.A.Value }} {{ $labels.source }} game(s) haven't been polled for three of their rounds (at least 3 minutes): their scores and alerts are late. The Jobs dashboard shows the queue and the worker's warnings."
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} {{ $labels.source }} game(s) haven't been polled for three of their rounds (at least 3 minutes): their scores and alerts are late. The Jobs dashboard shows the queue and the worker's warnings. A game its source has stopped returning (a fixture outside the plan, say) stays behind, and this mails every 6 hours, until the game is closed 6 days after its start.",
+    "no_data": "KeepLast"
   },
   {
     "uid": "sf-queue-backlog",
@@ -79,7 +80,8 @@
     "expr": "max(sports_follow_jobs_oldest_wait_seconds{job=\"sports-follow-worker\"})",
     "op": "gt",
     "threshold": 120,
-    "summary": "For 5 minutes, a job has waited over 2 minutes for one of the worker's slots: polls, builds and pushes queue behind it. The Jobs dashboard shows what's running."
+    "summary": "For 5 minutes, a job has waited over 2 minutes for one of the worker's slots: polls, builds and pushes queue behind it. The Jobs dashboard shows what's running.",
+    "no_data": "KeepLast"
   },
   {
     "uid": "sf-moments-unsent",
@@ -88,7 +90,8 @@
     "expr": "max(sports_follow_moments_unsent{job=\"sports-follow-worker\"})",
     "op": "gt",
     "threshold": 0,
-    "summary": "{{ printf \"%.0f\" $values.A.Value }} moment(s) found over 3 minutes ago haven't been sent, and the tick's sweep hasn't sent them either. Fans aren't getting alerts: c logs worker."
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} moment(s) found over 3 minutes ago haven't been sent, and the tick's sweep hasn't sent them either. Fans aren't getting alerts: c logs worker.",
+    "no_data": "KeepLast"
   },
   {
     "uid": "sf-pushes-failing",

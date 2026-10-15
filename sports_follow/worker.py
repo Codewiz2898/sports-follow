@@ -213,6 +213,7 @@ async def startup(ctx) -> None:
     # A connection for each of those threads, the tick's and notify's: checkouts give up after 5 s.
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
+    metrics.seed()
 
 
 async def _in_tick_pool(fn):
