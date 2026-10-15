@@ -441,6 +441,29 @@ def test_an_exception_in_a_route_is_its_requests_line_with_the_stack_and_a_500(a
     assert request.status.status_code == StatusCode.ERROR and [e.name for e in request.events] == ["exception"]
 
 
+def test_an_exception_after_the_answer_started_is_logged_once_and_ends_the_connection(caplog):
+    """A stream that fails part way: its line has the stack, and uvicorn's own line about it is left out."""
+    async def stream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
+        await send({"type": "http.response.body", "body": b"data: 1\n\n", "more_body": True})
+        raise ConnectionError("redis went away")
+
+    caplog.set_level(logging.INFO, "sports_follow")
+    logs.setup()
+
+    async def go():
+        transport = httpx.ASGITransport(app=server.RequestLog(stream), raise_app_exceptions=True)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/api/me/stream")
+
+    with pytest.raises(ConnectionError) as raised:
+        asyncio.run(go())
+    [line] = _request_lines(caplog)
+    assert line.levelno == logging.ERROR and line.status == 200 and line.exc_info[1] is raised.value and line.error == "ConnectionError"
+    uvicorns = logging.getLogger("uvicorn.error").makeRecord("uvicorn.error", logging.ERROR, __file__, 1, "Exception in ASGI application", (), (ConnectionError, raised.value, raised.value.__traceback__))
+    assert not logs._said(uvicorns)
+
+
 # A source map for the build "index-B3kd8.js": its first line's columns 0, 10 and 20 come from PlayerPage.tsx
 # (lines 1 and 5) and from react-dom (line 10).
 SOURCE_MAP = {"version": 3, "sources": ["../../src/pages/PlayerPage.tsx", "../../node_modules/react-dom/x.js"], "names": [], "mappings": "AAAA,UAIE,UCKF"}
@@ -453,7 +476,7 @@ def _web_lines(caplog) -> list[logging.LogRecord]:
 def test_a_web_app_error_is_logged_with_its_page_build_source_and_the_failed_calls_id(api, monkeypatch, caplog, tmp_path):
     (tmp_path / "index-B3kd8.js.map").write_text(json.dumps(SOURCE_MAP))
     monkeypatch.setattr(web_errors, "MAPS", tmp_path)
-    web_errors._map.cache_clear()
+    web_errors._read.cache_clear()
     caplog.set_level(logging.INFO, "sports_follow")
     stack = "TypeError: c is undefined\n    at Xe (https://stann.in/assets/index-B3kd8.js:1:25)\n    at Ye (https://stann.in/assets/index-B3kd8.js?v=2:1:12)"
     render = api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
@@ -469,13 +492,33 @@ def test_a_web_app_error_is_logged_with_its_page_build_source_and_the_failed_cal
     assert (one.error, one.place, one.kind, one.page, one.version) == ("TypeError", "web/src/pages/PlayerPage.tsx", "render", "/search", "index-B3kd8")
     assert one.exc.splitlines() == ["TypeError: c is undefined", "    at Xe (web/node_modules/react-dom/x.js:10:1)", "    at Ye (web/src/pages/PlayerPage.tsx:5:3)"]
     assert "private" not in one.getMessage() + str(vars(one)) and one.context["fan"] == logs.fan("fan")
-    assert (two.error, two.place, two.call, two.call_status, two.call_rid) == ("HTTP 502", "GET /api/players/{id}/card", "GET /api/players/7/card", 502, "ab12cd34ef56ab78")
+    assert (two.error, two.place, two.call, two.call_status, two.call_rid) == ("HTTP 502", "GET /api/players/{player_id}/card", "GET /api/players/7/card", 502, "ab12cd34ef56ab78")
     # A stack from a build this server doesn't have stays as it came; a request id that isn't one is left out.
     api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
         "kind": "error", "name": "Error", "message": "boom", "stack": "Error: boom\n    at https://stann.in/assets/index-0ld.js:1:5", "page": "/", "request_id": "not an id",
     })
     old = _web_lines(caplog)[-1]
     assert old.exc.splitlines()[1] == "    at assets/index-0ld.js:1:5" and old.place == "assets/index-0ld.js" and not hasattr(old, "call_rid")
+
+
+def test_a_web_report_of_any_shape_is_logged_or_refused_never_a_500(api, monkeypatch, caplog, tmp_path):
+    """An address urllib can't read, a stack naming builds this server doesn't have: logged as they are.
+    A failed call is grouped by its route, whatever its ids look like."""
+    (tmp_path / "index-B3kd8.js.map").write_text(json.dumps(SOURCE_MAP))
+    monkeypatch.setattr(web_errors, "MAPS", tmp_path)
+    web_errors._read.cache_clear()
+    caplog.set_level(logging.INFO, "sports_follow")
+    made_up = "\n".join(f"    at x (https://stann.in/assets/{name}.js:1:5)" for name in ["index-B3kd8", "a1", "a2", "a3", "a4", "a5"] * 10)
+    for body in [
+        {"kind": "error", "message": "boom", "page": "//[", "stack": made_up},
+        {"kind": "api", "page": "/", "call": "GET //[x", "status": 500},
+        {"kind": "api", "page": "/", "call": "GET /api/athletes/espn_soccer/abc-12", "status": 503},
+        {"kind": "render", "page": "/", "stack": "/src" * 4000},
+    ]:
+        assert api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body=body).status_code == 204
+    assert web_errors._read.cache_info().misses == 1  # made-up builds cost a look, not a read
+    assert [r.place for r in _web_lines(caplog)][1:3] == ["GET //[x", "GET /api/athletes/{system}/{athlete_id}"]
+    assert db_module.engine.hide_parameters  # a failed query's stack never has its values (a fan's id)
 
 
 def test_the_web_app_sends_only_so_many_errors_an_hour(api, monkeypatch, caplog):

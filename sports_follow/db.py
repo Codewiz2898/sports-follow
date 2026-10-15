@@ -14,7 +14,9 @@ from .config import DATABASE_URL
 def _engine(connections: int):
     # With every pooled connection in use, a checkout gives up after a few seconds rather than holding its
     # request (and thread) for SQLAlchemy's default 30.
-    return create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=connections - 5, pool_timeout=5, future=True)
+    # hide_parameters: a failed statement's error message leaves out its values (a fan's id), since it's
+    # logged with its stack and recorded on its trace (logs.py, tracing.py).
+    return create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=connections - 5, pool_timeout=5, future=True, hide_parameters=True)
 
 
 engine = _engine(15)  # the API: routes take a connection for a query or two, streams none

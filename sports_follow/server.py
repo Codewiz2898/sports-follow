@@ -30,6 +30,7 @@ from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as InPath
+from fastapi.routing import APIRoute
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +38,7 @@ from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
+from starlette.routing import Match
 
 from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
@@ -1350,7 +1352,15 @@ async def web_error(request: Request, report: web_errors.Report, fan: str = Depe
         await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once
         if used > limit:
             raise HTTPException(429, "This app has sent all the error reports it may this hour.")
-    await run_in_threadpool(web_errors.record, report)
+    await run_in_threadpool(web_errors.record, report, _route_of)
+
+
+def _route_of(method: str, path: str) -> str | None:
+    """The API route a request to `path` goes to ("/api/players/{player_id}/card"), if any."""
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/api/") and route.matches({"type": "http", "path": path, "method": method})[0] == Match.FULL:
+            return route.path
+    return None
 
 
 # ---------------------------------------------------------------- the built frontend (production)

@@ -137,10 +137,12 @@ def _record(*args: Any, **kwargs: Any) -> logging.LogRecord:
             record.exc_info, record._repeat = None, True
         else:
             record.error, record.place = error_type(exc), place(exc)
-            try:
-                setattr(exc, _LOGGED, True)
-            except (AttributeError, TypeError):  # an exception that takes no attributes is logged again
-                pass
+            # Only our own lines count as having logged it: a library's (one never shipped, say) doesn't.
+            if record.name == _PACKAGE or record.name.startswith(f"{_PACKAGE}."):
+                try:
+                    setattr(exc, _LOGGED, True)
+                except (AttributeError, TypeError):  # an exception that takes no attributes is logged again
+                    pass
     return record
 
 

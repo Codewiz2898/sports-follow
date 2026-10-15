@@ -18,8 +18,10 @@ import json
 import logging
 import posixpath
 import re
+import threading
 from array import array
 from bisect import bisect_right
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -34,7 +36,7 @@ log = logging.getLogger("sports_follow.web")
 MAPS = Path(__file__).resolve().parent.parent / "web" / "sourcemaps"
 # Reports taken in an hour, from one fan, from one address, and from everyone together; the rest are dropped.
 PER_FAN, PER_ADDRESS, PER_HOUR = 30, 60, 600
-STACK_LINES = 60
+STACK_LINES, LINE_CHARS = 60, 1000
 
 
 class Report(BaseModel):
@@ -72,7 +74,12 @@ def _without_queries(text: str) -> str:
 
 
 def _path(page: str) -> str:
-    return urlsplit(page).path[:300] or "/"
+    """An address's path alone: "/search?q=x" -> "/search"."""
+    try:
+        path = urlsplit(page).path
+    except ValueError:  # not an address urllib can read ("//[")
+        path = re.split(r"[?#]", page, maxsplit=1)[0]
+    return path[:300] or "/"
 
 
 def _call(call: str | None) -> str | None:
@@ -125,11 +132,22 @@ def _lines(mappings: str) -> list[tuple[array, array, array, array]]:
     return lines
 
 
-@lru_cache(maxsize=4)
+_reading = threading.Lock()
+
+
 def _map(file: str) -> _Map | None:
-    """The source map of one file of the build ("index-B3kd8.js"), if this server has it."""
+    """The source map of one file of the build ("index-B3kd8.js"), if this server has it. A name it
+    doesn't have costs a look in the folder; one it has is read once (by one report at a time)."""
+    if not (MAPS / f"{file}.map").is_file():
+        return None
+    with _reading:
+        return _read(MAPS / f"{file}.map")
+
+
+@lru_cache(maxsize=4)
+def _read(path: Path) -> _Map | None:
     try:
-        raw = json.loads((MAPS / f"{file}.map").read_text())
+        raw = json.loads(path.read_text())
         root = raw.get("sourceRoot") or ""
         # Its sources are relative to where the build wrote it, web/dist/assets.
         sources = [posixpath.normpath(posixpath.join("web/dist/assets", root, s)) for s in raw["sources"]]
@@ -155,6 +173,7 @@ def resolve(stack: str) -> tuple[str, str | None]:
     in the app's own code (web/src), else of its innermost frame."""
     frames, ours, first = [], None, None
     for text in stack.splitlines()[:STACK_LINES]:
+        text = text[:LINE_CHARS]
         match = FRAME.search(text)
         if match:
             file, line, column = match["file"], int(match["line"]), int(match["column"])
@@ -168,13 +187,18 @@ def resolve(stack: str) -> tuple[str, str | None]:
     return "\n".join(frames), ours or first
 
 
-def record(report: Report) -> None:
-    """Log one report (the request's own context names the fan, by a hash)."""
+def record(report: Report, route: Callable[[str, str], str | None] = lambda method, path: None) -> None:
+    """Log one report (the request's own context names the fan, by a hash). `route` names the API route
+    a failed call went to ("/api/athletes/{system}/{source_id}"), which groups it; else its numbers are ids."""
     page, call = _path(report.page), _call(report.call)
     stack, where = resolve(_without_queries(report.stack)) if report.stack else ("", None)
     if report.kind == "api":
         error = f"HTTP {report.status}" if report.status else "no answer"
-        place = ID.sub("/{id}", call) if call else "an API call"
+        if call:
+            method, _, path = call.partition(" ")
+            place = f"{method} {route(method, path) or ID.sub('/{id}', path)}"
+        else:
+            place = "an API call"
     else:
         error = report.name.strip() or "Error"
         place = where or f"page {ID.sub('/{id}', page)}"
