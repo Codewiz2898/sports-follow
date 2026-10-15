@@ -20,6 +20,7 @@ import hmac
 import os
 import secrets
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,15 @@ def check_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(tried, base64.b64decode(digest))
     except (ValueError, TypeError):
         return False
+
+
+_checking = threading.BoundedSemaphore(2)  # a burst of sign-ins waits its turn, rather than taking every core
+
+
+def try_password(password: str, stored: str) -> bool:
+    """check_password, two at a time at most: each takes about 50 ms of a core and 16 MB."""
+    with _checking:
+        return check_password(password, stored)
 
 
 def fingerprint(stored: str) -> str:
@@ -179,8 +189,10 @@ def _whole(value: Any, low: int, high: int, what: str) -> int:
 def checked_limits(name: str, body: dict[str, Any]) -> dict[str, Any]:
     """What the panel may set of a budget, checked: windows of a minute, an hour or a day (each at most
     once), each with its allowance and a margin under it; a reserve and fans' share each window can
-    still pay for; a pause of a second to an hour. Raises ValueError, saying what's wrong."""
-    if name not in {b.name for b in budget.known()}:
+    still pay for; a pause of a second to an hour; and a source whose plan has a limit keeps at least one
+    window. Raises ValueError, saying what's wrong."""
+    declared = next((b for b in budget.known() if b.name == name), None)
+    if declared is None:
         raise LookupError(name)
     windows = body.get("windows")
     if not isinstance(windows, list) or len(windows) > len(SPANS):
@@ -195,6 +207,8 @@ def checked_limits(name: str, body: dict[str, Any]) -> dict[str, Any]:
         margin = _whole(w.get("margin", 0), 0, requests - 1, "A window's margin")
         out.append({"seconds": w["seconds"], "requests": requests, "margin": margin})
     out.sort(key=lambda w: w["seconds"])
+    if declared.windows and not out:
+        raise ValueError("Keep at least one window: its plan has a limit, and without one nothing would stop every lane spending past it.")
     room = min((w["requests"] - w["margin"] for w in out), default=10_000_001)  # what every window can spend
     reserve = _whole(body.get("reserve", 0), 0, room - 1, "The reserve (less than every window's allowance after its margin)")
     fan = body.get("fan")

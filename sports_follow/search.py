@@ -542,8 +542,10 @@ PREVIEW_TTL = 600
 
 def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] | None:
     """What following this athlete would show: who they are, their next game, their last game with
-    their line, and their stats. None if the source has no such athlete."""
-    adapter = ADAPTERS[system]
+    their line, and their stats. None if the source has no such athlete, or has just been turned off."""
+    adapter = ADAPTERS.get(system)
+    if adapter is None:
+        return None
     cache_key = f"{system}:{athlete_id}:{league}"
     hit = _previews.get(cache_key)
     if hit and time.time() - hit[0] < PREVIEW_TTL:

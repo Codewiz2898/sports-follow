@@ -238,7 +238,10 @@ reads the hash on each sign-in, and a new one signs every admin out.
 deploy/push-secrets.sh deploy@<server-ip>
 ```
 The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
---force-recreate api worker` after the deploy that brings the panel.
+--force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
+everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
+sooner, clear the count:
+`docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
 
 **Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
 only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and

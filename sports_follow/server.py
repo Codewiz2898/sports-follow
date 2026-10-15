@@ -853,8 +853,6 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     email = accounts.normal_email(body.get("email"))
     if email is None:
         raise HTTPException(400, "That doesn't look like an email address.")
-    if await in_db(accounts.blocked, email):
-        raise HTTPException(403, BLOCKED)
     who, now = accounts.email_key(email), datetime.now(timezone.utc)
     hour, day = now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d")
     if int(await state["redis"].get(f"auth-fails:{who}:{day}") or 0) >= FAILS_PER_DAY:
@@ -874,6 +872,10 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
+    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
+    if await in_db(accounts.blocked, email):
+        await state["redis"].delete(f"auth-wait:{who}")
+        raise HTTPException(403, BLOCKED)
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
@@ -1029,12 +1031,14 @@ async def admin_login(request: Request, response: Response, body: dict = Body(..
     failed = f"admin-fails:{int(now // 3600)}"
     if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
         raise HTTPException(429, "Too many wrong passwords this hour. Try again in an hour.")
+    # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
+    await state["redis"].incr(failed)
+    await state["redis"].expire(failed, 7200)
     password = body.get("password")
-    if not isinstance(password, str) or not 0 < len(password) <= 1000 or not await asyncio.to_thread(admin.check_password, password, stored):
-        await state["redis"].incr(failed)
-        await state["redis"].expire(failed, 7200)
+    if not isinstance(password, str) or not 0 < len(password) <= 1000 or not await asyncio.to_thread(admin.try_password, password, stored):
         admin_log.warning("admin panel: a wrong password")
         raise HTTPException(401, "That isn't the admin password.")
+    await state["redis"].decr(failed)
     token = secrets.token_urlsafe(32)
     await state["redis"].set(admin.session_key(token), admin.fingerprint(stored), ex=admin.SESSION_LIFE)
     response.set_cookie(admin.COOKIE, token, max_age=admin.SESSION_LIFE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))

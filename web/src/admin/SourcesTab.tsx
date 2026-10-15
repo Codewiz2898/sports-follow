@@ -42,8 +42,9 @@ export function SourcesTab() {
         <h2 id="sources-title" className="dsp section-title">Sources</h2>
         <Note>
           Where two sources serve a sport, the first that runs is used. Turn one off and its followed players move to the next on their
-          next refresh; with none left, their pages stop updating until it's back. The server's settings (SPORTS_FOLLOW_SOURCES, and each
-          licensed source's token) stay the limit: a source they leave out can't be turned on here.
+          next refresh, which reads their games again from it, and turning it back on moves them all back: it's not for a moment's pause.
+          With no source left, their pages stop updating until it's back. The server's settings (SPORTS_FOLLOW_SOURCES, and each licensed
+          source's token) stay the limit: a source they leave out can't be turned on here.
         </Note>
         {error && <div className="error-box" role="alert">{error}</div>}
         {[...bySport].map(([sport, sources]) => (
@@ -193,6 +194,8 @@ function LimitsForm({ allowance: b, onSaved, onCancel }: { allowance: Allowance;
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const declared = (seconds: number) => b.declared.windows.find((w) => w.seconds === seconds)
+  // The fans' share is counted in the shortest window ticked (budget.take).
+  const shareWindow = SPANS.find(([s]) => draft.windows[s].on)?.[1]
   const setWindow = (seconds: number, change: Partial<Draft['windows'][number]>) =>
     setDraft((d) => ({ ...d, windows: { ...d.windows, [seconds]: { ...d.windows[seconds], ...change } } }))
 
@@ -244,7 +247,7 @@ function LimitsForm({ allowance: b, onSaved, onCancel }: { allowance: Allowance;
           <input className="field compact" inputMode="numeric" value={draft.reserve} onChange={(e) => setDraft({ ...draft, reserve: e.target.value })} />
         </label>
         <label className="stack tiny muted">
-          Fans' share, first window (empty: no cap of its own)
+          Fans' share: their requests {shareWindow ?? 'a window'} (empty: no cap of its own)
           <input className="field compact" inputMode="numeric" value={draft.fan} onChange={(e) => setDraft({ ...draft, fan: e.target.value })} />
         </label>
         <label className="stack tiny muted">

@@ -118,10 +118,17 @@ def test_the_fans_share_and_the_pause_follow_the_panel(scarce):
     assert budget.effective(scarce).pause == 5 and budget.effective(scarce).fan == 1
 
 
-def test_an_allowance_with_no_windows_is_only_counted(scarce):
-    admin.set_limits(scarce.name, {"windows": [], "reserve": 0, "fan": None, "pause": 60})
+def test_a_source_without_a_published_limit_can_be_given_one_and_back(monkeypatch):
+    counted = budget.Budget("counted-test")
+    monkeypatch.setattr(budget, "known", lambda: [counted])
+    admin.set_limits(counted.name, {"windows": [{"seconds": 60, "requests": 2}], "reserve": 0, "fan": None, "pause": 60})
+    budget.take(counted, lane_name="refresh")
+    budget.take(counted, lane_name="refresh")
+    with pytest.raises(budget.RateLimited):
+        budget.take(counted, lane_name="refresh")
+    admin.set_limits(counted.name, {"windows": [], "reserve": 0, "fan": None, "pause": 60})
     for _ in range(50):
-        budget.take(scarce, lane_name="refresh")
+        budget.take(counted, lane_name="refresh")
 
 
 @pytest.mark.parametrize("body, wrong", [
@@ -131,10 +138,11 @@ def test_an_allowance_with_no_windows_is_only_counted(scarce):
     ({"windows": [{"seconds": 60, "requests": 5, "margin": 5}]}, "margin"),
     ({"windows": [{"seconds": 60, "requests": 5, "margin": 1}], "reserve": 4}, "reserve"),
     ({"windows": [{"seconds": 60, "requests": 5}], "fan": 6}, "fans' share"),
-    ({"windows": [], "pause": 0}, "pause"),
+    ({"windows": [{"seconds": 60, "requests": 5}], "pause": 0}, "pause"),
     ({"windows": [{"seconds": 60, "requests": "5"}]}, "allowance"),
     ({"windows": [{"seconds": 60, "requests": True}]}, "allowance"),
     ({}, "list"),
+    ({"windows": []}, "at least one window"),  # its plan has a limit
 ])
 def test_an_allowance_that_cant_work_is_refused_saying_why(scarce, body, wrong):
     with pytest.raises(ValueError, match=wrong):

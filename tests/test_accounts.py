@@ -33,6 +33,7 @@ class Accounts:
         self.lookups = 0
         self.made = 0
         self.bumped = False
+        self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
 
     def find_or_create(self, db, email):
         found = next((i for i, e in self.emails.items() if e == email), None)
@@ -65,6 +66,11 @@ class Accounts:
         self.google = {**linked, sub: account_id}
         return account_id
 
+    def blocked(self, db, email=None, account_id=None):
+        if account_id is None:
+            account_id = next((i for i, e in self.emails.items() if e == email), None)
+        return account_id in self.blocked_ids
+
     def describe(self, db, account_id):
         email = self.emails.get(account_id)
         return {"signed_in": True, "email": email, "google": False, "created_at": "2026-10-13T00:00:00+00:00"} if email else None
@@ -86,7 +92,7 @@ class Accounts:
 @pytest.fixture
 def store(api, monkeypatch):
     fake = Accounts()
-    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account"):
+    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked"):
         monkeypatch.setattr(accounts, name, getattr(fake, name))
     return fake
 
@@ -464,6 +470,20 @@ def test_an_address_whose_account_has_another_google_account_is_sent_to_the_code
     go_to_google(api, google)
     _, back = go_to_google(api, google, claims=good_claims(sub="google-999"))
     assert back.headers["location"] == "/account?error=google_linked"
+
+
+def test_a_blocked_account_signs_in_neither_with_google_nor_with_a_code_from_before(api, store, google, outbox):
+    store.emails[1] = "fan@gmail.com"
+    assert api.call("POST", "/api/auth/email/start", body={"email": "fan@gmail.com"}, address=PUBLIC).status_code == 200
+    store.blocked_ids.add(1)  # an admin blocks it while the code is on its way
+    refused = api.call("POST", "/api/auth/email/verify", body={"email": "fan@gmail.com", "code": outbox["fan@gmail.com"]}, address=PUBLIC)
+    assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
+    assert "sf_session" not in set_cookies(refused)
+    asked = api.call("POST", "/api/auth/email/start", body={"email": "fan@gmail.com"}, address=PUBLIC)
+    assert asked.status_code == 403 and "auth-wait:" + accounts.email_key("fan@gmail.com") not in api.redis.data
+    _, back = go_to_google(api, google)
+    assert back.headers["location"] == "/account?error=blocked" and "sf_session" not in set_cookies(back)
+    assert store.sessions == {}
 
 
 def test_without_a_client_google_is_off(api, monkeypatch):

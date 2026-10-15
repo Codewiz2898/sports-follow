@@ -106,6 +106,8 @@ class _Copy:
         self.now = Controls()
         self.version = 0  # goes up each time what's read differs from the copy
         self.loaded = False
+        self.reads = 0  # reads begun, in order
+        self.applied = 0  # the latest-begun read whose rows are the copy
         self.lock = threading.Lock()
         self.thread: threading.Thread | None = None
 
@@ -114,14 +116,20 @@ _copy = _Copy()
 
 
 def load() -> Controls:
-    """Read the rows now (a change made here is seen at once; other processes within REFRESH)."""
-    rows = STORE.read()
-    fresh = parse(rows)
+    """Read the rows now (a change made here is seen at once; other processes within REFRESH). A read
+    that began before another one already applied is dropped: the thread's read that started just
+    before a change committed never undoes the change's own."""
     with _copy.lock:
-        if fresh != _copy.now:
-            _copy.now, _copy.version = fresh, _copy.version + 1
+        _copy.reads += 1
+        mine = _copy.reads
+    fresh = parse(STORE.read())
+    with _copy.lock:
+        if mine > _copy.applied:
+            _copy.applied = mine
+            if fresh != _copy.now:
+                _copy.now, _copy.version = fresh, _copy.version + 1
         _copy.loaded = True
-    return fresh
+        return _copy.now
 
 
 def _keep_reading() -> None:
