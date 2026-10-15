@@ -20,7 +20,7 @@ from time import perf_counter
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, notify, pipeline, registry, retention, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -63,6 +63,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
 
         def ended(outcome: str, how: str) -> None:
             took = perf_counter() - started
+            metrics.job(fn.__name__, outcome, took, waited)
             if quiet and outcome == "ok" and took < QUIET_UNDER:
                 return
             queue = "" if waited is None else f", after {waited:.1f}s in the queue"
@@ -211,6 +212,7 @@ async def startup(ctx) -> None:
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
     # A connection for each of those threads, the tick's and notify's: checkouts give up after 5 s.
     db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
+    metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
 
 
 async def _in_tick_pool(fn):

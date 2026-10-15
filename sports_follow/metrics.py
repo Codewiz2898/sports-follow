@@ -1,0 +1,262 @@
+"""Metrics (OpenTelemetry): the numbers that show trouble before fans see it, sent over OTLP beside the
+traces and log lines (tracing.setup starts them where OTEL_METRICS_EXPORTER, otlp by default, has an
+endpoint). Off, every call here does nothing.
+
+Two kinds:
+* Counted where they happen, in every process: API requests by route (server.RequestLog), job runs by
+  job (worker._logged), pushes by push service and result and how long a moment waited for its push,
+  moments found by kind (notify.py), card builds and refreshes by result (pipeline.py, structured.py).
+  Source requests come from the httpx instrumentation: http.client.request.duration, by server.address.
+* Read every minute by the worker alone (watch()): live games and how long since each was last polled,
+  the job queue, cards by status and how old the live cards' data is, and each source's allowance:
+  used, what it says is left, whether it's pausing us.
+
+Labels are route, job_name, source, bucket, lane, sport, kind, status and result: never a fan's or a player's
+id. Not plain job, which Prometheus keeps for the process (sports-follow-api, -worker), dropping ours.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections import Counter
+from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
+from typing import Any
+
+from opentelemetry import metrics as otel
+
+log = logging.getLogger("sports_follow.metrics")
+
+_meter = otel.get_meter("sports_follow")
+_made: dict[tuple[int, str], Any] = {}
+_watching = False
+
+# Seconds: from a fast query to a ten-minute poll session (job durations, a moment's wait for its push).
+SECONDS = (0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900)
+# A live game not polled for this long is behind: every one is polled at least once a minute.
+BEHIND = 180
+
+
+def _instrument(kind: str, name: str, unit: str, description: str, **advice: Any) -> Any:
+    """The instrument on the current meter, made once (tests swap the meter for one of their own)."""
+    key = (id(_meter), name)
+    if key not in _made:
+        _made[key] = getattr(_meter, f"create_{kind}")(name, unit=unit, description=description, **advice)
+    return _made[key]
+
+
+# ---------------------------------------------------------------- counted where they happen
+
+
+def request(method: str, route: str | None, status: int, seconds: float) -> None:
+    """One API request answered (server.RequestLog): OpenTelemetry's own HTTP server metric."""
+    _instrument("histogram", "http.server.request.duration", "s", "API requests by route and status, and how long they took",
+                explicit_bucket_boundaries_advisory=SECONDS).record(
+        seconds, {"http.request.method": method, "http.route": route or "unmatched", "http.response.status_code": status})
+
+
+def job(name: str, outcome: str, seconds: float, waited: float | None) -> None:
+    """One worker job ended (worker._logged): how long it ran and how it ended; how long it waited to start."""
+    _instrument("histogram", "sports_follow.job.duration", "s", "Worker jobs by job and outcome, and how long they ran",
+                explicit_bucket_boundaries_advisory=SECONDS).record(seconds, {"job_name": name, "outcome": outcome})
+    if waited is not None:
+        _instrument("histogram", "sports_follow.job.wait", "s", "How long worker jobs waited in the queue to start",
+                    explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited), {"job_name": name})
+
+
+def pushes(results: Iterable[tuple[str | None, int | str | None]], waited: float) -> None:
+    """A batch's pushes (notify.send): each device's push service and what it answered (None: took it), and
+    how long the batch's oldest moment waited, from its poll or build finding it to its pushes."""
+    counted: Counter[tuple[str, str]] = Counter()
+    for service, error in results:
+        result = "delivered" if error is None else "gone" if error in (404, 410) else "failed"
+        counted[(service or "unknown", result)] += 1
+    counter = _instrument("counter", "sports_follow.pushes", "{push}", "Pushes to devices by push service and result")
+    for (service, result), n in counted.items():
+        counter.add(n, {"push_service": service, "result": result})
+    _instrument("histogram", "sports_follow.push.wait", "s", "How long a batch's oldest moment waited for its pushes",
+                explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited))
+
+
+def moment(kind: str) -> None:
+    """A moment found and stored (notify.record): a goal, a wicket, a result."""
+    _instrument("counter", "sports_follow.moments", "{moment}", "Moments found, by kind").add(1, {"kind": kind})
+
+
+def card(step: str, result: str) -> None:
+    """A card built (pipeline.build_card) or a player's source read again (structured.refresh): ok or failed."""
+    _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(1, {"step": step, "result": result})
+
+
+# ---------------------------------------------------------------- read every minute, by the worker
+
+
+Reading = list[tuple[float, dict[str, Any]]]
+
+
+def live(now: float | None = None) -> dict[str, Reading]:
+    """The armed and live games with a followed player and a live binding, by source and status; per
+    source, how long since its least recently polled game was polled (structured._polled), and how
+    many of its games weren't polled within BEHIND seconds (or ever)."""
+    from sqlalchemy import select
+
+    from . import bus
+    from .db import session
+    from .models import Event, EventPlayer, Follow
+
+    now = now or time.time()
+    with session() as db:
+        followed = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
+        games = db.execute(
+            select(Event.id, Event.status, Event.live_binding["adapter"].astext)
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))
+        ).all()
+    counts: Counter[tuple[str, str]] = Counter((source or "unknown", status) for _, status, source in games)
+    redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
+    polled = redis.mget([f"polled_at:{event_id}" for event_id, _, _ in games]) if games else []
+    oldest: dict[str, float] = {}
+    behind: Counter[str] = Counter({source or "unknown": 0 for _, _, source in games})
+    for (_, _, source), at in zip(games, polled):
+        source = source or "unknown"
+        age = now - float(at) if at is not None else None
+        if age is not None:
+            oldest[source] = max(oldest.get(source, 0.0), age)
+        if age is None or age > BEHIND:
+            behind[source] += 1
+    return {
+        "games": [(n, {"source": source, "status": status}) for (source, status), n in counts.items()],
+        "poll_age": [(age, {"source": source}) for source, age in oldest.items()],
+        "behind": [(n, {"source": source}) for source, n in behind.items()],
+    }
+
+
+def queue(now: float | None = None) -> dict[str, Reading]:
+    """arq's queue: jobs ready to run but waiting for a slot, jobs set for later, jobs running, and how
+    long the oldest ready one has waited."""
+    from arq.constants import default_queue_name, in_progress_key_prefix
+
+    from . import bus
+
+    now_ms = (now or time.time()) * 1000
+    redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
+    ready = redis.zcount(default_queue_name, "-inf", now_ms)
+    deferred = redis.zcard(default_queue_name) - ready
+    running = sum(1 for _ in redis.scan_iter(match=f"{in_progress_key_prefix}*", count=500))
+    first = redis.zrangebyscore(default_queue_name, "-inf", now_ms, start=0, num=1, withscores=True)
+    return {
+        "jobs": [(ready, {"state": "ready"}), (deferred, {"state": "deferred"}), (running, {"state": "running"})],
+        "oldest_wait": [(max(0.0, (now_ms - first[0][1]) / 1000) if first else 0.0, {})],
+    }
+
+
+def cards(now: datetime | None = None) -> dict[str, Reading]:
+    """Followed players' cards by status and sport, and how old the newest live score is on each sport's
+    live cards at their worst (freshness["live"])."""
+    from sqlalchemy import func, select
+
+    from .db import session
+    from .models import Follow, Player, PlayerCard
+
+    now = now or datetime.now(timezone.utc)
+    with session() as db:
+        followed = select(Follow.player_id)
+        statuses = db.execute(
+            select(PlayerCard.status, Player.sport, func.count()).join(Player, Player.id == PlayerCard.player_id)
+            .where(PlayerCard.player_id.in_(followed)).group_by(PlayerCard.status, Player.sport)
+        ).all()
+        live_rows = db.execute(
+            select(Player.sport, PlayerCard.freshness).join(Player, Player.id == PlayerCard.player_id)
+            .where(PlayerCard.is_live.is_(True), PlayerCard.player_id.in_(followed))
+        ).all()
+    worst: dict[str, float] = {}
+    for sport, freshness in live_rows:
+        stamp = (freshness or {}).get("live")
+        try:
+            at = datetime.fromisoformat(stamp) if stamp else None
+        except ValueError:
+            at = None
+        if at is not None:
+            worst[sport or "other"] = max(worst.get(sport or "other", 0.0), (now - at).total_seconds())
+    return {
+        "cards": [(n, {"status": status, "sport": sport or "other"}) for status, sport, n in statuses],
+        "live_data_age": [(age, {"sport": sport}) for sport, age in worst.items()],
+    }
+
+
+def _running_budgets() -> dict[str, Any]:
+    """The budgets of the sources this build runs, by name."""
+    from .adapters import ADAPTERS
+
+    return {b.name: b for adapter in ADAPTERS.values() for b in adapter.budgets()}
+
+
+def sources(now: float | None = None) -> dict[str, Reading]:
+    """Each running source's allowance (adapters/budget.py): requests so far this window, by bucket,
+    against the window's allowance; what the source says is left; whether it's pausing us; and this
+    hour's requests by lane, sent and refused."""
+    from .adapters import budget
+
+    now = now or time.time()
+    running = _running_budgets()
+    used: Reading = []
+    allowance: Reading = []
+    left: Reading = []
+    paused: Reading = []
+    for name, b in running.items():
+        stand = budget.standing(b, now)
+        for w in stand["windows"]:
+            used.append((w["used"], {"source": name, "bucket": w["bucket"], "window": w["window"]}))
+            if not w["bucket"]:
+                allowance.append((w["allowance"], {"source": name, "window": w["window"]}))
+        left += [(n, {"source": name, "bucket": bucket}) for bucket, n in stand["left"].items()]
+        paused.append((1 if stand["paused"] else 0, {"source": name}))
+    hourly = [(row[f"{what}_h"], {"source": row["source"], "lane": row["lane"], "result": what})
+              for row in budget.usage(list(running.values()), now) for what in ("sent", "refused") if row[f"{what}_h"]]
+    return {"used": used, "allowance": allowance, "left": left, "paused": paused, "hourly": hourly}
+
+
+# Each reading the worker reports: (metric, unit, description, the reading, which of its parts).
+READINGS: list[tuple[str, str, str, Callable[[], dict[str, Reading]], str]] = [
+    ("sports_follow.live.games", "{game}", "Armed and live games with a followed player, by source and status", live, "games"),
+    ("sports_follow.live.poll_age", "s", "Seconds since each source's least recently polled live game was polled", live, "poll_age"),
+    ("sports_follow.live.games_behind", "{game}", f"Live games not polled for {BEHIND} seconds, by source", live, "behind"),
+    ("sports_follow.jobs", "{job}", "arq jobs: ready and waiting for a slot, set for later, running", queue, "jobs"),
+    ("sports_follow.jobs.oldest_wait", "s", "How long the oldest ready job has waited for a slot", queue, "oldest_wait"),
+    ("sports_follow.cards", "{card}", "Followed players' cards by status and sport", cards, "cards"),
+    ("sports_follow.cards.live_data_age", "s", "Age of the newest live score on a sport's live cards, at the worst", cards, "live_data_age"),
+    ("sports_follow.source.used", "{request}", "Requests to a source so far in its current window, by bucket", sources, "used"),
+    ("sports_follow.source.allowance", "{request}", "A source's allowance a window", sources, "allowance"),
+    ("sports_follow.source.left", "{request}", "What a source says is left of its allowance, by bucket", sources, "left"),
+    ("sports_follow.source.paused", "", "1 while a source has asked us to slow down", sources, "paused"),
+    ("sports_follow.source.requests_this_hour", "{request}", "Requests to a source this hour, by lane, sent and refused", sources, "hourly"),
+]
+
+
+def watch() -> None:
+    """Report READINGS every time metrics are exported: in the worker only, as the numbers are the same
+    from any process. Readings share one run of each function per export."""
+    from opentelemetry.metrics import CallbackOptions, Observation
+
+    global _watching
+    if _watching:
+        return
+    _watching = True
+    cache: dict[Callable[[], dict[str, Reading]], tuple[float, dict[str, Reading]]] = {}
+
+    def read(fn: Callable[[], dict[str, Reading]]) -> dict[str, Reading]:
+        at, value = cache.get(fn, (0.0, {}))
+        if time.monotonic() - at > 5:
+            try:
+                value = fn()
+            except Exception as exc:  # noqa: BLE001 — a reading that fails is left out, and the rest go
+                log.warning("metrics: %s failed: %s", fn.__name__, exc)
+                value = {}
+            cache[fn] = (time.monotonic(), value)
+        return value
+
+    for name, unit, description, fn, part in READINGS:
+        def callback(options: CallbackOptions, fn: Callable[[], dict[str, Reading]] = fn, part: str = part) -> Iterable[Observation]:
+            return [Observation(value, attributes) for value, attributes in read(fn).get(part, [])]
+
+        _meter.create_observable_gauge(name, callbacks=[callback], unit=unit, description=description)

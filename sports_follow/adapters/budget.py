@@ -26,6 +26,7 @@ a loop would spend what live games need, so past the share they're refused, and 
 from __future__ import annotations
 
 import contextvars
+import fnmatch
 import logging
 import threading
 import time
@@ -120,6 +121,9 @@ class MemoryStore:
         with self.lock:
             self.data[key] = (value, time.time() + ttl)
 
+    def keys(self, pattern: str) -> list[str]:
+        return [k for k, (_, until) in list(self.data.items()) if fnmatch.fnmatchcase(k, pattern) and until >= time.time()]
+
 
 class RedisStore:
     """Counts every process shares."""
@@ -138,6 +142,9 @@ class RedisStore:
 
     def put(self, key: str, value: int, ttl: int) -> None:
         _redis().set(key, value, ex=ttl)
+
+    def keys(self, pattern: str) -> list[str]:
+        return [k.decode() if isinstance(k, bytes) else k for k in _redis().scan_iter(match=pattern, count=500)]
 
 
 def _redis() -> Any:
@@ -289,6 +296,25 @@ def usage(budgets: list[Budget], now: float | None = None) -> list[dict[str, Any
             if any(row[k] for k in ("sent_h", "sent_d", "refused_h", "refused_d")):
                 rows.append(row)
     return rows
+
+
+WINDOW_NAMES = {60: "minute", 3600: "hour", 86400: "day"}
+
+
+def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
+    """Where one source stands now (metrics.py reads it every minute): each window's requests so far
+    against its allowance, for each bucket that has counted any; what the source says is left, by
+    bucket; and whether it's pausing us."""
+    now = now or time.time()
+    prefix = f"budget:{budget.name}:"
+    buckets = {""}
+    for w in budget.windows:
+        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{int(now // w.seconds)}")}
+    windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _store_call("get", _window_key(budget, b, w, now)) or 0, "allowance": w.requests}
+               for b in sorted(buckets) for w in budget.windows]
+    left_now = {b: v for b in sorted(buckets) if (v := left(budget, b)) is not None}
+    paused = _store_call("get", _paused_key(budget))
+    return {"windows": [w for w in windows if w["used"] or not w["bucket"]], "left": left_now, "paused": bool(paused and paused > now)}
 
 
 def known() -> list[Budget]:

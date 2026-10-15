@@ -21,7 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, moments, naming, notify, registry, sports, tracing
+from . import bus, engine, metrics, moments, naming, notify, registry, sports, tracing
 from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -485,6 +485,7 @@ def _record_final(db: Session, event: Event, player_id: int, snap: Snapshot, lin
 
 
 def _record_health(player_id: int, ok: bool, error: str | None = None, db: Session | None = None) -> None:
+    metrics.card("refresh", "ok" if ok else "failed")
     def write(s: Session) -> None:
         for row in s.scalars(select(SourceBinding).where(SourceBinding.player_id == player_id)):
             health = dict(row.health or {})
@@ -739,7 +740,9 @@ def _polled(event_id: int, cadence: int) -> bool:
     """Note a poll of an event. Returns whether the one before it was recent: within POLL_GAP, or three of
     a slow source's rounds (Liquipedia reads every five minutes)."""
     seconds = max(POLL_GAP, 3 * cadence)
-    return bus.sync_redis().set(f"polled:{event_id}", "1", ex=seconds, get=True) is not None
+    redis = bus.sync_redis()
+    redis.set(f"polled_at:{event_id}", int(time.time()), ex=6 * 3600)  # how long since, for metrics.live
+    return redis.set(f"polled:{event_id}", "1", ex=seconds, get=True) is not None
 
 
 def _team_ids(db: Session, system: str, player_ids: list[int]) -> dict[int, list[str]]:

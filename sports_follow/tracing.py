@@ -1,12 +1,13 @@
 """Traces (OpenTelemetry): a span for each API request, each worker job and each round of a live poll,
 with the source requests, database queries, Redis commands and model calls made inside it, as one
 trace from a fan's request through the jobs it queued (logs.carry takes the trace along). And the log
-lines, shipped over OTLP beside them (logs.ship), each in the trace it was logged in.
+lines, shipped over OTLP beside them (logs.ship), each in the trace it was logged in, and the metrics
+(metrics.py).
 
 Off unless an exporter is set, with OpenTelemetry's own settings, so any backend takes them:
-OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS (its key: a secret) send traces and logs over
-OTLP (_TRACES_ and _LOGS_ variants for one alone; OTEL_TRACES_EXPORTER or OTEL_LOGS_EXPORTER=none turns
-one off); OTEL_TRACES_EXPORTER=console prints spans, for development. OTEL_TRACES_SAMPLER and
+OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS (its key: a secret) send traces, logs and
+metrics over OTLP (_TRACES_, _LOGS_ and _METRICS_ variants for one alone; OTEL_TRACES_EXPORTER,
+OTEL_LOGS_EXPORTER or OTEL_METRICS_EXPORTER=none turns one off); OTEL_TRACES_EXPORTER=console prints spans, for development. OTEL_TRACES_SAMPLER and
 _SAMPLER_ARG keep a share of traces (all by default); OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES
 name the process. Off, nothing is instrumented, and the spans this app makes itself cost nothing.
 
@@ -36,7 +37,7 @@ UNTRACED = ("/api/health",)
 
 
 def _otlp(signal: str) -> bool:
-    """Whether OpenTelemetry's settings send this signal ("TRACES", "LOGS") over OTLP."""
+    """Whether OpenTelemetry's settings send this signal ("TRACES", "LOGS", "METRICS") over OTLP."""
     if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
         return False
     kind = os.environ.get(f"OTEL_{signal}_EXPORTER", "").strip().lower()
@@ -65,21 +66,35 @@ def _log_exporter() -> Any:
     return None
 
 
-def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
+def _metric_exporter() -> Any:
+    """The metric exporter OpenTelemetry's settings ask for (OTLP only), or None."""
+    if _otlp("METRICS"):
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+        return OTLPMetricExporter()
+    return None
+
+
+def setup(service: str, exporter: Any = None, log_exporter: Any = None, metric_exporter: Any = None) -> bool:
     """Start this process's telemetry as `service` (unless OTEL_SERVICE_NAME names it), as far as the
     settings ask: traces (spans for its own work, and for the source requests (httpx), Redis commands
-    and database queries) and log lines (logs.ship). Once a process; returns whether traces are on."""
+    and database queries), log lines (logs.ship) and metrics (metrics.py; every OTEL_METRIC_EXPORT_INTERVAL,
+    a minute). Once a process; returns whether traces are on."""
     global on, _started
     if _started:
         return on
     exporter = exporter or _exporter()
     log_exporter = log_exporter or _log_exporter()
-    if exporter is None and log_exporter is None:
+    metric_exporter = metric_exporter or _metric_exporter()
+    if exporter is None and log_exporter is None and metric_exporter is None:
         return False
+    import uuid
+
     from opentelemetry.sdk.resources import Resource
 
     _started = True
-    resource = Resource.create({} if os.environ.get("OTEL_SERVICE_NAME") else {"service.name": service})
+    # Each process its own instance: the API's two workers would otherwise write the same metric series.
+    resource = Resource.create({"service.instance.id": str(uuid.uuid4())} | ({} if os.environ.get("OTEL_SERVICE_NAME") else {"service.name": service}))
     if log_exporter is not None:
         from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -90,12 +105,14 @@ def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
         lines = LoggerProvider(resource=resource)
         lines.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
         logs.ship(lines)
+    if metric_exporter is not None:
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        # Global, before the libraries are instrumented: httpx's instrumentation measures source requests with it.
+        metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[PeriodicExportingMetricReader(metric_exporter)]))
     if exporter is not None:
-        # The libraries' spans named as this app's own are (url.full, server.address, http.response.status_code,
-        # db.query.text): OpenTelemetry's stable conventions, which they use only when asked.
-        os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http,database")
-        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-        from opentelemetry.instrumentation.redis import RedisInstrumentor
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
@@ -104,10 +121,17 @@ def setup(service: str, exporter: Any = None, log_exporter: Any = None) -> bool:
         provider = TracerProvider(resource=resource, sampler=_FromWork(configured))
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
+        on = True
+    if exporter is not None or metric_exporter is not None:
+        # The libraries' spans and metrics named as this app's own are (url.full, server.address,
+        # http.response.status_code, db.query.text): OpenTelemetry's stable conventions, used only when asked.
+        os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http,database")
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+
         HTTPXClientInstrumentor().instrument(request_hook=_outgoing)
         RedisInstrumentor().instrument()
         _watch_queries()
-        on = True
     return on
 
 
@@ -184,13 +208,19 @@ def span(name: str, attributes: Mapping[str, Any] | None = None, *, kind: SpanKi
         yield current
 
 
+def measured(path: str) -> bool:
+    """Whether a request is traced and counted (metrics.request): an API request, but not a health check
+    or a live stream."""
+    return path.startswith("/api/") and path not in UNTRACED and not path.endswith("/stream")
+
+
 def request_span(method: str, path: str):
     """The span of an API request (server.RequestLog), named for its route once that's known (answered).
     An untraced path has none, nor any span for the queries and Redis commands it makes: a health check
     would be two traces of its own every 15 seconds."""
     if not path.startswith("/api/"):
         return nullcontext(None)
-    if path in UNTRACED or path.endswith("/stream"):
+    if not measured(path):
         return shallow()
     return span(method, {"http.request.method": method, "url.path": path}, kind=SpanKind.SERVER)
 

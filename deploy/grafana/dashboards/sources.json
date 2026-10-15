@@ -1,7 +1,7 @@
 {
   "uid": "sports-follow-sources",
   "title": "Sports Follow · Sources",
-  "description": "The data sources the app reads: requests, errors, refusals and time taken by source and lane, from the source requests' spans.",
+  "description": "The data sources the app reads: requests, errors, refusals and time taken by source and lane, from the source requests' spans; each source's allowance, from the worker's metrics.",
   "tags": [
     "sports-follow"
   ],
@@ -32,6 +32,16 @@
         "type": "datasource",
         "query": "tempo",
         "regex": "",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      },
+      {
+        "name": "prom",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "/^(?!.*usage).*$/",
         "hide": 0,
         "current": {},
         "refresh": 1
@@ -477,19 +487,261 @@
       "id": 7
     },
     {
-      "type": "text",
-      "title": "Quota",
+      "type": "bargauge",
+      "title": "Allowance used this window, by source and bucket",
+      "description": "Requests so far in each window against the plan's allowance (adapters/budget.py). Background lanes stop at the reserve kept for live games and fans.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max by (source, bucket, window) (sports_follow_source_used{job=\"sports-follow-worker\"}) / on (source, window) group_left max by (source, window) (sports_follow_source_allowance{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}} {{bucket}} (a {{window}})",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
       "options": {
-        "mode": "markdown",
-        "content": "How much of each source's allowance is left comes with the app's metrics (BHA-194). Until then, on the server:\n\n`docker compose -f deploy/compose.yaml exec worker python -m sports_follow.usage`"
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       },
       "gridPos": {
         "x": 0,
         "y": 37,
-        "w": 24,
-        "h": 3
+        "w": 12,
+        "h": 9
       },
       "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "What sources say is left",
+      "description": "Where the source reports it (Sportmonks, PandaScore).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max by (source, bucket) (sports_follow_source_left{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}} {{bucket}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 12,
+        "h": 14
+      },
+      "id": 9
+    },
+    {
+      "type": "bargauge",
+      "title": "Requests this hour, by source, lane and result",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum by (source, lane, result) (sports_follow_source_requests_this_hour{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}} {{lane}} {{result}}",
+          "instant": true,
+          "range": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 12,
+        "h": 9
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Paused by the source (it said slow down)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max by (source) (sports_follow_source_paused{job=\"sports-follow-worker\"})",
+          "legendFormat": "{{source}}",
+          "instant": false,
+          "range": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 51,
+        "w": 12,
+        "h": 14
+      },
+      "id": 11
     }
   ]
 }
