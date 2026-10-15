@@ -195,13 +195,15 @@ class Cricket(Sport):
         """The match's best innings, from the headline's ("103 (152) & 48* (60) · 5/23 (4 ov)"): fifty or more
         ("Hundred", "112 (98) v Australia"), or three wickets or more ("Five-for", "5/23 (4 ov) v
         Australia"), as high() words their moments; of a batting and a bowling high, the bigger."""
-        made = []
+        made: list[tuple[tuple[int, ...], Poster]] = []  # each by how big: priority, batting first, then more runs or wickets, fewer conceded
         for part in re.split(r" & | · ", line.get("headline") or ""):
             if (m := _BAT.fullmatch(part)) and (marks := [k for k in MARKS if k <= int(m[1])]):
-                made.append(Poster(_RUNS.get(marks[-1], str(marks[-1])), spaced(part, versus), priority=_RUNS_PRIORITY.get(marks[-1], 95)))
+                poster = Poster(_RUNS.get(marks[-1], str(marks[-1])), spaced(part, versus), priority=_RUNS_PRIORITY.get(marks[-1], 95))
+                made.append(((poster.priority, 1, int(m[1]), 0), poster))
             elif (m := _BOWL.fullmatch(part)) and int(m[1]) >= 3:
-                made.append(Poster(f"{_HAUL.get(int(m[1]), m[1])}-for", spaced(part, versus), priority=_haul(int(m[1]))))
-        return max(made, key=lambda p: p.priority, default=None)
+                poster = Poster(f"{_HAUL.get(int(m[1]), m[1])}-for", spaced(part, versus), priority=_haul(int(m[1])))
+                made.append(((poster.priority, 0, int(m[1]), -int(m[2])), poster))
+        return max(made, key=lambda x: x[0], default=(None, None))[1]
 
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.

@@ -155,6 +155,8 @@ def test_a_finished_cricket_line_is_its_best_innings():
     # A Test's two innings and the bowling: the best of them by their moments' priorities, the batting of equals.
     assert finished("Cricket", "103 (152) & 48* (60) · 5/40 (20 ov)") == Poster("Hundred", "103 (152)")
     assert finished("Cricket", "12 (30) & 61 (90) · 1/20 (8 ov) & 6/50 (22 ov)") == Poster("Six-for", "6/50 (22 ov)")
+    assert finished("Cricket", "103 (152) & 120 (200)") == Poster("Hundred", "120 (200)")  # the bigger of equals
+    assert finished("Cricket", "6/50 (22 ov) & 5/23 (9 ov)") == Poster("Six-for", "6/50 (22 ov)")
     assert finished("Cricket", "49 (30) · 2/10 (3 ov)") is None
     assert finished("Cricket", "Did not bat or bowl") is None
 
