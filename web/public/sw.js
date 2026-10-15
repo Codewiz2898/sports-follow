@@ -5,7 +5,8 @@
 // route). Built assets: cache first (their names change with their content). Fonts and other files:
 // served from cache while refreshed. /api/me/following and player cards: network first, the last
 // answer offline. The sports and their colours (/api/sports, /api/sports.css): from cache while
-// refreshed. Every other /api call and every live stream passes straight through.
+// refreshed. Players' photos (/api/photos/): cache first, like built assets. Every other /api call and
+// every live stream passes straight through.
 //
 // Push: moments (a goal, a fifty, a result; see sports_follow/moments.py) arrive as notifications,
 // planned by sports_follow/alerts.py. Each game is one notification (its tag): a new moment replaces
@@ -51,6 +52,8 @@ self.addEventListener('fetch', (event) => {
   if (url.origin === self.location.origin) {
     if (req.mode === 'navigate') return event.respondWith(networkFirst(req, SHELL, '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, FILES))
+    // A player's photo: its address is its content, so the copy kept is always right.
+    if (url.pathname.startsWith('/api/photos/')) return event.respondWith(cacheFirst(req, FILES))
     if (url.pathname.startsWith('/api/')) {
       if (OFFLINE_DATA.test(url.pathname)) event.respondWith(networkFirst(req, DATA))
       else if (SPORTS.test(url.pathname)) event.respondWith(staleWhileRevalidate(req, DATA))

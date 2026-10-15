@@ -125,7 +125,9 @@ class Sport:
     # ---- how the app shows it (GET /api/sports, /api/sports.css)
 
     # Its colour, as CSS custom properties on [data-sport]: the block colour, text on it, softer text on
-    # it, and the colour itself as text on the dark ink. A sport without one wears ink.
+    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A player's photo
+    # is recoloured from "deep" (its darks) to the block colour (its lights); without "deep", from the text
+    # on it, which must then be the darker.
     colour: dict[str, str] = {}
     # Which free-text sport names it is (a page's "Women's football", the agent's "T20 cricket"): a
     # regular expression over the lower-case name, and one that rules a name out ("american football").

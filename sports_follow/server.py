@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -440,9 +440,19 @@ def sports_css() -> Response:
 
 
 @app.get("/api/credits")
-def credits() -> dict[str, Any]:
-    """Where this build's scores, ratings, evaluations, words and code come from."""
-    return credits_page.credits()
+def credits(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Where this build's scores, ratings, evaluations, words, photos and code come from."""
+    return credits_page.credits(photos=photos.used(db))
+
+
+@app.get("/api/photos/{name}")
+async def player_photo(name: str) -> Response:
+    """A player's photo (photos.py), from our own copy: its address is its content, so it's kept a year."""
+    found = await in_db(photos.serve, name)
+    if found is None:
+        raise HTTPException(404, "No such photo.")
+    data, media_type = found
+    return Response(data, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
@@ -1232,9 +1242,10 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
     if holder is not None:
         return {"player_id": holder}
     found = await _resolve(person)
-    base = {"qid": person.qid, "born": person.birth_date.isoformat() if person.birth_date else None}
+    athlete = await in_db(registry.get, person.qid, person.sport)
+    photo = await in_db(photos.of_file, athlete.image) if athlete else None
+    base = {"qid": person.qid, "born": person.birth_date.isoformat() if person.birth_date else None, "photo": photo}
     if found is None:
-        athlete = await in_db(registry.get, person.qid, person.sport)
         return {
             **base, "system": None, "athlete_id": None, "league": person.league, "name": person.name, "sport": sports.label(person.sport),
             "teams": person.teams, "source": "Wikidata", "source_url": f"https://www.wikidata.org/wiki/{person.qid}",

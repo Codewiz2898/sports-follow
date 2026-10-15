@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import type { Card, LatestResult, UpcomingEvent } from '../api'
+import type { Card, LatestResult, Photo, UpcomingEvent } from '../api'
 import { useNow } from '../clock'
-import { highlight, LiveScoreboard, NextStrip, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
+import { highlight, LiveScoreboard, NextStrip, PhotosNote, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, PlusIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { StartersSection } from '../components/Starters'
@@ -81,12 +81,12 @@ function tileOrder(cards: Card[], now: number) {
  * or a hundred first, then any game with the player's numbers, then the newest. Each card carries
  * its newest result, and the stream updates it the moment a game ends.
  */
-function bigMoment(cards: Card[], now: number): { result: LatestResult; sport: string } | null {
+function bigMoment(cards: Card[], now: number): { result: LatestResult; sport: string; photo?: Photo | null } | null {
   const recent = cards.flatMap((c) => {
     const r = c.recent_results?.[0]
     // Today or yesterday where the fan is; a game dated tomorrow (an agent's slip) isn't today's moment.
     const days = daysAgo(playedOn(r), new Date(now))
-    return r && days != null && days >= 0 && days <= 1 ? [{ result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport }] : []
+    return r && days != null && days >= 0 && days <= 1 ? [{ result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport, photo: c.player.photo }] : []
   })
   const rank = (m: { result: LatestResult; sport: string }) => (highlight(m.sport, m.result.player_contribution) ? 2 : lineStats(m.result.player_contribution) ? 1 : 0)
   const time = (m: { result: LatestResult }) => parseDate(playedOn(m.result))?.getTime() ?? 0
@@ -157,7 +157,7 @@ export function TodayPage() {
       ))}
 
       <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
-        {moment && <ResultHero result={moment.result} sport={moment.sport} />}
+        {moment && <ResultHero result={moment.result} sport={moment.sport} photo={moment.photo} />}
       </ErrorBoundary>
 
       <SaveNudge />
@@ -174,6 +174,7 @@ export function TodayPage() {
               {tileOrder(cards, now).map((c) => <PlayerTile key={c.player_id} card={c} progress={progress[c.player_id]} />)}
               <Link to="/search" className="tile add" aria-label="Follow another player"><PlusIcon width={22} height={22} /><span className="dsp">Follow</span></Link>
             </div>
+            <PhotosNote photos={cards.map((c) => c.player.photo)} />
           </ErrorBoundary>
         </section>
       )}

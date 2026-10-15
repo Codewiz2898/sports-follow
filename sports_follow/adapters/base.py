@@ -134,6 +134,8 @@ class SearchResult:
     born: int | None = None  # birth year, shown to tell namesakes apart
     matched: bool = True  # False: only alike ("catalin clark" ~ Caitlin Clark), offered as "did you mean"
     popularity: int = 0  # Wikipedia editions for registry athletes; a headshot or title for live hits
+    image: str | None = None  # the registry's Commons file, for finding their photo (photos.attach)
+    photo: dict[str, Any] | None = None  # their photo and its credit, when it's here (photos.public)
     _rank: tuple = ()
 
 

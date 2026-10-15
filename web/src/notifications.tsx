@@ -176,7 +176,7 @@ export function MomentToasts({ moments, dismiss, playerOf }: { moments: PlayerMo
         const player = playerOf(m.player_id)?.player
         return (
           <div key={m.id} className="toast">
-            {player && <Avatar name={player.name} sport={player.sport} />}
+            {player && <Avatar name={player.name} sport={player.sport} photo={player.photo} />}
             <Link to={m.url} onClick={() => dismiss(m.id)} className="stack" style={{ minWidth: 0, flex: 1 }}>
               <span className="title">{m.title}</span>
               {m.body && <span className="small muted">{m.body}</span>}

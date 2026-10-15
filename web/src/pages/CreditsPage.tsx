@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Credit, type Credits } from '../api'
+import { api, type Credit, type Credits, type PhotoCredit } from '../api'
 import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
 import { safeHref } from '../format'
@@ -27,6 +27,7 @@ export function CreditsPage() {
         <>
           <CreditList label="Scores and stats" items={credits.data} />
           <CreditList label="Also from" items={credits.also} />
+          <PhotoList items={credits.photos ?? []} />
 
           <section className="section" aria-label="Notices">
             <SectionHead title="Notices" />
@@ -70,6 +71,32 @@ function CreditList({ label, items }: { label: string; items: Credit[] }) {
                 {c.note}
               </span>
             )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/** Every player photo shown, with its author and licence: the credit each one's licence asks for. */
+function PhotoList({ items }: { items: PhotoCredit[] }) {
+  useEffect(() => {
+    if (items.length && window.location.hash === '#photos') document.getElementById('photos')?.scrollIntoView()
+  }, [items.length])
+  if (!items.length) return null
+  return (
+    <section className="section" id="photos" aria-label="Photos">
+      <SectionHead title="Photos" />
+      <ul className="card list">
+        {items.map((p) => (
+          <li key={p.page} className="stack" style={{ gap: 4 }}>
+            <span className="title">{p.name}</span>
+            <span className="small">
+              {safeHref(p.page) ? <a href={safeHref(p.page)} target="_blank" rel="noreferrer" className="link">Photo</a> : 'Photo'}
+              {` by ${p.author}, `}
+              {safeHref(p.licence_url) ? <a href={safeHref(p.licence_url)} target="_blank" rel="noreferrer" className="link">{p.licence}</a> : p.licence}
+              {', from Wikimedia Commons, recoloured'}
+            </span>
           </li>
         ))}
       </ul>

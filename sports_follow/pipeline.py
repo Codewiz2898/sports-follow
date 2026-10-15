@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, metrics, moments, notify, shutdown, sports, structured
+from . import bus, metrics, moments, notify, photos, shutdown, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -298,7 +298,7 @@ def placeholder_card(player: Player) -> dict[str, Any]:
         "slug": player.slug,
         "status": "building",
         "version": 0,
-        "player": {"name": player.name, "sport": player.sport or "", "status": player.status, "teams": player.teams or []},
+        "player": {"name": player.name, "sport": player.sport or "", "status": player.status, "teams": player.teams or [], **photos.for_card(player)},
         "live": {"is_live": False, "player_stats": []},
         "news": [],
         "upcoming": [],
@@ -425,7 +425,8 @@ def _card_from_report(player: Player, report: dict[str, Any], version: int, buil
         "status": "ready",
         "version": version,
         "built_at": stamp,
-        "player": report["player"],
+        # The agent's report knows nothing of photos: the player's own (photos.py) stays on the card.
+        "player": {**report["player"], **photos.for_card(player)},
         "live": _timed(report["live"], "as_of"),
         "news": _newest_first(report["news"]),
         "upcoming": [_timed(u, "start_utc") for u in report["upcoming"]],

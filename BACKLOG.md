@@ -168,7 +168,7 @@ is offered last and capped at 3 per fan per day.
 - **FIDE list** for chess ratings and the 1.9M players Wikidata doesn't have, once FIDE gives written
   permission for commercial use; until then chess falls back to Lichess's FIDE search.
 - **Licensed roster feed** to keep current teams right between Wikidata edits (transfers, debuts).
-- **Photos**: see item 6.
+- **Photos**: built, see item 6.
 - A **review queue** for registry-to-source matches the birth date can't settle.
 - **Namesakes Wikidata lacks**: a full name the registry knows well doesn't ask ESPN, so an obscure
   namesake only ESPN has (the Malaysian-league footballer Nikola Jokić) no longer shows beside the star.
@@ -228,9 +228,11 @@ by lock index if chess traffic outgrows it.
 
 ### 6. Player headshots
 
-**Today.** Players show initials. The registry already stores each athlete's Wikimedia Commons photo
-(Wikidata P18) as a file name: 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known
-ones (75%, those with 20+ Wikipedia editions). Nothing is displayed yet.
+**Built (BHA-13).** Followed and starter players show their Wikimedia Commons photo (Wikidata P18),
+recoloured in their sport's colour, with its credit; initials otherwise (`sports_follow/photos.py`). The
+registry has a photo for 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known ones (75%,
+those with 20+ Wikipedia editions). Next: crop to the face rather than zooming toward the top of the photo
+(BHA-67), and a styled avatar for players without one (BHA-69).
 
 **Done when** a player's page, search results and the Following list show a photo with its credit
 where a properly licensed one exists, and initials otherwise.

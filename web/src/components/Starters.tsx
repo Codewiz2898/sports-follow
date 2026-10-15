@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type SearchResult, type StarterSport } from '../api'
 import { useFollowing } from '../following'
-import { SectionHead } from './Blocks'
+import { PhotosNote, PlayerPhoto, SectionHead, usePhoto } from './Blocks'
 import { CheckIcon, PlusIcon } from './Icons'
 import { followTarget } from './Search'
 
@@ -88,21 +88,27 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
         <section key={s.key} className="section" aria-label={s.label}>
           {!chips && <SectionHead title={s.label} />}
           <div className="tiles">
-            {s.players.map((r) => {
-              const on = followed(r)
-              const busy = pending.includes(r.key)
-              return (
-                <button key={r.key} type="button" className="tile pick" data-sport={s.key} aria-pressed={on} aria-busy={busy} aria-label={`Follow ${r.name}`} onClick={() => void toggle(r)}>
-                  <span className="corner">{busy ? <span className="spinner" /> : on ? <CheckIcon width={20} height={20} /> : <PlusIcon width={20} height={20} />}</span>
-                  <span className="dsp name">{r.name}</span>
-                  {r.detail && <span className="status">{r.detail}</span>}
-                </button>
-              )
-            })}
+            {s.players.map((r) => (
+              <StarterTile key={r.key} r={r} sport={s.key} on={followed(r)} busy={pending.includes(r.key)} onToggle={() => void toggle(r)} />
+            ))}
           </div>
+          <PhotosNote photos={s.players.map((r) => r.photo)} />
         </section>
       ))}
     </div>
+  )
+}
+
+/** One starter, followed or unfollowed with a tap: their name, team and photo in their sport's colour. */
+function StarterTile({ r, sport, on, busy, onToggle }: { r: SearchResult; sport: string; on: boolean; busy: boolean; onToggle: () => void }) {
+  const [photo, drop] = usePhoto(r.photo)
+  return (
+    <button type="button" className={`tile pick${photo ? ' pictured' : ''}`} data-sport={sport} aria-pressed={on} aria-busy={busy} aria-label={`Follow ${r.name}`} onClick={onToggle}>
+      {photo && <PlayerPhoto photo={photo} className="tile-photo" onError={drop} />}
+      <span className="corner">{busy ? <span className="spinner" /> : on ? <CheckIcon width={20} height={20} /> : <PlusIcon width={20} height={20} />}</span>
+      <span className="dsp name">{r.name}</span>
+      {r.detail && <span className="status">{r.detail}</span>}
+    </button>
   )
 }
 
