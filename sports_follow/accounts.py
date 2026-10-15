@@ -84,6 +84,12 @@ def find_or_create_google(db: Session, sub: str, email: str) -> int | None:
     return None
 
 
+def blocked(db: Session, email: str | None = None, account_id: int | None = None) -> bool:
+    """Whether an admin blocked this account (admin.py): it can't sign in."""
+    where = Account.email == email if account_id is None else Account.id == account_id
+    return db.scalar(select(Account.blocked_at).where(where)) is not None
+
+
 def describe(db: Session, account_id: int) -> dict | None:
     account = db.get(Account, account_id)
     if account is None:
@@ -98,7 +104,7 @@ def session_for(db: Session, token_hash: str) -> Signed | None:
     row = db.execute(
         select(AccountSession.id, Account.id, Account.fan_id)
         .join(Account, Account.id == AccountSession.account_id)
-        .where(AccountSession.token_hash == token_hash, AccountSession.expires_at > func.now())
+        .where(AccountSession.token_hash == token_hash, AccountSession.expires_at > func.now(), Account.blocked_at.is_(None))
     ).first()
     return Signed(account_id=row[1], fan_id=row[2], session_id=row[0]) if row else None
 

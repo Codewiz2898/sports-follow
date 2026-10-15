@@ -62,6 +62,13 @@ class Fixture:
     team_names: list[str] = field(default_factory=list)  # in the same order as team_ids
     detail: str | None = None  # "2nd ODI", "Matchday 7"
     result: dict[str, Any] | None = None  # scores and winner for finished events
+    # How big the source rates the game's event, where it rates them (an esports tournament's tier), on
+    # LiveGame.tier's scale: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated. A league-wide
+    # schedule's games are ranked by their sport (Sport.notable), which reads it.
+    tier: int = 0
+    # What else the source knows that its sport ranks a game by (Sport.notable), in the shape the sport's
+    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}.
+    facts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -264,6 +271,15 @@ class Adapter:
     # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
     # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
     # out the small ones and set each game's tier, so the biggest come first.
+    #
+    # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
+    # requests:
+    #   def schedule(self, start: date, end: date) -> list[Fixture]
+    # every game it covers that starts on those days (UTC, both included), finished or to come, whoever
+    # follows it, as fixtures() gives a player's: Today's big results and big games coming up for every fan
+    # (league.py), each ranked by its sport (Sport.notable) from its tier, facts, stage and result. Asked a
+    # few times a day at most, and only while fans are looking. Where the source rates its events, leave out
+    # the small ones and set each game's tier.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""

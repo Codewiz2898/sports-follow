@@ -3,13 +3,14 @@
 // components) and the Android app (mobile/), so it touches nothing of a browser's. A sport is passed by
 // its key (each app finds it its own way).
 
-import { ahead, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortWhen } from './format'
+import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { drawable } from './sports/facts'
-import type { ActivityItem, Card, LiveStatus, Starter, UpcomingEvent } from './types'
+import type { ActivityItem, Card, LeagueGame, LiveStatus, Starter, UpcomingEvent } from './types'
 
 export const FEW = 3  // until a fan follows this many, Today keeps offering starters
 export const AHEAD_DAYS = 14  // how far Coming up looks
+export const TAIL = 6  // league games in a rail after the fan's own, before its "All N" card
 
 /** Group live cards by the game they're in, so two followed players in one match show as one game. Keyed by
  * the game, which also turns its line art its own way. */
@@ -151,4 +152,49 @@ export function wireWhen(at: string, now: number): string {
   if (!d || days == null) return ''
   if (days <= 0) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   return days < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : day(at)
+}
+
+// ---------------------------------------------------------------- the big games (GET /api/league)
+
+/** The events the fan's players are in: a league game that's one of them is theirs, and shows once, as theirs. */
+export function theirEvents(cards: Card[]): Set<number> {
+  const ids = cards.flatMap((c) => [
+    ...(c.recent_results ?? []).map((r) => r.event_id),
+    ...(c.upcoming ?? []).map((u) => u.event_id),
+    c.live.event_id,
+  ])
+  return new Set(ids.filter((id): id is number => id != null))
+}
+
+/** The league games none of the fan's players are in (by event, never by name). */
+export function notTheirs(games: LeagueGame[], events: Set<number>): LeagueGame[] {
+  return games.filter((g) => !g.event_ids.some((id) => events.has(id)))
+}
+
+/** The big games still to come: one that has started since the server's answer is live, or over. */
+export function stillToCome(games: LeagueGame[], now: number): LeagueGame[] {
+  return games.filter((g) => ahead(g.start_utc, now))
+}
+
+/** "Since yesterday", or the day the latest results are from ("Tue 13 Oct"). */
+export function resultsDay(day: string | null): string {
+  return day ? parseDate(day)!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : 'Since yesterday'
+}
+
+const letters = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/** Under a big game: its stage and what makes it big, once ("Final" when the stage already says "Final"). */
+export function leagueAbout(game: LeagueGame, ...first: string[]): string {
+  const detail = game.detail ?? ''
+  const why = game.why && !letters(detail).includes(letters(game.why)) ? game.why : ''
+  return [...first, why, detail].filter(Boolean).join(' · ')
+}
+
+/** A big game to come: big, the countdown within a day, else the day; `when`, the time it starts. */
+export function leagueComing(game: LeagueGame, now: number): { big: string; when: string } {
+  const start = parseDate(game.start_utc)
+  const left = start && start.getTime() - now < 864e5 ? countdown(game.start_utc, now) : ''
+  const big = left || (start && start.getTime() - now < 6 * 864e5 ? start.toLocaleDateString(undefined, { weekday: 'short' }) : start?.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) || 'TBC'
+  const when = left ? shortWhen(game.start_utc, now) : start && !dateOnly(game.start_utc) ? start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''
+  return { big, when }
 }

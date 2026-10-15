@@ -210,7 +210,7 @@ server:
 
 | | Where |
 |---|---|
-| The API tokens (Sportmonks, Lichess, Resend, Google, …) | `~/.config/sports-follow` on the Mac, sent by `push-secrets.sh` |
+| The API tokens (Sportmonks, Lichess, Resend, Google, …) and the admin password's hash | `~/.config/sports-follow` on the Mac, sent by `push-secrets.sh` |
 | The database password, gateway token, push key and fan cookie key | made by the server, once |
 | All of the above, sealed | `/var/backups/sports-follow/secrets.age` on the server, and a copy in the password manager (`backup-secrets.sh`); next to the off-site dumps once they exist |
 | The age secret key that opens it | the password manager only |
@@ -227,6 +227,21 @@ pbpaste > ~/.config/sports-follow/openrouter-key && chmod 600 ~/.config/sports-f
 deploy/push-secrets.sh deploy@<server-ip>
 ```
 After that, the Mac's development key can be revoked without taking the app down.
+
+**The admin panel** (you, once): `https://<domain>/admin` turns sports and sources off and on, sets what
+each source may spend, and looks after accounts, on the running app. It opens with a password of its own;
+only its hash goes to the server, and without one the panel isn't there. Make it on the Mac (it asks for
+the password twice; keep the password itself in the password manager), then send it. No restart: the API
+reads the hash on each sign-in, and a new one signs every admin out.
+```bash
+.venv/bin/python -m sports_follow.admin password     # writes ~/.config/sports-follow/admin-password
+deploy/push-secrets.sh deploy@<server-ip>
+```
+The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
+--force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
+everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
+sooner, clear the count:
+`docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
 
 **Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
 only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and

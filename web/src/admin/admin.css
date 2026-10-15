@@ -1,0 +1,46 @@
+/* The admin panel (/admin): the app's paper, ink and sport colours, laid out wide, without the fans' sidebar. */
+.admin { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: 1100px; margin: 0 auto; padding: calc(20px + env(safe-area-inset-top, 0px)) var(--gutter) 64px; }
+@media (min-width: 1024px) { .admin { padding: 32px 40px 64px; } }
+.admin-sign-in { max-width: 440px; justify-content: center; min-height: 100%; }
+.admin-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.admin-head .brand { font-size: 26px; }
+.admin-head .btn { margin-left: auto; }
+.admin-tabs { display: flex; gap: 20px; border-bottom: 2px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.admin-tabs a { display: inline-flex; align-items: center; height: 44px; margin-bottom: -2px; border-bottom: 3px solid transparent; color: var(--muted); font-weight: 800; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+.admin-tabs a:hover { color: var(--text); }
+.admin-tabs a.active { color: var(--text); border-bottom-color: var(--text); }
+.admin-note { max-width: 75ch; font-size: 13px; color: var(--muted); }
+.admin-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.list > li > a.admin-row { color: var(--text); }
+.list > li > a.admin-row:hover .title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
+/* A sport: its colour block while it runs, paper with a ring while it's off. */
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.admin-sport { display: flex; flex-direction: column; justify-content: space-between; gap: 22px; min-height: 148px; padding: 16px 18px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); --focus: var(--on-sport); }
+.admin-sport .dsp { font-size: 36px; }
+.admin-sport .small { color: var(--on-sport-soft); font-weight: 700; }
+.admin-sport[data-off] { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 2px var(--line); --focus: var(--text); }
+.admin-sport[data-off] .small { color: var(--muted); }
+.admin-sport:not([data-off]) .switch[aria-checked='true'] { background: var(--on-sport); }
+.admin-sport:not([data-off]) .switch[aria-checked='true']::after { background: var(--sport); }
+
+.pill.soft { background: var(--raised); color: var(--text); }
+.pill.danger { background: #fde8e6; color: var(--danger); }
+
+/* An allowance: how much of each window is spent, by lane, and its limits. */
+.admin-allowances { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 10px; align-items: start; }
+.meter { height: 8px; border-radius: 999px; background: var(--raised); overflow: hidden; }
+.meter > span { display: block; height: 100%; border-radius: inherit; background: var(--text); }
+.meter.full > span { background: var(--danger); }
+.usage { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage th, .usage td { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+.usage thead th { font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.usage th:first-child { text-align: left; }
+.usage tbody th { font-weight: 700; }
+.usage tr:last-child > * { border-bottom: 0; }
+.limits-form { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; border-top: 2px solid var(--line); }
+.limit-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr)); gap: 10px; align-items: end; margin: 0; padding: 0; border: 0; min-width: 0; }
+.limit-row input[type='checkbox'] { width: 18px; height: 18px; accent-color: var(--text); }
+.limit-row > label:first-of-type:has(input[type='checkbox']) { align-self: center; font-weight: 700; }
+.field.compact { height: 44px; padding: 0 12px; border-radius: 12px; font-size: 15px; }
+.field.compact:disabled { opacity: 0.45; }

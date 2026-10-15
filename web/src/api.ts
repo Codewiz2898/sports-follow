@@ -5,6 +5,7 @@ import { report } from './errors'
 import type { StreamEvent } from './types'
 
 export type * from './types'
+export { json } from './endpoints'
 
 /** A refusal from the API: its message for the fan, and the HTTP status. */
 export class ApiError extends Error {
@@ -17,7 +18,7 @@ export class ApiError extends Error {
 }
 
 /** A call to the API. A server error (5xx) is reported (errors.ts) with the request id the answer names. */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
     let message = `Request failed (${res.status})`

@@ -254,6 +254,28 @@ export interface LiveSport {
   games: LiveGame[]
 }
 
+/** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.
+ * Its sport says how big it is (rank, why) and, once it's over, its big word and the line under it. */
+export interface LeagueGame {
+  key: string
+  sport: string
+  title: string
+  competition: string
+  detail?: string | null
+  start_utc: string
+  rank: number
+  word: string  // "4–1", "By 6 wickets", a lobby's winner; "" for a game to come
+  line: string  // "Arsenal beat Chelsea"; "" says the title
+  why: string  // "1st v 3rd", "Final", "Tier S"
+  event_ids: number[]  // the events it is here: a fan's player in one makes it theirs
+}
+
+export interface League {
+  results: { day: string | null; games: LeagueGame[] }  // day: null for since yesterday
+  coming: { games: LeagueGame[] }
+  refreshing: boolean
+}
+
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
 export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
 

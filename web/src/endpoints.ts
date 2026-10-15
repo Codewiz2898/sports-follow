@@ -2,12 +2,12 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Card, Credits, FollowTarget, Form, GameDetail, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Card, Credits, FollowTarget, Form, GameDetail, League, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
 
-const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+export const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 export function endpoints(request: Request) {
   return {
@@ -27,6 +27,8 @@ export function endpoints(request: Request) {
     refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
     starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
     live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
+    // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.
+    league: (fresh = false) => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`, fresh ? { cache: 'no-store' } : undefined),
     search: (q: string, sport?: string | null, signal?: AbortSignal) =>
       request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
     /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */
