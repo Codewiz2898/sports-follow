@@ -2,8 +2,9 @@
 
 Follow any athlete in any sport. Each followed player gets one shared page: live score and the
 player's own numbers while they play, upcoming games, news, recent results and season stats. The
-Today screen puts all of your players together: live games first, then the day's big result, the next
-game, and a tile for each player in their sport's colour.
+Today screen puts all of your players together: live games first, then a row of every result since
+yesterday and a row of every game in the next two weeks, each scrolling sideways, and a tile for each
+player in their sport's colour.
 
 ## How it's built
 
@@ -205,8 +206,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
   before the first render and kept on the device. How a sport is drawn is its view,
-  `web/src/sports/<sport>.tsx` (its live board, the mark behind its hero card, how its line reads),
-  plus one line in `VIEWS`; a sport without one shows the plain score and mark.
+  `web/src/sports/<sport>.tsx` (its live board, its ground as line art behind Today's cards (`backdrop`),
+  how its line reads), plus one line in `VIEWS`; a sport without one shows the plain score and no line art.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
   and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry

@@ -16,6 +16,17 @@ export interface ChessState {
   match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
 }
 
+// An empty chessboard: its edge and the 32 dark squares, filled.
+const BOARD = (
+  <>
+    <rect x="2" y="2" width="96" height="96" />
+    <path stroke="none" fill="currentColor" fillOpacity={0.45} d={Array.from({ length: 32 }, (_, i) => {
+      const rank = Math.floor(i / 4)
+      return `M${2 + 12 * (2 * (i % 4) + ((rank + 1) % 2))} ${2 + 12 * rank}h12v12h-12z`
+    }).join('')} />
+  </>
+)
+
 const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
 
 /** The board from the position's FEN, from the followed player's side, with the last move marked. */
@@ -69,6 +80,6 @@ export const chess: SportView = {
   kinds: ['chess'],
   Board: ChessBoard as SportView['Board'],
   draws: ((state: ChessState) => Boolean(state.white && state.black)) as SportView['draws'],
-  mark: <><circle cx="50" cy="20" r="10" /><path d="M38 30h24M44 30c0 22-8 38-14 50h40c-6-12-14-28-14-50" /></>,
+  backdrop: BOARD,
   inHeadline: ['Colour', 'Opponent'],
 }

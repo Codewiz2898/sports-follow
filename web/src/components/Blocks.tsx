@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, LatestResult, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { ahead, countdown, dateOnly, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName, shortWhen } from '../format'
-import { SportMark, sportKey, sportName, viewOf, viewOfKind } from '../sports'
+import { Backdrop, sportKey, sportName, viewOf, viewOfKind } from '../sports'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -81,51 +81,113 @@ export function highlight(sport: string | null | undefined, text?: string | null
   return viewOf(sportKey(sport))?.highlight?.(text) ?? null
 }
 
-/** Today's big moment: the newest finished game, in the player's colour, their numbers huge. */
-export function ResultHero({ result, sport }: { result: LatestResult; sport?: string | null }) {
-  const key = sportKey(sport)
-  const stats = lineStats(result.player_contribution)?.slice(0, 3)
-  const word = highlight(sport, result.player_contribution)
-  // A line that only restates the result ("Lost in 2 sets") gives way to the score.
-  const restates = /^(won|lost|drew)\b/i.test(result.player_contribution ?? '')
-  const big = result.player_contribution && !restates ? result.player_contribution : result.result.replace(/^(Won|Lost|Drew)\s+/, '')
+/** One finished game on Today: each of the fan's players in it, the one with the biggest line first. */
+export interface GameResult {
+  key: string  // the game: its event id, else its title and day
+  players: { result: LatestResult; sport?: string | null; teams?: string[] }[]
+}
+
+const WON = { W: 'Won', D: 'Drew', L: 'Lost' }
+
+/** The big word's size: as large as a card's width takes it in a line or two. */
+function wordSize(word: string, hero?: boolean): string {
+  const steps = hero ? [64, 50, 40, 32] : [46, 36, 28, 22]
+  return `${steps[word.length <= 10 ? 0 : word.length <= 16 ? 1 : word.length <= 24 ? 2 : 3]}px`
+}
+
+/**
+ * A finished game of the fan's on Today: a block of its sport's colour with one big word (the sport's word
+ * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
+ * and the first one's win, draw or loss. The hero, the first card on a day with nothing live, is bigger and
+ * has that player's numbers.
+ */
+export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
+  const lead = game.players[0]
+  const r = lead.result
+  const key = sportKey(lead.sport)
+  const word = highlight(lead.sport, r.player_contribution) ?? r.result
+  const wl = outcome(r.result, lead.teams)
+  const when = dayLabel(playedOn(r), new Date(now))
+  const stats = hero ? lineStats(r.player_contribution)?.slice(0, 3) : undefined
+  const match = word === r.result ? r.title : `${r.result} · ${r.title}`
+  // Each player's own line; the hero's numbers say the first one's.
+  const lines = game.players
+    .filter((p) => p.result.player_contribution && !(stats && p === lead))
+    .map((p) => (game.players.length > 1 ? `${shortName(p.result.player_name)}: ${p.result.player_contribution}` : p.result.player_contribution!))
+  const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   return (
-    <Link to={`/player/${result.player_id}`} className="hero" data-sport={key} aria-label={`${result.player_name}: ${result.title}, ${result.result}`}>
-      <SportMark sport={key} className="hero-mark" />
-      <span className="row">
-        <span className="pill ink" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{dayLabel(playedOn(result))}</span>
-        {result.competition && <span className="tag soft" style={{ textAlign: 'right' }}>{result.competition}</span>}
-      </span>
-      <span className="dsp hero-name">{shortName(result.player_name)}</span>
-      {stats ? (
-        <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
-          {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag">{s.label}</span></span>)}
-        </span>
+    <Link to={`/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
+      <Backdrop sport={key} seed={game.key} />
+      {hero ? (
+        <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
       ) : (
-        <span className="dsp" style={{ fontSize: 56 }}>{big}</span>
+        <span className="row"><span className="eyebrow">{[when, r.competition].filter(Boolean).join(' · ')}</span>{badge}</span>
       )}
-      <span className="hero-foot">
-        <span className="stack" style={{ gap: 2 }}>
-          <span>{result.result}</span>
-          <span className="small soft" style={{ fontWeight: 600 }}>{result.title}</span>
+      <span className="dsp word" style={{ '--word': wordSize(word, hero) } as CSSProperties}>{word}</span>
+      <span className="stack" style={{ gap: hero ? 12 : 2 }}>
+        <span className="dsp who">{game.players.map((p) => shortName(p.result.player_name)).join(' · ')}</span>
+        {stats && (
+          <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
+            {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag soft">{s.label}</span></span>)}
+          </span>
+        )}
+        {!hero && <span className="line">{match}</span>}
+        {lines.map((l) => <span key={l} className="line strong">{l}</span>)}
+      </span>
+      {hero && (
+        <span className="hero-foot">
+          <span className="line">{match}</span>
+          {r.competition && <span className="line soft" style={{ textAlign: 'right' }}>{r.competition}</span>}
         </span>
-        {word && <span className="pill outline">{word}</span>}
+      )}
+    </Link>
+  )
+}
+
+/**
+ * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it.
+ */
+export function ComingCard({ event, players, seed }: { event: UpcomingEvent; players: Card[]; seed: string }) {
+  const now = useNow()
+  const key = sportKey(players[0].player.sport)
+  const start = parseDate(event.start_utc)
+  const left = start && start.getTime() - now < 864e5 ? countdown(event.start_utc, now) : ''
+  const big = left || (start && start.getTime() - now < 6 * 864e5 ? start.toLocaleDateString(undefined, { weekday: 'short' }) : start?.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) || 'TBC'
+  // Above it, what the big line doesn't say: the day and time over a countdown, the time over a day.
+  const time = start && !dateOnly(event.start_utc) ? start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'Time TBC'
+  return (
+    <Link to={`/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
+      <Backdrop sport={key} seed={seed} />
+      <span className="eyebrow muted">{[left ? shortWhen(event.start_utc, now) : time, event.competition].filter(Boolean).join(' · ')}</span>
+      <span className="dsp count">{big}</span>
+      <span className="stack" style={{ gap: 6 }}>
+        <span className="what">{event.title}</span>
+        <span className="player-chip">{players.map((c) => shortName(c.player.name)).join(' · ')}</span>
       </span>
     </Link>
   )
 }
 
-/** The next game for one of your players, as one ink strip with a countdown. */
-export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & { players?: string[] }; playerId: number; sport?: string | null }) {
-  const now = useNow()
-  const left = countdown(event.start_utc, now)
+/** A player's next game, on their page: an ink card, the countdown in their sport's colour. `children` sit
+ * at its foot beside when and where it is (the page's refresh button). */
+export function NextCard({ event, sport, children }: { event: UpcomingEvent; sport?: string | null; children?: ReactNode }) {
+  const left = countdown(event.start_utc, useNow())
   return (
-    <Link to={`/player/${playerId}`} className="strip" data-sport={sportKey(sport)}>
-      <span className="tag">Next</span>
-      <span className="dsp when">{shortWhen(event.start_utc, now)}</span>
-      <span className="what">{[event.players?.map(shortName).join(', '), event.title, dateOnly(event.start_utc) && 'time TBC'].filter(Boolean).join(' · ')}</span>
-      {left && <span className="dsp count">{left}</span>}
-    </Link>
+    <section className="next-card" data-sport={sportKey(sport)} aria-label="Next game">
+      <span className="row">
+        <span className="eyebrow" style={{ color: 'var(--sport-on-ink)' }}>Next game</span>
+        {event.competition && <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{event.competition}</span>}
+      </span>
+      <span className="row" style={{ alignItems: 'flex-end' }}>
+        <span className="title" style={{ fontSize: 20 }}>{event.title}</span>
+        {left && <span className="dsp count">{left}</span>}
+      </span>
+      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.16)', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700 }}>{[event.start_utc ? dateTime(event.start_utc) : 'Date to be confirmed', event.venue].filter(Boolean).join(' · ')}</span>
+        {children}
+      </span>
+    </section>
   )
 }
 
@@ -167,12 +229,14 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
 /**
  * The live scoreboard. Scores from a structured source carry a sport-specific state (two sides and
  * scorers for football, innings for cricket), drawn by that sport's view (sports/); scores the research
- * agent read off a web page, and states no view draws, are text in one generic layout.
+ * agent read off a web page, and states no view draws, are text in one generic layout. With a `seed`
+ * (Today's game key) the sport's line art sits faint behind it.
  */
-export function LiveScoreboard({ live, playerName, sport, teams, compact }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean }) {
+export function LiveScoreboard({ live, playerName, sport, teams, compact, seed }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string }) {
   const now = useNow()
   const state = live.state
   const view = viewOfKind(state?.kind)
+  const key = sportKey(sport ?? state?.kind)
   const plain = (
     <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
       <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
@@ -180,7 +244,9 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact }: { li
     </div>
   )
   return (
-    <section className={`board${compact ? ' compact' : ''}`} data-sport={sportKey(sport ?? state?.kind)} aria-label="Live now">
+    <section className={`board${compact ? ' compact' : ''}${seed ? ' drawn' : ''}`} data-sport={key} aria-label="Live now">
+      {/* On Today, the sport's line art behind it, turned its own way for this game (seed). */}
+      {seed && <Backdrop sport={key} seed={seed} />}
       <div className="row">
         <span className="badge-live">Live</span>
         {live.event && <span className="eyebrow" style={{ textAlign: 'right' }}>{live.event}</span>}

@@ -949,6 +949,18 @@ def test_the_card_is_private_and_its_etag_changes_with_anything_in_it(api):
     assert failed.status_code == 200 and failed.json()["status"] == "failed"
 
 
+def test_the_follow_list_carries_every_result_the_card_keeps():
+    # Today's results rail shows each of a player's games since yesterday, so the list sends all the card
+    # keeps (newest first, as the card has them), and the newest stays first for the tiles. News stays at three.
+    results = [{"title": f"Game {i}", "result": "Won 1–0", "start_utc": f"2026-10-1{5 - i}T18:00:00Z", "event_id": 100 + i} for i in range(structured.RECENT_LIMIT)]
+    card = {"player_id": 1, "version": 3, "status": "ready", "recent_results": results, "news": [{"headline": str(i)} for i in range(5)]}
+    summary = server._summary(card)
+    assert summary["recent_results"] == results and summary["recent_results"][0]["title"] == "Game 0"
+    assert len(summary["news"]) == 3
+    # A card without results (one still building) sends an empty list, as before.
+    assert server._summary({"player_id": 2, "status": "building"})["recent_results"] == []
+
+
 # ---------------------------------------------------------------- ids and bodies (BUG-039)
 
 

@@ -124,7 +124,17 @@ export const esports: SportView = {
   kinds: ['esports', 'battle_royale'],
   Board: EsportsBoard as SportView['Board'],
   draws: ((state: EsportsState | BattleRoyaleState) => state.kind === 'battle_royale' || state.teams.length === 2) as SportView['draws'],
-  mark: <path d="M30 34h40c11 0 17 9 19 22l3 16c1 9-7 13-13 7l-10-10H31L21 79c-6 6-14 2-13-7l3-16c2-13 8-22 19-22zM31 48v14M24 55h14M66 52h.01M75 60h.01" />,
+  // A game map from above: three lanes between two bases, the river across the middle, and the jungle's paths.
+  backdrop: (
+    <>
+      <rect x="5" y="5" width="90" height="90" rx="8" />
+      <path d="M14 82V18a4 4 0 0 1 4-4h64M18 86h64a4 4 0 0 0 4-4V18M17 83 83 17" />
+      <path d="M5 66c22-3 36-14 38-28s14-28 52-33" strokeDasharray="3 3" />
+      <path d="M28 70c6-10 14-12 22-10M50 40c8 2 16 0 22-10M30 42c4-8 10-12 16-12M54 70c6 0 12-4 16-12" />
+      <circle cx="14" cy="86" r="6" />
+      <circle cx="86" cy="14" r="6" />
+    </>
+  ),
   noLine: null, // no player lines: the team's result says it
   inHeadline: ['Place', 'Points'],
 }
