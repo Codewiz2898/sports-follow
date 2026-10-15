@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from sports_follow import accounts, google_signin, mail, server
@@ -230,6 +231,28 @@ def test_a_code_that_couldnt_be_sent_can_be_asked_for_again_at_once(api, store, 
     monkeypatch.setattr(mail, "send_code", down)
     assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}).status_code == 502
     assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)
+
+
+def test_an_address_the_mail_service_wont_send_to_is_the_fans_to_change(api, store, monkeypatch):
+    """Resend refuses some addresses (example.com's): a 400 that says so, not a server error (a 5xx counts
+    against the API's alert). Its other refusals and failures stay 502s."""
+    monkeypatch.setattr(mail, "_key", lambda: "re_test")
+    monkeypatch.setattr(mail, "MAIL_FROM", "signin@stann.in")
+    answers: list[tuple[int, str]] = []
+
+    def post(url, headers, json):
+        status, text = answers.pop(0)
+        return httpx.Response(status, text=text)
+
+    monkeypatch.setattr(mail._client, "post", post)
+    refused = '{"statusCode":422,"name":"validation_error","message":"Invalid `to` field. Please use our testing email address instead of domains like `example.com`."}'
+    answers.append((422, refused))
+    answer = api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)
+    assert answer.status_code == 400 and "that address" in answer.json()["detail"]
+    assert not any(k.startswith(("auth-code:", "auth-wait:")) for k in api.redis.data)  # another address may follow at once
+    for status, text in [(422, '{"statusCode":422,"name":"validation_error","message":"The `from` field is invalid."}'), (422, "not json"), (500, "")]:
+        answers.append((status, text))
+        assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 502
 
 
 def test_without_a_mail_key_email_sign_in_is_off_and_logging_codes_needs_plain_http(api, monkeypatch):

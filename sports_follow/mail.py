@@ -33,6 +33,11 @@ class MailError(Exception):
     pass
 
 
+class Undeliverable(MailError):
+    """Resend won't send to this address (a domain it refuses, like example.com): the fan's to change,
+    not something wrong with this server or worth trying again."""
+
+
 @lru_cache(maxsize=1)
 def _key() -> str | None:
     if os.environ.get("SPORTS_FOLLOW_RESEND_KEY"):
@@ -77,6 +82,19 @@ def send_code(email: str, code: str) -> None:
     except httpx.HTTPError as exc:
         raise MailError(f"Resend: {exc}") from exc
     if answer.status_code >= 300:
-        # The answer names the problem (a bad key, an unverified domain), never the recipient's address.
-        log.warning("mail: Resend answered %s: %s", answer.status_code, answer.text[:200])
-        raise MailError(f"Resend answered {answer.status_code}")
+        # The answer names the problem (a bad key, an unverified domain, an address it won't send to),
+        # never the recipient's address.
+        refused = _refuses_recipient(answer)
+        log.log(logging.INFO if refused else logging.WARNING, "mail: Resend answered %s: %s", answer.status_code, answer.text[:200])
+        raise (Undeliverable if refused else MailError)(f"Resend answered {answer.status_code}")
+
+
+def _refuses_recipient(answer: httpx.Response) -> bool:
+    """Whether Resend refused the request for its `to` field: a 422 whose message names it."""
+    if answer.status_code != 422:
+        return False
+    try:
+        said = answer.json()
+    except ValueError:
+        return False
+    return isinstance(said, dict) and "`to`" in str(said.get("message", ""))
