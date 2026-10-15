@@ -23,7 +23,7 @@ from llm_providers import Client, LlmError
 from pydantic import BaseModel, ValidationError
 
 from . import tracing
-from .adapters import budget
+from .adapters import Adapter, budget, providers
 from .schema import LiveUpdate, PlayerReport
 from .tools import TOOL_DEFS, ToolError, describe, run_tool
 
@@ -43,7 +43,9 @@ RUN_LIMIT = 600
 LIVE_LIMIT = 240  # a live check's, within its 300 s lock (pipeline.refresh_live)
 RETRYABLE = {"timeout", "server", "network", "rate_limit"}
 
-SYSTEM_PROMPT = """\
+# {apis} is where the running sources' own public APIs go (_apis). Cricbuzz and ESPNcricinfo are websites,
+# read as any page is, not one of our sources.
+PROMPT = """\
 You are a sports-follow agent. Given a player's name, you find out who they are and \
 what is happening with them right now, using the web_search and fetch_url tools. You cover \
 every sport: football, cricket, tennis, chess, basketball, F1, golf, athletics, and so on.
@@ -53,11 +55,7 @@ How to work:
 prominent currently newsworthy athlete and say who else it could mean in `disambiguation`.
 - Use web_search kind='news' for the latest news. Search results are only leads: open \
 (fetch_url) fixture and live pages before stating a score, date or stat.
-- Public JSON APIs are often the most reliable live source and can be fetched directly, e.g. \
-ESPN (https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard, \
-.../summary?event={id}; leagues like soccer/eng.1, soccer/ksa.1, soccer/uefa.champions, \
-basketball/nba, tennis/atp) and Lichess (https://lichess.org/api/broadcast/top). \
-Cricbuzz and ESPNcricinfo pages work for cricket.
+- {apis}Cricbuzz and ESPNcricinfo pages work for cricket.
 - Think about what "match", "score" and "stats" mean for the sport. Team sports: club and \
 national-team fixtures. Tennis/golf/F1: the tournament, draw position, next round. Chess: \
 the event, round pairings, the current game (result or move number), ratings and tournament \
@@ -75,6 +73,24 @@ in one turn, and aim to finish in about 5 rounds of tool calls. A good report wi
 beats a perfect one that takes minutes.
 
 When you are done, call the submit tool exactly once with everything you found."""
+
+
+def _apis(adapters: dict[str, Adapter] | None = None) -> str:
+    """The prompt's pointer to public JSON APIs: each running provider's that the agent can read, as the
+    provider describes it (Provider.research), or nothing when none runs."""
+    named = [f"{p.name} ({p.research(theirs)})" for p, theirs in providers(adapters) if p.research]
+    if not named:
+        return ""
+    listed = named[0] if len(named) == 1 else f"{', '.join(named[:-1])} and {named[-1]}"
+    return f"Public JSON APIs are often the most reliable live source and can be fetched directly, e.g. {listed}. "
+
+
+def system_prompt(adapters: dict[str, Adapter] | None = None) -> str:
+    """The research agent's instructions, pointing it at the running sources' APIs (adapters.ADAPTERS)."""
+    return PROMPT.replace("{apis}", _apis(adapters))
+
+
+SYSTEM_PROMPT = system_prompt()
 
 
 class AgentError(RuntimeError):

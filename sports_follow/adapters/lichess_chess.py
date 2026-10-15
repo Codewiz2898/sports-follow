@@ -478,6 +478,7 @@ PROVIDER = Provider(
     note="The games are shown unchanged; the evaluations beside them are ours.",
     search=LiveSearch(find=search, unfiltered=False, min_length=3),
     recognise=recognise,
+    research=lambda adapters: f"{API}broadcast/top",  # the broadcasts on now
     budgets=(BUDGET, ANONYMOUS),
 )
 
