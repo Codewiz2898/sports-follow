@@ -843,7 +843,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 before = baseline(latest, last, snap, recent)
                 name, sport = people.get(player_id, ("", ""))
                 seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
-                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen))
+                told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
+                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue

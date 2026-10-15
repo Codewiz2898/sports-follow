@@ -19,6 +19,11 @@ sports app, not a feed of every poll:
   BREAKTHROUGH priority (a hundred, a five-for, a late equaliser, an upset) always makes a sound. A
   game's start is silent if the fan already heard about that game (its line-up).
 - **Late is worse than never** for a live moment: one older than its TTL isn't pushed.
+- **Corrections.** A moment the source takes back (a goal VAR rules out) is corrected on the same
+  notification, by the same rules, for the fans who were sent that moment; a fan who never heard it
+  hears nothing, and a moment taken back before it went isn't sent at all. The same rules include the
+  fan's level now: one who has since set the player to results only or off isn't sent the correction.
+  The moment leaves the story underneath.
 
 Quiet hours are per device, so notify.py applies them after this.
 """
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from itertools import zip_longest
 
 from .moments import wanted
 
@@ -59,6 +65,7 @@ class Item:
     body: str
     url: str
     created_at: datetime
+    corrects: int | None = None  # the moment a correction takes back
 
 
 @dataclass
@@ -70,6 +77,7 @@ class Sent:
     loud: bool
     lines: list[str]
     at: datetime
+    moment_ids: list[int] = field(default_factory=list)  # each line's moment
 
 
 @dataclass
@@ -97,14 +105,22 @@ def tier(level: str, item: Item) -> str | None:
     return "silent"
 
 
-def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime) -> list[Push]:
-    """One fan's pushes for a batch of new moments (see the module docstring)."""
+def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None) -> list[Push]:
+    """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
+    moments corrections in these games have taken back, which leave the story (this batch's own
+    corrections count without it)."""
+    told = {m for s in sent for m in s.moment_ids}
+    taken = (taken_back or set()) | {i.corrects for i in items if i.corrects is not None}
     groups: dict[str, list[tuple[Item, bool]]] = {}
     for item in items:
         if item.player_id not in levels:
             continue  # someone else's player: a batch holds every player in the game, a sweep every game
         how = tier(levels[item.player_id], item)
         if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
+            continue
+        if item.id in taken or (item.corrects is not None and item.corrects not in told):
+            # Taken back before it went (a batch the tick swept up late), or the correction of something
+            # this fan was never sent.
             continue
         tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
         groups.setdefault(tag, []).append((item, how == "loud"))
@@ -127,7 +143,7 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
                 loud = False
         loud_this_hour += loud
         lines = [i.title for i, _ in members]
-        story = [line for s in earlier for line in s.lines if line not in lines] if lead.event_id else []
+        story = [line for s in earlier for line, m in zip_longest(s.lines, s.moment_ids) if line is not None and line not in lines and m not in taken] if lead.event_id else []
         body = "\n".join(dict.fromkeys(x for x in [lead.body, *lines[1:], *story] if x))
         pushes.append(Push(
             event_id=lead.event_id,

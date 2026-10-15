@@ -114,8 +114,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
-  in it; "Mute this game" stops it. Sound is rationed (once every 3 minutes a game, 6 times an hour a
-  phone) except for the biggest moments. `sports_follow/notify.py` claims each batch once, logs every
+  in it; "Mute this game" stops it. A goal VAR rules out is corrected on that notification, for the
+  fans who were sent it, and told again if the source shows it again (a goal the source credits to
+  another player instead is left as it was).
+  Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
+  moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it by Web Push (VAPID) to each device at once, and the tick sweeps up
   any batch a restart dropped. Quiet hours are per device and make notifications arrive silently.
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
@@ -168,7 +171,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
-  line-up, what happens during a game), its form summary and how search shows its athletes. Shared code
+  line-up, what happens during a game, what a source takes back (`taken_back`)), its form summary and
+  how search shows its athletes. Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a

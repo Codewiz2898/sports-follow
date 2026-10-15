@@ -108,13 +108,20 @@ def make_keys() -> str:
 
 
 def record(db: Session, player_id: int, event_id: int | None, found: list[Found], url: str | None = None) -> list[int]:
-    """Store new moments; ones already stored (the same key) are skipped. Returns the new ids."""
+    """Store new moments; ones already stored (the same key) are skipped. A correction is stored with the
+    moment it takes back (its detail is that moment's kind and detail), and not at all if that one never
+    was. Returns the new ids."""
     ids = []
     for f in found:
-        key = f"{event_id or '-'}:{player_id}:{f.kind}:{f.detail}"[:200]
+        corrects = None
+        if f.kind == "correction":
+            corrects = db.scalar(select(Moment.id).where(Moment.key == _key(event_id, player_id, f.detail)))
+            if corrects is None:
+                continue  # what it takes back was never found, so nobody was told it
+        key = _key(event_id, player_id, f"{f.kind}:{f.detail}")
         new_id = db.scalar(
             insert(Moment)
-            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}")
+            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects)
             .on_conflict_do_nothing()
             .returning(Moment.id)
         )
@@ -122,6 +129,19 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
             ids.append(new_id)
             metrics.moment(f.kind)
     return ids
+
+
+def told(db: Session, player_id: int, event_id: int) -> list[tuple[str, str]]:
+    """The moments stored for a player in a game, oldest first, as each one's kind and detail (read back
+    from its key): what the sport may take back (moments.detect)."""
+    prefix = _key(event_id, player_id, "")
+    keys = db.scalars(select(Moment.key).where(Moment.player_id == player_id, Moment.event_id == event_id).order_by(Moment.id))
+    return [(kind, detail) for kind, _, detail in (key.removeprefix(prefix).partition(":") for key in keys)]
+
+
+def _key(event_id: int | None, player_id: int, kind_detail: str) -> str:
+    """A moment's key: its game, its player, its kind and detail. The same moment found again has the same key."""
+    return f"{event_id or '-'}:{player_id}:{kind_detail}"[:200]
 
 
 def dispatch(moment_ids: list[int]) -> None:
@@ -158,11 +178,15 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         if not claimed:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
-        items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at) for m in rows]
-        jobs = _plan(db, items, now)
+        items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects) for m in rows]
+        taken_back = _taken_back(db, items)
+        jobs = _plan(db, items, now, taken_back)
+        # A correction's toast follows its moment's: one sent in an earlier batch (not taken back before it went).
+        corrects = {i.corrects for i in items if i.corrects is not None}
+        toasted = set(db.scalars(select(Moment.id).where(Moment.id.in_(corrects), Moment.id.not_in(claimed), Moment.sent_at.is_not(None))).all()) if corrects else set()
     # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself.
     for item in items:
-        if (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
+        if item.id not in taken_back and (item.corrects is None or item.corrects in toasted) and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
             bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
     if not jobs:
         return 0
@@ -180,7 +204,14 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     return sent
 
 
-def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
+def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
+    """The moments of a batch's games a correction has taken back (a goal VAR ruled out), the batch's
+    own corrections among them: not sent if they haven't been, and out of the story underneath."""
+    events = {i.event_id for i in items if i.event_id}
+    return {m for m in db.scalars(select(Moment.corrects).where(Moment.event_id.in_(events), Moment.corrects.is_not(None))).all() if m} if events else set()
+
+
+def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, endpoint, p256dh, auth), payload, ttl, topic)."""
     players = {i.player_id for i in items}
@@ -202,11 +233,11 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime) -> list[tuple[in
     sent: dict[str, list[alerts.Sent]] = {}
     earlier = select(Notification).where(Notification.fan_id.in_(devices), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
     for n in db.scalars(earlier):
-        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at))
+        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
     jobs = []
     for fan, fan_devices in devices.items():
-        for p in alerts.plan(items, levels[fan], muted.get(fan, set()), sent.get(fan, []), now):
+        for p in alerts.plan(items, levels[fan], muted.get(fan, set()), sent.get(fan, []), now, taken_back):
             row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
             db.add(row)
             db.flush()

@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 
 from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing
@@ -1039,16 +1039,20 @@ ACTIVITY_DAYS = 30
 @app.get("/api/me/activity")
 def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit: int = 30, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Every moment of the fan's players since they followed them, newest first, whatever reached the
-    phone: the app's activity list. Players set to off are left out. Page with ?before=<next>."""
+    phone: the app's activity list. Players set to off are left out, and a correction (a goal VAR ruled
+    out) unless the list has the moment it takes back. Page with ?before=<next>."""
     limit = max(1, min(limit, 50))
     level = func.coalesce(Follow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+    taken = aliased(Moment)
     query = (
         select(Moment, Player.name, Event.title, NotificationMute.event_id.is_not(None))
         .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
         .join(Player, Player.id == Moment.player_id)
         .outerjoin(Event, Event.id == Moment.event_id)
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
+        .outerjoin(taken, taken.id == Moment.corrects)
         .where(level != "off", Moment.created_at >= Follow.created_at, Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS))
+        .where(or_(Moment.corrects.is_(None), taken.created_at >= Follow.created_at))
         .order_by(Moment.id.desc())
         .limit(limit)
     )

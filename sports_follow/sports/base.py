@@ -51,7 +51,9 @@ class Found:
     level: str  # key | minor
     title: str
     body: str
-    detail: str = ""  # tells two moments of one kind apart in the key ("50", "i2:100", "goal2", "set3")
+    # Tells two moments of one kind apart in the key ("50", "i2:100", "goal2", "set3"). A correction's is
+    # the kind and detail of the moment it takes back ("goal:goal@101").
+    detail: str = ""
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY (moments.py)
 
 
@@ -219,6 +221,14 @@ class Sport:
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """What happened to the player between two polls: goals, fifties, sets."""
+        return []
+
+    def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
+        """What the source has taken back since the last poll (a goal VAR rules out), of the moments found
+        for the player in this game so far (`told`: each one's kind and detail, oldest first). Each is a
+        "correction" whose detail names the moment it takes back; it replaces the game's notification for
+        the fans who were sent that moment, and reaches no one else (alerts.py). A moment taken back that
+        the source shows again may be found again here, under a new detail."""
         return []
 
     # ---- live games and cards (structured.py)

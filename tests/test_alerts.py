@@ -5,19 +5,19 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sports_follow.alerts import BREAKTHROUGH, LOUD_PER_HOUR, Item, Sent, plan
+from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan
 
 NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
 KOHLI, ROHIT = 1, 2
 GAME, OTHER = 10, 11
 
 
-def item(id: int, kind: str, title: str, *, level: str = "key", priority: int = 70, player: int = KOHLI, event: int | None = GAME, body: str = "IND 240/3 (38 ov)", ago: int = 0) -> Item:
-    return Item(id, player, event, kind, level, priority, title, body, f"/player/{player}", NOW - timedelta(seconds=ago))
+def item(id: int, kind: str, title: str, *, level: str = "key", priority: int = 70, player: int = KOHLI, event: int | None = GAME, body: str = "IND 240/3 (38 ov)", ago: int = 0, corrects: int | None = None) -> Item:
+    return Item(id, player, event, kind, level, priority, title, body, f"/player/{player}", NOW - timedelta(seconds=ago), corrects)
 
 
-def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI) -> Sent:
-    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago))
+def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI, moments: list[int] | None = None) -> Sent:
+    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago), moments or [])
 
 
 def test_levels_pick_what_reaches_the_phone():
@@ -104,3 +104,36 @@ def test_the_start_is_quiet_once_the_line_up_was_heard():
     start = item(1, "start", "Mohamed Salah's game has started", priority=40)
     assert plan([start], {KOHLI: "key"}, set(), [], NOW)[0].loud is True
     assert plan([start], {KOHLI: "key"}, set(), [sent(GAME, "Mohamed Salah starts", ago=1800)], NOW)[0].loud is False
+
+
+def test_a_correction_replaces_the_goal_for_the_fans_who_were_sent_it():
+    # The line-up (moment 4) went out an hour ago, the goal (5) two minutes ago; VAR has ruled it out.
+    heard = [sent(GAME, "Mohamed Salah starts", ago=3600, moments=[4]), sent(GAME, "Goal: Mohamed Salah puts Egypt ahead", ago=120, moments=[5])]
+    correction = item(6, "correction", "Goal ruled out: Mohamed Salah", priority=85, body="Egypt 0 – 0 South Africa · 25'", corrects=5)
+    [p] = plan([correction], {KOHLI: "key"}, set(), heard, NOW)
+    assert (p.tag, p.title, p.kind, p.moment_ids, p.ttl) == ("e10", "Goal ruled out: Mohamed Salah", "correction", [6], LIVE_TTL)
+    assert p.body.split("\n") == ["Egypt 0 – 0 South Africa · 25'", "Mohamed Salah starts"]  # the goal leaves the story
+    # Sound by the same rules as the goal: the game made one two minutes ago; ten minutes ago, it may again.
+    assert p.loud is False
+    assert plan([correction], {KOHLI: "key"}, set(), [sent(GAME, "Goal: Mohamed Salah", moments=[5])], NOW)[0].loud is True
+    # Not sent the goal (followed since, a level that left it out), the game muted, or too late: nothing.
+    assert plan([correction], {KOHLI: "key"}, set(), heard[:1], NOW) == []
+    assert plan([correction], {KOHLI: "results"}, set(), heard, NOW) == []
+    assert plan([correction], {KOHLI: "off"}, set(), heard, NOW) == []
+    assert plan([correction], {KOHLI: "key"}, {GAME}, heard, NOW) == []
+    assert plan([item(6, "correction", "Goal ruled out", corrects=5, ago=LIVE_TTL + 60)], {KOHLI: "key"}, set(), heard, NOW) == []
+    # Later in the game the goal stays out of the story, and the correction stays in it.
+    later = [*heard, sent(GAME, "Goal ruled out: Mohamed Salah", ago=60, moments=[6])]
+    [p] = plan([item(7, "yellow", "Yellow card: Mohamed Salah", level="minor", priority=20)], {KOHLI: "everything"}, set(), later, NOW, {5})
+    assert p.story == ["Goal ruled out: Mohamed Salah", "Mohamed Salah starts"]
+
+
+def test_a_goal_taken_back_before_it_went_isnt_sent():
+    goal = item(5, "goal", "Goal: Mohamed Salah puts Egypt ahead", priority=90)
+    correction = item(6, "correction", "Goal ruled out: Mohamed Salah", priority=85, corrects=5)
+    # A restart dropped the goal's batch, and its correction went to nobody (nobody was sent the goal):
+    # the tick's sweep, still inside the goal's TTL, doesn't send it now.
+    assert plan([correction], {KOHLI: "key"}, set(), [], NOW) == []
+    assert plan([goal], {KOHLI: "key"}, set(), [], NOW, {5}) == []
+    # The sweep found both in one batch: neither goes.
+    assert plan([goal, correction], {KOHLI: "key"}, set(), [], NOW) == []

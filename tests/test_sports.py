@@ -30,6 +30,24 @@ def test_a_sport_no_module_knows_still_gets_a_start_and_a_result():
     assert [(f.kind, f.title) for f in moments.detect("Golf", "Rory", "1", now, done)] == [("final", "Rory: Won by 2")]
 
 
+def test_a_sport_that_says_how_a_score_is_taken_back_gets_corrections(monkeypatch):
+    # Nothing shared names football: a sport's own taken_back is all a correction needs (alerts.py and
+    # notify.py route it by its kind, "correction").
+    class Darts(sports.Sport):
+        key = "darts"
+
+        def taken_back(self, who, athlete_id, before, now, told):
+            legs = moments.number(moments.stat(now.line, "Legs"))
+            return [moments.Found("correction", "key", f"Leg taken back: {who}", now.score, f"leg:{d}") for k, d in told if k == "leg" and int(d) > legs]
+
+    monkeypatch.setattr(sports, "of", lambda name: Darts())
+    legs = lambda n: {"headline": f"{n} legs", "stats": [{"label": "Legs", "value": str(n)}]}  # noqa: E731
+    before, now = moments.Seen("live", line=legs(3)), moments.Seen("live", line=legs(2), score="2–2")
+    [f] = moments.detect("Darts", "Luke Littler", "1", before, now, [("leg", "2"), ("leg", "3")])
+    assert (f.kind, f.level, f.title, f.detail, f.priority) == ("correction", "key", "Leg taken back: Luke Littler", "leg:3", 85)
+    assert moments.detect("Darts", "Luke Littler", "1", before, now) == []  # nothing told, nothing to take back
+
+
 def test_a_source_serves_one_sport_and_a_game_finds_the_source_that_covers_it(monkeypatch):
     assert all(sports.get(a.sport) for a in KNOWN.values())
     monkeypatch.setattr(adapters, "ADAPTERS", dict(KNOWN))
