@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# From the Mac: put the server's alert rules (rules.json) into Grafana Cloud, with an email contact point and
-# the notification policy that sends every alert there (README.md, "Alerts"). Safe to run again after
-# changing rules.json: everything is replaced by what's here.
+# From the Mac: put the alert rules into Grafana Cloud (the server's, rules.json, and the app's, app-rules.json),
+# with an email contact point and the notification policy that sends every alert there (README.md,
+# "Alerts"). Safe to run again after changing either: everything is replaced by what's here.
 #   deploy/grafana/apply-alerts.sh            the folder, contact point, policy and rules
 #   deploy/grafana/apply-alerts.sh --test     also send a test email through the contact point
 # Settings from ~/.config/sports-follow/grafana-admin.env (GRAFANA_ADMIN_ENV=<file> for another):
@@ -14,7 +14,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${GRAFANA_ADMIN_ENV:-$HOME/.config/sports-follow/grafana-admin.env}"
 FOLDER_UID=sports-follow
-GROUP=server
 CONTACT_UID=sports-follow-email
 CONTACT_NAME="Sports Follow email"
 TEST=""
@@ -77,27 +76,36 @@ api PUT /api/v1/provisioning/policies "$(jq -n --arg r "$CONTACT_NAME" \
   '{receiver: $r, group_by: ["grafana_folder", "alertname"], group_wait: "30s", group_interval: "5m", repeat_interval: "6h"}')" >/dev/null
 say "notification policy: everything to $CONTACT_NAME, repeated every 6 hours"
 
-# The rules (rules.json): each query returns the current value, and its threshold (op, threshold) decides
-# whether that's a problem, so a healthy server has data and its alerts resolve. When the metrics stop, a
-# rule keeps its last state (KeepLast), so a silent server sends no false "Resolved" mails; only
-# sf-server-down, whose query has data only while the server is silent, takes no data as OK.
-group=$(jq --arg ds "$ds" --arg folder "$FOLDER_UID" --arg group "$GROUP" '{
-  title: $group, folderUid: $folder, interval: 60,
-  rules: [ .[] | {
-    uid, title, for, folderUID: $folder, ruleGroup: $group, condition: "C",
-    noDataState: (.no_data // "KeepLast"), execErrState: "Error",
-    labels: {app: "sports-follow"},
-    annotations: {summary: .summary},
-    data: [
-      {refId: "A", relativeTimeRange: {from: 900, to: 0}, datasourceUid: $ds,
-       model: {refId: "A", expr: .expr, instant: true, range: false}},
-      {refId: "C", relativeTimeRange: {from: 0, to: 0}, datasourceUid: "__expr__",
-       model: {refId: "C", type: "threshold", expression: "A", conditions: [{evaluator: {type: .op, params: [.threshold]}}]}}
-    ]
-  } ]
-}' "$HERE/rules.json")
-api PUT "/api/v1/provisioning/folder/$FOLDER_UID/rule-groups/$GROUP" "$group" >/dev/null
-say "$(jq length "$HERE/rules.json") rules in Sports Follow / $GROUP, checked every minute"
+# The rules: each query returns the current value, and its threshold (op, threshold) decides whether that's a
+# problem, so a healthy server has data and its alerts resolve. Two groups:
+#   server (rules.json)    the server's metrics. When they stop, a rule keeps its last state (KeepLast), so a
+#                          silent server sends no false "Resolved" mails; only sf-server-down, whose query has
+#                          data only while the server is silent, takes no data as OK.
+#   app (app-rules.json)   the app's own metrics (sports_follow/metrics.py). No data means nothing to measure
+#                          (no live game, no push), which is fine (OK); sf-app-silent catches the worker going quiet.
+# put_group <name> <rules file> <no data, unless a rule says>
+put_group() {
+  local group
+  group=$(jq --arg ds "$ds" --arg folder "$FOLDER_UID" --arg group "$1" --arg nodata "$3" '{
+    title: $group, folderUid: $folder, interval: 60,
+    rules: [ .[] | {
+      uid, title, for, folderUID: $folder, ruleGroup: $group, condition: "C",
+      noDataState: (.no_data // $nodata), execErrState: "Error",
+      labels: {app: "sports-follow", area: $group},
+      annotations: {summary: .summary},
+      data: [
+        {refId: "A", relativeTimeRange: {from: 900, to: 0}, datasourceUid: $ds,
+         model: {refId: "A", expr: .expr, instant: true, range: false}},
+        {refId: "C", relativeTimeRange: {from: 0, to: 0}, datasourceUid: "__expr__",
+         model: {refId: "C", type: "threshold", expression: "A", conditions: [{evaluator: {type: .op, params: [.threshold]}}]}}
+      ]
+    } ]
+  }' "$2")
+  api PUT "/api/v1/provisioning/folder/$FOLDER_UID/rule-groups/$1" "$group" >/dev/null
+  say "$(jq length "$2") rules in Sports Follow / $1, checked every minute"
+}
+put_group server "$HERE/rules.json" KeepLast
+put_group app "$HERE/app-rules.json" OK
 
 if [ -n "$TEST" ]; then
   # Grafana 13 (Grafana Cloud) tests a contact point through its receivers API; older ones through the

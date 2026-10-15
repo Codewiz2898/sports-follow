@@ -398,6 +398,27 @@ Each one emails when it starts, again every 6 hours while it lasts, and "Resolve
 | Docker, containers | Docker, or one of the app's containers, isn't up for 10 minutes; or a container restarted 3 times in an hour |
 | Certificate | the one Caddy serves isn't trusted for 10 minutes, or expires within 10 days |
 
+And on the app's own metrics (`grafana/app-rules.json`, from `sports_follow/metrics.py`; "Traces and
+logs" below), which catch the app working badly while the server is fine. These have nothing to say
+when there's nothing to measure, such as no push, and stay quiet. The live games, the queue and unsent
+moments are read every minute, 0 or not: if the worker goes quiet, those keep their state and "The
+worker stopped reporting" says why. Counts start at 0 when a process starts (`metrics.seed`), so the
+first failures after a deploy count:
+
+| Rule | Emails when |
+|---|---|
+| The worker stopped reporting | no worker metrics for 10 minutes: it's stuck or down, or `otlp.env` stopped working |
+| The API is failing requests | over 3 server errors (5xx) in 10 minutes |
+| The API is slow | for 10 minutes, the slowest 5% of requests take over 3 s (once there are 20 requests in 10 minutes) |
+| A source keeps failing | for 5 minutes, over half of a source's requests fail with a server error or no answer, at least 5 of them |
+| A source keeps telling us to slow down | it had us paused (429) over half of the last 15 minutes (given 10 minutes of readings) |
+| A source's allowance is nearly used | over 90% of a window's allowance is spent, or the source says under 10% of its hour is left |
+| A live game isn't being polled | for 2 minutes, a game hasn't been polled for three of its rounds (at least 3 minutes; Liquipedia's 15) |
+| Jobs are waiting for the worker | for 5 minutes, a job has waited over 2 minutes for a slot |
+| Pushes aren't going out | for 5 minutes, a moment found over 3 minutes ago hasn't been sent |
+| Pushes are failing | over 20% of the last 30 minutes' pushes failed (unsubscribed devices aside), at least 3 |
+| Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
+
 **Setting it up** (you, once):
 1. **Sign up** at grafana.com (free) and create a stack.
 2. **Metrics:** on the grafana.com portal, open your stack → **Prometheus** → **Details** for the remote

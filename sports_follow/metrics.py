@@ -34,8 +34,12 @@ _watching = False
 
 # Seconds: from a fast query to a ten-minute poll session (job durations, a moment's wait for its push).
 SECONDS = (0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900)
-# A live game not polled for this long is behind: every one is polled at least once a minute.
+# A live game is behind when it hasn't been polled for three of its rounds, a round being its source's
+# cadence or a minute (armed and quiet games are polled once a minute), and never sooner than this.
 BEHIND = 180
+# A moment found this long ago and still unsent: its batch's sender (notify.send) didn't claim it, nor
+# did the tick's sweep a minute after (notify.SWEEP_AFTER).
+UNSENT_AFTER = 180
 
 
 def _instrument(kind: str, name: str, unit: str, description: str, **advice: Any) -> Any:
@@ -50,10 +54,42 @@ def _instrument(kind: str, name: str, unit: str, description: str, **advice: Any
 
 
 def request(method: str, route: str | None, status: int, seconds: float) -> None:
-    """One API request answered (server.RequestLog): OpenTelemetry's own HTTP server metric."""
+    """One API request answered (server.RequestLog): OpenTelemetry's own HTTP server metric, and a count of
+    server errors of its own (no route: one series, which seed() starts at 0, for sf-api-errors)."""
     _instrument("histogram", "http.server.request.duration", "s", "API requests by route and status, and how long they took",
                 explicit_bucket_boundaries_advisory=SECONDS).record(
         seconds, {"http.request.method": method, "http.route": route or "unmatched", "http.response.status_code": status})
+    if status >= 500:
+        _api_errors().add(1)
+
+
+def _api_errors() -> Any:
+    return _instrument("counter", "sports_follow.api.errors", "{request}", "API requests answered with a server error (5xx)")
+
+
+# The push services nearly every browser uses (Chrome and Edge, Safari, Firefox): seed() starts their counts at 0.
+PUSH_SERVICES = ("fcm.googleapis.com", "web.push.apple.com", "updates.push.services.mozilla.com")
+
+
+def seed() -> None:
+    """Zero for each count the alert rules take increase() of (app-rules.json), sent at once. A series'
+    first sample counts nothing in increase(), Grafana Cloud records no zero before it, and each
+    process's series are new (its own service.instance.id): without these, the first failures after a
+    deploy would go unseen. At startup, in the API and the worker."""
+    _api_errors().add(0)
+    for step in ("build", "refresh"):
+        for result in ("ok", "failed"):
+            card(step, result, by=0)
+    counter = _instrument("counter", "sports_follow.pushes", "{push}", "Pushes to devices by push service and result")
+    for service in PUSH_SERVICES:
+        for result in ("delivered", "gone", "failed"):
+            counter.add(0, {"push_service": service, "result": result})
+    flush = getattr(otel.get_meter_provider(), "force_flush", None)
+    if flush is not None:
+        try:
+            flush(timeout_millis=5000)
+        except Exception as exc:  # noqa: BLE001 — a slow export mustn't hold up a start
+            log.warning("metrics: the first export failed: %s", exc)
 
 
 def job(name: str, outcome: str, seconds: float, waited: float | None) -> None:
@@ -84,9 +120,9 @@ def moment(kind: str) -> None:
     _instrument("counter", "sports_follow.moments", "{moment}", "Moments found, by kind").add(1, {"kind": kind})
 
 
-def card(step: str, result: str) -> None:
+def card(step: str, result: str, by: int = 1) -> None:
     """A card built (pipeline.build_card) or a player's source read again (structured.refresh): ok or failed."""
-    _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(1, {"step": step, "result": result})
+    _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(by, {"step": step, "result": result})
 
 
 # ---------------------------------------------------------------- read every minute, by the worker
@@ -95,34 +131,44 @@ def card(step: str, result: str) -> None:
 Reading = list[tuple[float, dict[str, Any]]]
 
 
+def behind_after(live_binding: dict[str, Any]) -> float:
+    """Seconds without a poll after which a game is behind: three rounds of its source's cadence (or of a
+    minute, for armed and quiet games), at least BEHIND. Liquipedia's 5-minute rounds make 15 minutes."""
+    return max(BEHIND, 3 * max(60, int(live_binding.get("cadence") or 10)))
+
+
 def live(now: float | None = None) -> dict[str, Reading]:
-    """The armed and live games with a followed player and a live binding, by source and status; per
+    """The armed and live games with a followed player and a live binding to a source this build runs
+    (one it doesn't run never polls them, and they aren't late for it), by source and status; per
     source, how long since its least recently polled game was polled (structured._polled), and how
-    many of its games weren't polled within BEHIND seconds (or ever)."""
+    many of its games weren't polled within behind_after (or ever)."""
     from sqlalchemy import select
 
     from . import bus
+    from .adapters import ADAPTERS
     from .db import session
     from .models import Event, EventPlayer, Follow
 
     now = now or time.time()
     with session() as db:
         followed = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
-        games = db.execute(
-            select(Event.id, Event.status, Event.live_binding["adapter"].astext)
+        games = [(event_id, status, dict(binding or {})) for event_id, status, binding in db.execute(
+            select(Event.id, Event.status, Event.live_binding)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))
-        ).all()
-    counts: Counter[tuple[str, str]] = Counter((source or "unknown", status) for _, status, source in games)
+        ).all() if (binding or {}).get("adapter") in ADAPTERS]
+    counts: Counter[tuple[str, str]] = Counter((binding["adapter"], status) for _, status, binding in games)
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
     polled = redis.mget([f"polled_at:{event_id}" for event_id, _, _ in games]) if games else []
     oldest: dict[str, float] = {}
-    behind: Counter[str] = Counter({source or "unknown": 0 for _, _, source in games})
-    for (_, _, source), at in zip(games, polled):
-        source = source or "unknown"
+    # Every running source says how many of its games are behind, 0 too: the alert rule then has data
+    # while the worker reports, and keeps its state when the worker goes quiet (sf-app-silent says so).
+    behind: Counter[str] = Counter({name: 0 for name in ADAPTERS})
+    for (_, _, binding), at in zip(games, polled):
+        source = binding["adapter"]
         age = now - float(at) if at is not None else None
         if age is not None:
             oldest[source] = max(oldest.get(source, 0.0), age)
-        if age is None or age > BEHIND:
+        if age is None or age > behind_after(binding):
             behind[source] += 1
     return {
         "games": [(n, {"source": source, "status": status}) for (source, status), n in counts.items()],
@@ -131,22 +177,42 @@ def live(now: float | None = None) -> dict[str, Reading]:
     }
 
 
+def unsent(now: datetime | None = None) -> dict[str, Reading]:
+    """Moments found over UNSENT_AFTER seconds ago that no sender has claimed, still young enough to send
+    (alerts.LATE_TTL): any for a few minutes, and pushes aren't going out."""
+    from datetime import timedelta
+
+    from sqlalchemy import func, select
+
+    from .alerts import LATE_TTL
+    from .db import session
+    from .models import Moment
+
+    now = now or datetime.now(timezone.utc)
+    with session() as db:
+        waiting = db.scalar(select(func.count()).select_from(Moment).where(
+            Moment.sent_at.is_(None), Moment.created_at <= now - timedelta(seconds=UNSENT_AFTER), Moment.created_at >= now - timedelta(seconds=LATE_TTL)))
+    return {"unsent": [(waiting or 0, {})]}
+
+
 def queue(now: float | None = None) -> dict[str, Reading]:
     """arq's queue: jobs ready to run but waiting for a slot, jobs set for later, jobs running, and how
-    long the oldest ready one has waited."""
+    long the oldest waiting one has waited. arq leaves a job in its queue until it finishes (with the time
+    it was due), so the running ones are taken out: a ten-minute poll session isn't waiting."""
     from arq.constants import default_queue_name, in_progress_key_prefix
 
     from . import bus
 
     now_ms = (now or time.time()) * 1000
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
-    ready = redis.zcount(default_queue_name, "-inf", now_ms)
-    deferred = redis.zcard(default_queue_name) - ready
-    running = sum(1 for _ in redis.scan_iter(match=f"{in_progress_key_prefix}*", count=500))
-    first = redis.zrangebyscore(default_queue_name, "-inf", now_ms, start=0, num=1, withscores=True)
+    running = {key.removeprefix(in_progress_key_prefix) for key in redis.scan_iter(match=f"{in_progress_key_prefix}*", count=500)}
+    due = redis.zcount(default_queue_name, "-inf", now_ms)
+    first = redis.zrangebyscore(default_queue_name, "-inf", now_ms, start=0, num=1000, withscores=True)  # oldest first
+    waiting = [at for job, at in first if job not in running]
+    ready = due - (len(first) - len(waiting))
     return {
-        "jobs": [(ready, {"state": "ready"}), (deferred, {"state": "deferred"}), (running, {"state": "running"})],
-        "oldest_wait": [(max(0.0, (now_ms - first[0][1]) / 1000) if first else 0.0, {})],
+        "jobs": [(ready, {"state": "ready"}), (redis.zcard(default_queue_name) - due, {"state": "deferred"}), (len(running), {"state": "running"})],
+        "oldest_wait": [(max(0.0, (now_ms - waiting[0]) / 1000) if waiting else 0.0, {})],
     }
 
 
@@ -220,7 +286,8 @@ def sources(now: float | None = None) -> dict[str, Reading]:
 READINGS: list[tuple[str, str, str, Callable[[], dict[str, Reading]], str]] = [
     ("sports_follow.live.games", "{game}", "Armed and live games with a followed player, by source and status", live, "games"),
     ("sports_follow.live.poll_age", "s", "Seconds since each source's least recently polled live game was polled", live, "poll_age"),
-    ("sports_follow.live.games_behind", "{game}", f"Live games not polled for {BEHIND} seconds, by source", live, "behind"),
+    ("sports_follow.live.games_behind", "{game}", "Live games not polled for three of their rounds (at least 3 minutes), by source", live, "behind"),
+    ("sports_follow.moments.unsent", "{moment}", f"Moments found over {UNSENT_AFTER} seconds ago that no sender has claimed", unsent, "unsent"),
     ("sports_follow.jobs", "{job}", "arq jobs: ready and waiting for a slot, set for later, running", queue, "jobs"),
     ("sports_follow.jobs.oldest_wait", "s", "How long the oldest ready job has waited for a slot", queue, "oldest_wait"),
     ("sports_follow.cards", "{card}", "Followed players' cards by status and sport", cards, "cards"),

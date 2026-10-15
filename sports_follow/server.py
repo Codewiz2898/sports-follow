@@ -60,6 +60,7 @@ state: dict[str, Any] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cookie_key()  # a server without its cookie key stops here, not on a fan's first request
+    metrics.seed()
     state["arq"] = await create_pool(RedisSettings.from_dsn(REDIS_URL))
     state["redis"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True)
     yield
