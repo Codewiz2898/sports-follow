@@ -412,7 +412,7 @@ Each one emails when it starts, again every 6 hours while it lasts, and "Resolve
 |---|---|
 | The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
 | Fans can't reach the app | for 3 minutes, no probe outside the server got a healthy answer from `/api/health` |
-| The uptime check stopped reporting | no results from it for 15 minutes (it also says so until it's set up) |
+| The uptime check stopped reporting | no results from it for 20 minutes (it also says so until it's set up) |
 | The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
 | Disk | any disk is over 80% full for 10 minutes |
 | Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |

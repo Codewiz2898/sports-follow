@@ -21,11 +21,11 @@
   {
     "uid": "sf-uptime-silent",
     "title": "The uptime check stopped reporting",
-    "for": "0s",
+    "for": "5m",
     "expr": "absent_over_time(probe_success{job=\"sports-follow-uptime\"}[15m])",
     "op": "gt",
     "threshold": 0,
-    "summary": "No results from the uptime check for 15 minutes, so \"Fans can't reach the app\" can't fire: Synthetic Monitoring isn't switched on, the check was disabled or removed, or the free tier's checks ran out. Run deploy/grafana/apply-alerts.sh (README.md, \"Alerts\").",
+    "summary": "No results from the uptime check for 20 minutes, so \"Fans can't reach the app\" can't fire: Synthetic Monitoring isn't switched on, the check was disabled or removed, or the free tier's checks ran out. Run deploy/grafana/apply-alerts.sh (README.md, \"Alerts\").",
     "no_data": "OK"
   },
   {
