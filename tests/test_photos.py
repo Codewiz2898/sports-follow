@@ -8,10 +8,13 @@ The database tests are skipped without one:
 
 from __future__ import annotations
 
+import copy
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +27,9 @@ from .test_api import api  # noqa: F401  (the fixture)
 SAKA = "Bukayo Saka England v Ghana 23 June 2026-057 (cropped).jpg"
 BUMRAH = "Jasprit Bumrah in PMO New Delhi.jpg"
 PAGE = "https://commons.wikimedia.org/wiki/File:"
+# Public-domain photos standing in for players' thumbnails (tests/test_faces.py says whose).
+FAR_OFF = (Path(__file__).parent / "fixtures" / "photos" / "babe-ruth.jpg").read_bytes()
+CLOSE_UP = (Path(__file__).parent / "fixtures" / "photos" / "michael-jordan.jpg").read_bytes()
 
 
 def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-sa-4.0", artist: str | None = '<a href="//commons.wikimedia.org/wiki/User:Berlination" title="User:Berlination">Bryan Berlin</a>', sha1: str = "aa", **meta) -> dict:
@@ -115,6 +121,13 @@ def test_only_wikimedias_own_hosts_are_downloaded_from():
             photos.download(url)
 
 
+def test_an_empty_thumbnail_is_not_kept(monkeypatch):
+    empty = httpx.Response(200, headers={"content-type": "image/jpeg"}, content=b"", request=httpx.Request("GET", "https://upload.wikimedia.org/x.jpg"))
+    monkeypatch.setattr(photos._client, "get", lambda url: empty)
+    with pytest.raises(ValueError, match="thumbnail is 0 bytes"):
+        photos.download("https://upload.wikimedia.org/x.jpg")
+
+
 def test_a_photo_address_is_its_digest_and_kind():
     assert photos.NAME.fullmatch("0123456789abcdef0123456789abcdef.jpg")
     for name in ("../photo.jpg", "0123.jpg", "0123456789abcdef0123456789abcdef.svg", "0123456789ABCDEF0123456789ABCDEF.jpg"):
@@ -167,12 +180,14 @@ def db(monkeypatch):
 
 
 class Commons:
-    """The Commons API and its thumbnails, as the job reaches them: what each file is, and what was asked."""
+    """The Commons API and its thumbnails, as the job reaches them: what each file is, what was asked, and
+    the picture each thumbnail is (Saka's a real one with a face; the rest bytes that aren't a picture)."""
 
     def __init__(self, monkeypatch):
         self.files: dict[str, dict] = {}
         self.asked: list[list[str]] = []
         self.downloads: list[str] = []
+        self.pictures: dict[str, bytes] = {SAKA.replace(" ", "_"): FAR_OFF}
         monkeypatch.setattr(photos, "ask", self.ask)
         monkeypatch.setattr(photos, "download", self.download)
 
@@ -182,7 +197,8 @@ class Commons:
 
     def download(self, url):
         self.downloads.append(url)
-        return f"jpeg bytes of {url}".encode(), "image/jpeg"
+        picture = next((data for slug, data in self.pictures.items() if url.endswith(slug)), None)
+        return picture or f"jpeg bytes of {url}".encode(), "image/jpeg"
 
 
 def athlete(qid: str, sport: str, name: str, image: str | None, ids: dict | None = None) -> dict:
@@ -230,7 +246,7 @@ def test_followed_and_starter_athletes_photos_are_fetched_once_and_written_into_
     db = squad
     assert set(photos.wanted(db)) == {SAKA, BUMRAH, "Haaland.jpg"}  # not Mbappé: nobody follows or is offered him
     done = photos.refresh()
-    assert done == {"asked": 3, "shown": 2, "left_out": 1, "cards": 1, "forgotten": 0}
+    assert done == {"asked": 3, "shown": 2, "left_out": 1, "framed": 2, "cards": 1, "forgotten": 0}
     assert len(commons.asked) == 1 and len(commons.downloads) == 2  # one API request; Haaland's GFDL photo isn't downloaded
     saka = _photo(db, SAKA)
     assert saka and saka.status == "ok" and saka.author == "Bryan Berlin" and saka.data and saka.digest
@@ -245,8 +261,71 @@ def test_followed_and_starter_athletes_photos_are_fetched_once_and_written_into_
     assert "photo" not in db.get(PlayerCard, 2).card["player"] and "photo" not in db.get(PlayerCard, 3).card["player"]
 
     # The next run asks about nothing: every file was asked about just now.
-    assert photos.refresh() == {"asked": 0, "shown": 0, "left_out": 0, "cards": 0, "forgotten": 0}
+    assert photos.refresh() == {"asked": 0, "shown": 0, "left_out": 0, "framed": 0, "cards": 0, "forgotten": 0}
     assert len(commons.asked) == 1
+
+
+@needs_db
+def test_the_face_in_each_new_photo_is_found_once_and_framed_in_its_card(squad, commons):
+    db = squad
+    assert photos.refresh()["framed"] == 2  # Saka's and Bumrah's: Haaland's isn't kept
+    saka, bumrah = _photo(db, SAKA), _photo(db, BUMRAH)
+    assert saka and (saka.width, saka.height) == (330, 435) and saka.face and saka.face["w"] < 0.15  # far off, near the top
+    assert bumrah and (bumrah.width, bumrah.height, bumrah.face) == (0, 0, None)  # not a picture: looked at, and nothing found
+    assert "crop" not in photos.public(bumrah)
+    db.expire_all()
+    shown = db.get(PlayerCard, 1).card["player"]["photo"]
+    assert shown["crop"] == photos.framing(330, 435, saka.face)["crop"]
+    assert photos.refresh()["framed"] == 0  # each looked at once
+
+    # A new upload of the file, a close-up this time: looked at again, and the card framed anew.
+    commons.files[SAKA] = info(SAKA, sha1="saka2")
+    commons.pictures[SAKA.replace(" ", "_")] = CLOSE_UP
+    done = photos.refresh(now=datetime.now(timezone.utc) + timedelta(days=photos.REFETCH_DAYS + 1))
+    assert (done["framed"], done["cards"]) == (1, 1)
+    saka = _photo(db, SAKA)
+    assert saka and (saka.width, saka.height) == (330, 471) and saka.face and saka.face["w"] > 0.4
+    db.expire_all()
+    assert db.get(PlayerCard, 1).card["player"]["photo"]["crop"] == photos.framing(330, 471, saka.face)["crop"]
+
+
+@needs_db
+def test_the_detector_failing_holds_up_neither_the_cards_nor_the_next_run(squad, commons, monkeypatch):
+    db = squad
+    failing, find = [True], photos.faces.find
+
+    def flaky(data):
+        if failing[0]:
+            raise RuntimeError("model missing")
+        return find(data)
+
+    monkeypatch.setattr(photos.faces, "find", flaky)
+    done = photos.refresh()
+    assert (done["shown"], done["framed"], done["cards"]) == (2, 0, 1)  # Saka's card still gets the photo
+    saka = _photo(db, SAKA)
+    assert saka and saka.width is None
+    db.expire_all()
+    assert "crop" not in db.get(PlayerCard, 1).card["player"]["photo"]
+    failing[0] = False
+    assert photos.refresh()["framed"] == 2  # looked at on the next run
+
+
+@needs_db
+def test_photos_kept_before_the_job_looked_for_faces_are_looked_at_on_its_next_run(squad, commons):
+    db = squad
+    photos.refresh()
+    # As a photo and card from before faces.py: no size or face, and no framing in the card.
+    db.execute(text("UPDATE photo SET width = NULL, height = NULL, face = NULL"))
+    row = db.get(PlayerCard, 1)
+    assert row
+    card = copy.deepcopy(row.card)
+    del card["player"]["photo"]["crop"]
+    row.card = card
+    db.commit()
+    done = photos.refresh()
+    assert (done["asked"], done["framed"], done["cards"]) == (0, 2, 1)  # nothing asked of Commons again
+    db.expire_all()
+    assert db.get(PlayerCard, 1).card["player"]["photo"] == photos.public(_photo(db, SAKA)) and "crop" in db.published[1]["player"]["photo"]
 
 
 @needs_db
@@ -274,7 +353,7 @@ def test_a_photo_is_asked_about_again_after_a_while_and_one_no_longer_free_leave
     commons.files[SAKA] = info(SAKA, licence="GFDL", code="gfdl")  # relicensed, or deleted: it may not show
     photos.refresh(now=later + timedelta(days=2 * photos.REFETCH_DAYS + 2))
     saka = _photo(db, SAKA)
-    assert saka and (saka.status, saka.data, saka.digest) == ("unfree", None, None)
+    assert saka and (saka.status, saka.data, saka.digest, saka.width, saka.face) == ("unfree", None, None, None, None)
     db.expire_all()
     assert "photo" not in db.get(PlayerCard, 1).card["player"] and "photo" not in db.published[1]["player"]
 

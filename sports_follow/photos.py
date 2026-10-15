@@ -9,8 +9,13 @@ see it (public domain, CC0, CC BY, CC BY-SA, GODL-India: the user's choice; not 
 "Attribution" or "copyrighted free use") is downloaded once and kept in Postgres, so every API process
 serves the same bytes at /api/photos/<digest>.jpg, cached for a year. Nothing is hot-linked. Each file is
 asked about again every REFETCH_DAYS (a new licence, author or upload, or a file Commons deleted), one
-that failed the next day. The job then writes each followed player's photo into their card, and forgets
-files fetched over FORGET_DAYS ago that nobody follows or is offered now.
+that failed the next day. The job then looks for the face in each new thumbnail (faces.py), writes each
+followed player's photo into their card, and forgets files fetched over FORGET_DAYS ago that nobody
+follows or is offered now.
+
+Where the face is tells the app how to frame a photo (framing): a large picture keeps the face in view,
+and a small round avatar shows a square around it, head and shoulders, rather than the top of a photo
+that might be a full-length action shot. A photo with no face found keeps the app's top-centre guess.
 
 The app recolours every photo in its sport's colour (a duotone, web/src/styles.css), so each credit says
 so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured". A recoloured CC BY-SA photo stays
@@ -38,9 +43,9 @@ from urllib.parse import unquote, urlparse, urlunparse
 
 import httpx
 from sqlalchemy import delete, exists, or_, select, union
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session, object_session, undefer
 
-from . import bus, logs, sports
+from . import bus, faces, logs, sports
 from .config import USER_AGENT
 from .db import session
 from .models import Athlete, Follow, Photo, Player, PlayerCard, PlayerIdentity, Starter
@@ -56,6 +61,9 @@ REFETCH_DAYS = 90
 RETRY = timedelta(days=1)
 FORGET_DAYS = 30
 MAX_BYTES = 2_000_000
+FILL = 0.4  # how much of the profile's square the face takes: head and shoulders
+RAISE = 0.1  # how far the square's centre sits above the face's, in face sizes, so the hair isn't cut off
+CLOSEST = 120  # the fewest thumbnail pixels the square spans, so a far-off face isn't blown up to a blur
 LOCK = "photos"
 TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 # The licences kept, by Commons' code: "cc-by-sa-4.0", "cc-by-2.0", "cc-by-sa-3.0-de", "cc0", "pd". A
@@ -178,7 +186,7 @@ def download(url: str) -> tuple[bytes, str]:
     media = res.headers.get("content-type", "").split(";")[0].strip()
     if media not in TYPES:
         raise ValueError(f"thumbnail is {media or 'of no type'}")
-    if len(res.content) > MAX_BYTES:
+    if not res.content or len(res.content) > MAX_BYTES:
         raise ValueError(f"thumbnail is {len(res.content)} bytes")
     return res.content, media
 
@@ -234,8 +242,23 @@ def credit(photo: Photo) -> str:
     return f"Photo: {photo.author or 'unknown author'}, {photo.licence}, Wikimedia Commons, recoloured"
 
 
+def framing(width: int | None, height: int | None, face: dict[str, float] | None) -> dict[str, Any]:
+    """{"crop": the square around the player's face the profile shows, head and shoulders}: FILL of it
+    face, a little above the middle, never closer than CLOSEST pixels across and never past the photo's
+    edges, as {x, y, w, h}, fractions of the photo's width and height. A full-length action shot then
+    shows the player's face as a headshot does. {} when no face was found: the profile shows the photo
+    from near its top."""
+    if not (face and width and height):
+        return {}
+    x, y = (face["x"] + face["w"] / 2) * width, (face["y"] + face["h"] / 2) * height
+    size = max(face["w"] * width, face["h"] * height)
+    side = min(max(size / FILL, CLOSEST), width, height)
+    left, top = min(max(x - side / 2, 0), width - side), min(max(y - RAISE * size - side / 2, 0), height - side)
+    return {"crop": {"x": round(left / width, 4), "y": round(top / height, 4), "w": round(side / width, 4), "h": round(side / height, 4)}}
+
+
 def public(photo: Photo) -> dict[str, Any]:
-    """A photo as the app gets it: our own address for it, and its credit."""
+    """A photo as the app gets it: our own address for it, its credit, and where its face is."""
     return {
         "url": f"/api/photos/{photo.digest}.{TYPES[photo.media_type or 'image/jpeg']}",
         "credit": credit(photo),
@@ -243,6 +266,7 @@ def public(photo: Photo) -> dict[str, Any]:
         "author": photo.author,
         "licence": photo.licence,
         "licence_url": photo.licence_url,
+        **framing(photo.width, photo.height, photo.face),
     }
 
 
@@ -301,8 +325,8 @@ def serve(db: Session, name: str) -> tuple[bytes, str] | None:
 
 
 def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: Photo | None) -> Photo:
-    """Write what Commons said, downloading the thumbnail when it's new; a photo no longer free to show
-    loses its bytes."""
+    """Write what Commons said, downloading the thumbnail when it's new (look() then finds its face); a photo
+    no longer free to show loses its bytes."""
     photo = known or Photo(file=file)
     if known is None:
         db.add(photo)
@@ -311,8 +335,9 @@ def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: P
     photo.status, photo.reason, photo.fetched_at = info.status, info.reason, now
     photo.licence, photo.licence_url, photo.author, photo.page, photo.source_sha1 = info.licence, info.licence_url, info.author, info.page, info.sha1
     if info.status != "ok":
-        photo.data = photo.digest = photo.media_type = None
+        photo.data = photo.digest = photo.media_type = photo.width = photo.height = photo.face = None
     elif not same:
+        photo.width = photo.height = photo.face = None
         try:
             data, media = download(info.thumb or "")
         except ValueError as exc:
@@ -321,6 +346,29 @@ def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: P
         photo.data, photo.media_type, photo.digest = data, media, hashlib.sha256(data).hexdigest()[:32]
         time.sleep(PAUSE)
     return photo
+
+
+def look() -> int:
+    """Find the face in each kept thumbnail not looked at yet: a new one, or one kept before the job looked
+    (faces.py; a few milliseconds each, in this process). Returns how many."""
+    with session() as db:
+        ids = db.scalars(select(Photo.id).where(Photo.status == "ok", Photo.digest.is_not(None), Photo.width.is_(None))).all()
+    looked = 0
+    for photo_id in ids:
+        try:
+            with session() as db:
+                photo = db.get(Photo, photo_id, options=[undefer(Photo.data)])
+                if photo is None or photo.data is None or photo.width is not None:
+                    continue
+                photo.width, photo.height, box = faces.find(photo.data)
+                photo.face = box._asdict() if box else None
+            looked += 1
+        except Exception:
+            # The detector itself failing (its model missing, say) mustn't hold up the cards: these photos
+            # wait for the next run, and the profile shows them from near the top meanwhile.
+            log.exception("photos: looking for the face in photo %s failed; the rest wait for the next run", photo_id)
+            break
+    return looked
 
 
 def stamp(db: Session) -> int:
@@ -363,10 +411,11 @@ def stamp(db: Session) -> int:
 
 
 def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]:
-    """One run: ask Commons about the files wanted and due (new ones first), keep what may be shown, write
-    the photos into the cards, and forget files fetched over FORGET_DAYS ago that nobody wants now."""
+    """One run: ask Commons about the files wanted and due (new ones first), keep what may be shown, find
+    the faces in new thumbnails, write the photos into the cards, and forget files fetched over FORGET_DAYS
+    ago that nobody wants now."""
     now = now or datetime.now(timezone.utc)
-    done = {"asked": 0, "shown": 0, "left_out": 0, "cards": 0, "forgotten": 0}
+    done = {"asked": 0, "shown": 0, "left_out": 0, "framed": 0, "cards": 0, "forgotten": 0}
     with session() as db:
         want = wanted(db)
         known = {p.file: p for p in db.scalars(select(Photo).where(Photo.file.in_(list(want))))} if want else {}
@@ -385,6 +434,7 @@ def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]
                         log.info("photos: %s left out: %s", file, photo.reason)
     except Unavailable as exc:
         log.warning("photos: %s; the rest wait for the next run", exc)
+    done["framed"] = look()
     with session() as db:
         done["cards"] = stamp(db)
         stale = [Photo.fetched_at < now - timedelta(days=FORGET_DAYS), *([Photo.file.not_in(list(want))] if want else [])]
@@ -402,7 +452,7 @@ def run() -> dict[str, int] | None:
     finally:
         bus.release(LOCK, token)
     if any(done.values()):
-        log.info("photos: %(asked)d asked about, %(shown)d to show, %(left_out)d left out, %(cards)d cards updated, %(forgotten)d forgotten", done)
+        log.info("photos: %(asked)d asked about, %(shown)d to show, %(left_out)d left out, %(framed)d looked at for a face, %(cards)d cards updated, %(forgotten)d forgotten", done)
     return done
 
 

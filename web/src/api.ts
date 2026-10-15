@@ -13,6 +13,9 @@ export interface Photo {
   author: string
   licence: string
   licence_url?: string | null
+  // The square around the face the profile shows, head and shoulders, when one was found (photos.framing):
+  // fractions of the photo's width and height.
+  crop?: { x: number; y: number; w: number; h: number }
 }
 
 export interface PlayerProfile {

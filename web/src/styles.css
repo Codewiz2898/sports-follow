@@ -134,6 +134,13 @@ p { margin: 0; }
 .duo { position: relative; overflow: hidden; isolation: isolate; background: var(--photo-light); }
 .duo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; filter: grayscale(1) contrast(1.1); mix-blend-mode: multiply; }
 .duo::after { content: ""; position: absolute; inset: 0; background: var(--photo-dark); mix-blend-mode: screen; pointer-events: none; }
+/* Where the photos job found the face: the square around it (--cw and --ch its size, --cx and --cy its
+   centre, as fractions of the photo) covers the picture, its centre at --at across and halfway down, but
+   never so far that the picture runs past the photo's edges. */
+.duo.framed { container-type: size; }
+.duo.framed img { position: absolute; max-width: none; --side: max(100cqw, 100cqh); width: calc(var(--side) / var(--cw)); height: calc(var(--side) / var(--ch));
+  left: clamp(100cqw - var(--side) / var(--cw), var(--at, 50cqw) - var(--cx) * var(--side) / var(--cw), 0px);
+  top: clamp(100cqh - var(--side) / var(--ch), 50cqh - var(--cy) * var(--side) / var(--ch), 0px); }
 /* Its credit, as the licence asks: on the block it sits on, linking to the file's page on Commons. */
 .photo-credit { font-size: 10px; font-weight: 700; line-height: 1.3; color: var(--on-sport-soft); overflow-wrap: anywhere; }
 a.photo-credit:hover { text-decoration: underline; }
@@ -228,7 +235,7 @@ a.photo-credit:hover { text-decoration: underline; }
 .player-band { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 16px; margin: calc(-20px - env(safe-area-inset-top, 0px)) calc(-1 * var(--gutter)) 0; padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter) 22px; background: var(--sport); color: var(--on-sport); border-radius: 0 0 28px 28px; }
 .player-band > * { position: relative; }
 /* The player's photo, large, below the buttons on the right, fading into the band. */
-.player-band > .band-photo { position: absolute; right: 0; bottom: 0; top: calc(64px + env(safe-area-inset-top, 0px)); width: min(46%, 280px); -webkit-mask-image: linear-gradient(to right, transparent, #000 50%); mask-image: linear-gradient(to right, transparent, #000 50%); pointer-events: none; }
+.player-band > .band-photo { position: absolute; right: 0; bottom: 0; top: calc(64px + env(safe-area-inset-top, 0px)); width: min(46%, 280px); -webkit-mask-image: linear-gradient(to right, transparent, #000 50%); mask-image: linear-gradient(to right, transparent, #000 50%); pointer-events: none; --at: 62cqw; }  /* a face right of the fade */
 .player-band > .photo-credit { max-width: 62%; margin-top: -6px; }
 @media (min-width: 1024px) { .player-band { margin: 0; padding: 20px 24px 26px; border-radius: 28px; } }
 .player-band .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
