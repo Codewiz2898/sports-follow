@@ -47,15 +47,21 @@ SCALLOPS, RING, SCALLOP, CORE, S_HEIGHT = 14, 0.786, 0.214, 0.81, 0.62
 # On a 512 grid, "radius" being the badge's outer radius. "icon" sits on a rounded paper tile; "maskable"
 # fills the square and keeps the badge well inside the 40%-radius safe zone launchers never crop;
 # "monochrome" is the badge alone in white with the s cut out, for themed icons and the notification
-# badge; "mark" is the badge alone in colour, edge to edge, for the header's logo.
+# badge; "mark" is the badge alone in colour, edge to edge, for the header's logo. The Android app's
+# adaptive icon (mobile/app.config.ts) is two layers on a clear ground: a launcher shows only a circle
+# a third of the canvas wide around the centre, so its badge is smaller, inside Android's 66dp-in-108dp
+# safe zone.
 VARIANTS = {
     "icon": {"ground": 112, "radius": 215, "mono": False},
     "maskable": {"ground": 0, "radius": 176, "mono": False},
     "monochrome": {"ground": None, "radius": 176, "mono": True},
     "mark": {"ground": None, "radius": 256, "mono": False},
+    "adaptive": {"ground": None, "radius": 136, "mono": False},
+    "adaptive-monochrome": {"ground": None, "radius": 136, "mono": True},
 }
 # badge-96: the small white mark Android shows in the status bar for a notification.
-PNGS = [("icon", 192), ("icon", 512), ("maskable", 192), ("maskable", 512), ("monochrome", 512), ("maskable", 180, "apple-touch-icon"), ("monochrome", 96, "badge-96")]
+PNGS = [("icon", 192), ("icon", 512), ("maskable", 192), ("maskable", 512), ("monochrome", 512), ("maskable", 180, "apple-touch-icon"), ("monochrome", 96, "badge-96"),
+        ("adaptive", 432), ("adaptive-monochrome", 432)]
 
 
 def circles(v: dict, scale: float = 1.0) -> list[tuple[float, float, float]]:

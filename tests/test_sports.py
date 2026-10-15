@@ -117,6 +117,10 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
     assert body["other"]["key"] == "other" and body["other"]["alerts"]["key"][0] == "Big news"
     esports = next(s for s in body["sports"] if s["key"] == "esports")
     assert esports["team_results"] and esports["keeps_names"] and esports["stats_title"] == "Overview"
+    # The Android app can't read /api/sports.css: each sport brings its colours here too, "other" none.
+    cricket = next(s for s in body["sports"] if s["key"] == "cricket")
+    assert cricket["colour"] == {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
+    assert all(s["colour"] for s in body["sports"]) and body["other"]["colour"] is None
 
 
 def test_each_sport_brings_its_colour(api):

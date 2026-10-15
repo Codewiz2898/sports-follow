@@ -4,7 +4,7 @@ import { shortWhen } from '../format'
 import { useFollowing } from '../following'
 import { SectionHead } from './Blocks'
 import { CheckIcon, PlusIcon } from './Icons'
-import { followTarget } from './Search'
+import { followTarget } from '../follow'
 
 // What this page load knows, shared by every picker: the last answer (shown at once by the next picker,
 // while it asks again), the player each starter followed here became, and the sport last picked by chip.

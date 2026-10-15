@@ -85,7 +85,9 @@ def label(name: str | None) -> str:
 
 def shown(sport: Sport, live: bool) -> dict[str, Any]:
     """A sport as the app knows it (GET /api/sports): what it's called, which free-text names are it, what
-    its alert levels say, and whether this build runs it and has live scores for it."""
+    its alert levels say, whether this build runs it and has live scores for it, and its colours for an
+    app that doesn't read /api/sports.css (the Android app): the block, text on it, softer text on it and
+    the colour as text on ink, or None for a sport that wears ink."""
     return {
         "key": sport.key or "other",
         "label": sport.label,
@@ -97,6 +99,7 @@ def shown(sport: Sport, live: bool) -> dict[str, Any]:
         "stats_title": sport.stats_title,
         "team_results": sport.team_moments,
         "keeps_names": sport.keeps_names,
+        "colour": {k: v for k, v in sport.colour.items() if k in ("sport", "on", "on_soft", "ink")} or None,
     }
 
 

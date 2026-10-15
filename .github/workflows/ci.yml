@@ -93,3 +93,21 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Type-check and build
         run: npm run build
+
+  mobile:
+    name: Android app types
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # Also checks the web files the app shares (web/src/types.ts, format.ts, follow.ts, sports/naming.ts).
+      - name: Type-check
+        run: npm run typecheck

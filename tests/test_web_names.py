@@ -31,14 +31,14 @@ SOURCE_LIMITS = {
 }
 
 
-def named(wanted: set[str]) -> dict[str, list[tuple[int, str]]]:
-    """Each web/src file's quoted strings that are one of the wanted names, with their lines."""
+def named(wanted: set[str], root: Path = WEB) -> dict[str, list[tuple[int, str]]]:
+    """Each file's quoted strings under root (web/src) that are one of the wanted names, with their lines."""
     found = {}
-    for path in sorted(p for p in WEB.rglob("*") if p.suffix in (".ts", ".tsx")):
+    for path in sorted(p for p in root.rglob("*") if p.suffix in (".ts", ".tsx")):
         text = path.read_text()
         hits = [(text.count("\n", 0, m.start()) + 1, m[2]) for m in TOKENS.finditer(text) if m[1] and m[2].lower() in wanted]
         if hits:
-            found[path.relative_to(WEB).as_posix()] = hits
+            found[path.relative_to(root).as_posix()] = hits
     return found
 
 
@@ -81,3 +81,14 @@ def test_a_sports_view_names_only_its_own_sport():
 
 def test_the_web_app_names_no_more_sources_than_before():
     held(named(set(KNOWN)), SOURCE_LIMITS, "source")
+
+
+MOBILE = WEB.parent.parent / "mobile" / "src"
+
+
+def test_the_android_app_names_no_sport_and_no_source():
+    """The Android app (mobile/src) starts out taking everything from the API, so it has no limits: no
+    file names a sport or a source. A sport's own view there, when one comes, gets the web's VIEWS rule."""
+    wanted = set().union(*(names_of(s) for s in sports.ALL)) | {k.lower() for k in KNOWN}
+    found = named(wanted, MOBILE)
+    assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)

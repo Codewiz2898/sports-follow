@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api, type FollowTarget, type Research, type SearchResponse, type SearchResult } from '../api'
+import { api, type Research, type SearchResponse, type SearchResult } from '../api'
 import { APP_NAME } from '../app'
+import { followTarget } from '../follow'
 import { relative } from '../format'
 import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
@@ -104,14 +105,6 @@ export function useSearchActions(onDone?: () => void) {
   const research = useCallback((query: string) => run(`research:${query}`, () => following.follow({ query })), [following, run])
 
   return { open, follow, research, pending, error, isFollowing: following.isFollowing }
-}
-
-/** What following a result sends: the player already here, the athlete in their live source, or a name. */
-export function followTarget(r: SearchResult): FollowTarget {
-  return r.player_id ? { player_id: r.player_id }
-    : r.system && r.athlete_id ? { system: r.system, athlete_id: r.athlete_id, league: r.league, qid: r.qid }
-      : r.qid ? { qid: r.qid, sport: r.sport.toLowerCase() }  // the server finds them in the live source
-        : { query: r.name }  // a sport only the agent covers: this is an AI research
 }
 
 // Accents and apostrophes dropped, as the server compares names: "aja" is the start of A'ja.
