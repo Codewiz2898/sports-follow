@@ -180,6 +180,7 @@ class EspnBasketball(espn.EspnAdapter, Adapter):
     covers = "Basketball"
     espn_uid = SPORT_UID
     espn_leagues = LEAGUES
+    research_leagues = ("basketball/nba",)
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):

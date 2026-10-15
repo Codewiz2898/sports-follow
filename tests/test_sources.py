@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
-from sports_follow import search, sports
-from sports_follow.adapters import KNOWN, Provider, providers, source_name
+from sports_follow import agent, search, sports
+from sports_follow.adapters import ADAPTERS, KNOWN, Provider, budget, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
 # Every module in adapters/ is a source's, but what all of them share: what an adapter is, and the budget.
@@ -56,8 +58,35 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return {id(n.body[0].value) for n in nodes if n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
 
 
+def _naming() -> Callable[[str], str | None]:
+    """How a text names a source, if it does: by its system ("espn_cricket"); by name, its provider's or an
+    API it reads ("ESPN", "OpenDota": its budget's), where a name in lower case is an id or a slug instead
+    (a game's "pubg", a registry id's "pandascore:"); or by its URL, its provider's site or where its
+    requests go ("site.api.espn.com")."""
+    systems = re.compile(rf"\b({'|'.join(KNOWN)})\b")
+    names = {p.name for p, _ in providers(KNOWN)} | {b.name for b in budget.known()}
+    by_name = re.compile(rf"\b({'|'.join(map(re.escape, names))})\b", re.I)
+    urls = [p.url for p, _ in providers(KNOWN)] + [u for b in budget.known() for u in b.urls]
+    hosts = {(urlparse(u).hostname or "").removeprefix("www.") for u in urls}
+    by_url = re.compile(rf"\b({'|'.join(map(re.escape, hosts))})\b", re.I)
+
+    def named(text: str) -> str | None:
+        found = [*systems.findall(text), *(n for n in by_name.findall(text) if not n.islower()), *by_url.findall(text)]
+        return found[0] if found else None
+
+    return named
+
+
+def test_a_source_is_known_by_its_system_its_name_or_its_url():
+    named = _naming()
+    assert [named(t) for t in ("espn_cricket:253802", "e.g. ESPN (", " and OpenDota", "LIQUIPEDIA")] == ["espn_cricket", "ESPN", "OpenDota", "LIQUIPEDIA"]
+    assert [named(t) for t in ("https://site.api.espn.com/apis/x", "lichess.org/api/broadcast/top")] == ["site.api.espn.com", "lichess.org"]
+    # Not a source: a game's slug, a registry id's prefix, a website none of them reads.
+    assert [named(t) for t in ("valorant|pubg|dota", "pandascore:34470", "ESPNcricinfo pages", "https://www.espncricinfo.com")] == [None] * 4
+
+
 def test_no_shared_module_names_a_source():
-    named = re.compile(rf"\b({'|'.join(KNOWN)})\b")
+    named = _naming()
     found = []
     shared = [PACKAGE / "adapters" / f"{m}.py" for m in ("base", "budget")]  # what every source shares, beside them
     for path in [*PACKAGE.glob("*.py"), *(PACKAGE / "sports").glob("*.py"), *shared]:
@@ -75,9 +104,26 @@ def test_no_shared_module_names_a_source():
                 found.append(f"{path.name}:{node.lineno} imports adapters.{module[-1]}")  # from .adapters.espn import …
             elif isinstance(node, ast.ImportFrom) and module[-1] == "adapters":
                 found += [f"{path.name}:{node.lineno} imports {a.name}" for a in node.names if a.name in SOURCE_MODULES]  # from .adapters import espn
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip and named.search(node.value):
-                found.append(f"{path.name}:{node.lineno} names {named.search(node.value)[0]}")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip and (name := named(node.value)):
+                found.append(f"{path.name}:{node.lineno} names {name}")
     assert not found, "\n".join(found)
+
+
+def test_the_research_agent_is_pointed_only_at_the_running_sources_apis():
+    # Today's sources, word for word as the prompt said it when it named them itself.
+    line = next(x for x in agent.system_prompt(KNOWN).splitlines() if "Cricbuzz" in x)
+    assert line == (
+        "- Public JSON APIs are often the most reliable live source and can be fetched directly, e.g. "
+        "ESPN (https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard, .../summary?event={id}; "
+        "leagues like soccer/eng.1, soccer/ksa.1, soccer/uefa.champions, basketball/nba, tennis/atp) "
+        "and Lichess (https://lichess.org/api/broadcast/top). Cricbuzz and ESPNcricinfo pages work for cricket."
+    )
+    # A public build (licensed sources only) has no ESPN; without ESPN's football source, no football leagues.
+    public = agent.system_prompt({s: a for s, a in KNOWN.items() if a.provider.licensed})
+    assert "e.g. Lichess (https://lichess.org/api/broadcast/top). Cricbuzz" in public and "espn.com" not in public
+    assert "leagues like basketball/nba, tennis/atp)" in agent.system_prompt({s: a for s, a in KNOWN.items() if s != "espn_soccer"})
+    assert "- Cricbuzz and ESPNcricinfo pages work for cricket.\n" in agent.system_prompt({}) and "Public JSON" not in agent.system_prompt({})
+    assert agent.SYSTEM_PROMPT == agent.system_prompt(ADAPTERS)
 
 
 def test_no_source_borrows_from_another():

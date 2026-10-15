@@ -167,6 +167,10 @@ class Provider:
     # recognise(query, adapters): the (adapter, ref) a full typed name surely means; False when the name
     # is ambiguous, which ends the lookup (the agent decides); None to leave it to the next provider.
     recognise: Callable[[str, list["Adapter"]], "tuple[Adapter, PlayerRef] | bool | None"] | None = None
+    # research(adapters): its public API as the research agent's prompt points to it, given its running
+    # adapters ("https://lichess.org/api/broadcast/top"), for an API the agent can read without a key of
+    # ours (tools.fetch_url spends its budget). agent.py lists each running provider's.
+    research: Callable[[list["Adapter"]], str] | None = None
     budgets: tuple[Budget, ...] = ()  # what its API key may spend (adapters/budget.py)
 
 
@@ -202,6 +206,10 @@ class Adapter:
     def credits_also(self) -> list[dict[str, Any]]:
         """Others whose data comes in through this source, for the Credits page (FIDE's ratings via Lichess)."""
         return []
+
+    def credit(self, snap: Snapshot) -> str:
+        """Who a live card credits for this snapshot: the source, and anyone else whose data it carries."""
+        return self.name
 
     def find_player(self, name: str) -> PlayerRef | None:
         raise NotImplementedError

@@ -10,10 +10,11 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from sports_follow import credits, moments
+from sports_follow import credits, moments, structured
 from sports_follow.adapters import dota, opendota, pandascore, pandascore_esports as ps
 from sports_follow.adapters import budget
 from sports_follow.adapters.base import AdapterError
+from sports_follow.models import Event
 
 SPIRIT, LIQUID = 1669, 1652
 BEGIN = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
@@ -174,6 +175,19 @@ def test_the_credits_name_opendota_while_it_runs(monkeypatch):
     assert "OpenDota" in [c["name"] for c in credits.credits({"pandascore_esports": 1}, stockfish=False)["also"]]
     monkeypatch.setattr(opendota, "ENABLED", False)
     assert "OpenDota" not in [c["name"] for c in credits.credits({"pandascore_esports": 1}, stockfish=False)["also"]]
+
+
+def test_a_live_card_credits_opendota_beside_pandascore_once_it_has_the_map(opendota_up):
+    adapter = ps.PandascoreEsports()
+    m = _series("running", [("finished", SPIRIT), ("running", None)])
+    snap = ps.parse_match(m)
+    event = Event(id=5, title="Team Spirit vs Team Liquid", notes=None, competition="The International", start_utc=BEGIN, status="live")
+    card = {"live": {"is_live": False, "player_stats": []}, "upcoming": [], "recent_results": [], "freshness": {}}
+    structured._apply_snapshot(card, event, snap, None, adapter, BEGIN)
+    assert card["live"]["source"] == "PandaScore"
+    adapter._dota(m, snap)
+    structured._apply_snapshot(card, event, snap, snap.lines["101"], adapter, BEGIN)
+    assert card["live"]["source"] == "PandaScore and OpenDota"
 
 
 # ---------------------------------------------------------------- the client

@@ -147,10 +147,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the provider's other adapters), what it `covers`, its athlete `id_pattern`, and `available()` (a
   licensed source needs its token). Optional capabilities are opt-in, so nothing else changes: a name
   `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
-  `recognise` for search as you type, `snapshots` for batched live polling, `spare` for background reads.
+  `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
+  prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
+  `snapshots` for batched live polling, `spare` for background reads.
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
   serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
-  source never breaks another. `tests/test_sources.py` fails if shared code names a source.
+  source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
+  its provider's name or an API it reads, or its URL.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
   declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
   spent, a reserve kept for live games, and, for a scarce one, fans' own share. Its provider lists it

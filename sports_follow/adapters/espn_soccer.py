@@ -245,6 +245,7 @@ class EspnSoccer(espn.EspnAdapter, Adapter):
     name = "ESPN"
     covers = "Football"
     espn_uid = SPORT_UID
+    research_leagues = ("soccer/eng.1", "soccer/ksa.1", "soccer/uefa.champions")
 
     def find_player(self, name: str) -> PlayerRef | None:
         for hit in espn.search_athletes(name, SPORT_UID):

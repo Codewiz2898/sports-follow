@@ -882,8 +882,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "player_stats": line.stats if line else [],
             "state": snap.state,
             "moments": snap.moments[:10],
-            # The inside of a Dota 2 map comes from OpenDota: credit both.
-            "source": source_name(adapter.system) + (" and OpenDota" if snap.state.get("dota") else ""),
+            "source": adapter.credit(snap),
             "source_url": snap.source_url,
             "as_of": stamp,
         }
