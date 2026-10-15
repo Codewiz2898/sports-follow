@@ -253,6 +253,23 @@ export interface StarterSport {
   players: Starter[]
 }
 
+/** A game a source has on now, whoever follows it (GET /api/live, live.py): its live block shaped like a
+ * card's, and a few players to follow from it, best first. */
+export interface LiveGame {
+  key: string
+  title: string
+  competition: string
+  start_utc?: string | null
+  live: LiveStatus
+  players: SearchResult[]
+}
+
+export interface LiveSport {
+  key: string
+  label: string
+  games: LiveGame[]
+}
+
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
 export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
 
@@ -272,6 +289,7 @@ export const api = {
   form: (playerId: number, last: number) => request<Form>(`/api/players/${playerId}/form?last=${last}`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
   starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
+  live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
   /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */

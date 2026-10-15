@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from .. import bus, naming
 from . import budget, dota, opendota, pandascore
-from .base import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, Snapshot
+from .base import Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -503,6 +503,19 @@ class PandascoreEsports(Adapter):
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
+
+    def live_now(self) -> list[LiveGame]:
+        """Every series on now in the plan's games (matches/running): one request. Its teams, not its players:
+        a match names no players, and the registry knows the teams' pros."""
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"page[size]": 50})
+        rows = rows if isinstance(rows, list) else []
+        by_id = {str(m.get("id")): m for m in rows}
+        out = []
+        for f in parse_fixtures(rows):
+            snap = parse_match(by_id[f.source_id])
+            if snap.status == "live":
+                out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names))
+        return out
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many series at once, MULTI_MAX to a request: the live lane's one fetch a round. Keyed as

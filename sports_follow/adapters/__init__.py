@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .. import sports
 from ..config import SOURCES
-from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot
 from .espn_basketball import EspnBasketball
 from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
@@ -80,6 +80,6 @@ def source_name(system: str) -> str:
 
 
 __all__ = [
-    "ADAPTERS", "ALL", "KNOWN", "Adapter", "AdapterError", "Fixture", "Line", "LiveSearch", "PlayerRef", "Provider",
+    "ADAPTERS", "ALL", "KNOWN", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "PlayerRef", "Provider",
     "Roster", "Rostered", "SearchResult", "Snapshot", "for_sport", "pick", "providers", "source_name",
 ]

@@ -28,7 +28,7 @@ from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from . import naming, pipeline, registry, sports, structured
-from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, budget, providers, source_name
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, Provider, SearchResult, budget, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -476,6 +476,18 @@ def offered_pairs(db: Session, athletes: list[Athlete], fan: str | None) -> list
     rows = [from_athlete(a, "") for a in athletes]
     _ours(db, rows, fan)
     return [(a, r) for a, r in zip(athletes, rows) if r.player_id or (r.system and r.athlete_id)]
+
+
+def offered_refs(db: Session, sport: str, refs: list[PlayerRef], fan: str | None) -> list[SearchResult]:
+    """Players a source names (a game on now's, live.py) as result rows, in the order given: followed by
+    the source's id, and filled in for those already on Sports Follow."""
+    rows = [
+        SearchResult(key=f"{r.system}:{r.athlete_id}", name=r.name, sport=sport, detail=" · ".join(n for n in r.team_names[:1] if n),
+                     system=r.system, athlete_id=r.athlete_id, league=r.league, live_scores=True)
+        for r in refs
+    ]
+    _ours(db, rows, fan)
+    return rows
 
 
 def offered_players(db: Session, players: list[Player], fan: str | None) -> list[SearchResult]:

@@ -271,3 +271,22 @@ def test_the_team_sheet_before_kick_off_and_goal_details():
     assert (opener["team_id"], opener["assist"], opener["own_goal"]) == (str(HOME), "Ozan Tufan", False)
     assert (own_goal["own_goal"], own_goal["assist"]) == (True, None)
     assert penalty["clock"] == "45+2'" and penalty["athlete_ids"] == [str(STAR)]
+
+
+def test_live_now_lists_every_match_in_play_with_its_starting_elevens(monkeypatch):
+    named = [{**row, "player_name": name} for row, name in zip(LINEUPS, ["Mohamed Salah", "Ozan Tufan", "Bench Warmer", "A. Keeper"])]
+    in_play = _match("INPLAY_2ND_HALF", 2, 1, lineups=named, events=EVENTS[:1])
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, sportmonks._bucket(path)))
+        return {"data": [in_play, _match("FT", 1, 0, id=556)]}  # a match just over isn't on now
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    [game] = sm.SportmonksFootball().live_now()
+    assert asked == [("/football/livescores/inplay", "Fixture")]  # Sportmonks counts livescores as fixtures
+    assert (game.source_id, game.title, game.competition, game.teams) == ("555", "Trabzonspor vs Galatasaray", "Super Lig", ["Trabzonspor", "Galatasaray"])
+    assert game.snapshot.status == "live" and game.snapshot.state["home"]["score"] == "2"
+    # The starting elevens only, as the line-ups name them, with their team.
+    assert [(p.system, p.athlete_id, p.name, p.team_names) for p in game.players] == [
+        ("sportmonks_football", str(STAR), "Mohamed Salah", ["Trabzonspor"]), ("sportmonks_football", str(KEEPER), "A. Keeper", ["Galatasaray"])]

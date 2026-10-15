@@ -30,7 +30,7 @@ import httpx
 from .. import bus, naming
 from ..config import USER_AGENT
 from . import budget
-from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
 
 # With the slash: the budgets below match requests by this prefix, so every address is API + path.
 API = "https://lichess.org/api/"
@@ -299,6 +299,34 @@ def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: d
     if round_info.get("ongoing") or (games and starts and starts <= now):
         return "live"
     return "scheduled"
+
+
+LIVE_TOURS = 3  # the top broadcasts on now whose round is read for live_now(): a request each, on the one-at-a-time line
+LIVE_BOARDS = 2  # and the boards of each round shown: the highest rated pairs still playing
+
+
+def live_boards(round_data: dict[str, Any], system: str, now: datetime | None = None) -> list[LiveGame]:
+    """A broadcast round on now -> its highest rated boards still being played, each a game with both players."""
+    now = now or datetime.now(timezone.utc)
+    rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
+    playing = [g for g in round_data.get("games") or [] if g.get("status") == "*" and len(g.get("players") or []) >= 2 and all(p.get("fideId") for p in g["players"][:2])]
+    playing.sort(key=lambda g: -sum(p.get("rating") or 0 for p in g["players"][:2]))
+    out = []
+    for g in playing[:LIVE_BOARDS]:
+        sides = g["players"][:2]
+        snap = parse_board(round_data, str(sides[0]["fideId"]), now)
+        if snap.status != "live":
+            continue
+        refs = [PlayerRef(system=system, athlete_id=str(p["fideId"]), name=display_name(p.get("name") or ""), team_ids=[str(p["fideId"])], team_names=[display_name(p.get("name") or "")]) for p in sides]
+        out.append(LiveGame(
+            source_id=f"{rnd.get('id')}:{g.get('id')}",
+            title=f"{refs[0].name} v {refs[1].name}",
+            competition=" · ".join(x for x in (tour.get("name"), rnd.get("name")) if x),
+            start_utc=_dt(rnd.get("startsAt")),
+            snapshot=snap,
+            players=refs,
+        ))
+    return out
 
 
 def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None = None) -> Snapshot:
@@ -680,6 +708,18 @@ class LichessChess(Adapter):
 
     def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
         return []
+
+    def live_now(self) -> list[LiveGame]:
+        """The top broadcasts on now (broadcast/top, read every ten minutes at most), and in the round each has
+        on, its highest rated boards still being played: a request for each of the first LIVE_TOURS rounds."""
+        now = datetime.now(timezone.utc)
+        top = get_json(f"{API}broadcast/top", ttl=600)
+        out: list[LiveGame] = []
+        for entry in (top.get("active") or [])[:LIVE_TOURS]:
+            rnd = entry.get("round") or {}
+            if rnd.get("id") and not rnd.get("finished"):
+                out.extend(live_boards(get_json(f"{API}broadcast/-/-/{rnd['id']}", ttl=60), self.system, now))
+        return out
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)

@@ -368,3 +368,37 @@ def test_tournament_pgn_reads_tags_with_escaped_quotes():
     # A value is unescaped: \" is a quote, \\ a backslash.
     pgn = '[White "O\\"Neill, Pat \\\\ IM"]\n[Black "B"]\n[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/ijklmnop"]\n'
     assert lichess_chess.parse_pgn_rounds(pgn)["abcdefgh"][0]["players"][0]["name"] == 'O"Neill, Pat \\ IM'
+
+
+def test_chess_live_now_shows_the_top_boards_still_being_played(monkeypatch):
+    def board(gid: str, white: tuple, black: tuple, status: str = "*") -> dict:
+        side = lambda p: {"name": p[0], "fideId": p[1], "rating": p[2], "title": "GM", "clock": 360000}  # noqa: E731
+        return {"id": gid, "status": status, "fen": "8/8/8/8/8/8/8/8 w - - 0 40", "players": [side(white), side(black)]}
+
+    starts = int(time.time() * 1000) - 3600 * 1000
+    round_now = {
+        "round": {"id": "r5", "name": "Round 5", "ongoing": True, "startsAt": starts, "url": "https://lichess.org/broadcast/x/round-5/r5"},
+        "tour": {"id": "t1", "name": "Grand Swiss"},
+        "games": [
+            board("g1", ("Gukesh, D", 46616543, 2777), ("Carlsen, Magnus", 1503014, 2837)),
+            board("g2", ("Erigaisi, Arjun", 35009192, 2780), ("Nakamura, Hikaru", 2016192, 2800), status="1-0"),  # over
+            board("g3", ("Praggnanandhaa, R", 25059530, 2758), ("Caruana, Fabiano", 2020009, 2795)),
+            board("g4", ("Lower, Rated", 1, 2400), ("Also, Lower", 2, 2390)),
+        ],
+    }
+    asked = []
+
+    def fake_get_json(url, ttl, text=False):
+        asked.append(url.removeprefix(lichess_chess.API))
+        if url.endswith("broadcast/top"):
+            return {"active": [{"tour": round_now["tour"], "round": round_now["round"]}, {"tour": {"name": "Done"}, "round": {"id": "r9", "finished": True}}]}
+        return round_now
+
+    monkeypatch.setattr(lichess_chess, "get_json", fake_get_json)
+    games = lichess_chess.LichessChess().live_now()
+    assert asked == ["broadcast/top", "broadcast/-/-/r5"]  # a finished round isn't read
+    # The highest rated pairs still playing, LIVE_BOARDS of them, each with both players followable by FIDE id.
+    assert [(g.title, g.competition, [p.athlete_id for p in g.players]) for g in games] == [
+        ("D Gukesh v Magnus Carlsen", "Grand Swiss · Round 5", ["46616543", "1503014"]),
+        ("R Praggnanandhaa v Fabiano Caruana", "Grand Swiss · Round 5", ["25059530", "2020009"])]
+    assert all(g.snapshot.status == "live" and g.snapshot.state["kind"] == "chess" for g in games)

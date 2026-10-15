@@ -48,18 +48,17 @@ export function starterNames(sports: StarterSport[] | null, n: number): string[]
 }
 
 /**
- * The starter picker: a sport's starters as tiles in its colour, each followed, or unfollowed, with one tap.
- * In the welcome's second step (each sport the fan picked, under its name) and on Today while a fan
- * follows few players (one sport at a time, by chips).
+ * Follow, or unfollow, a result with one tap: whether it's followed, whether a tap is on its way, and the
+ * last error. What was followed here is kept for the whole page, by result key ("system:athlete id"), so a
+ * starter tile and a live game's chip for one player agree, and a picker mounted again still knows.
  */
-export function StarterPicker({ sports, chips = false }: { sports: StarterSport[]; chips?: boolean }) {
+export function useFollowToggle() {
   const following = useFollowing()
-  const [shown, setShown] = useState(sports.some((s) => s.key === lastChip) ? lastChip : sports[0]?.key ?? '')
-  const [ids, setIds] = useState<Record<string, number>>(() => ({ ...followedHere }))
+  const [, setVersion] = useState(0)
   const [pending, setPending] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  const playerOf = (r: SearchResult) => ids[r.key] ?? r.player_id ?? null
+  const playerOf = (r: SearchResult) => followedHere[r.key] ?? r.player_id ?? null
   const followed = (r: SearchResult) => {
     const id = playerOf(r)
     return id != null && following.isFollowing(id)
@@ -75,7 +74,7 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
       else {
         const card = await following.follow(followTarget(r))
         followedHere[r.key] = card.player_id
-        setIds({ ...followedHere })
+        setVersion((v) => v + 1)
       }
     } catch (e) {
       setError((e as Error).message)
@@ -83,6 +82,18 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
       setPending((p) => p.filter((k) => k !== r.key))
     }
   }
+
+  return { followed, toggle, busy: (r: SearchResult) => pending.includes(r.key), error }
+}
+
+/**
+ * The starter picker: a sport's starters as tiles in its colour, each followed, or unfollowed, with one tap.
+ * In the welcome's second step (each sport the fan picked, under its name) and on Today while a fan
+ * follows few players (one sport at a time, by chips).
+ */
+export function StarterPicker({ sports, chips = false }: { sports: StarterSport[]; chips?: boolean }) {
+  const [shown, setShown] = useState(sports.some((s) => s.key === lastChip) ? lastChip : sports[0]?.key ?? '')
+  const { followed, toggle, busy: pendingFor, error } = useFollowToggle()
 
   const groups = chips ? sports.filter((s) => s.key === shown) : sports
   return (
@@ -103,7 +114,7 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
           <div className="tiles">
             {s.players.map((r) => {
               const on = followed(r)
-              const busy = pending.includes(r.key)
+              const busy = pendingFor(r)
               return (
                 <button key={r.key} type="button" className="tile pick" data-sport={s.key} aria-pressed={on} aria-busy={busy} aria-label={`Follow ${r.name}`} onClick={() => void toggle(r)}>
                   <span className="corner">{busy ? <span className="spinner" /> : on ? <CheckIcon width={20} height={20} /> : <PlusIcon width={20} height={20} />}</span>

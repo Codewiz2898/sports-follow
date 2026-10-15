@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1192,3 +1192,13 @@ def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_
     assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
     assert not any(k.startswith("research") for k in api.redis.data)
     assert api.call("GET", "/api/config").json()["research"] is False
+
+
+def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch):
+    """GET /api/live answers from live.offer at once, and queues one read for each source whose last read
+    is too old: a page never waits on a source (tests/test_live.py holds what's offered)."""
+    games = [{"key": "football", "label": "Football", "games": [{"key": "pitch:100", "title": "A vs B", "players": []}]}]
+    monkeypatch.setattr(live, "offer", lambda db, fan: (games, ["pitch"]))
+    answer = api.call("GET", "/api/live", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {"sports": games, "refreshing": True}
+    assert api.queue.jobs[-1] == ("read_live", "pitch") and api.queue.options["_job_id"] == "read_live:pitch"

@@ -18,10 +18,12 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import sportmonks
-from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type;metadata"
+# Every match in play, league-wide: enough for its score, clock, scorers and the players in it.
+LIVE_INCLUDE = "participants;scores;state;periods;league;lineups;events.type"
 PLAYER_INCLUDE = "teams.team;nationality"
 
 # Match states (…/football/states): everything else is "scheduled".
@@ -231,6 +233,24 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
+def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
+    """Livescores in play -> the games on now, each with its starting players, named as the line-ups name them."""
+    out = []
+    for x in rows:
+        fixtures = parse_fixtures([x])
+        snap = parse_match(x)
+        if not fixtures or snap.status != "live":
+            continue
+        f = fixtures[0]
+        teams = dict(zip(f.team_ids, f.team_names))
+        players = [
+            PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[str(r.get("team_id"))], team_names=[teams.get(str(r.get("team_id")), "")])
+            for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")
+        ]
+        out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
+    return out
+
+
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
     """The team sheet, published about an hour before kick-off: who starts and who's on the bench. Until
     then Sportmonks fills the line-ups with its own prediction (eleven starters a side, days ahead), marked
@@ -369,6 +389,12 @@ class SportmonksFootball(Adapter):
         if not data.get("data"):
             raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
         return parse_match(data["data"])
+
+    def live_now(self) -> list[LiveGame]:
+        """Every match in the plan's leagues in play now, with its starting elevens: one request (livescores/inplay,
+        which Sportmonks counts as Fixture requests)."""
+        rows = sportmonks.get_json("/football/livescores/inplay", ttl=30, include=LIVE_INCLUDE).get("data") or []
+        return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many matches at once, MULTI_MAX to a request (fixtures/multi): the live lane's one fetch a

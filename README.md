@@ -176,7 +176,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
   `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
-  `snapshots` for batched live polling, `spare` for background reads, `rekey` for a source that changes
+  `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
+  `sports_follow/live.py`), `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
