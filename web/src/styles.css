@@ -17,6 +17,7 @@
   --radius-card: 22px;
   --radius-tile: 20px;
   --gutter: 16px;
+  --page-x: var(--gutter);  /* the page's side padding (.main): 40px on a desktop */
 }
 
 /* A sport's block colour, the ink that reads on it, that ink for secondary text (still 4.5:1 or better),
@@ -40,6 +41,7 @@ button { font: inherit; color: inherit; }
 /* The ring is ink, or paper inside ink surfaces, or the block's ink inside a sport colour. */
 :focus-visible { outline: 3px solid var(--focus, var(--text)); outline-offset: 2px; border-radius: 8px; }
 .tabbar, .next-card, .toast, .notice.action { --focus: var(--bg); }
+.next-card.coming { --focus: var(--text); }  /* the card is the link: its ring is on the paper around it */
 .player-band { --focus: var(--on-sport); }
 h1, h2, h3 { margin: 0; text-wrap: balance; }
 p { margin: 0; }
@@ -76,7 +78,8 @@ p { margin: 0; }
     display: flex; flex-direction: column; gap: 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
     padding: 28px 20px; background: var(--raised);
   }
-  .main { max-width: 1040px; padding: 32px 40px 56px; margin: 0; }
+  :root { --page-x: 40px; }
+  .main { max-width: 1040px; padding: 32px var(--page-x) 56px; margin: 0; }
   .tabbar { display: none; }
 }
 
@@ -195,23 +198,65 @@ a.photo-credit:hover { text-decoration: underline; }
 .error-box { padding: 14px 16px; border-radius: 14px; background: #fde8e6; color: var(--danger); font-size: 14px; font-weight: 600; }
 
 /* ---------------------------------------------------------------- today */
-/* The day's big moment: a finished game in the player's sport colour, the numbers huge. */
+/* A new fan's first step: a block of colour. */
 .hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--sport); color: var(--on-sport); }
-.hero > * { position: relative; }
-.hero-mark { position: absolute; right: -90px; top: -64px; width: 280px; height: 280px; opacity: 0.14; pointer-events: none; }
-.hero-name { font-size: clamp(36px, 13vw, 60px); overflow-wrap: anywhere; }
-.hero-stats { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 8px; max-width: 460px; }
-.hero-stats .dsp { font-size: 64px; }
-.hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 2px solid color-mix(in srgb, currentColor 18%, transparent); font-weight: 800; }
 
-/* The next game: one ink strip. */
-.strip { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 16px; border-radius: 18px; background: var(--text); color: var(--bg); }
-.strip .when { font-size: 24px; white-space: nowrap; }
-.strip .what { flex: 1; min-width: 0; font-weight: 700; font-size: 13px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.strip .count { font-size: 24px; color: var(--sport-on-ink); white-space: nowrap; }
-.strip .tag { color: var(--sport-on-ink); }
-/* Narrow phones, and 12-hour clocks ("Thu 08:00 PM"): the game drops to its own line. */
-@media (max-width: 420px) { .strip { flex-wrap: wrap; row-gap: 2px; } .strip .what { order: 3; flex-basis: 100%; } .strip .count { margin-left: auto; } }
+/* Rails (Rail.tsx): a row of fixed-width cards that scrolls sideways out to the page's edge. Each card snaps
+   to the page padding and the next one peeks in; no scrollbar. Room above and below for a focus ring. */
+.rail {
+  display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+  scroll-padding-inline: var(--page-x); scroll-behavior: smooth; scrollbar-width: none;
+  margin: -6px calc(-1 * var(--page-x)); padding: 6px var(--page-x);
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail > * { flex: 0 0 auto; scroll-snap-align: start; }
+/* "All N": every card at once, in a grid. */
+.rail.open { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); overflow: visible; margin: 0; padding: 0; }
+.rail.open > *, .rail.open > .result-card.hero { width: auto; }
+.rail-all { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; width: 150px; padding: 16px; border: 0; border-radius: var(--radius-tile); background: transparent; box-shadow: inset 0 0 0 2px var(--text); color: var(--text); text-align: left; cursor: pointer; }
+.rail-all:hover { background: rgba(13, 13, 13, 0.05); }
+.rail-all .dsp { font-size: 34px; }
+.rail.open > .rail-all { min-height: 96px; }
+.rail-arrows { display: none; gap: 8px; }
+.rail-arrow { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--surface); color: var(--text); cursor: pointer; }
+.rail-arrow:hover:not(:disabled) { background: var(--raised); }
+.rail-arrow:disabled { opacity: 0.35; cursor: default; }
+@media (min-width: 1024px) { .rail-arrows { display: flex; } .rail { gap: 12px; } }
+@media (prefers-reduced-motion: reduce) { .rail { scroll-behavior: auto; } }
+
+/* A sport's ground as line art (sports/index.tsx, Backdrop), faint behind a card's text in the card's ink,
+   centred, turned and sized as its game's seed says, and cropped by the card. Lines stay one weight at any size. */
+.backdrop { position: absolute; left: var(--bd-x, 50%); top: var(--bd-y, 50%); width: calc(var(--bd-size, 1.4) * min(100%, 320px)); height: auto; aspect-ratio: 1; transform: translate(-50%, -50%) rotate(var(--bd-turn, 0deg)); opacity: 0.18; pointer-events: none; }
+.backdrop * { vector-effect: non-scaling-stroke; }
+.result-card > :not(.backdrop), .next-card > :not(.backdrop), .board.drawn > :not(.backdrop) { position: relative; }
+.next-card .backdrop, .board .backdrop { color: var(--sport-on-ink); }
+.board.drawn { position: relative; overflow: hidden; }
+
+/* A finished game of the fan's: a block of its sport's colour, one big word, the player and their line. */
+.result-card { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; width: 236px; min-height: 268px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }
+.result-card .eyebrow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on-sport-soft); }
+.result-card .word { font-size: var(--word, 46px); overflow-wrap: anywhere; }
+.result-card .who { font-size: 26px; overflow-wrap: anywhere; }
+.result-card .line { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.result-card .line.strong { font-weight: 800; }
+/* Its win, draw or loss in the block's own ink. */
+.result-card .wl.W { background: var(--on-sport); color: var(--sport); }
+.result-card .wl.D { background: color-mix(in srgb, var(--on-sport) 22%, transparent); color: var(--on-sport); }
+.result-card .wl.L { box-shadow: inset 0 0 0 2px var(--on-sport); color: var(--on-sport); }
+/* The hero: on a day with nothing live, the biggest result leads the page, and the cards after it stand as tall. */
+.result-card.hero { width: 322px; min-height: 356px; padding: 18px; border-radius: 26px; }
+.result-card.hero .who { font-size: 40px; }
+.hero-stats { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 8px; }
+.hero-stats .dsp { font-size: 44px; }
+.hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 2px solid color-mix(in srgb, currentColor 18%, transparent); }
+@media (min-width: 1024px) { .result-card { width: 248px; } .result-card.hero { width: 360px; } }
+
+/* A game still to come, on Today: a small next-card (player page), the countdown or day big. */
+.next-card.coming { position: relative; overflow: hidden; justify-content: space-between; gap: 8px; width: 204px; min-height: 176px; padding: 14px 16px; border-radius: var(--radius-tile); }
+.next-card.coming .eyebrow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-card.coming .what { font-weight: 700; font-size: 13px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.player-chip { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
+@media (min-width: 1024px) { .next-card.coming { width: 212px; } }
 
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (min-width: 720px) { .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
@@ -280,6 +325,12 @@ a.photo-credit:hover { text-decoration: underline; }
 .board.compact .score { font-size: 40px; }
 .board .clock { font-size: 22px; color: #ff6b5f; }
 .board .live-note { color: #ff8a80; font-size: 13px; font-weight: 700; }
+/* Today's board: the player's line in one row under the score, and the game's newest moment. */
+.live-line { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.live-line .who { font-size: 20px; color: var(--sport-on-ink); }
+.live-line .what { font-size: 13px; font-weight: 700; }
+.live-line .missed { font-size: 12px; font-weight: 600; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.live-line .missed b { color: var(--text); font-weight: 800; }
 .player-line { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 16px; background: var(--sport); color: var(--on-sport); flex-wrap: wrap; }
 .player-line .eyebrow { color: var(--on-sport-soft); }
 .player-line .lead { font-size: 44px; }

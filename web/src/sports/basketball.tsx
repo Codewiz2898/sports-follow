@@ -41,7 +41,6 @@ export const basketball: SportView = {
   key: 'basketball',
   kinds: ['basketball'],
   Board: BasketballBoard as SportView['Board'],
-  mark: <><circle cx="50" cy="50" r="46" /><path d="M4 50h92M50 4v92M17 17c16 16 16 50 0 66M83 17c-16 16-16 50 0 66" /></>,
   highlight: (line) => {
     const tens = (lineStats(line) ?? []).filter((s) => /^(PTS|REB|AST|STL|BLK)$/i.test(s.label) && Number(s.value) >= 10).length
     return tens >= 3 ? 'Triple-double' : tens === 2 ? 'Double-double' : null

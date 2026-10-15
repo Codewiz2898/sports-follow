@@ -2,14 +2,14 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
-import { api, subscribe, type Card, type StreamEvent, type UpcomingEvent } from '../api'
+import { api, subscribe, type Card, type StreamEvent } from '../api'
 import { useNow } from '../clock'
-import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
+import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
-import { ahead, countdown, dateTime, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
-import { sportKey, sportName } from '../sports'
+import { ahead, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
+import { sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
 
@@ -240,7 +240,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
           </span>
         </>
       ) : retired ? null : next ? (
-        <NextCard card={card} next={next} />
+        <NextCard event={next} sport={p.sport}><RefreshButton card={card} /></NextCard>
       ) : card.live.available === false ? (
         <div className="card card-pad stack">
           <span className="title">No live scores for {sportName(p.sport) || 'this sport'} yet</span>
@@ -336,28 +336,6 @@ function RefreshButton({ card, style }: { card: Card; style?: CSSProperties }) {
     <button type="button" className="btn link" style={{ color: 'inherit', display: 'inline-flex', gap: 6, ...style }} onClick={refresh} disabled={Boolean(refreshing)}>
       <RefreshIcon width={14} height={14} />{refreshing ?? 'Refresh'}
     </button>
-  )
-}
-
-/** The next game, an ink card with a countdown. */
-function NextCard({ card, next }: { card: Card; next: UpcomingEvent }) {
-  const left = countdown(next.start_utc, useNow())
-
-  return (
-    <section className="next-card" data-sport={sportKey(card.player.sport)} aria-label="Next game">
-      <span className="row">
-        <span className="eyebrow" style={{ color: 'var(--sport-on-ink)' }}>Next game</span>
-        {next.competition && <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{next.competition}</span>}
-      </span>
-      <span className="row" style={{ alignItems: 'flex-end' }}>
-        <span className="title" style={{ fontSize: 20 }}>{next.title}</span>
-        {left && <span className="dsp count">{left}</span>}
-      </span>
-      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.16)', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700 }}>{[next.start_utc ? dateTime(next.start_utc) : 'Date to be confirmed', next.venue].filter(Boolean).join(' · ')}</span>
-        <RefreshButton card={card} />
-      </span>
-    </section>
   )
 }
 

@@ -409,8 +409,10 @@ async def read_card(player_id: int) -> dict[str, Any] | None:
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
     return {k: card.get(k) for k in ("player_id", "slug", "status", "version", "built_at", "player", "live", "upcoming", "freshness", "error")} | {
         "news": (card.get("news") or [])[:3],
-        # The newest result: the app's player tiles and Today's big moment show it.
-        "recent_results": (card.get("recent_results") or [])[:1],
+        # The results the card keeps, newest first: structured.RECENT_LIMIT for a bound player, and no more
+        # than that of what the agent wrote for one only it covers. Today's results rail shows them all, the
+        # tiles the newest.
+        "recent_results": (card.get("recent_results") or [])[: structured.RECENT_LIMIT],
     }
 
 

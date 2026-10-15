@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, LatestResult, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { ahead, countdown, dateOnly, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName, shortWhen } from '../format'
-import { SportMark, sportKey, sportName, viewOf, viewOfKind } from '../sports'
+import { Backdrop, sportKey, sportName, viewOf, viewOfKind } from '../sports'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -81,51 +81,131 @@ export function highlight(sport: string | null | undefined, text?: string | null
   return viewOf(sportKey(sport))?.highlight?.(text) ?? null
 }
 
-/** Today's big moment: the newest finished game, in the player's colour, their numbers huge. */
-export function ResultHero({ result, sport }: { result: LatestResult; sport?: string | null }) {
-  const key = sportKey(sport)
-  const stats = lineStats(result.player_contribution)?.slice(0, 3)
-  const word = highlight(sport, result.player_contribution)
-  // A line that only restates the result ("Lost in 2 sets") gives way to the score.
-  const restates = /^(won|lost|drew)\b/i.test(result.player_contribution ?? '')
-  const big = result.player_contribution && !restates ? result.player_contribution : result.result.replace(/^(Won|Lost|Drew)\s+/, '')
+/** One finished game on Today: each of the fan's players in it, the one with the biggest line first. */
+export interface GameResult {
+  key: string  // the game: its event id, else its title and day
+  players: { result: LatestResult; sport?: string | null; teams?: string[] }[]
+}
+
+const WON = { W: 'Won', D: 'Drew', L: 'Lost' }
+
+/** The big word's size: as large as a card's width takes it in a line or two. */
+function wordSize(word: string, hero?: boolean): string {
+  const steps = hero ? [64, 50, 40, 32] : [46, 36, 28, 22]
+  return `${steps[word.length <= 10 ? 0 : word.length <= 16 ? 1 : word.length <= 24 ? 2 : 3]}px`
+}
+
+/**
+ * A finished game of the fan's on Today: a block of its sport's colour with one big word (the sport's word
+ * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
+ * and their win, draw or loss. Players whose games went differently (opponents, or teams apart in one lobby)
+ * share the card too: then it shows the score alone, or the game, and each player's line says how theirs went.
+ * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers.
+ */
+export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
+  const lead = game.players[0]
+  const r = lead.result
+  const key = sportKey(lead.sport)
+  const several = game.players.length > 1
+  const marks = game.players.map((p) => outcome(p.result.result, p.teams))
+  // Their games went differently: they played each other (one won), or finished apart in a lobby ("3rd of
+  // 16" and "9th of 16"). Then no one result is everyone's.
+  const split = new Set(marks).size > 1 || new Set(game.players.map((p) => p.result.result)).size > 1
+  // The card's result from nobody's side: the score without "Won" when each side's is a win, draw or loss,
+  // else the game itself.
+  const score = r.result.replace(/^(won|lost|drew)\s+/i, '')
+  const result = !split ? r.result : marks.every(Boolean) && score && !/^by\b/i.test(score) ? score : r.title  // "by forfeit" says nothing alone
+  const word = highlight(lead.sport, r.player_contribution) ?? (result || r.player_contribution || r.title)
+  const wl = split ? null : marks[0]
+  const when = dayLabel(playedOn(r), new Date(now))
+  const stats = hero ? lineStats(r.player_contribution)?.slice(0, 3) : undefined
+  const match = result && result !== r.title && word !== result ? `${result} · ${r.title}` : r.title
+  // Each player's own line (with how their game went, when the card can't say it once); the hero's numbers
+  // say the first one's.
+  const lines = game.players.flatMap((p, i) => {
+    const line = stats && p === lead ? null : p.result.player_contribution
+    const mark = marks[i]
+    const how = split ? (mark ? WON[mark] : p.result.result) : null
+    const said = [how, line].filter(Boolean).join(' · ')
+    return said ? [several ? `${shortName(p.result.player_name)}: ${said}` : said] : []
+  })
+  const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   return (
-    <Link to={`/player/${result.player_id}`} className="hero" data-sport={key} aria-label={`${result.player_name}: ${result.title}, ${result.result}`}>
-      <SportMark sport={key} className="hero-mark" />
-      <span className="row">
-        <span className="pill ink" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{dayLabel(playedOn(result))}</span>
-        {result.competition && <span className="tag soft" style={{ textAlign: 'right' }}>{result.competition}</span>}
-      </span>
-      <span className="dsp hero-name">{shortName(result.player_name)}</span>
-      {stats ? (
-        <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
-          {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag">{s.label}</span></span>)}
-        </span>
+    <Link to={`/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
+      <Backdrop sport={key} seed={game.key} />
+      {hero ? (
+        <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
       ) : (
-        <span className="dsp" style={{ fontSize: 56 }}>{big}</span>
+        <span className="row"><span className="eyebrow">{[when, r.competition].filter(Boolean).join(' · ')}</span>{badge}</span>
       )}
-      <span className="hero-foot">
-        <span className="stack" style={{ gap: 2 }}>
-          <span>{result.result}</span>
-          <span className="small soft" style={{ fontWeight: 600 }}>{result.title}</span>
+      <span className="dsp word" style={{ '--word': wordSize(word, hero) } as CSSProperties}>{word}</span>
+      <span className="stack" style={{ gap: hero ? 12 : 2 }}>
+        <span className="dsp who">{game.players.map((p) => shortName(p.result.player_name)).join(' · ')}</span>
+        {stats && (
+          <span className="stack" style={{ gap: 4 }}>
+            {several && <span className="tag soft">{shortName(r.player_name)}</span>}
+            <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
+              {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag soft">{s.label}</span></span>)}
+            </span>
+          </span>
+        )}
+        {!hero && match !== word && <span className="line">{match}</span>}
+        {lines.map((l) => <span key={l} className="line strong">{l}</span>)}
+      </span>
+      {hero && (
+        <span className="hero-foot">
+          {match !== word && <span className="line">{match}</span>}
+          {r.competition && <span className="line soft" style={{ textAlign: 'right', marginLeft: 'auto' }}>{r.competition}</span>}
         </span>
-        {word && <span className="pill outline">{word}</span>}
+      )}
+    </Link>
+  )
+}
+
+/**
+ * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it.
+ */
+export function ComingCard({ event, players, seed }: { event: UpcomingEvent; players: Card[]; seed: string }) {
+  const now = useNow()
+  const key = sportKey(players[0].player.sport)
+  const start = parseDate(event.start_utc)
+  const left = start && start.getTime() - now < 864e5 ? countdown(event.start_utc, now) : ''
+  const big = left || (start && start.getTime() - now < 6 * 864e5 ? start.toLocaleDateString(undefined, { weekday: 'short' }) : start?.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) || 'TBC'
+  // Above it, what the big line doesn't say: the day and time over a countdown, the time over a day.
+  const time = start && !dateOnly(event.start_utc) ? start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'Time TBC'
+  return (
+    <Link to={`/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
+      <Backdrop sport={key} seed={seed} />
+      <span className="eyebrow muted">{[left ? shortWhen(event.start_utc, now) : time, event.competition].filter(Boolean).join(' · ')}</span>
+      <span className="dsp count">{big}</span>
+      <span className="stack" style={{ gap: 6 }}>
+        <span className="what">{event.title}</span>
+        <span className="player-chip">{players.map((c) => shortName(c.player.name)).join(' · ')}</span>
       </span>
     </Link>
   )
 }
 
-/** The next game for one of your players, as one ink strip with a countdown. */
-export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & { players?: string[] }; playerId: number; sport?: string | null }) {
-  const now = useNow()
-  const left = countdown(event.start_utc, now)
+/** A player's next game, on their page: an ink card, the countdown in their sport's colour. `children` sit
+ * at its foot beside when and where it is (the page's refresh button). */
+export function NextCard({ event, sport, children }: { event: UpcomingEvent; sport?: string | null; children?: ReactNode }) {
+  const left = countdown(event.start_utc, useNow())
   return (
-    <Link to={`/player/${playerId}`} className="strip" data-sport={sportKey(sport)}>
-      <span className="tag">Next</span>
-      <span className="dsp when">{shortWhen(event.start_utc, now)}</span>
-      <span className="what">{[event.players?.map(shortName).join(', '), event.title, dateOnly(event.start_utc) && 'time TBC'].filter(Boolean).join(' · ')}</span>
-      {left && <span className="dsp count">{left}</span>}
-    </Link>
+    <section className="next-card" data-sport={sportKey(sport)} aria-label="Next game">
+      <span className="row">
+        <span className="eyebrow" style={{ color: 'var(--sport-on-ink)' }}>Next game</span>
+        {event.competition && <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{event.competition}</span>}
+      </span>
+      <span className="row" style={{ alignItems: 'flex-end' }}>
+        <span className="title" style={{ fontSize: 20 }}>{event.title}</span>
+        {left && <span className="dsp count">{left}</span>}
+      </span>
+      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.16)', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700 }}>{[event.start_utc ? dateTime(event.start_utc) : 'Date to be confirmed', event.venue].filter(Boolean).join(' · ')}</span>
+        {children}
+      </span>
+    </section>
   )
 }
 
@@ -164,15 +244,22 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
   )
 }
 
+/** The newest moment of a game on Today's board ("Goal: Saka · 2–1 · 52'"), and whether it came after the
+ * fan last looked at their alerts. */
+export interface LatestMoment { text: string; missed: boolean }
+
 /**
  * The live scoreboard. Scores from a structured source carry a sport-specific state (two sides and
  * scorers for football, innings for cricket), drawn by that sport's view (sports/); scores the research
- * agent read off a web page, and states no view draws, are text in one generic layout.
+ * agent read off a web page, and states no view draws, are text in one generic layout. Today's is compact:
+ * with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is one row
+ * with the game's `latest` moment under it.
  */
-export function LiveScoreboard({ live, playerName, sport, teams, compact }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean }) {
+export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
   const state = live.state
   const view = viewOfKind(state?.kind)
+  const key = sportKey(sport ?? state?.kind)
   const plain = (
     <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
       <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
@@ -180,7 +267,9 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact }: { li
     </div>
   )
   return (
-    <section className={`board${compact ? ' compact' : ''}`} data-sport={sportKey(sport ?? state?.kind)} aria-label="Live now">
+    <section className={`board${compact ? ' compact' : ''}${seed ? ' drawn' : ''}`} data-sport={key} aria-label="Live now">
+      {/* On Today, the sport's line art behind it, turned its own way for this game (seed). */}
+      {seed && <Backdrop sport={key} seed={seed} />}
       <div className="row">
         <span className="badge-live">Live</span>
         {live.event && <span className="eyebrow" style={{ textAlign: 'right' }}>{live.event}</span>}
@@ -188,7 +277,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact }: { li
       {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
       <ErrorBoundary fallback={plain} resetKey={live}>
         {view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} live={live} /> : plain}
-        <PlayerLine live={live} playerName={playerName} />
+        {compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />}
         {!compact && live.moments && live.moments.length > 0 && (
           <ul className="moments">
             {live.moments.slice(0, 5).map((m, i) => (
@@ -207,6 +296,44 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact }: { li
         {!compact && safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" className="link" style={{ color: 'var(--text)' }}>Open source</a>}
       </div>
     </section>
+  )
+}
+
+/** A stat in words: "3 shots", "1 key pass"; an abbreviation stays as it is ("22 PTS", "2 4s"), and a value
+ * that isn't a number follows its label ("Colour Black"). */
+function statWords(s: Stat): string {
+  if (!/^[\d.,½*/–-]/.test(s.value)) return `${s.label} ${s.value}`
+  if (s.label === s.label.toUpperCase()) return `${s.value} ${s.label}`
+  const label = s.label.toLowerCase()
+  // One of them: "passes" → "pass", "shots" → "shot"; "4s" stays.
+  const one = /(ss|sh|ch|x)es$/.test(label) ? label.slice(0, -2) : /[a-z]{2}(?<!s)s$/.test(label) ? label.slice(0, -1) : label
+  return `${s.value} ${s.value === '1' ? one : label}`
+}
+
+/**
+ * The followed player's line on Today's board, in one row: their name in the sport's colour, then their
+ * numbers (the headline first, "67* (71)", without the stats it already says). Under it, the newest thing
+ * that happened to the fan's players in this game, which the fan missed if it came after they last looked
+ * at their alerts.
+ */
+function LiveLine({ live, playerName, latest }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null }) {
+  const stats = (live.player_stats ?? []).filter((s) => !/^[–—-]*$/.test(s.value.trim()))  // a dash is no number yet
+  const view = viewOfKind(live.state?.kind)
+  const said = new Set(view?.inHeadline ?? [])
+  const numbers = live.headline ? [live.headline, ...stats.filter((s) => !said.has(s.label)).slice(0, 4).map(statWords)] : stats.slice(0, 5).map(statWords)
+  // No numbers yet: say why, unless the sport has no player lines at all (esports: the team's result says it).
+  const why = !numbers.length && live.state && view?.noLine !== null ? view?.noLine ?? 'has no numbers in this game yet' : null
+  if (!numbers.length && !why && !latest) return null
+  return (
+    <div className="live-line">
+      {(numbers.length > 0 || why) && (
+        <span className="row" style={{ justifyContent: 'flex-start', alignItems: 'baseline', flexWrap: 'wrap', columnGap: 8, rowGap: 2 }}>
+          <span className="dsp who">{shortName(playerName)}</span>
+          <span className="what">{numbers.length ? numbers.join(' · ') : why}</span>
+        </span>
+      )}
+      {latest && <span className="missed"><b>{latest.missed ? 'You missed' : 'Latest'}</b> {latest.text}</span>}
+    </div>
   )
 }
 

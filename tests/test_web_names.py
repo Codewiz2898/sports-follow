@@ -1,6 +1,6 @@
 """The web app takes the list of sports from the API rather than keeping its own, and names no source
 (CLAUDE.md, "Code organization"). tests/test_sports.py and tests/test_sources.py hold shared Python to
-none. In web/src only a sport's view (web/src/sports/<sport>.tsx: its live board and mark) names a sport,
+none. In web/src only a sport's view (web/src/sports/<sport>.tsx: its live board and line art) names a sport,
 and only its own. Where a file still names something it should take from the API (a source, today), it
 has a limit instead: how many times it names it now. A file over its limit has gained a name; a file
 under it should have its limit lowered here, so code moved toward the rule can't drift back.
