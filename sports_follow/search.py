@@ -165,11 +165,7 @@ def from_athlete(a: Athlete, query: str) -> SearchResult:
     """A registry athlete as a result. Keyed by their live-source id when the registry knows it, so a
     player already followed through that source is the same row."""
     rules = sports.of(a.sport)
-    if rules.side_by_side:
-        # Its sources sit side by side, each for its own games (esports): the one this row came from.
-        system = next((s for s in a.ids or {} if s in ADAPTERS), None)
-    else:
-        system = registry.live_system(a.sport)
+    system = registry.follow_system(a.sport, a.ids or {})
     live_id = (a.ids or {}).get(system) if system else None
     parts = rules.search_detail(a)
     aka = _aka(query, a.name, list(a.aliases or []))
@@ -452,6 +448,15 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
             pool.setdefault(r.key, r)
     scored = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -x[0])
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]
+
+
+def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[dict[str, Any]]:
+    """Registry athletes as the app's result rows, not found by a query but offered (starters.py): filled
+    in for those already on Sports Follow, so following one is the same call as from search. Only those a
+    running source covers by id, or who have a page, so following one never needs AI research."""
+    rows = [from_athlete(a, "") for a in athletes]
+    _ours(db, rows, fan)
+    return [_public(r) for r in rows if r.player_id or (r.system and r.athlete_id)]
 
 
 def _public(r: SearchResult) -> dict[str, Any]:

@@ -19,9 +19,11 @@ import pytest
 from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import players, registry
+from types import SimpleNamespace
+
+from sports_follow import adapters, players, registry, sports, starters
 from sports_follow.adapters import Adapter, PlayerRef, Roster, Rostered, pubg
-from sports_follow.models import Athlete, AthleteOverride, Follow, Moment, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import Athlete, AthleteOverride, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -33,7 +35,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -175,3 +177,118 @@ def test_restoring_lets_the_import_bring_them_back(db, capsys):
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q213854"]
     assert players.main(["list"]) == 0 and "Nothing added or removed yet." in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- starters
+
+
+@pytest.fixture(autouse=True)
+def live_source(monkeypatch):
+    """The live source has whoever Wikidata gave an id for, and nobody else (no network in tests)."""
+    asked: list[str] = []
+
+    def resolve(person):
+        asked.append(person.qid)
+        return (None, person.ids) if person.ids.get(registry.live_system(person.sport) or "") else None
+
+    monkeypatch.setattr(registry, "resolve", resolve)
+    return asked
+
+
+def chess_starters(db) -> str:
+    """Two chess players a live source knows by id, and one it doesn't. Returns the source's system."""
+    system = registry.live_system("chess")
+    if system is None:
+        pytest.skip("no live chess source in this build")
+    registry.upsert(db, [athlete("Q10", "chess", "Gukesh D", {system: "gukesh"}), athlete("Q11", "chess", "R Praggnanandhaa", {system: "pragg"}),
+                         athlete("Q12", "chess", "Nobody Online")])
+    db.commit()
+    return system
+
+
+def test_starters_are_offered_in_the_order_they_were_added_and_pinned(db, capsys):
+    system = chess_starters(db)
+    for qid in ("Q11", "Q10"):
+        assert players.main(["starter", "add", qid]) == 0
+    assert players.main(["starter", "add", "Q12"]) == 2 and "doesn't have Nobody Online" in capsys.readouterr().err  # nobody to follow live
+    assert players.main(["starter", "add", "Q10"]) == 0 and "Already a starter: Gukesh D" in capsys.readouterr().out
+    db.expire_all()
+    assert [(s.qid, s.position) for s in db.scalars(select(Starter).order_by(Starter.position))] == [("Q11", 1), ("Q10", 2)]
+    assert {(o.qid, o.action) for o in db.scalars(select(AthleteOverride))} == {("Q10", "keep"), ("Q11", "keep")}  # no import drops them
+    [offer] = starters.offer(db, "fan")
+    assert offer["key"] == "chess" and [(r["name"], r["system"], r["athlete_id"], r["following"]) for r in offer["players"]] == [
+        ("R Praggnanandhaa", system, "pragg", False), ("Gukesh D", system, "gukesh", False)]
+    assert players.main(["starter", "list"]) == 0
+    listing = capsys.readouterr().out
+    assert listing.index("R Praggnanandhaa") < listing.index("Gukesh D")
+
+
+def test_a_starter_whose_source_id_went_missing_isnt_offered(db, capsys):
+    chess_starters(db)
+    assert players.main(["starter", "add", "Q10"]) == 0
+    db.execute(update(Athlete).where(Athlete.qid == "Q10").values(ids={}))  # an import that lost the id
+    db.commit()
+    assert starters.offer(db, "fan") == []
+    assert players.main(["starter", "list"]) == 0 and "Gukesh D (not offered: no running source has their id)" in capsys.readouterr().out
+
+
+def test_a_starter_already_on_the_app_says_who_follows_them(db):
+    system = chess_starters(db)
+    db.add(Player(id=7, slug="gukesh-d", name="Gukesh D", sport="Chess", wikidata_qid="Q10"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=7, status="ready", card={}), PlayerIdentity(player_id=7, system=system, external_id="gukesh", confidence=1.0),
+                Follow(fan_id="fan", player_id=7, alert_rules={}), Follow(fan_id="other", player_id=7, alert_rules={})])
+    db.commit()
+    assert players.main(["starter", "add", "Q10"]) == 0
+    [row] = starters.offer(db, "fan")[0]["players"]
+    assert (row["player_id"], row["following"], row["followers"]) == (7, True, 2)
+    assert starters.offer(db, "someone new")[0]["players"][0]["following"] is False
+
+
+def test_a_sport_thats_off_offers_no_starters(db, monkeypatch):
+    chess_starters(db)
+    assert players.main(["starter", "add", "Q10"]) == 0
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "chess"))
+    assert starters.offer(db, "fan") == []
+
+
+def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):
+    chess_starters(db)
+    for qid in ("Q10", "Q11"):
+        assert players.main(["starter", "add", qid]) == 0
+    assert players.main(["starter", "remove", "Q10"]) == 0
+    assert players.main(["starter", "remove", "Q10"]) == 2 and "isn't a starter" in capsys.readouterr().err
+    assert players.main(["remove", "Q11", "--yes"]) == 0  # the athlete goes, and their starter row with them
+    db.expire_all()
+    assert db.scalars(select(Starter)).all() == []
+    assert players.main(["starter", "add", "Q11"]) == 2  # removed: no registry row to offer
+
+
+def test_a_starter_in_two_sports_needs_the_sport(db, capsys):
+    kohli(db)
+    cricket = registry.live_system("cricket")
+    if cricket is None:
+        pytest.skip("no live cricket source in this build")
+    registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli", {cricket: "253802"}), athlete("Q213854", "chess", "Virat Kohli")])
+    db.commit()
+    assert players.main(["starter", "add", "Q213854"]) == 2 and "say which with --sport" in capsys.readouterr().err
+    assert players.main(["starter", "add", "Q213854", "--sport", "cricket"]) == 0
+    db.expire_all()
+    assert [(s.qid, s.sport) for s in db.scalars(select(Starter))] == [("Q213854", "cricket")]
+
+
+def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, capsys, monkeypatch, live_source):
+    """Esports sources sit side by side, each for its own games: a pro from the second is checked there,
+    not looked for by name in the sport's first source."""
+    for system in [s for s, a in adapters.ADAPTERS.items() if a.sport == "esports"]:
+        monkeypatch.delitem(adapters.ADAPTERS, system)
+    asked: list[tuple[str, str]] = []
+    for system in ("first_esports", "second_esports"):
+        monkeypatch.setitem(adapters.ADAPTERS, system, SimpleNamespace(system=system, sport="esports", player=lambda xid, league=None, s=system: asked.append((s, xid)) or object()))
+    registry.upsert(db, [athlete("pro:77", "esports", "Jonathan", {"second_esports": "77"}, league="bgmi")])
+    db.commit()
+    assert players.main(["starter", "add", "pro:77"]) == 0
+    assert "followed live through second_esports" in capsys.readouterr().out
+    assert asked == [("second_esports", "77")] and live_source == []  # never searched for by name in the first
+    [row] = starters.offer(db, "fan")[0]["players"]
+    assert (row["system"], row["athlete_id"]) == ("second_esports", "77")
