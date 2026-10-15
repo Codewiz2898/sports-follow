@@ -135,6 +135,20 @@ class AthleteOverride(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class Starter(Base):
+    """A registry athlete offered to a new fan, who follows nobody yet, in their sport's starter picker
+    (starters.py; the operator sets them with `players starter`). Removing the athlete takes the row too."""
+
+    __tablename__ = "starter"
+    __table_args__ = (UniqueConstraint("qid", "sport"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id
+    sport: Mapped[str] = mapped_column(String(20))
+    position: Mapped[int] = mapped_column(Integer)  # the order within the sport, first shown first
+    created_at: Mapped[datetime] = _now()
+
+
 class Team(Base):
     __tablename__ = "team"
 

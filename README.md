@@ -183,6 +183,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
   for following.
+- **Starter players**, the few a new fan is offered in each sport (the welcome, an empty Today, search's
+  "Try"), are rows too, set with the same command: `starter add <registry id>` (it checks the sport's
+  live source has them, and pins them), `starter remove`, `starter list`. A sport that's turned off
+  offers none, and removing a player takes their starter row with them (`sports_follow/starters.py`).
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
   database and `alembic check`; and the web app's type-check and build. In `web/src`,

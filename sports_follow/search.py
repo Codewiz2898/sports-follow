@@ -454,6 +454,15 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]
 
 
+def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[dict[str, Any]]:
+    """Registry athletes as the app's result rows, not found by a query but offered (starters.py): filled
+    in for those already on Sports Follow, so following one is the same call as from search. Only those a
+    running source covers by id, or who have a page, so following one never needs AI research."""
+    rows = [from_athlete(a, "") for a in athletes]
+    _ours(db, rows, fan)
+    return [_public(r) for r in rows if r.player_id or (r.system and r.athlete_id)]
+
+
 def _public(r: SearchResult) -> dict[str, Any]:
     out = asdict(r)
     for hidden in ("_rank", "matched", "popularity"):

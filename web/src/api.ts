@@ -218,6 +218,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
+/** A sport's starters: the few players a new fan is offered there (GET /api/starters), as search results. */
+export interface StarterSport {
+  key: string
+  label: string
+  players: SearchResult[]
+}
+
 /** What to follow: a name for the research agent, a player already here, or an athlete picked in search. */
 export type FollowTarget = { query: string } | { player_id: number } | Pick | { qid: string; sport: string }
 
@@ -236,6 +243,7 @@ export const api = {
   result: (playerId: number, eventId: number) => request<GameDetail>(`/api/players/${playerId}/results/${eventId}`),
   form: (playerId: number, last: number) => request<Form>(`/api/players/${playerId}/form?last=${last}`),
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
+  starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
   /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */

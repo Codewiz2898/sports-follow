@@ -31,7 +31,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, structured
+from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, starters, structured
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1000,3 +1000,13 @@ def test_a_device_moves_to_another_fan_only_with_its_own_keys(api):
     assert subscribe("fan-b", "new-key", "new-auth").status_code == 200 and api.devices[endpoint] == ("fan-b", "new-key", "new-auth")
     trims = [s for s in api.statements if isinstance(s, Delete) and s.table.name == "push_subscription"]
     assert len(trims) == 3  # the device cap, after each subscription that went through
+
+
+def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
+    """GET /api/starters answers from starters.offer for this fan (whose follows mark the rows); starters.py
+    and tests/test_players.py hold what's offered."""
+    asked = []
+    offer = [{"key": "chess", "label": "Chess", "players": [{"key": "lichess_chess:gukesh", "name": "Gukesh D", "following": True}]}]
+    monkeypatch.setattr(starters, "offer", lambda db, fan: asked.append(fan) or offer)
+    answer = api.call("GET", "/api/starters", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {"sports": offer} and asked == ["fan"]

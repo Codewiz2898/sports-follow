@@ -1,16 +1,19 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import type { Card, LatestResult, UpcomingEvent } from '../api'
 import { useNow } from '../clock'
 import { highlight, LiveScoreboard, NextStrip, PlayerTile, ResultHero, SectionHead } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, PlusIcon, SearchIcon, UserIcon } from '../components/Icons'
+import { StartersSection } from '../components/Starters'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useAccount } from '../account'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
+import { welcomed } from './WelcomePage'
 
 const NUDGE = 'sf-save-nudge'
+const FEW = 3  // until a fan follows this many, Today keeps offering starters
 
 /** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
 function SaveNudge() {
@@ -123,6 +126,7 @@ export function TodayPage() {
   )
 
   if (loaded && cards.length === 0) {
+    if (!welcomed()) return <Navigate to="/welcome" replace />  // a new fan: the welcome first, once
     return (
       <>
         {header}
@@ -131,6 +135,7 @@ export function TodayPage() {
           <p style={{ fontWeight: 600, maxWidth: '36ch' }}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</p>
           <Link to="/search" className="btn" style={{ alignSelf: 'flex-start', background: 'var(--on-sport)', color: 'var(--sport)', borderColor: 'var(--on-sport)' }}><SearchIcon width={18} height={18} />Find a player</Link>
         </section>
+        <StartersSection />
       </>
     )
   }
@@ -172,6 +177,8 @@ export function TodayPage() {
           </ErrorBoundary>
         </section>
       )}
+
+      {cards.length > 0 && cards.length < FEW && <StartersSection />}
     </>
   )
 }
