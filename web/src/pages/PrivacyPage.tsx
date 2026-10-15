@@ -4,7 +4,7 @@ import { useAccount } from '../account'
 import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
 
-/** What Sports Follow keeps about a fan, why, who else sees any of it, and how to delete it. */
+/** What the app keeps about a fan, why, who else sees any of it, and how to delete it. */
 export function PrivacyPage() {
   const { config } = useAccount()
   const contact = config?.contact_email

@@ -15,11 +15,13 @@ from pathlib import Path
 
 import httpx
 
+from .config import APP_NAME
+
 log = logging.getLogger("sports_follow.mail")
 
 RESEND_URL = "https://api.resend.com/emails"
 KEY_PATH = Path.home() / ".config" / "sports-follow" / "resend-key"
-MAIL_FROM = os.environ.get("SPORTS_FOLLOW_MAIL_FROM", "")  # "Sports Follow <signin@your-domain>"
+MAIL_FROM = os.environ.get("SPORTS_FOLLOW_MAIL_FROM", "")  # "stann <signin@your-domain>"
 MAIL_LOG = os.environ.get("SPORTS_FOLLOW_MAIL_LOG") == "1"
 
 _client = httpx.Client(timeout=15)
@@ -45,15 +47,15 @@ def configured(https: bool) -> bool:
 
 
 def send_code(email: str, code: str) -> None:
-    subject = f"{code} is your Sports Follow code"
+    subject = f"{code} is your {APP_NAME} code"
     text = (
-        f"Your Sports Follow sign-in code is {code}\n\n"
+        f"Your {APP_NAME} sign-in code is {code}\n\n"
         "Type it into the app to sign in. It works for 10 minutes.\n\n"
         "Didn't ask for it? You can ignore this email: nobody can sign in without the code.\n"
     )
     body = (
         '<div style="font-family:Helvetica,Arial,sans-serif;max-width:420px;margin:0 auto;padding:24px;color:#111">'
-        '<p style="font-size:15px;margin:0 0 16px">Your Sports Follow sign-in code:</p>'
+        f'<p style="font-size:15px;margin:0 0 16px">Your {html.escape(APP_NAME)} sign-in code:</p>'
         f'<p style="font-size:36px;font-weight:800;letter-spacing:6px;margin:0 0 16px">{html.escape(code)}</p>'
         '<p style="font-size:15px;margin:0 0 16px">Type it into the app to sign in. It works for 10 minutes.</p>'
         '<p style="font-size:13px;color:#666;margin:0">Didn\'t ask for it? You can ignore this email: nobody can sign in without the code.</p>'

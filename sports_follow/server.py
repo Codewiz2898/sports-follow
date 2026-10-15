@@ -41,7 +41,7 @@ from starlette.datastructures import Headers
 from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, structured, tracing
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
 # Nor does it log validation failures, which carry what a client sent.
-app = FastAPI(title="Sports Follow", lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -96,7 +96,7 @@ class SameOriginWrites:
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] == "http" and scope["method"] in UNSAFE and scope["path"].startswith("/api/") and not _same_origin(Headers(scope=scope)):
-            return await JSONResponse({"detail": "This API only takes changes from the Sports Follow app."}, status_code=403)(scope, receive, send)
+            return await JSONResponse({"detail": f"This API only takes changes from the {APP_NAME} app."}, status_code=403)(scope, receive, send)
         await self.app(scope, receive, send)
 
 
@@ -400,8 +400,8 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
-    """What this server offers the app: the model, the ways to sign in, who to write to about privacy."""
-    return {"model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    """What this server offers the app: its name, the model, the ways to sign in, who to write to about privacy."""
+    return {"name": APP_NAME, "model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -476,7 +476,7 @@ async def take_research(fan: str, address: str | None, used_up: str) -> list[str
     limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
     if address:
         limits.append((player_search.research_address_key(address, now), RESEARCH_PER_ADDRESS, 2 * DAY, "Your network has used today's AI researches. Try again tomorrow."))
-    limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, "Sports Follow has done all the AI research it can this hour. Try again later."))
+    limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, f"{APP_NAME} has done all the AI research it can this hour. Try again later."))
     taken: list[str] = []
     for key, limit, ttl, refusal in limits:
         used = await state["redis"].incr(key)
@@ -597,7 +597,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         if adapter is None or not _source_id_ok(system, athlete_id) or not _league_ok(league):
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
-            raise HTTPException(404, "That athlete isn't on Sports Follow.")  # removed by an operator (players.py)
+            raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
         except AdapterError as exc:
@@ -792,7 +792,7 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     address = client_address(request)
     await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
     await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
-    await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, "Sports Follow is sending a lot of codes right now. Try again in a few minutes.")
+    await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")

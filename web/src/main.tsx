@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEven
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AccountNotice, AccountProvider, useAccount } from './account'
+import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -106,7 +107,7 @@ function Sidebar() {
   const live = cards.filter((c) => c.live.is_live)
   return (
     <aside className="sidebar" aria-label="Followed players">
-      <NavLink to="/" className="brand"><img src="/icons/mark.svg" alt="" width={36} height={36} />stann</NavLink>
+      <NavLink to="/" className="brand"><img src="/icons/mark.svg" alt="" width={36} height={36} />{APP_NAME}</NavLink>
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>

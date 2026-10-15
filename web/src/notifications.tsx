@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type AlertLevel, type Card, type PlayerMoment } from './api'
+import { APP_NAME } from './app'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
 import { sportInfo } from './sports'
@@ -71,7 +72,7 @@ export function usePush() {
   const unavailable = !import.meta.env.PROD
     ? 'Notifications work in the built app: run `npm run build` in web/ and open http://localhost:8421.'
     : !supported && iphone && !standalone
-      ? 'On iPhone, add Sports Follow to your Home Screen first (Share, then Add to Home Screen), and turn notifications on from the app.'
+      ? `On iPhone, add ${APP_NAME} to your Home Screen first (Share, then Add to Home Screen), and turn notifications on from the app.`
       : !supported
         ? "This browser can't show notifications."
         : serverOn === false

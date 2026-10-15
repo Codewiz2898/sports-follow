@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { APP_NAME } from './app'
 import { PlusIcon } from './components/Icons'
 
 /** Chrome's install offer (Android, desktop); Safari has none: iPhone installs from the Share menu. */
@@ -127,7 +128,7 @@ export function PwaNotices() {
       )}
       {updateReady && (
         <div className="notice action" role="status">
-          <span>A new version of Sports Follow is ready.</span>
+          <span>A new version of {APP_NAME} is ready.</span>
           <button type="button" className="btn link" onClick={applyUpdate}>Reload</button>
         </div>
       )}

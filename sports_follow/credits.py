@@ -13,6 +13,7 @@ from typing import Any
 from . import engine
 from .adapters import ADAPTERS, KNOWN, providers
 from .agent import MODEL
+from .config import APP_NAME
 
 # Server, web app and services, with the licence each is used under (tests check the Python ones
 # against the installed packages).
@@ -45,7 +46,7 @@ SOFTWARE: list[dict[str, str]] = [
 
 NOTICES = [
     "Scores and statistics come from the providers above and aren't official records; if one looks wrong, the governing body's record is the one that counts.",
-    "Team, league and competition names belong to their owners. Sports Follow isn't affiliated with or endorsed by any league, team, player, governing body or data provider.",
+    f"Team, league and competition names belong to their owners. {APP_NAME} isn't affiliated with or endorsed by any league, team, player, governing body or data provider.",
 ]
 
 

@@ -6,6 +6,8 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# The app's name (web/vite.config.ts fills it into the page, the manifest and the service worker).
+COPY sports_follow/app.json /sports_follow/app.json
 RUN npm run build
 
 

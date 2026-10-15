@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -9,6 +10,12 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow"
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
+
+# The app's name as fans see it ("stann"). It's written once, in app.json next to this file, because the
+# web build (web/vite.config.ts) and the Android app (android/generate.mjs) read it there too: the page
+# title, the manifest, the service worker's notifications and the launcher are built with it. So it's not
+# an environment setting: a server can't call itself anything its web app wasn't built with.
+APP_NAME: str = json.loads(Path(__file__).with_name("app.json").read_text())["name"]
 
 # Logs (logs.py): one line per record on stdout, "json" for a server's log collector or "text" to read,
 # and our own lines from this level up (other libraries' from WARNING).
