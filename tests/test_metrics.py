@@ -200,3 +200,36 @@ def test_setup_measures_source_requests_and_jobs_under_the_processs_own_instance
     [client] = got["metrics"]["http.client.request.duration"]
     assert client["server.address"] == "127.0.0.1" and "url.full" not in client  # by source, never the URL
     assert got["metrics"]["sports_follow.job.duration"] == [{"job_name": "refresh_structured", "outcome": "ok"}]
+
+
+def test_a_game_is_behind_after_three_of_its_rounds_and_never_under_three_minutes():
+    assert metrics.behind_after({"cadence": 10}) == 180  # in play every 10 s, but armed and quiet games once a minute
+    assert metrics.behind_after({"cadence": 120}) == 360  # PUBG
+    assert metrics.behind_after({"cadence": 300}) == 900  # Liquipedia: polled every 5 minutes on purpose
+    assert metrics.behind_after({}) == 180
+
+
+def test_the_worker_reports_unsent_moments():
+    assert ("sports_follow.moments.unsent", "unsent") in {(name, part) for name, _, _, _, part in metrics.READINGS}
+
+
+def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_right():
+    """The app's alert rules (deploy/grafana/app-rules.json, applied by apply-alerts.sh): each complete, each
+    uid once across both groups, each reading only metrics with the job they come from."""
+    import json
+    import re
+    from pathlib import Path
+
+    grafana = Path(__file__).resolve().parent.parent / "deploy" / "grafana"
+    app = json.loads((grafana / "app-rules.json").read_text())
+    server = json.loads((grafana / "rules.json").read_text())
+    uids = [r["uid"] for r in app + server]
+    assert len(uids) == len(set(uids))
+    sent = {name.replace(".", "_") for name, *_ in metrics.READINGS} | {
+        "http_server_request_duration_seconds", "http_client_request_duration_seconds", "sports_follow_pushes", "sports_follow_cards_updates"}
+    for rule in app:
+        assert {"uid", "title", "for", "expr", "op", "threshold", "summary"} <= set(rule) and rule["op"] in ("gt", "lt")
+        for metric in re.findall(r"\b((?:sports_follow|http)_[a-z_]+)\{", rule["expr"]):
+            base = re.sub(r"_(bucket|count|sum|total)$", "", metric)
+            assert base in sent or base.removesuffix("_seconds") in sent, (rule["uid"], metric)
+        assert 'job="' in rule["expr"] or 'job=~"' in rule["expr"], rule["uid"]  # never another app's series

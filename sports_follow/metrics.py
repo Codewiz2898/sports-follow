@@ -34,8 +34,12 @@ _watching = False
 
 # Seconds: from a fast query to a ten-minute poll session (job durations, a moment's wait for its push).
 SECONDS = (0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900)
-# A live game not polled for this long is behind: every one is polled at least once a minute.
+# A live game is behind when it hasn't been polled for three of its rounds, a round being its source's
+# cadence or a minute (armed and quiet games are polled once a minute), and never sooner than this.
 BEHIND = 180
+# A moment found this long ago and still unsent: its batch's sender (notify.send) didn't claim it, nor
+# did the tick's sweep a minute after (notify.SWEEP_AFTER).
+UNSENT_AFTER = 180
 
 
 def _instrument(kind: str, name: str, unit: str, description: str, **advice: Any) -> Any:
@@ -95,40 +99,67 @@ def card(step: str, result: str) -> None:
 Reading = list[tuple[float, dict[str, Any]]]
 
 
+def behind_after(live_binding: dict[str, Any]) -> float:
+    """Seconds without a poll after which a game is behind: three rounds of its source's cadence (or of a
+    minute, for armed and quiet games), at least BEHIND. Liquipedia's 5-minute rounds make 15 minutes."""
+    return max(BEHIND, 3 * max(60, int(live_binding.get("cadence") or 10)))
+
+
 def live(now: float | None = None) -> dict[str, Reading]:
-    """The armed and live games with a followed player and a live binding, by source and status; per
+    """The armed and live games with a followed player and a live binding to a source this build runs
+    (one it doesn't run never polls them, and they aren't late for it), by source and status; per
     source, how long since its least recently polled game was polled (structured._polled), and how
-    many of its games weren't polled within BEHIND seconds (or ever)."""
+    many of its games weren't polled within behind_after (or ever)."""
     from sqlalchemy import select
 
     from . import bus
+    from .adapters import ADAPTERS
     from .db import session
     from .models import Event, EventPlayer, Follow
 
     now = now or time.time()
     with session() as db:
         followed = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
-        games = db.execute(
-            select(Event.id, Event.status, Event.live_binding["adapter"].astext)
+        games = [(event_id, status, dict(binding or {})) for event_id, status, binding in db.execute(
+            select(Event.id, Event.status, Event.live_binding)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))
-        ).all()
-    counts: Counter[tuple[str, str]] = Counter((source or "unknown", status) for _, status, source in games)
+        ).all() if (binding or {}).get("adapter") in ADAPTERS]
+    source_of = lambda binding: binding["adapter"]  # noqa: E731
+    counts: Counter[tuple[str, str]] = Counter((source_of(binding), status) for _, status, binding in games)
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
     polled = redis.mget([f"polled_at:{event_id}" for event_id, _, _ in games]) if games else []
     oldest: dict[str, float] = {}
-    behind: Counter[str] = Counter({source or "unknown": 0 for _, _, source in games})
-    for (_, _, source), at in zip(games, polled):
-        source = source or "unknown"
+    behind: Counter[str] = Counter({source_of(binding): 0 for _, _, binding in games})
+    for (_, _, binding), at in zip(games, polled):
+        source = source_of(binding)
         age = now - float(at) if at is not None else None
         if age is not None:
             oldest[source] = max(oldest.get(source, 0.0), age)
-        if age is None or age > BEHIND:
+        if age is None or age > behind_after(binding):
             behind[source] += 1
     return {
         "games": [(n, {"source": source, "status": status}) for (source, status), n in counts.items()],
         "poll_age": [(age, {"source": source}) for source, age in oldest.items()],
         "behind": [(n, {"source": source}) for source, n in behind.items()],
     }
+
+
+def unsent(now: datetime | None = None) -> dict[str, Reading]:
+    """Moments found over UNSENT_AFTER seconds ago that no sender has claimed, still young enough to send
+    (alerts.LATE_TTL): any for a few minutes, and pushes aren't going out."""
+    from datetime import timedelta
+
+    from sqlalchemy import func, select
+
+    from .alerts import LATE_TTL
+    from .db import session
+    from .models import Moment
+
+    now = now or datetime.now(timezone.utc)
+    with session() as db:
+        waiting = db.scalar(select(func.count()).select_from(Moment).where(
+            Moment.sent_at.is_(None), Moment.created_at <= now - timedelta(seconds=UNSENT_AFTER), Moment.created_at >= now - timedelta(seconds=LATE_TTL)))
+    return {"unsent": [(waiting or 0, {})]}
 
 
 def queue(now: float | None = None) -> dict[str, Reading]:
@@ -220,7 +251,8 @@ def sources(now: float | None = None) -> dict[str, Reading]:
 READINGS: list[tuple[str, str, str, Callable[[], dict[str, Reading]], str]] = [
     ("sports_follow.live.games", "{game}", "Armed and live games with a followed player, by source and status", live, "games"),
     ("sports_follow.live.poll_age", "s", "Seconds since each source's least recently polled live game was polled", live, "poll_age"),
-    ("sports_follow.live.games_behind", "{game}", f"Live games not polled for {BEHIND} seconds, by source", live, "behind"),
+    ("sports_follow.live.games_behind", "{game}", "Live games not polled for three of their rounds (at least 3 minutes), by source", live, "behind"),
+    ("sports_follow.moments.unsent", "{moment}", f"Moments found over {UNSENT_AFTER} seconds ago that no sender has claimed", unsent, "unsent"),
     ("sports_follow.jobs", "{job}", "arq jobs: ready and waiting for a slot, set for later, running", queue, "jobs"),
     ("sports_follow.jobs.oldest_wait", "s", "How long the oldest ready job has waited for a slot", queue, "oldest_wait"),
     ("sports_follow.cards", "{card}", "Followed players' cards by status and sport", cards, "cards"),
