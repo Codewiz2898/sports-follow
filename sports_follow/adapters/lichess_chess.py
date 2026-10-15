@@ -301,15 +301,20 @@ def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: d
     return "scheduled"
 
 
-LIVE_TOURS = 3  # the top broadcasts on now whose round is read for live_now(): a request each, on the one-at-a-time line
+LIVE_TOURS = 3  # the broadcasts on now whose round is read for live_now(), highest tier first: a request each, on the one-at-a-time line
 LIVE_BOARDS = 2  # and the boards of each round shown: the highest rated pairs still playing
+# A board's average rating to be one of the big games on now: an elite event's, not the top board of a
+# seniors' or an open's section (Lichess's tiers rank an event, not who plays in it). None on a quiet day.
+LIVE_RATING = 2550
 
 
 def live_boards(round_data: dict[str, Any], system: str, now: datetime | None = None) -> list[LiveGame]:
-    """A broadcast round on now -> its highest rated boards still being played, each a game with both players."""
+    """A broadcast round on now -> its highest rated boards still being played whose players average
+    LIVE_RATING or more, each a game with both players."""
     now = now or datetime.now(timezone.utc)
     rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
-    playing = [g for g in round_data.get("games") or [] if g.get("status") == "*" and len(g.get("players") or []) >= 2 and all(p.get("fideId") for p in g["players"][:2])]
+    playing = [g for g in round_data.get("games") or [] if g.get("status") == "*" and len(g.get("players") or []) >= 2 and all(p.get("fideId") for p in g["players"][:2])
+               and sum(p.get("rating") or 0 for p in g["players"][:2]) >= 2 * LIVE_RATING]
     playing.sort(key=lambda g: -sum(p.get("rating") or 0 for p in g["players"][:2]))
     out = []
     for g in playing[:LIVE_BOARDS]:
@@ -711,15 +716,16 @@ class LichessChess(Adapter):
         return []
 
     def live_now(self) -> list[LiveGame]:
-        """The top broadcasts on now (broadcast/top, read every ten minutes at most), and in the round each has
-        on, its highest rated boards still being played: a request for each of the first LIVE_TOURS rounds."""
+        """The broadcasts with a round under way (broadcast/top, read every ten minutes at most), highest tier
+        first and of equals in Lichess's order, and in each of the first LIVE_TOURS of those rounds, its
+        strongest boards still being played (live_boards): a request a round."""
         now = datetime.now(timezone.utc)
         top = get_json(f"{API}broadcast/top", ttl=600)
+        on = [e for e in top.get("active") or [] if (e.get("round") or {}).get("id") and e["round"].get("ongoing")]  # one not started yet has no boards
+        on.sort(key=lambda e: -((e.get("tour") or {}).get("tier") or 0))
         out: list[LiveGame] = []
-        for entry in (top.get("active") or [])[:LIVE_TOURS]:
-            rnd = entry.get("round") or {}
-            if rnd.get("id") and rnd.get("ongoing"):  # one not started yet has no boards to read
-                out.extend(live_boards(get_json(f"{API}broadcast/-/-/{rnd['id']}", ttl=60), self.system, now))
+        for entry in on[:LIVE_TOURS]:
+            out.extend(live_boards(get_json(f"{API}broadcast/-/-/{entry['round']['id']}", ttl=60), self.system, now))
         return out
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
