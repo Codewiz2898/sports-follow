@@ -45,7 +45,7 @@ def _match(status: str, sen: int = 0, nrg: int = 0, games: list[dict] | None = N
         "games": games or [_game(1, "not_started"), _game(2, "not_started"), _game(3, "not_started")],
         "league": {"id": 1, "name": "VCT Americas"},
         "serie": {"id": 2, "full_name": "Stage 2 2026"},
-        "tournament": {"id": 3, "name": "Playoffs"},
+        "tournament": {"id": 3, "name": "Playoffs", "tier": "a"},  # PandaScore's tiers: "s" to "d", or "unranked"
         "videogame": {"id": 26, "name": "Valorant", "slug": "valorant"},
         **extra,
     }
@@ -328,9 +328,28 @@ def test_the_token_goes_in_a_header_and_a_429_pauses_reads(monkeypatch):
         assert len(seen) == 2  # paused: nothing sent
 
 
-def test_live_now_lists_every_series_on_by_its_teams(monkeypatch):
+def test_live_now_lists_a_series_on_by_its_teams(monkeypatch):
     asked = []
-    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or [LIVE, _match("finished", 2, 0, id=99)])
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append((path, sorted(params))) or [LIVE, _match("finished", 2, 0, id=99)])
     [game] = ps.PandascoreEsports().live_now()
-    assert asked == ["/matches/running"]
+    # By game, as /matches/running names its filter: it answers "filter[videogame_id]" with HTTP 400.
+    assert asked == [("/matches/running", ["filter[videogame]", "page[size]"])]
     assert game.snapshot.status == "live" and game.players == [] and len(game.teams) == 2  # a match names no players: live.py asks the registry
+
+
+def test_live_now_keeps_the_big_tournaments_series_biggest_tier_first(monkeypatch):
+    def on(match_id: int, league: str, tier: str | None) -> dict:
+        return {**LIVE, "id": match_id, "league": {"id": match_id, "name": league}, "tournament": {"id": match_id, "name": "Playoffs", "tier": tier}}
+
+    running = [on(1, "DreamLeague Closed Qualifier", "c"), on(2, "North America League", "a"), on(3, "ESEA Advanced", "d"), on(4, "CBLOL", "b"),
+               on(5, "Worlds", "s"), on(6, "Thunderpick World Championship", "a"), on(7, "Streamers League", "unranked"), on(8, "New Cup", None),
+               {**on(9, "No Tournament", None), "tournament": None}]
+    asked = []
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or running)
+    games = ps.PandascoreEsports().live_now()
+    assert asked == ["/matches/running"]  # still the one request
+    # S, then the two A's in PandaScore's order, then B; C, D, unranked and untiered series aren't the big games.
+    assert [(g.source_id, g.tier) for g in games] == [("5", 3), ("2", 2), ("6", 2), ("4", 1)]
+    assert games[0].competition == "Worlds Stage 2 2026"
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: [on(1, "DreamLeague Closed Qualifier", "c"), on(3, "ESEA Advanced", "d")])
+    assert ps.PandascoreEsports().live_now() == []  # a quiet day: esports shows nothing

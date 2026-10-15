@@ -404,3 +404,41 @@ def test_chess_live_now_shows_the_top_boards_still_being_played(monkeypatch):
     assert all(g.snapshot.status == "live" and g.snapshot.state["kind"] == "chess" for g in games)
     # A board is a fixture of each of its players, as a followed player's card has it: Today shows it once, as theirs.
     assert games[0].fixtures == ["r5-46616543", "r5-1503014"]
+
+
+def test_chess_live_now_reads_the_highest_tier_rounds_on_and_only_the_strong_boards(monkeypatch):
+    def board(gid: str, white: tuple, black: tuple) -> dict:
+        side = lambda p: {"name": p[0], "fideId": p[1], "rating": p[2], "clock": 360000}  # noqa: E731
+        return {"id": gid, "status": "*", "fen": "8/8/8/8/8/8/8/8 w - - 0 40", "players": [side(white), side(black)]}
+
+    starts = int(time.time() * 1000) - 3600 * 1000
+
+    def entry(rid: str, name: str, tier: int | None, ongoing: bool | None) -> dict:
+        return {"tour": {"id": f"t-{rid}", "name": name, **({"tier": tier} if tier else {})},
+                "round": {"id": rid, "name": "Round 9", "ongoing": ongoing, "startsAt": starts, "url": f"https://lichess.org/broadcast/x/r/{rid}"}}
+
+    # Lichess's order, as on 15 Oct: a seniors section first (tier 4, as an official FIDE event), then events
+    # between rounds, and the elite one further down.
+    top = {"active": [entry("seniors", "Continental 65+", 4, True), entry("youth", "World U17", 4, None), entry("uni", "University", 4, None),
+                      entry("open", "Open", 3, True), entry("elite", "Grand Swiss", 5, True), entry("women", "Women's Grand Prix", 4, True)]}
+    rounds = {
+        "seniors": [board("s1", ("Ledesma, Otoniel", 1, 2186), ("Leskovar, Mario", 2, 2170)), board("s2", ("Pinal Borges, Nelson", 3, 2265), ("Velasquez, Hector", 4, 1932))],
+        "elite": [board("e1", ("Gukesh, D", 46616543, 2777), ("Carlsen, Magnus", 1503014, 2837)), board("e2", ("Strong, One", 5, 2560), ("Lower, Two", 6, 2540))],
+        "women": [board("w1", ("Ju, Wenjun", 8603006, 2560), ("Humpy, Koneru", 5008123, 2540)), board("w2", ("Just, Short", 7, 2550), ("Of, It", 9, 2549))],
+        "open": [board("o1", ("Never, Read", 10, 2700), ("Fourth, Round", 11, 2700))],
+    }
+    asked = []
+
+    def fake_get_json(url, ttl, text=False):
+        asked.append(url.removeprefix(lichess_chess.API))
+        if url.endswith("broadcast/top"):
+            return top
+        rid = url.rsplit("/", 1)[-1]
+        return {"round": top["active"][[e["round"]["id"] for e in top["active"]].index(rid)]["round"], "tour": {"name": rid}, "games": rounds[rid]}
+
+    monkeypatch.setattr(lichess_chess, "get_json", fake_get_json)
+    games = lichess_chess.LichessChess().live_now()
+    # The rounds under way, highest tier first and of equals in Lichess's order, LIVE_TOURS of them: the open isn't read.
+    assert asked == ["broadcast/top", "broadcast/-/-/elite", "broadcast/-/-/seniors", "broadcast/-/-/women"]
+    # Only boards averaging LIVE_RATING or more: none of the seniors', and 2550 counts but 2549.5 doesn't.
+    assert [g.title for g in games] == ["D Gukesh v Magnus Carlsen", "One Strong v Two Lower", "Wenjun Ju v Koneru Humpy"]

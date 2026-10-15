@@ -11,7 +11,8 @@ The read also ranks each game's players, so the API's work stays small: the regi
 (by the source's id, or by name in the sport), then the order the source puts them forward in; an athlete
 an operator removed is left out. A game whose source names no players offers its teams' pros the registry
 knows, in that game's title (league). The API puts those already on Sports Follow first, at most PLAYERS
-a game, and the games with the most followed, then the best known, players first, at most GAMES a sport. Each game says
+a game, and the games of the biggest events first (where the source rates them: the game's tier), then those
+with the most followed, then the best known, players, at most GAMES a sport. Each game says
 which of Sports Follow's events it is (event_ids, by the source's fixture ids), so Today shows a game a fan's
 player is in once, as theirs.
 """
@@ -40,7 +41,7 @@ KEEP = 15 * 60  # and Redis drops it after this
 GAMES = 6  # the most games a sport shows
 PLAYERS = 4  # and the most players a game offers
 KEPT = 3 * PLAYERS  # players kept a game by a read: room for those on Sports Follow to come first
-READ_GAMES = 30  # games kept a read, best known first
+READ_GAMES = 30  # games kept a read, the biggest events' first, then the best known
 
 
 def sources() -> list[Adapter]:
@@ -95,6 +96,7 @@ def _dump(game: LiveGame, players: list[dict[str, Any]], fame: int) -> dict[str,
                  "state": snap.state, "source_url": snap.source_url, "player_stats": []},
         "players": players,
         "fame": fame,
+        "tier": game.tier,
     }
 
 
@@ -106,7 +108,7 @@ def read(system: str, now: datetime | None = None) -> int:
     with session() as db:
         blocked = registry.blocked(db)
         dumped = [_dump(g, *_ranked(db, adapter.sport, system, g, blocked)) for g in games]
-    dumped.sort(key=lambda g: -g["fame"])
+    dumped.sort(key=lambda g: (-g["tier"], -g["fame"]))
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)
     return len(games)
@@ -148,7 +150,7 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
         if age <= SERVE:
             by_sport.setdefault(adapter.sport, []).extend((adapter.system, g) for g in (read_ or {}).get("games") or [])
     blocked = registry.blocked(db) if by_sport else set()
-    ranked = {sport.key: sorted(by_sport.get(sport.key, []), key=lambda sg: -sg[1].get("fame", 0))[: GAMES * 2] for sport in sports.ENABLED}
+    ranked = {sport.key: sorted(by_sport.get(sport.key, []), key=lambda sg: (-sg[1].get("tier", 0), -sg[1].get("fame", 0)))[: GAMES * 2] for sport in sports.ENABLED}
     keys = {k for candidates in ranked.values() for system, game in candidates for k in _event_keys(system, game)}
     events = {key: event_id for key, event_id in db.execute(select(Event.key, Event.id).where(Event.key.in_(keys)))} if keys else {}
     out = []
@@ -162,7 +164,7 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
             mine = [row for (j, _), row in zip(refs, rows) if j == i]
             mine.sort(key=lambda r: r.player_id is None)  # already on Sports Follow first; otherwise as the read ranked them
             players = mine[:PLAYERS]
-            rank = (-max((p.followers for p in players), default=0), -game.get("fame", 0))  # most followed, then best known
+            rank = (-game.get("tier", 0), -max((p.followers for p in players), default=0), -game.get("fame", 0))  # biggest event, most followed, best known
             games.append((rank, {"key": f"{system}:{game['source_id']}", "title": game["title"], "competition": game["competition"],
                                  "start_utc": game.get("start_utc"), "live": game["live"], "players": [search.public(p) for p in players],
                                  "event_ids": sorted({events[k] for k in _event_keys(system, game) if k in events})}))

@@ -45,6 +45,13 @@ IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", ",".joi
 
 _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "canceled": "postponed", "postponed": "postponed"}
 
+# The tournament tiers whose series are among the big games on now (live_now), as LiveGame tiers, biggest
+# first. PandaScore rates a tournament S > A > B > C > D, or "unranked", by its organiser, teams and prize
+# pool: S is Worlds, The International, a Major; A a top regional league (LCK, VCT EMEA); B a smaller
+# region's league or the qualifier for an S event (CBLOL, The International's). Most closed qualifiers are
+# C or D, a second division (ESEA Advanced) D: left out, so on a quiet day esports shows nothing.
+LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
+
 # Nationalities come as ISO 3166 codes; the countries most pros play for, by name. Others show as the code.
 COUNTRIES = {
     "IN": "India", "US": "United States", "CA": "Canada", "BR": "Brazil", "AR": "Argentina", "CL": "Chile", "MX": "Mexico",
@@ -505,20 +512,24 @@ class PandascoreEsports(Adapter):
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
 
     def live_now(self) -> list[LiveGame]:
-        """Every series on now in the plan's games (matches/running): one request. Its teams, not its players:
-        a match names no players, and the registry knows the teams' pros."""
+        """The big series on now in the plan's games (matches/running, one request): those of a tournament in
+        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order. Its teams, not its players: a
+        match names no players, and the registry knows the teams' pros."""
         games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame_id]": games, "page[size]": 50})
+        # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
+        # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
         out = []
         for f in parse_fixtures(rows):
             m = by_id[f.source_id]
+            tier = LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0)  # "unranked", or none yet: 0
             snap = parse_match(m)
-            if snap.status == "live":
+            if tier and snap.status == "live":
                 out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
-                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug")))
-        return out
+                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier))
+        return sorted(out, key=lambda g: -g.tier)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many series at once, MULTI_MAX to a request: the live lane's one fetch a round. Keyed as
