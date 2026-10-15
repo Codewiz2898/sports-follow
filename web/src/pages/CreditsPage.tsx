@@ -80,12 +80,9 @@ function CreditList({ label, items }: { label: string; items: Credit[] }) {
 
 /** Every player photo shown, with its author and licence: the credit each one's licence asks for. */
 function PhotoList({ items }: { items: PhotoCredit[] }) {
-  useEffect(() => {
-    if (items.length && window.location.hash === '#photos') document.getElementById('photos')?.scrollIntoView()
-  }, [items.length])
   if (!items.length) return null
   return (
-    <section className="section" id="photos" aria-label="Photos">
+    <section className="section" aria-label="Photos">
       <SectionHead title="Photos" />
       <ul className="card list">
         {items.map((p) => (
