@@ -182,6 +182,25 @@ def test_one_network_gets_twenty_codes_an_hour_whichever_addresses_they_go_to(ap
     assert api.call("POST", "/api/auth/email/start", body={"email": "other@example.com"}, address="81.2.69.143").status_code == 200
 
 
+def test_one_network_gets_twenty_codes_a_day_however_the_hours_fall(api, store, outbox):
+    def start(i):
+        for key in [k for k in api.redis.data if k.startswith("auth-address:")]:
+            del api.redis.data[key]  # another hour
+        return api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=PUBLIC)
+
+    assert [start(i).status_code for i in range(server.CODES_PER_ADDRESS_DAY)] == [200] * server.CODES_PER_ADDRESS_DAY
+    refused = start(99)
+    assert refused.status_code == 429 and "today" in refused.json()["detail"]
+
+
+def test_codes_stop_at_the_mail_plans_daily_allowance(api, store, outbox, monkeypatch):
+    """Past it the mail provider refuses anyway: the fan hears "tomorrow" instead of a failed send."""
+    monkeypatch.setattr(server, "MAIL_CODES_PER_DAY", 3)
+    answers = [api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=f"81.2.69.{10 + i}") for i in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert "today" in answers[-1].json()["detail"] and len(outbox) == 3
+
+
 def test_an_address_with_twenty_wrong_codes_today_gets_no_more(api, store, outbox):
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     api.redis.data[f"auth-fails:{accounts.email_key('fan@example.com')}:{day}"] = server.FAILS_PER_DAY

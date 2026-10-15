@@ -41,7 +41,7 @@ from starlette.datastructures import Headers
 from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -719,6 +719,7 @@ RESEND_AFTER = 60  # seconds before another code to the same address
 CODES_PER_EMAIL = 5  # an hour
 CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
+CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
 FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
 
@@ -799,7 +800,10 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     address = client_address(request)
     await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
     await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
+    if address:
+        await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
     await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
+    await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
