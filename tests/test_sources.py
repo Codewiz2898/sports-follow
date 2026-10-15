@@ -59,19 +59,25 @@ def _docstrings(tree: ast.AST) -> set[int]:
 
 
 def _naming() -> Callable[[str], str | None]:
-    """How a text names a source, if it does: by its system ("espn_cricket"); by name, its provider's or an
-    API it reads ("ESPN", "OpenDota": its budget's), where a name in lower case is an id or a slug instead
-    (a game's "pubg", a registry id's "pandascore:"); or by its URL, its provider's site or where its
-    requests go ("site.api.espn.com")."""
+    """How a text names a source, if it does: by its system ("espn_cricket"); by its URL, on the domain (the
+    last two labels) of its provider's site or of where its requests go ("espn.com"); or by name, its
+    provider's or an API's it reads, in any case ("ESPN", "OpenDota", or "opendota", its budget's key). A
+    game as an adapter writes it (a slug in its games, a name in its game_names, or that name in lower
+    case) names the game, not a source ("pubg", "PUBG Mobile"), unless it's exactly a provider's name ("PUBG")."""
+    provider_names = {p.name for p, _ in providers(KNOWN)}
     systems = re.compile(rf"\b({'|'.join(KNOWN)})\b")
-    names = {p.name for p, _ in providers(KNOWN)} | {b.name for b in budget.known()}
+    names = sorted(provider_names | {b.name for b in budget.known()}, key=len, reverse=True)  # "lichess-anonymous" first
     by_name = re.compile(rf"\b({'|'.join(map(re.escape, names))})\b", re.I)
+    written = {g for a in KNOWN.values() for g in getattr(a, "games", ())}
+    written |= {n for a in KNOWN.values() for g in getattr(a, "game_names", ()) for n in (g, g.lower())}
+    games = sorted(written - provider_names, key=len, reverse=True)
+    game = re.compile(rf"\b({'|'.join(map(re.escape, games)) or '(?!)'})\b")
     urls = [p.url for p, _ in providers(KNOWN)] + [u for b in budget.known() for u in b.urls]
-    hosts = {(urlparse(u).hostname or "").removeprefix("www.") for u in urls}
-    by_url = re.compile(rf"\b({'|'.join(map(re.escape, hosts))})\b", re.I)
+    domains = {".".join((urlparse(u).hostname or "").split(".")[-2:]) for u in urls}
+    by_url = re.compile(rf"\b({'|'.join(map(re.escape, domains))})\b", re.I)
 
     def named(text: str) -> str | None:
-        found = [*systems.findall(text), *(n for n in by_name.findall(text) if not n.islower()), *by_url.findall(text)]
+        found = [*systems.findall(text), *by_url.findall(text), *by_name.findall(game.sub(" ", text))]
         return found[0] if found else None
 
     return named
@@ -79,10 +85,11 @@ def _naming() -> Callable[[str], str | None]:
 
 def test_a_source_is_known_by_its_system_its_name_or_its_url():
     named = _naming()
-    assert [named(t) for t in ("espn_cricket:253802", "e.g. ESPN (", " and OpenDota", "LIQUIPEDIA")] == ["espn_cricket", "ESPN", "OpenDota", "LIQUIPEDIA"]
-    assert [named(t) for t in ("https://site.api.espn.com/apis/x", "lichess.org/api/broadcast/top")] == ["site.api.espn.com", "lichess.org"]
-    # Not a source: a game's slug, a registry id's prefix, a website none of them reads.
-    assert [named(t) for t in ("valorant|pubg|dota", "pandascore:34470", "ESPNcricinfo pages", "https://www.espncricinfo.com")] == [None] * 4
+    assert [named(t) for t in ("espn_cricket:253802", "e.g. ESPN (", " and OpenDota", "LIQUIPEDIA", "credit PUBG")] == ["espn_cricket", "ESPN", "OpenDota", "LIQUIPEDIA", "PUBG"]
+    assert [named(t) for t in ('if b.name == "espn":', '{"opendota": 1}', "lichess-anonymous")] == ["espn", "opendota", "lichess-anonymous"]
+    assert [named(t) for t in ("https://pubg.com/en/news", "https://site.api.espn.com/apis/x", "https://www.opendota.com/matches/1")] == ["pubg.com", "espn.com", "opendota.com"]
+    # Not a source: a game (its slug, its name), a website none of them reads.
+    assert [named(t) for t in ("valorant|pubg|dota", "PUBG Mobile", "PUBG: Battlegrounds", "ESPNcricinfo pages", "https://www.espncricinfo.com")] == [None] * 5
 
 
 def test_no_shared_module_names_a_source():
@@ -124,6 +131,14 @@ def test_the_research_agent_is_pointed_only_at_the_running_sources_apis():
     assert "leagues like basketball/nba, tennis/atp)" in agent.system_prompt({s: a for s, a in KNOWN.items() if s != "espn_soccer"})
     assert "- Cricbuzz and ESPNcricinfo pages work for cricket.\n" in agent.system_prompt({}) and "Public JSON" not in agent.system_prompt({})
     assert agent.SYSTEM_PROMPT == agent.system_prompt(ADAPTERS)
+
+
+def test_the_research_agent_is_pointed_only_at_urls_its_sources_budget():
+    # What the agent fetches there spends the source's own allowance (tools.fetch_url), never nothing.
+    for provider, theirs in providers(KNOWN):
+        if provider.research:
+            urls = re.findall(r"https?://[^\s,;)]+", provider.research(theirs))
+            assert urls and all(budget.for_url(u) in provider.budgets for u in urls), provider.name
 
 
 def test_no_source_borrows_from_another():
