@@ -237,6 +237,17 @@ class Football(Sport):
         minute = re.search(r"\b\d+(?:\+\d+)?'", f.body)
         return Poster(word, spaced(minute[0] if minute else None, versus))
 
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The goals a finished game's line counts ("2 goals, 1 assist"), else its assists, as poster() words
+        them: "Brace", "Hat-trick", "4 goals", one "Goal"; "2 assists", one "Assist". No minute: the
+        line doesn't say when, nor what a goal did."""
+        for kind, one, many in (("goal", HIGHS["Goal"], MANY_GOALS), ("assist", HIGHS["Assist"], {})):
+            if said := re.search(rf"\b(\d+) {kind}s?\b", line.get("headline") or ""):
+                n = int(said[1])
+                priority = (95 if n >= 3 else 85) if kind == "goal" else 65  # a hat-trick's moment's, a goal's, an assist's
+                return Poster(many.get(n, f"{n} {kind}s") if n > 1 else one, versus, priority=priority)
+        return None
+
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if ln.get("headline") not in (None, "On the bench")]
         total = lambda label: int(sum(num(values(ln).get(label)) for ln in played))  # noqa: E731

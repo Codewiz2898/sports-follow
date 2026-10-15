@@ -192,8 +192,11 @@ export interface PlayerMoment { id: number; title: string; body: string; url: st
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, pushed or not. */
 export interface ActivityItem extends PlayerMoment { priority: number; player: string; event: string | null; muted: boolean; at: string }
 
-/** One of the fan's players' big moments this week, as its sport words it for a poster on Today (GET /api/me/week). */
-export interface WeekPoster { id: number; player_id: number; player: string; sport: string; event_id: number | null; word: string; line: string; url: string; at: string }
+/**
+ * One of the fan's players' big moments this week, as its sport words it for a poster on Today (GET /api/me/week):
+ * read from a moment (its id), or off the result of a game that had none (id null; a poster per player and game).
+ */
+export interface WeekPoster { id: number | null; player_id: number; player: string; sport: string; event_id: number | null; word: string; line: string; url: string; at: string }
 
 /** A row of Today's Wire (GET /api/me/week): a line-up, or a story about one of the fan's players by its own headline, with the site that ran it. */
 export interface WireRow { id: number; player_id: number; player: string; sport: string; tag: string; text: string; source: string | null; url: string; at: string }

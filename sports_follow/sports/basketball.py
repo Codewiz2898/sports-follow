@@ -20,6 +20,15 @@ def counts(line: dict[str, Any] | None) -> dict[str, int]:
     return got
 
 
+TENS = ("PTS", "REB", "AST", "STL", "BLK")  # a double-double is two of these in double figures, a triple three
+MARKS = (20, 30, 40, 50, 60)  # the points told
+
+
+def _points(mark: int) -> int:
+    """A points mark's priority: 40's is a triple-double's, 50 and on above it."""
+    return {20: 30, 30: 65, 40: 85}.get(mark, 95)
+
+
 def _made(value: str | None) -> tuple[int, int]:
     """ "15-19" -> (15, 19)."""
     made, _, tried = (value or "").partition("-")
@@ -60,10 +69,10 @@ class Basketball(Sport):
         found = []
         was, got = counts(before.line), counts(now.line)
         where = " · ".join(x for x in ((now.line or {}).get("headline"), now.score, now.clock) if x)
-        for mark in crossed(was.get("PTS", 0), got.get("PTS", 0), (20, 30, 40, 50, 60)):
-            found.append(Found("points", "key" if mark >= 30 else "minor", f"{who}: {mark} points", where, str(mark), {20: 30, 30: 65, 40: 85}.get(mark, 95)))
-        tens_was = sum(1 for k in ("PTS", "REB", "AST", "STL", "BLK") if was.get(k, 0) >= 10)
-        tens_now = sum(1 for k in ("PTS", "REB", "AST", "STL", "BLK") if got.get(k, 0) >= 10)
+        for mark in crossed(was.get("PTS", 0), got.get("PTS", 0), MARKS):
+            found.append(Found("points", "key" if mark >= 30 else "minor", f"{who}: {mark} points", where, str(mark), _points(mark)))
+        tens_was = sum(1 for k in TENS if was.get(k, 0) >= 10)
+        tens_now = sum(1 for k in TENS if got.get(k, 0) >= 10)
         if tens_was < 2 <= tens_now:
             found.append(Found("double", "minor", f"{who}: double-double", where))
         if tens_was < 3 <= tens_now:
@@ -79,6 +88,19 @@ class Basketball(Sport):
             line = re.match(r"\d+ PTS · \d+ REB · \d+ AST", f.body)
             return Poster("Triple-double", line[0] if line else versus)
         return None
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """A triple-double with its line, or 30 points or more ("38 points v Utah Jazz": the points scored,
+        where a moment says the mark reached), off a finished game's line; of the two, the bigger by their
+        moments' priorities, the triple-double of equals."""
+        got = counts(line)
+        made = []
+        if sum(1 for k in TENS if got.get(k, 0) >= 10) >= 3:
+            head = re.match(r"\d+ PTS · \d+ REB · \d+ AST", line.get("headline") or "")
+            made.append(Poster("Triple-double", head[0] if head else versus, priority=85))  # moments.PRIORITY's
+        if (points := got.get("PTS", 0)) >= 30:
+            made.append(Poster(f"{points} points", versus, priority=_points(max(k for k in MARKS if k <= points))))
+        return max(made, key=lambda p: p.priority, default=None)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if not str(ln.get("headline") or "").startswith("Did not play")]

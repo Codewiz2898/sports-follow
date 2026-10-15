@@ -61,11 +61,13 @@ class Found:
 class Poster:
     """A player's game this week as Today's "This week" rail draws it (week.py): a word or two in big type
     ("Hundred", "Hat-trick"), a short line under the player's name ("112 (98) v Australia"), and the moment
-    it was read from, which dates it."""
+    it was read from, which dates it. One read off a finished game's line instead (Sport.finished_poster)
+    has no moment, and says how big it is: the priority its moment would have had."""
 
     word: str
     line: str = ""
     of: Found | None = field(default=None, compare=False)
+    priority: int = field(default=0, compare=False)
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
@@ -264,6 +266,15 @@ class Sport:
         """One moment as a poster, if it's one of the player's highs, read off the title and body this sport
         wrote it with: the title says what the kind can't (a cricketer's "takes 5 wickets" is a "Five-for").
         None for a set, a yellow card, a line-up, being out, the news. A sport no module knows has none."""
+        return None
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """A player's finished game as a poster when no moment found in it makes one (week.py), read off the
+        line it left them ({"headline": "112 (98)", "stats": […]}) and its result from their side ("Won
+        2–1"), in the words high() has for the same high, with the priority its moment would have had.
+        Moments are found only while a game is polled live, so a game first seen after it ended has none;
+        where they're there they say more ("Late equaliser", "Upset") and win. None for a game without a
+        high, and for a sport no module knows."""
         return None
 
     # ---- live games and cards (structured.py)

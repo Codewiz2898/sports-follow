@@ -64,7 +64,7 @@ function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
 export function ThisWeek({ posters, now }: { posters: WeekPoster[]; now: number }) {
   return (
     <Rail title="This week" note="The big moments" all="Every big moment this week" className="week">
-      {posters.map((p) => <Poster key={p.id} poster={p} now={now} />)}
+      {posters.map((p) => <Poster key={`${p.player_id}:${p.event_id ?? `m${p.id}`}`} poster={p} now={now} />)}
     </Rail>
   )
 }
