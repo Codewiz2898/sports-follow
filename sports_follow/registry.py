@@ -640,9 +640,9 @@ def find_in_source(person: Person) -> tuple[Adapter, PlayerRef] | None:
         return None
     if system == live_system(person.sport):
         return resolve(person)
-    adapter = ADAPTERS[system]
-    ref = adapter.player(person.ids[system], person.league)
-    return (adapter, ref) if ref else None
+    adapter = ADAPTERS.get(system)  # None: turned off since follow_system looked (the admin panel)
+    ref = adapter.player(person.ids[system], person.league) if adapter else None
+    return (adapter, ref) if adapter and ref else None
 
 
 def sport_of(system: str) -> str | None:
@@ -734,8 +734,9 @@ def link_players(sport: str | None = None) -> int:
 
 
 def _source_ref(system: str, athlete_id: str) -> PlayerRef | None:
+    adapter = ADAPTERS.get(system)
     try:
-        return ADAPTERS[system].player(athlete_id)
+        return adapter.player(athlete_id) if adapter else None
     except AdapterError:
         return None
 

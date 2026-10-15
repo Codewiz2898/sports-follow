@@ -21,6 +21,10 @@ most that many fan requests a window): one fan following a pro is a request, but
 a loop would spend what live games need, so past the share they're refused, and logged.
 
     .venv/bin/python -m sports_follow.usage     # each source's spend this hour and today, by lane
+
+What a source declares can be changed while the app runs, from the admin panel (controls.py): a new
+plan's allowance, a bigger reserve, a smaller fans' share. Every count reads the budget as the panel
+left it (effective).
 """
 
 from __future__ import annotations
@@ -31,10 +35,11 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlparse
 
+from .. import controls
 from .base import AdapterError
 
 log = logging.getLogger("sports_follow.budget")
@@ -66,6 +71,27 @@ class Budget:
     fan: int | None = None  # the most fan requests a (first) window may take, for a scarce source; None: no cap of its own
     pause: int = 60  # seconds every lane waits after the source says slow down (429)
     urls: tuple[str, ...] = ()  # where its requests go: a page the research agent fetches there spends it too
+
+
+def effective(budget: Budget) -> Budget:
+    """The budget as the admin panel left it (controls.set_budget): its windows (each one's allowance and
+    margin), reserve, fans' share and pause where the panel changed them, the rest as its source declares.
+    A change of the wrong shape (written by hand) is left out."""
+    change = controls.current().budgets.get(budget.name)
+    if not change:
+        return budget
+    fields: dict[str, Any] = {}
+    try:
+        if isinstance(change.get("windows"), list):
+            fields["windows"] = tuple(Window(int(w["seconds"]), int(w["requests"]), int(w.get("margin", 0))) for w in change["windows"])
+    except (KeyError, TypeError, ValueError):
+        log.warning("source budgets: %s's windows from the admin panel aren't readable; its own stand", budget.name)
+    for name in ("reserve", "pause"):
+        if type(change.get(name)) is int:
+            fields[name] = change[name]
+    if "fan" in change and (change["fan"] is None or type(change["fan"]) is int):
+        fields["fan"] = change["fan"]
+    return replace(budget, **fields)
 
 
 # ---------------------------------------------------------------- lanes
@@ -206,6 +232,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
     slow down, what it says is left is down to the margin (or, for a background lane, the reserve), a
     window's allowance less the same is spent, or so is the fans' share of a scarce source. A refused
     request isn't counted."""
+    budget = effective(budget)
     lane_name = lane_name or lane()
     now = time.time()
     paused = _store_call("get", _paused_key(budget))
@@ -243,6 +270,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
 def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
     """Whether a background read (a refresh, older results, the import) has room now, before starting a
     batch of them: the source isn't pausing us, and every window has more left than its reserve."""
+    budget = effective(budget)
     now = time.time()
     paused = _store_call("get", _paused_key(budget))
     if paused and paused > now:
@@ -267,6 +295,7 @@ def left(budget: Budget, bucket: str = "") -> int | None:
 
 def pause(budget: Budget) -> None:
     """The source said slow down (429): no lane asks it for budget.pause seconds."""
+    budget = effective(budget)
     _store_call("put", _paused_key(budget), int(time.time() + budget.pause), budget.pause + 5)
 
 
@@ -305,6 +334,7 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
     """Where one source stands now (metrics.py reads it every minute): each window's requests so far
     against its allowance, for each bucket that has counted any; what the source says is left, by
     bucket; and whether it's pausing us."""
+    budget = effective(budget)
     now = now or time.time()
     prefix = f"budget:{budget.name}:"
     buckets = {""}

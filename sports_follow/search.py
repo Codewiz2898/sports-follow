@@ -44,8 +44,6 @@ SUGGEST_MIN = 0.78  # how close a spelling must be to be offered as "did you mea
 SURELY = 0.9  # a "did you mean" this close is the name, misspelled: the live sources aren't asked as well
 LIKENESS = 0.4  # trigram likeness of a fan's alias to the query that makes a player a "did you mean"
 
-SPORTS = tuple(s.key for s in sports.ENABLED)  # the filters a search takes: the sports this build runs
-
 _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="search")
 
 
@@ -278,13 +276,13 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
 
 
 def run(db: Session, query: str, sport: str | None = None, fan: str | None = None, may_ask: Callable[[], bool] = lambda: True) -> dict[str, Any]:
-    """Search every source in parallel and merge. sport narrows to one of SPORTS. may_ask is asked once,
+    """Search every source in parallel and merge. sport narrows to one of the sports that run. may_ask is asked once,
     just before the first of the sources' own searches would go out: False leaves them out (a client over
     its limit, server.search) and the answer comes from Sports Follow and the registry."""
     from .config import AGENT
 
     query = " ".join(query.split())[:80]
-    sport = sport if sport in SPORTS else None
+    sport = sport if sport in {s.key for s in sports.ENABLED} else None
     ask = functools.cache(may_ask)
     if len(query) < 2 or not searchable(query):
         # Nothing to search by ("--", "विराट कोहली"), nor to research: a researched player is named by
@@ -544,8 +542,10 @@ PREVIEW_TTL = 600
 
 def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] | None:
     """What following this athlete would show: who they are, their next game, their last game with
-    their line, and their stats. None if the source has no such athlete."""
-    adapter = ADAPTERS[system]
+    their line, and their stats. None if the source has no such athlete, or has just been turned off."""
+    adapter = ADAPTERS.get(system)
+    if adapter is None:
+        return None
     cache_key = f"{system}:{athlete_id}:{league}"
     hit = _previews.get(cache_key)
     if hit and time.time() - hit[0] < PREVIEW_TTL:

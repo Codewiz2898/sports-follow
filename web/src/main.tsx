@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { lazy, StrictMode, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AccountNotice, AccountProvider, useAccount } from './account'
@@ -24,6 +24,9 @@ import { loadSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
 import { WelcomePage } from './pages/WelcomePage'
 import './styles.css'
+
+// The admin panel: its own chunk, so fans never download it.
+const AdminApp = lazy(() => import('./admin/AdminApp'))
 
 /** Desktop search: results drop down under the sidebar box. ↑ ↓ move, Enter opens, Shift+Enter follows, Esc closes, / focuses. */
 function SidebarSearch() {
@@ -218,18 +221,27 @@ function failedRender(error: unknown, info: { componentStack?: string }) {
 
 // The sports this app knows come from the server; the first render waits for them (from this device's
 // copy when there is one, so only a first visit waits on the network).
+// The admin panel (/admin) is apart from the fans' app: none of its providers, so no following or live stream.
 void loadSports().then(() => createRoot(document.getElementById('root')!, { onCaughtError: failedRender, onUncaughtError: failedRender }).render(
   <StrictMode>
     <BrowserRouter>
-      <PwaProvider>
-        <AccountProvider>
-          <FollowingProvider>
-            <ActivityProvider>
-              <App />
-            </ActivityProvider>
-          </FollowingProvider>
-        </AccountProvider>
-      </PwaProvider>
+      {window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/') ? (
+        <Suspense fallback={null}>
+          <ErrorBoundary>
+            <Routes><Route path="/admin/*" element={<AdminApp />} /></Routes>
+          </ErrorBoundary>
+        </Suspense>
+      ) : (
+        <PwaProvider>
+          <AccountProvider>
+            <FollowingProvider>
+              <ActivityProvider>
+                <App />
+              </ActivityProvider>
+            </FollowingProvider>
+          </AccountProvider>
+        </PwaProvider>
+      )}
     </BrowserRouter>
   </StrictMode>,
 ))

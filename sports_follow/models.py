@@ -420,6 +420,8 @@ class Account(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     created_at: Mapped[datetime] = _now()
     last_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When an admin blocked it (admin.py): it can't sign in, and its sessions ended then.
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AccountSession(Base):
@@ -433,3 +435,14 @@ class AccountSession(Base):
     created_at: Mapped[datetime] = _now()
     last_seen_at: Mapped[datetime] = _now()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class Control(Base):
+    """One thing the admin panel changed on the running app (controls.py): the sports and sources turned
+    off, a source's allowance. Every process reads them, so a change needs no restart."""
+
+    __tablename__ = "control"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)  # "sports_off", "sources_off", "budget:sportmonks"
+    value: Mapped[dict | list] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = _now()

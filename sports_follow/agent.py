@@ -12,7 +12,7 @@ import copy
 import logging
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,7 +75,7 @@ beats a perfect one that takes minutes.
 When you are done, call the submit tool exactly once with everything you found."""
 
 
-def _apis(adapters: dict[str, Adapter] | None = None) -> str:
+def _apis(adapters: Mapping[str, Adapter] | None = None) -> str:
     """The prompt's pointer to public JSON APIs: each running provider's that the agent can read, as the
     provider describes it (Provider.research), or nothing when none runs."""
     named = [f"{p.name} ({p.research(theirs)})" for p, theirs in providers(adapters) if p.research]
@@ -85,12 +85,10 @@ def _apis(adapters: dict[str, Adapter] | None = None) -> str:
     return f"Public JSON APIs are often the most reliable live source and can be fetched directly, e.g. {listed}. "
 
 
-def system_prompt(adapters: dict[str, Adapter] | None = None) -> str:
-    """The research agent's instructions, pointing it at the running sources' APIs (adapters.ADAPTERS)."""
+def system_prompt(adapters: Mapping[str, Adapter] | None = None) -> str:
+    """The research agent's instructions, pointing it at the running sources' APIs (adapters.ADAPTERS, as
+    they are now: the admin panel turns sources off and on)."""
     return PROMPT.replace("{apis}", _apis(adapters))
-
-
-SYSTEM_PROMPT = system_prompt()
 
 
 class AgentError(RuntimeError):
@@ -185,7 +183,7 @@ def _run(
                     with tracing.span("model call", {"gen_ai.operation.name": "chat", "gen_ai.request.model": MODEL, "sports_follow.label": label}) as call:
                         r = llm.complete(
                             model=MODEL,
-                            system=SYSTEM_PROMPT,
+                            system=system_prompt(),
                             messages=messages,
                             tools=tools,
                             max_tokens=16000,  # OpenRouter reserves credit for the whole budget up front
