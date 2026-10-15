@@ -311,6 +311,21 @@ def test_the_detector_failing_holds_up_neither_the_cards_nor_the_next_run(squad,
 
 
 @needs_db
+def test_a_photo_the_detector_chokes_on_is_passed_over(squad, commons, monkeypatch):
+    db = squad
+    find = photos.faces.find
+
+    def choking(data):
+        if data == FAR_OFF:
+            raise RuntimeError("bad picture")
+        return find(data)
+
+    monkeypatch.setattr(photos.faces, "find", choking)
+    assert photos.refresh()["framed"] == 1  # Bumrah's, after Saka's failed
+    assert _photo(db, SAKA).width is None and _photo(db, BUMRAH).width == 0
+
+
+@needs_db
 def test_photos_kept_before_the_job_looked_for_faces_are_looked_at_on_its_next_run(squad, commons):
     db = squad
     photos.refresh()

@@ -352,8 +352,8 @@ def look() -> int:
     """Find the face in each kept thumbnail not looked at yet: a new one, or one kept before the job looked
     (faces.py; a few milliseconds each, in this process). Returns how many."""
     with session() as db:
-        ids = db.scalars(select(Photo.id).where(Photo.status == "ok", Photo.digest.is_not(None), Photo.width.is_(None))).all()
-    looked = 0
+        ids = db.scalars(select(Photo.id).where(Photo.status == "ok", Photo.digest.is_not(None), Photo.width.is_(None)).order_by(Photo.id)).all()
+    looked = failed = 0
     for photo_id in ids:
         try:
             with session() as db:
@@ -362,12 +362,15 @@ def look() -> int:
                     continue
                 photo.width, photo.height, box = faces.find(photo.data)
                 photo.face = box._asdict() if box else None
-            looked += 1
+            looked, failed = looked + 1, 0
         except Exception:
-            # The detector itself failing (its model missing, say) mustn't hold up the cards: these photos
-            # wait for the next run, and the profile shows them from near the top meanwhile.
-            log.exception("photos: looking for the face in photo %s failed; the rest wait for the next run", photo_id)
-            break
+            # One photo the detector chokes on is passed over; two in a row is the detector itself (its
+            # model missing, say), and the rest wait for the next run. Neither holds up the cards, and the
+            # profile shows these photos from near the top meanwhile.
+            failed += 1
+            log.exception("photos: looking for the face in photo %s failed", photo_id)
+            if failed > 1:
+                break
     return looked
 
 
