@@ -113,7 +113,8 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
   const split = new Set(marks).size > 1 || new Set(game.players.map((p) => p.result.result)).size > 1
   // The card's result from nobody's side: the score without "Won" when each side's is a win, draw or loss,
   // else the game itself.
-  const result = !split ? r.result : marks.every(Boolean) ? r.result.replace(/^(won|lost|drew)\s+/i, '') || r.title : r.title
+  const score = r.result.replace(/^(won|lost|drew)\s+/i, '')
+  const result = !split ? r.result : marks.every(Boolean) && score && !/^by\b/i.test(score) ? score : r.title  // "by forfeit" says nothing alone
   const word = highlight(lead.sport, r.player_contribution) ?? (result || r.player_contribution || r.title)
   const wl = split ? null : marks[0]
   const when = dayLabel(playedOn(r), new Date(now))
@@ -153,8 +154,8 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
       </span>
       {hero && (
         <span className="hero-foot">
-          <span className="line">{match}</span>
-          {r.competition && <span className="line soft" style={{ textAlign: 'right' }}>{r.competition}</span>}
+          {match !== word && <span className="line">{match}</span>}
+          {r.competition && <span className="line soft" style={{ textAlign: 'right', marginLeft: 'auto' }}>{r.competition}</span>}
         </span>
       )}
     </Link>
