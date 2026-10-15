@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import credits, photos, pipeline, registry
+from sports_follow import credits, photos, pipeline, registry, server
 from sports_follow.models import Follow, Photo, Player, PlayerCard, PlayerIdentity, Starter
 
 from .test_api import api  # noqa: F401  (the fixture)
@@ -372,3 +372,12 @@ def test_the_api_serves_a_photo_for_a_year_and_nothing_else(api, monkeypatch):
     assert (res.status_code, res.content, res.headers["content-type"]) == (200, b"jpeg bytes", "image/jpeg")
     assert res.headers["cache-control"] == "public, max-age=31536000, immutable" and res.headers["x-content-type-options"] == "nosniff"
     assert api.call("GET", "/api/photos/ffffffffffffffffffffffffffffffff.jpg").status_code == 404
+
+
+def test_the_preview_of_an_athlete_picked_in_search_brings_their_photo(api, monkeypatch):
+    """Found by their id in the source: search results carry no photo, so the preview is where it comes from."""
+    shown = {"url": "/api/photos/" + "0" * 32 + ".jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"}
+    monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: {"system": system, "athlete_id": athlete_id, "name": "Someone"})
+    monkeypatch.setattr(photos, "of_source", lambda db, system, athlete_id: shown if (system, athlete_id) == ("espn_soccer", "231388") else None)
+    assert api.call("GET", "/api/athletes/espn_soccer/231388").json()["photo"] == shown
+    assert api.call("GET", "/api/athletes/espn_soccer/253989").json()["photo"] is None

@@ -48,7 +48,7 @@ from .models import Athlete, Follow, Photo, Player, PlayerCard, PlayerIdentity, 
 log = logging.getLogger("sports_follow.photos")
 
 API = "https://commons.wikimedia.org/w/api.php"
-WIDTH = 330  # a size Wikimedia keeps: a round avatar at 3x, and the large picture at 2x
+WIDTH = 330  # a size Wikimedia keeps: the profile's picture at 2x
 BATCH = 50  # files a Commons API request asks about (its limit)
 PER_RUN = 100  # files a run asks about at most; the rest wait for the next
 PAUSE = 0.5  # seconds between thumbnail downloads

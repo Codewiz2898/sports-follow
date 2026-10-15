@@ -7,17 +7,17 @@ import { SportMark, sportKey, sportName, viewOf, viewOfKind } from '../sports'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
- * its credit goes too, and initials come back. */
-export function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
+ * its credit goes too. */
+function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
   const [broken, setBroken] = useState<string | null>(null)
   return [photo && photo.url !== broken ? photo : null, () => setBroken(photo?.url ?? null)]
 }
 
 /** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css): on
  * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader. */
-export function PlayerPhoto({ photo, className, onError }: { photo: Photo; className?: string; onError: () => void }) {
+function PlayerPhoto({ photo, onError }: { photo: Photo; onError: () => void }) {
   return (
-    <span className={`duo${className ? ` ${className}` : ''}`} title={photo.credit} aria-hidden="true">
+    <span className="duo band-photo" title={photo.credit} aria-hidden="true">
       <img src={photo.url} alt="" loading="lazy" decoding="async" onError={onError} />
     </span>
   )
@@ -25,7 +25,7 @@ export function PlayerPhoto({ photo, className, onError }: { photo: Photo; class
 
 /** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons, recoloured",
  * linking to the file's page on Commons. */
-export function PhotoCredit({ photo }: { photo: Photo }) {
+function PhotoCredit({ photo }: { photo: Photo }) {
   const href = safeHref(photo.page)
   return href
     ? <a className="photo-credit" href={href} target="_blank" rel="noreferrer">{photo.credit}</a>
@@ -393,7 +393,7 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children }
   const [shown, drop] = usePhoto(photo)
   return (
     <header className="player-band" data-sport={sportKey(sport)}>
-      {shown && <PlayerPhoto photo={shown} className="band-photo" onError={drop} />}
+      {shown && <PlayerPhoto photo={shown} onError={drop} />}
       <div className="bar">
         {back}
         <span className="row" style={{ gap: 8 }}>{actions}</span>
