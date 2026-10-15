@@ -100,14 +100,30 @@ def shown(sport: Sport, live: bool) -> dict[str, Any]:
     }
 
 
+def _rgb(colour: str) -> tuple[float, ...]:
+    """ "#1f5bef" -> (0.12, 0.36, 0.94)."""
+    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def photo_tones(sport: Sport) -> tuple[str, str]:
+    """The two CSS colours a player's photo is recoloured with (web/src/styles.css, .duo): its darks become
+    the sport's deep colour D, its lights the block colour L. The page multiplies the grey photo by the
+    second colour and screens D over it, D + grey × L' × (1 − D), so L' = (L − D) / (1 − D) makes it exactly
+    D + grey × (L − D)."""
+    light, dark = sport.colour["sport"], sport.colour.get("deep") or sport.colour["on"]
+    pre = [(lc - dc) / (1 - dc) if dc < 1 else 0 for lc, dc in zip(_rgb(light), _rgb(dark))]
+    return dark, "#" + "".join(f"{round(max(0.0, min(1.0, c)) * 255):02x}" for c in pre)
+
+
 def css() -> str:
     """Each sport's colour on [data-sport] (GET /api/sports.css): the block, text on it, softer text on it,
-    and the colour as text on ink."""
+    the colour as text on ink, and the two a photo is recoloured with."""
     names = {"sport": "--sport", "on": "--on-sport", "on_soft": "--on-sport-soft", "ink": "--sport-on-ink"}
     rules = []
     for sport in ALL:
         if sport.colour:
-            props = "; ".join(f"{names[k]}: {v}" for k, v in sport.colour.items())
+            dark, light = photo_tones(sport)
+            props = "; ".join([*(f"{names[k]}: {v}" for k, v in sport.colour.items() if k in names), f"--photo-dark: {dark}", f"--photo-light: {light}"])
             rules.append(f"[data-sport='{sport.key}'] {{ {props}; }}")
     return "\n".join(rules) + "\n"
 
@@ -117,4 +133,4 @@ def names_of(sport: Sport) -> list[str]:
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "pick", "shown"]
+__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]

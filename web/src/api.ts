@@ -4,6 +4,17 @@ import { report } from './errors'
 
 export interface Stat { label: string; value: string }
 
+/** A player's photo from Wikimedia Commons, served from our own copy (sports_follow/photos.py), and the
+ * credit its licence asks for, shown with it: "Photo: <author>, <licence>, Wikimedia Commons, recoloured". */
+export interface Photo {
+  url: string
+  credit: string
+  page: string  // the file's page on Commons, where the credit links
+  author: string
+  licence: string
+  licence_url?: string | null
+}
+
 export interface PlayerProfile {
   name: string
   sport: string
@@ -13,6 +24,7 @@ export interface PlayerProfile {
   teams: string[]
   summary?: string
   disambiguation?: string | null
+  photo?: Photo | null
 }
 
 // A live score's sport-specific state ("kind" says whose: football, cricket, battle_royale…): its fields
@@ -164,6 +176,7 @@ export interface AthletePreview {
   born?: string | null
   country?: string | null
   live?: boolean
+  photo?: Photo | null
 }
 
 export interface Pick { system: string; athlete_id: string; league?: string | null; qid?: string | null }
@@ -188,7 +201,8 @@ export type StreamEvent =
 
 /** One credit on the Credits page (sports_follow/credits.py). */
 export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }
-export interface Credits { data: Credit[]; also: Credit[]; software: Credit[]; notices: string[] }
+export interface PhotoCredit { name: string; credit: string; page: string; author: string; licence: string; licence_url?: string | null }
+export interface Credits { data: Credit[]; also: Credit[]; photos?: PhotoCredit[]; software: Credit[]; notices: string[] }
 
 /** Who this device is signed in as (GET /api/me/account; sports_follow/accounts.py). */
 export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number }

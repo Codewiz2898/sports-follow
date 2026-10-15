@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -147,6 +148,28 @@ class Starter(Base):
     sport: Mapped[str] = mapped_column(String(20))
     position: Mapped[int] = mapped_column(Integer)  # the order within the sport, first shown first
     created_at: Mapped[datetime] = _now()
+
+
+class Photo(Base):
+    """A player's photo from Wikimedia Commons, by the registry's file name (Athlete.image): what Commons
+    says about it, and its thumbnail once its licence lets fans see it (photos.py)."""
+
+    __tablename__ = "photo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file: Mapped[str] = mapped_column(String(300), unique=True)
+    name: Mapped[str | None] = mapped_column(String(200))  # whose photo it is, as the Credits page names them
+    status: Mapped[str] = mapped_column(String(10))  # ok | unfree | missing | failed
+    reason: Mapped[str | None] = mapped_column(Text)  # why it isn't shown: "licence not kept: GFDL"
+    licence: Mapped[str | None] = mapped_column(String(100))  # "CC BY-SA 4.0", "public domain"
+    licence_url: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(200))
+    page: Mapped[str | None] = mapped_column(Text)  # the file's page on Commons, where its credit links
+    source_sha1: Mapped[str | None] = mapped_column(String(40))  # the upload's: a new one is a new photo
+    digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the thumbnail: its address
+    media_type: Mapped[str | None] = mapped_column(String(30))
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # the WIDTH-pixel thumbnail
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Team(Base):

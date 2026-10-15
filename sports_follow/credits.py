@@ -1,9 +1,10 @@
-"""Credits: where the app's scores, ratings, evaluations, words and code come from (the Credits page).
+"""Credits: where the app's scores, ratings, evaluations, words, photos and code come from (the Credits page).
 
 Built from what this build runs, so a public build (licensed sources only) credits exactly those and
 a development build also names ESPN. Lichess's broadcast games are CC BY-SA 4.0, which requires the
 credit and the licence link; Sportmonks, Wikidata and the rest don't require one, but fans should
-know where a score comes from and that it isn't an official record.
+know where a score comes from and that it isn't an official record. Every player photo shown is listed
+with its author and licence (photos.py): the licences fans may see them under all ask for the credit.
 """
 
 from __future__ import annotations
@@ -64,10 +65,17 @@ def _model() -> str:
     return f"{name} via OpenRouter" if route == "openrouter" else name
 
 
-def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None) -> dict[str, Any]:
-    """The Credits page for this build: the data providers it runs, the rest it relies on, the software.
-    Each source describes its provider and what it covers (adapters.base.Provider); licensed ones come first.
-    The AI model and the news it summarises only when the research agent runs (config.AGENT)."""
+PHOTO_NOTICES = [
+    "Player photos come from Wikimedia Commons, under the licences listed with each. We recolour them in each sport's colour and crop them; a recoloured photo keeps its licence.",
+    "A photo shows who a player is. It doesn't mean the player endorses us.",
+]
+
+
+def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The Credits page for this build: the data providers it runs, the rest it relies on, the software,
+    and every player photo shown (photos.used). Each source describes its provider and what it covers
+    (adapters.base.Provider); licensed ones come first. The AI model and the news it summarises only when
+    the research agent runs (config.AGENT)."""
     from .config import AGENT
 
     running = ADAPTERS if running is None else running
@@ -86,6 +94,12 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
         "licence": "CC0 1.0",
         "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
     }]
+    if photos:
+        also.append({
+            "name": "Wikimedia Commons",
+            "url": "https://commons.wikimedia.org",
+            "what": "Player photos, recoloured in each sport's colour. Each one's author and licence are under Photos.",
+        })
     for adapter in adapters.values():
         also += adapter.credits_also()
     if engine.enabled() if stockfish is None else stockfish:
@@ -108,4 +122,10 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
                 "what": "Each story links to the publisher's original; we show the headline and a short summary.",
             },
         ]
-    return {"data": data, "also": also, "software": [{k: v for k, v in s.items() if k != "package"} for s in SOFTWARE], "notices": NOTICES}
+    return {
+        "data": data,
+        "also": also,
+        "photos": [{k: p.get(k) for k in ("name", "credit", "page", "author", "licence", "licence_url")} for p in photos or []],
+        "software": [{k: v for k, v in s.items() if k != "package"} for s in SOFTWARE],
+        "notices": [*NOTICES, *(PHOTO_NOTICES if photos else [])],
+    }

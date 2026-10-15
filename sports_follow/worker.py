@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, starters, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -147,8 +147,9 @@ def _import_registry() -> None:
 
 def _warm_sources() -> None:
     """Sources that keep a shared index (PUBG: recent tournaments and their matches) bring it up to date,
-    and a source whose roster is read more often than the weekly import (PUBG's, from that index, every
-    six hours: roster_every) adds its players to the registry."""
+    a source that has changed how it names its athletes has the players bound to it moved to the new ids
+    (structured.rekey_bound), and a source whose roster is read more often than the weekly import (PUBG's,
+    from that index, every six hours: roster_every) adds its players to the registry."""
     from .adapters import ADAPTERS
 
     for adapter in list(ADAPTERS.values()):
@@ -159,6 +160,14 @@ def _warm_sources() -> None:
             log.info("warm %s: %s lobbies indexed", adapter.system, warm())
         except Exception:
             log.exception("warm %s failed", adapter.system)
+    for adapter in list(ADAPTERS.values()):
+        if getattr(adapter, "rekey", None) is None:
+            continue
+        try:
+            if moved := structured.rekey_bound(adapter):
+                log.info("rekey %s: %d players moved to the ids it gives now", adapter.system, moved)
+        except Exception:
+            log.exception("rekey %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
         every = getattr(adapter, "roster_every", None)
         if every and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds
@@ -212,6 +221,13 @@ async def import_registry(ctx) -> None:
 async def prune(ctx) -> None:
     """Rows and hot copies nothing reads any more, once a day (retention.py)."""
     await asyncio.to_thread(retention.prune)
+
+
+async def fetch_photos(ctx) -> None:
+    """Followed and starter players' photos from Wikimedia Commons, every 15 minutes (photos.py)."""
+    if await _missed(ctx, "fetch_photos"):
+        return
+    await asyncio.to_thread(photos.run)
 
 
 def _late(ctx) -> bool:
@@ -298,6 +314,7 @@ class WorkerSettings:
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
+        cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.
