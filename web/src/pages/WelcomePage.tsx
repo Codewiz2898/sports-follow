@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { LiveNow } from '../components/LiveNow'
 import { StarterPicker, useStarters } from '../components/Starters'
 import { CheckIcon, PlusIcon } from '../components/Icons'
 import { useFollowing } from '../following'
@@ -82,7 +83,10 @@ export function WelcomePage() {
           })}
         </div>
       ) : (
-        <StarterPicker sports={offered} />
+        <>
+          <LiveNow first={picked} />
+          <StarterPicker sports={offered} />
+        </>
       )}
 
       <div className="row welcome-foot">

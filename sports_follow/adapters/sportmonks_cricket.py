@@ -23,7 +23,7 @@ from typing import Any
 from .. import naming
 from ..sports import cricket
 from . import sportmonks
-from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
@@ -266,6 +266,24 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
+def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
+    """Livescores -> the matches on now, each with its playing elevens, named as the line-up names them."""
+    out = []
+    for x in rows:
+        f = parse_fixture(x)
+        snap = parse_match(x)
+        if snap.status != "live":
+            continue
+        teams = dict(zip(f.team_ids, f.team_names))
+        playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
+        sides = [[p for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+        # The sides in turn, each in the line-up's order: a game's best known come from both.
+        players = [PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
+                   for i in range(max((len(s) for s in sides), default=0)) for team, side in zip(f.team_ids, sides) if i < len(side) for p in [side[i]]]
+        out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
+    return out
+
+
 def _season_year(name: str) -> int:
     """ "2026" -> 2026, "2025/2026" -> 2026."""
     years = re.findall(r"\d{4}", name or "")
@@ -401,6 +419,11 @@ class SportmonksCricket(Adapter):
     def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
         one = PlayerRef(**{**ref.__dict__, "team_ids": [page["team"]]})
         return [f for f in self._matches(one, date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600) if f.status == "final"]
+
+    def live_now(self) -> list[LiveGame]:
+        """Every match in the plan's competitions on now, with its playing elevens: one request (livescores)."""
+        rows = sportmonks.get_json(f"{API}/livescores", ttl=30, include=LIST_INCLUDE).get("data") or []
+        return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.

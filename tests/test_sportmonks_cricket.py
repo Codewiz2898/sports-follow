@@ -191,3 +191,17 @@ def test_the_xi_is_the_team_sheet_before_the_start():
     snap = sc.parse_match(_match("NS", [], lineup=[{"id": OPENER, "lineup": {"substitution": False}}, {"id": KEEPER, "lineup": {"substitution": True}}]))
     assert snap.lines == {} and snap.squad == {str(OPENER): "starting", str(KEEPER): "bench"}
     assert sc.parse_match(_match("NS", [])).squad == {}
+
+
+def test_live_now_lists_every_match_on_with_its_playing_elevens(monkeypatch):
+    def player(pid: int, name: str, team: int, sub: bool = False) -> dict:
+        return {"id": pid, "fullname": name, "lineup": {"team_id": team, "substitution": sub}}
+
+    live = _match("2nd Innings", [FIRST, {**CHASE, "score": 60, "wickets": 3, "overs": 8}],
+                  lineup=[player(OPENER, "Abhishek Sharma", IND), player(SPINNER, "Rashid Khan", AFG), player(SEAMER, "A Sub", IND, sub=True)])
+    asked = []
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: asked.append(sportmonks._bucket(path)) or {"data": [live, _match("Finished", [FIRST, CHASE], id=71216)]})
+    [game] = sc.SportmonksCricket().live_now()
+    assert asked == ["Cricket livescores"]
+    assert (game.title, game.teams, game.snapshot.status) == ("India v Afghanistan", ["India", "Afghanistan"], "live")
+    assert [(p.athlete_id, p.name, p.team_names) for p in game.players] == [(str(OPENER), "Abhishek Sharma", ["India"]), (str(SPINNER), "Rashid Khan", ["Afghanistan"])]

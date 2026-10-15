@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -471,6 +471,23 @@ async def _following(fan: str) -> list[dict[str, Any]]:
 @app.get("/api/me/following")
 async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
     return {"players": await _following(fan)}
+
+
+@app.get("/api/live")
+async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Every game the running sources have on now, by sport, each with players this fan can follow from it
+    (live.py). Served from the last read; a source's read older than a minute queues another for the
+    worker, so "refreshing" says newer games may come in a moment."""
+    games, stale = await in_db(live.offer, fan)
+    for system in stale:
+        try:
+            # One read asked for a minute, whether the last one came or failed: a source that's down isn't
+            # asked again on every fan's look.
+            if await state["redis"].set(f"live:asked:{system}", "1", nx=True, ex=live.FRESH):
+                await enqueue("read_live", system, _job_id=f"read_live:{system}")
+        except Exception:
+            log.warning("live: couldn't ask for %s's games", system, exc_info=True)
+    return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
 
 
 @app.get("/api/starters")

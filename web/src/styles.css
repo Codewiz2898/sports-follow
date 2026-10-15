@@ -205,6 +205,17 @@ a.photo-credit:hover { text-decoration: underline; }
 /* A new fan's first step: a block of colour. */
 .hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--sport); color: var(--on-sport); }
 
+/* A game on now that nobody here may follow yet (LiveNow.tsx): outlined in its sport's colour, with players to
+   follow from it as pills that fill in once followed. */
+.live-game { display: flex; flex-direction: column; gap: 8px; width: 236px; min-height: 172px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--surface); box-shadow: inset 0 0 0 3px var(--sport); }
+.live-game .eyebrow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-game .clock { color: var(--text); }
+.live-game .score { font-size: 24px; overflow-wrap: anywhere; }
+.live-game .who { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.follow-pill { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--bg); color: var(--text); font: 700 12px var(--body); cursor: pointer; }
+.follow-pill[aria-pressed='true'] { background: var(--sport); color: var(--on-sport); }
+.follow-pill .spinner { width: 12px; height: 12px; }
+
 /* Rails (Rail.tsx): a row of fixed-width cards that scrolls sideways out to the page's edge. Each card snaps
    to the page padding and the next one peeks in; no scrollbar. Room above and below for a focus ring. */
 .rail {

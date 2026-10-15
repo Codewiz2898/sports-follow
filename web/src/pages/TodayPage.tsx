@@ -8,6 +8,7 @@ import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
+import { LiveNow } from '../components/LiveNow'
 import { StartersSection } from '../components/Starters'
 import { ThisWeek, useWeek } from '../components/ThisWeek'
 import { Wire } from '../components/Wire'
@@ -167,6 +168,7 @@ export function TodayPage() {
     return (
       <>
         {header}
+        <LiveNow />
         <section className="hero" data-sport="other" aria-label="Get started">
           <span className="dsp" style={{ fontSize: 48 }}>Pick your players</span>
           <p style={{ fontWeight: 600, maxWidth: '36ch' }}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</p>
@@ -219,6 +221,8 @@ export function TodayPage() {
           </Rail>
         )}
       </ErrorBoundary>
+
+      {cards.length > 0 && cards.length < FEW && <LiveNow />}
 
       {/* Side by side on a desktop, when there are both. */}
       {(posters.length > 0 || week.wire.length > 0) && (

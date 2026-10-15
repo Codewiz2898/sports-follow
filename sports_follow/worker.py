@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
+from . import accounts, bus, db, engine, history, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -205,6 +205,13 @@ async def refresh_starters(ctx) -> None:
         await ctx["redis"].delete("starters:refreshing")
 
 
+async def read_live(ctx, system: str) -> None:
+    """What a source has on now, league-wide, for "Live now" (live.read): queued by the API when a fan looks
+    and it last asked over a minute ago. In the refresh lane: no fan waits on it, so it stops short of the
+    allowance kept for followed players' live games."""
+    await in_lane('refresh', live.read, system)
+
+
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
     ended = await asyncio.to_thread(accounts.purge_expired)
@@ -305,7 +312,7 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
