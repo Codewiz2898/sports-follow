@@ -56,8 +56,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   330-pixel thumbnails, author, licence and file page go in the `photo` table, and the app gets them from
   our own origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the cards, search
   results and starters. Each file is asked about again every 90 days (a new upload, licence or author, or a
-  file Commons deleted, which then stops showing), one that failed the next day; files nobody has followed
-  for 30 days are forgotten. The app recolours each photo in its sport's colour (a duotone from the
+  file Commons deleted, which then stops showing), one that failed the next day; a file fetched over 30
+  days ago that nobody follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone from the
   sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so every credit
   says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", linking to the file's page,
   beside the large ones (a player's page, Today's big result); under a list of small ones, a line points

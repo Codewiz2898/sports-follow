@@ -4,7 +4,7 @@ import { useAccount } from '../account'
 import { useActivity } from '../activity'
 import type { ActivityItem, AlertLevel, Photo } from '../api'
 import { useNow } from '../clock'
-import { Avatar } from '../components/Blocks'
+import { Avatar, PhotosNote } from '../components/Blocks'
 import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
@@ -68,6 +68,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
           </ul>
         </section>
       ))}
+      <PhotosNote photos={activity.items.map((item) => profileOf(item.player_id)?.photo)} />
       {activity.more && <MoreButton more={activity.more} />}
     </>
   )
@@ -193,6 +194,7 @@ function Settings() {
             })}
           </ul>
         )}
+        <PhotosNote photos={cards.map((c) => c.player.photo)} />
       </section>
     </>
   )

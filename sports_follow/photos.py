@@ -9,7 +9,7 @@ see it (public domain, CC0, CC BY, CC BY-SA, GODL-India: the user's choice; not 
 serves the same bytes at /api/photos/<digest>.jpg, cached for a year. Nothing is hot-linked. Each file is
 asked about again every REFETCH_DAYS (a new licence, author or upload, or a file Commons deleted), one
 that failed the next day. The job then writes each followed player's photo into their card, and forgets
-the files nobody has followed for FORGET_DAYS.
+files fetched over FORGET_DAYS ago that nobody follows or is offered now.
 
 The app recolours every photo in its sport's colour (a duotone, web/src/styles.css), so each credit says
 so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured". A recoloured CC BY-SA photo stays
@@ -36,7 +36,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote, urlparse, urlunparse
 
 import httpx
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, union
 from sqlalchemy.orm import Session, object_session
 
 from . import bus, logs, sports
@@ -148,7 +148,8 @@ def ask(files: list[str]) -> dict[str, Info]:
         "titles": "|".join(f"File:{f}" for f in files),
     }
     try:
-        res = _client.get(API, params=params)
+        # Posted: fifty names in another script, percent-encoded, can be too long for an address.
+        res = _client.post(API, data=params)
         answer = res.json() if res.status_code == 200 else {}
     except (httpx.HTTPError, ValueError) as exc:
         raise Unavailable(f"Commons API: {exc}") from exc
@@ -167,6 +168,8 @@ def download(url: str) -> tuple[bytes, str]:
         res = _client.get(url)
     except httpx.HTTPError as exc:
         raise Unavailable(f"thumbnail: {exc}") from exc
+    if not (res.url.host or "").endswith(".wikimedia.org"):
+        raise ValueError(f"thumbnail redirected away from Wikimedia: {res.url.host}")
     if res.status_code in (429, 503):
         raise Unavailable(f"thumbnail: {res.status_code}")
     if res.status_code != 200:
@@ -187,13 +190,22 @@ def _file(image: str) -> str:
     return unquote(image) if re.search(r"%[0-9A-Fa-f]{2}", image) else image
 
 
+def _qids():
+    """Each player's registry athlete, by Wikidata id: their "wikidata" identity, or the qid a player in an
+    athlete's second sport carries without one (pipeline.start_from_registry)."""
+    held = select(PlayerIdentity.player_id.label("player_id"), PlayerIdentity.external_id.label("qid")).where(PlayerIdentity.system == "wikidata")
+    carried = select(Player.id.label("player_id"), Player.wikidata_qid.label("qid")).where(Player.wikidata_qid.is_not(None))
+    return union(held, carried).subquery()
+
+
 def wanted(db: Session) -> dict[str, str]:
     """The photo files to have, with whose each is: every followed player's registry athlete, and every
     starter of a running sport."""
+    qids = _qids()
     followed = (
         select(Athlete.image, Athlete.name)
-        .join(PlayerIdentity, (PlayerIdentity.system == "wikidata") & (PlayerIdentity.external_id == Athlete.qid))
-        .where(Athlete.image.is_not(None), exists(select(Follow.id).where(Follow.player_id == PlayerIdentity.player_id)))
+        .join(qids, qids.c.qid == Athlete.qid)
+        .where(Athlete.image.is_not(None), exists(select(Follow.id).where(Follow.player_id == qids.c.player_id)))
     )
     offered = (
         select(Athlete.image, Athlete.name)
@@ -248,12 +260,8 @@ def of_file(db: Session, image: str | None) -> dict[str, Any] | None:
 
 def of_player(db: Session, player_id: int) -> dict[str, Any] | None:
     """The photo a player's card shows: their registry athlete's, once it's here and free to show."""
-    image = db.scalar(
-        select(Athlete.image)
-        .join(PlayerIdentity, (PlayerIdentity.system == "wikidata") & (PlayerIdentity.external_id == Athlete.qid))
-        .where(PlayerIdentity.player_id == player_id, Athlete.image.is_not(None))
-        .limit(1)
-    )
+    qids = _qids()
+    image = db.scalar(select(Athlete.image).join(qids, qids.c.qid == Athlete.qid).where(qids.c.player_id == player_id, Athlete.image.is_not(None)).limit(1))
     return of_file(db, image)
 
 
@@ -273,10 +281,10 @@ def attach(db: Session, rows: list[Any]) -> None:
 
 
 def used(db: Session) -> list[dict[str, Any]]:
-    """Every photo the app shows now, for the Credits page: whose it is, and its credit."""
-    want = wanted(db)
-    shown = _shown(db, want)
-    return sorted(({"name": want[file], **photo} for file, photo in shown.items()), key=lambda p: p["name"])
+    """Every photo the app may show, for the Credits page: whose it is, and its credit. Not only those
+    wanted now: one not yet forgotten still shows in search, and on the card of a player nobody follows."""
+    rows = db.scalars(select(Photo).where(Photo.status == "ok", Photo.digest.is_not(None))).all()
+    return sorted(({"name": p.name or "", **public(p)} for p in rows), key=lambda p: p["name"])
 
 
 def serve(db: Session, name: str) -> tuple[bytes, str] | None:
@@ -293,12 +301,13 @@ def serve(db: Session, name: str) -> tuple[bytes, str] | None:
 # ---------------------------------------------------------------- the job
 
 
-def _keep(db: Session, file: str, info: Info, now: datetime, known: Photo | None) -> Photo:
+def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: Photo | None) -> Photo:
     """Write what Commons said, downloading the thumbnail when it's new; a photo no longer free to show
     loses its bytes."""
     photo = known or Photo(file=file)
     if known is None:
         db.add(photo)
+    photo.name = name
     same = info.status == "ok" and photo.status == "ok" and photo.digest and photo.source_sha1 == info.sha1
     photo.status, photo.reason, photo.fetched_at = info.status, info.reason, now
     photo.licence, photo.licence_url, photo.author, photo.page, photo.source_sha1 = info.licence, info.licence_url, info.author, info.page, info.sha1
@@ -318,10 +327,11 @@ def _keep(db: Session, file: str, info: Info, now: datetime, known: Photo | None
 def stamp(db: Session) -> int:
     """Write each followed player's photo into their card, or take one out that may no longer show, and
     publish the cards that changed. Returns how many."""
+    qids = _qids()
     players = db.execute(
         select(PlayerCard.player_id, Athlete.image, PlayerCard.card["player"]["photo"])
-        .join(PlayerIdentity, (PlayerIdentity.player_id == PlayerCard.player_id) & (PlayerIdentity.system == "wikidata"))
-        .join(Athlete, Athlete.qid == PlayerIdentity.external_id)
+        .join(qids, qids.c.player_id == PlayerCard.player_id)
+        .join(Athlete, Athlete.qid == qids.c.qid)
         .where(exists(select(Follow.id).where(Follow.player_id == PlayerCard.player_id)), or_(Athlete.image.is_not(None), PlayerCard.card["player"].has_key("photo")))
     ).all()
     shown = _shown(db, [image for _, image, _ in players if image])
@@ -355,7 +365,7 @@ def stamp(db: Session) -> int:
 
 def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]:
     """One run: ask Commons about the files wanted and due (new ones first), keep what may be shown, write
-    the photos into the cards, and forget files nobody has wanted for FORGET_DAYS."""
+    the photos into the cards, and forget files fetched over FORGET_DAYS ago that nobody wants now."""
     now = now or datetime.now(timezone.utc)
     done = {"asked": 0, "shown": 0, "left_out": 0, "cards": 0, "forgotten": 0}
     with session() as db:
@@ -368,7 +378,7 @@ def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]
             answers = ask(chunk)
             with session() as db:
                 for file in chunk:
-                    photo = _keep(db, file, answers[file], now, db.scalar(select(Photo).where(Photo.file == file)))
+                    photo = _keep(db, file, want[file], answers[file], now, db.scalar(select(Photo).where(Photo.file == file)))
                     db.commit()
                     done["asked"] += 1
                     done["shown" if photo.status == "ok" else "left_out"] += 1

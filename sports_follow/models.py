@@ -158,6 +158,7 @@ class Photo(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     file: Mapped[str] = mapped_column(String(300), unique=True)
+    name: Mapped[str | None] = mapped_column(String(200))  # whose photo it is, as the Credits page names them
     status: Mapped[str] = mapped_column(String(10))  # ok | unfree | missing | failed
     reason: Mapped[str | None] = mapped_column(Text)  # why it isn't shown: "licence not kept: GFDL"
     licence: Mapped[str | None] = mapped_column(String(100))  # "CC BY-SA 4.0", "public domain"

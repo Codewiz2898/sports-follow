@@ -21,6 +21,7 @@ def upgrade() -> None:
         "photo",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("file", sa.String(length=300), nullable=False),
+        sa.Column("name", sa.String(length=200), nullable=True),
         sa.Column("status", sa.String(length=10), nullable=False),
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("licence", sa.String(length=100), nullable=True),

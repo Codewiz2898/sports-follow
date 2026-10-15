@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate }
 import { AccountNotice, AccountProvider, useAccount } from './account'
 import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
-import { PlayerRow } from './components/Blocks'
+import { PhotosNote, PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { BellIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
@@ -125,6 +125,7 @@ function Sidebar() {
           ))}
         </ErrorBoundary>
       </nav>
+      <PhotosNote photos={cards.map((c) => c.player.photo)} />
       <span className="row tiny muted" style={{ marginTop: 'auto', justifyContent: 'flex-start' }}>
         <NavLink to="/credits" className="link">Credits and sources</NavLink>
         <NavLink to="/privacy" className="link">Privacy</NavLink>

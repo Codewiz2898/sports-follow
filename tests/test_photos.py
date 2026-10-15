@@ -337,6 +337,31 @@ def test_search_results_starters_and_new_cards_carry_the_photo(squad, commons):
 
 
 @needs_db
+def test_a_rebuilt_card_keeps_the_players_photo(squad, commons):
+    """The research agent's report knows nothing of photos: a rebuild from it carries the player's own."""
+    db = squad
+    photos.refresh()
+    report = {"player": {"name": "Bukayo Saka", "sport": "Football", "status": "active", "teams": ["Arsenal F.C."]}, "live": {"is_live": False, "player_stats": []},
+              "news": [], "upcoming": [], "recent_results": [], "season_stats": [], "sources": []}
+    card = pipeline._card_from_report(db.get(Player, 1), report, 5, datetime.now(timezone.utc))
+    assert card["player"]["photo"] == photos.public(_photo(db, SAKA)) and card["player"]["teams"] == ["Arsenal F.C."]
+
+
+@needs_db
+def test_a_player_in_an_athletes_second_sport_gets_their_photo_too(squad, commons):
+    """Bumrah's chess page, say: the qid is his cricket player's, so this one carries it without an identity."""
+    db = squad
+    db.add(Player(id=4, slug="jasprit-bumrah-chess", name="Jasprit Bumrah", sport="Chess", wikidata_qid="Q16227998"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=4, status="ready", version=1, card={"player_id": 4, "version": 1, "player": {"name": "Jasprit Bumrah", "sport": "Chess"}}),
+                Follow(fan_id="fan", player_id=4, alert_rules={})])
+    db.commit()
+    photos.refresh()
+    db.expire_all()
+    assert db.get(PlayerCard, 4).card["player"]["photo"] == photos.public(_photo(db, BUMRAH))
+
+
+@needs_db
 def test_the_credits_page_lists_the_photos_in_use(squad, commons):
     db = squad
     photos.refresh()
