@@ -27,6 +27,9 @@ SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
 # Where fans write about their data: the privacy page shows it (and has no Questions part without it),
 # and data sources see it in the user agent.
 CONTACT_EMAIL = os.environ.get("SPORTS_FOLLOW_CONTACT_EMAIL", "").strip()
+# Sign-in codes a UTC day, to everyone: the mail plan's daily allowance (Resend's free plan sends 100). Past
+# it, a fan hears "try tomorrow" from us rather than a failed send.
+MAIL_CODES_PER_DAY = int(os.environ.get("SPORTS_FOLLOW_MAIL_CODES_PER_DAY", 100))
 
 
 def user_agent(site: str, contact: str) -> str:
