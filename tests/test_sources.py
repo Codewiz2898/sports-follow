@@ -133,7 +133,7 @@ def test_the_research_agent_is_pointed_only_at_the_running_sources_apis():
     assert "e.g. Lichess (https://lichess.org/api/broadcast/top). Cricbuzz" in public and "espn.com" not in public
     assert "leagues like basketball/nba, tennis/atp)" in agent.system_prompt({s: a for s, a in KNOWN.items() if s != "espn_soccer"})
     assert "- Cricbuzz and ESPNcricinfo pages work for cricket.\n" in agent.system_prompt({}) and "Public JSON" not in agent.system_prompt({})
-    assert agent.SYSTEM_PROMPT == agent.system_prompt(ADAPTERS)
+    assert agent.system_prompt() == agent.system_prompt(ADAPTERS)
 
 
 def test_the_research_agent_is_pointed_only_at_urls_its_sources_budget():

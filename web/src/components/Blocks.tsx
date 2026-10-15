@@ -90,7 +90,7 @@ export interface GameResult {
 const WON = { W: 'Won', D: 'Drew', L: 'Lost' }
 
 /** The big word's size: as large as a card's width takes it in a line or two. */
-function wordSize(word: string, hero?: boolean): string {
+export function wordSize(word: string, hero?: boolean): string {
   const steps = hero ? [64, 50, 40, 32] : [46, 36, 28, 22]
   return `${steps[word.length <= 10 ? 0 : word.length <= 16 ? 1 : word.length <= 24 ? 2 : 3]}px`
 }

@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, fcm, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, bus, credits as credits_page, fcm, google_signin, league, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -490,6 +490,27 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
     return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
 
 
+@app.get("/api/league")
+async def league_games(response: Response, tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0) -> dict[str, Any]:
+    """Today's big results (since yesterday, else the latest day that had some: days where the fan is, tz
+    minutes east of UTC) and big games coming up (the next fortnight) in the competitions the running
+    sources cover, whoever follows them, ranked by each sport (league.py). The same for every fan in a time
+    zone, so no cookie and a public cache. Served from the last reads; a source's read a few hours old queues
+    another for the worker, so "refreshing" says new games may come in a moment."""
+    games, stale = await in_db(league.cached, tz)
+    for system in stale:
+        try:
+            # One read asked for an hour, whether the last one came or failed: a source that's down isn't
+            # asked again on every look.
+            if await state["redis"].set(f"league:asked:{system}", "1", nx=True, ex=league.ASK):
+                await enqueue("read_league", system, _job_id=f"read_league:{system}")
+        except Exception:
+            log.warning("league: couldn't ask for %s's games", system, exc_info=True)
+    # While a read is due, the app looks again in a moment: nothing in between may keep this answer.
+    response.headers["cache-control"] = "no-cache" if stale else f"public, max-age={league.CACHE}"
+    return {**games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the hour
+
+
 @app.get("/api/starters")
 async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Who a new fan is offered to follow, by sport (starters.py): the welcome's picker, an empty Today's,
@@ -784,6 +805,7 @@ CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public addre
 CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
 FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
+BLOCKED = "This account has been blocked."  # by an admin (admin.py)
 
 
 async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
@@ -871,6 +893,10 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
+    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
+    if await in_db(accounts.blocked, email):
+        await state["redis"].delete(f"auth-wait:{who}")
+        raise HTTPException(403, BLOCKED)
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
@@ -907,6 +933,8 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
     await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
+    if await in_db(accounts.blocked, email):
+        raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
 
@@ -945,6 +973,8 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
     account_id = await in_db(accounts.find_or_create_google, sub, email)
     if account_id is None:
         return back("/account?error=google_linked")
+    if await in_db(accounts.blocked, None, account_id):
+        return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
     response.headers["location"] = f"/account?welcome={done['players_added']}"
@@ -970,12 +1000,194 @@ async def delete_account(request: Request, response: Response, body: dict = Body
         raise HTTPException(401, "Sign in to delete your account.")
     if body.get("confirm") is not True:
         raise HTTPException(400, "Confirm to delete your account.")
-    gone = await in_db(accounts.delete_account, signed.account_id)
+    await _forget_account(await in_db(accounts.delete_account, signed.account_id))
+    _clear_cookies_for_anonymous(request, response)
+    return {"deleted": True}
+
+
+async def _forget_account(gone: accounts.Deleted | None) -> None:
+    """What Redis kept of a deleted account: its sessions' cached copies, its research count, its codes."""
     if gone is not None:
         await _forget_sessions(gone.token_hashes)
         who = accounts.email_key(gone.email)
         await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
-    _clear_cookies_for_anonymous(request, response)
+
+
+# ---------------------------------------------------------------- the admin panel (admin.py)
+
+admin_log = logging.getLogger("sports_follow.admin")
+
+
+async def require_admin(request: Request) -> None:
+    """An admin signed in to the panel. With no admin password set the panel isn't there (404); without a
+    session, or with one opened under a password since changed, sign in (401)."""
+    stored = await asyncio.to_thread(admin.stored_hash)
+    if stored is None:
+        raise HTTPException(404, "Not Found")
+    token = request.cookies.get(admin.COOKIE) or ""
+    held = await state["redis"].get(admin.session_key(token)) if token else None
+    if held is None or not hmac.compare_digest(held, admin.fingerprint(stored)):
+        raise HTTPException(401, "Sign in to the admin panel.")
+
+
+AdminOnly = [Depends(require_admin)]
+
+
+def _switch(body: dict, field: str) -> bool:
+    value = body.get(field)
+    if not isinstance(value, bool):
+        raise HTTPException(400, f'Say {{"{field}": true}} or {{"{field}": false}}.')
+    return value
+
+
+@app.post("/api/admin/login")
+async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
+    """Sign in to the admin panel with its password. Tries are limited from each client address, and
+    wrong passwords from everyone together, so it can't be guessed at speed."""
+    stored = await asyncio.to_thread(admin.stored_hash)
+    if stored is None:
+        raise HTTPException(404, "Not Found")
+    now = time.time()
+    await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
+    failed = f"admin-fails:{int(now // 3600)}"
+    if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
+        raise HTTPException(429, "Too many wrong passwords this hour. Try again in an hour.")
+    # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
+    await state["redis"].incr(failed)
+    await state["redis"].expire(failed, 7200)
+    password = body.get("password")
+    if not isinstance(password, str) or not 0 < len(password) <= 1000 or not await asyncio.to_thread(admin.try_password, password, stored):
+        admin_log.warning("admin panel: a wrong password")
+        raise HTTPException(401, "That isn't the admin password.")
+    await state["redis"].decr(failed)
+    token = secrets.token_urlsafe(32)
+    await state["redis"].set(admin.session_key(token), admin.fingerprint(stored), ex=admin.SESSION_LIFE)
+    response.set_cookie(admin.COOKIE, token, max_age=admin.SESSION_LIFE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))
+    admin_log.info("admin panel: signed in")
+    return {"admin": True}
+
+
+@app.post("/api/admin/logout")
+async def admin_logout(request: Request, response: Response) -> dict[str, Any]:
+    token = request.cookies.get(admin.COOKIE)
+    if token:
+        await state["redis"].delete(admin.session_key(token))
+    response.delete_cookie(admin.COOKIE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))
+    return {"admin": False}
+
+
+@app.get("/api/admin/me", dependencies=AdminOnly)
+def admin_me() -> dict[str, Any]:
+    return {"admin": True}
+
+
+@app.get("/api/admin/sports", dependencies=AdminOnly)
+def admin_sports() -> dict[str, Any]:
+    return {"sports": admin.sports_view()}
+
+
+@app.put("/api/admin/sports/{key}", dependencies=AdminOnly)
+def admin_set_sport(key: str, body: dict = Body(...)) -> dict[str, Any]:
+    """Turn a sport off or on, within what the server's settings allow: off, it isn't searched,
+    imported or polled, and its players' pages stay as they are."""
+    on = _switch(body, "on")
+    try:
+        admin.set_sport(key, on)
+    except LookupError:
+        raise HTTPException(404, "There's no such sport.") from None
+    admin_log.info("admin panel: sport %s turned %s", key, "on" if on else "off")
+    return {"sports": admin.sports_view()}
+
+
+@app.get("/api/admin/sources", dependencies=AdminOnly)
+def admin_sources() -> dict[str, Any]:
+    return admin.sources_view()
+
+
+@app.put("/api/admin/sources/{system}", dependencies=AdminOnly)
+def admin_set_source(system: str, body: dict = Body(...)) -> dict[str, Any]:
+    """Turn a source off or on, within what the server's settings allow. Its players move to the sport's
+    next running source on their next refresh, if there is one; without one their pages stop updating."""
+    on = _switch(body, "on")
+    try:
+        admin.set_source(system, on)
+    except LookupError:
+        raise HTTPException(404, "There's no such source.") from None
+    admin_log.info("admin panel: source %s turned %s", system, "on" if on else "off")
+    return admin.sources_view()
+
+
+@app.put("/api/admin/budgets/{name}", dependencies=AdminOnly)
+def admin_set_budget(name: str, body: dict = Body(...)) -> dict[str, Any]:
+    """What a source may spend (admin.checked_limits): its allowance a minute, an hour or a day, the
+    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429."""
+    try:
+        admin.set_limits(name, body)
+    except LookupError:
+        raise HTTPException(404, "There's no such allowance.") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: allowance %s set to %s", name, json.dumps(body, sort_keys=True))
+    return admin.sources_view()
+
+
+@app.delete("/api/admin/budgets/{name}", dependencies=AdminOnly)
+def admin_reset_budget(name: str) -> dict[str, Any]:
+    """Back to what the source declares."""
+    try:
+        admin.set_limits(name, None)
+    except LookupError:
+        raise HTTPException(404, "There's no such allowance.") from None
+    admin_log.info("admin panel: allowance %s back to its source's own", name)
+    return admin.sources_view()
+
+
+@app.get("/api/admin/users", dependencies=AdminOnly)
+def admin_users(q: Annotated[str, Query(max_length=254)] = "", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"overview": admin.overview(db), **admin.account_page(db, q, offset)}
+
+
+@app.get("/api/admin/users/{account_id}", dependencies=AdminOnly)
+def admin_user(account_id: RowId, db: Session = Depends(get_db)) -> dict[str, Any]:
+    found = admin.account(db, account_id)
+    if found is None:
+        raise HTTPException(404, "There's no such account.")
+    return found
+
+
+@app.post("/api/admin/users/{account_id}/signout", dependencies=AdminOnly)
+async def admin_sign_out(account_id: RowId) -> dict[str, Any]:
+    """Sign every device out of the account; their alerts stop."""
+    ended = await in_db(admin.sign_out, account_id)
+    if ended is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_sessions(ended)
+    admin_log.info("admin panel: account %s signed out everywhere", account_id)
+    return {"signed_out": len(ended)}
+
+
+@app.put("/api/admin/users/{account_id}/block", dependencies=AdminOnly)
+async def admin_block(account_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """Block an account (it can't sign in, and is signed out everywhere) or let it back in."""
+    blocked = _switch(body, "blocked")
+    ended = await in_db(admin.block, account_id, blocked)
+    if ended is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_sessions(ended)
+    admin_log.info("admin panel: account %s %s", account_id, "blocked" if blocked else "unblocked")
+    return {"blocked": blocked, "signed_out": len(ended)}
+
+
+@app.delete("/api/admin/users/{account_id}", dependencies=AdminOnly)
+async def admin_delete_user(account_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """Delete an account and everything kept under it, as its fan can (DELETE /api/me/account)."""
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Confirm to delete the account.")
+    gone = await in_db(accounts.delete_account, account_id)
+    if gone is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_account(gone)
+    admin_log.info("admin panel: account %s deleted", account_id)
     return {"deleted": True}
 
 

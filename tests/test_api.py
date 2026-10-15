@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, league, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1206,3 +1206,24 @@ def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch
     # The read failed, or hasn't come yet: the next looks within a minute don't ask again, but still say one's coming.
     assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is True
     assert [j for j in api.queue.jobs if j[0] == "read_live"] == [("read_live", "pitch")]
+
+
+def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_again(api, monkeypatch):
+    """GET /api/league answers from league.offer at once, sets no cookie, and asks one read an hour of each
+    source whose last read is a few hours old; while one is due the answer isn't kept anywhere, and once
+    none is, a public cache may keep it a minute (tests/test_league.py holds what's offered)."""
+    games = {"results": {"day": None, "games": [{"key": "pitch:100", "title": "A vs B", "event_ids": []}]}, "coming": {"games": []}}
+    stale = ["pitch"]
+    zones = []
+    monkeypatch.setattr(league, "cached", lambda db, tz: zones.append(tz) or (games, stale))
+    answer = api.call("GET", "/api/league?tz=330")
+    assert answer.status_code == 200 and answer.json() == {**games, "refreshing": True}
+    assert "set-cookie" not in answer.headers and answer.headers["cache-control"] == "no-cache"
+    assert api.queue.jobs[-1] == ("read_league", "pitch") and api.queue.options["_job_id"] == "read_league:pitch"
+    assert api.call("GET", "/api/league").json()["refreshing"] is True
+    assert [j for j in api.queue.jobs if j[0] == "read_league"] == [("read_league", "pitch")]
+    stale.clear()
+    answer = api.call("GET", "/api/league")
+    assert answer.json()["refreshing"] is False and answer.headers["cache-control"] == "public, max-age=60"
+    assert zones == [330, 0, 0]  # the fan's UTC offset in minutes, for their days; none is UTC's
+    assert api.call("GET", "/api/league?tz=9999").status_code == 422

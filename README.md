@@ -5,8 +5,10 @@ player's own numbers while they play, upcoming games, news, recent results and s
 Today screen puts all of your players together: on a phone a row of them along the top (the live
 score, or when they next play), then their live games, a row of the other games on anywhere ("Also
 live", outlined, with players to follow from each), a row of every result since yesterday and a row of
-every game in the next two weeks, each scrolling sideways. The Following page has a tile for each
-player in their sport's colour.
+every game in the next two weeks, each scrolling sideways and ending in the big games of the
+competitions the sources cover that none of your players are in, outlined too (a fan who follows nobody
+sees only those: "Big results", "Big games coming up"). The Following page has a tile for each player in
+their sport's colour.
 
 ## How it's built
 
@@ -182,6 +184,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
+  `schedule` for Today's big results and big games coming up (its competitions' games between two days,
+  whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
+  sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
+  most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
+  none),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
@@ -205,12 +212,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
   line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
-  finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), its form summary,
+  finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
+  its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
+  finish; for Today's big results and big games coming up), its form summary,
   how search shows its athletes, and its colours (a player's photo is recoloured with them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
-  code change. `tests/test_sports.py` fails if shared code names a sport.
+  code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport.
 
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
@@ -220,6 +229,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `VIEWS`; a sport without one shows the plain score and no line art. The Android app (`mobile/`) takes
   the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text on it,
   softer text on it, and itself as text on ink).
+- **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
+  no restart: it turns sports and sources off and on, sets what each source may spend (its allowance a
+  minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
+  fans' share; the pause after a 429) next to what was spent, by lane, and looks after accounts (find
+  one by address, see who they follow and their devices, sign them out everywhere, block them from
+  signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
+  every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
+  budgets follow them. The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out,
+  or a source `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
+  with a password of its own, not a fan's account: `python -m sports_follow.admin password` saves its
+  scrypt hash (in `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE`); without one the panel isn't there (404). An admin
+  stays signed in 12 hours, a new password signs every admin out, and tries are limited per address and,
+  for wrong ones, across everyone. The panel is its own chunk of the web build, so fans don't download it.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
   and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry
@@ -326,6 +348,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one network gets at most 20 a day |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
+| `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash, written by `python -m sports_follow.admin password`; without it there's no panel |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
@@ -334,8 +357,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
 | `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
-| `SPORTS_FOLLOW_SPORTS` | every sport | the sports that run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are |
-| `SPORTS_FOLLOW_SOURCES` | every source | a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only |
+| `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are. The admin panel turns these off and on while the app runs |
+| `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |

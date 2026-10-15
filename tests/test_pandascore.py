@@ -353,3 +353,32 @@ def test_live_now_keeps_the_big_tournaments_series_biggest_tier_first(monkeypatc
     assert games[0].competition == "Worlds Stage 2 2026"
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: [on(1, "DreamLeague Closed Qualifier", "c"), on(3, "ESEA Advanced", "d")])
     assert ps.PandascoreEsports().live_now() == []  # a quiet day: esports shows nothing
+
+
+def test_the_schedule_is_the_big_tournaments_series_between_two_days_each_with_its_tier(monkeypatch):
+    """The S and A tournaments first (on now, starting, ended: PandaScore filters tournaments by tier, not
+    series), then their series in the window."""
+    asked = []
+    tours = {"/tournaments/running": [{"id": 3, "tier": "a"}, {"id": 4, "tier": "b"}], "/tournaments/upcoming": [{"id": 9, "tier": "s"}], "/tournaments/past": []}
+
+    def get_json(path, ttl, **params):
+        asked.append((path, params))
+        if path in tours:
+            return tours[path]
+        return [{**FINAL, "tournament_id": 3}, _match("not_started", id=778, tournament_id=9, tournament={"id": 9, "name": "Playoffs", "tier": "s"}), _match("not_started", id=779, tournament_id=4)]
+
+    monkeypatch.setattr(pandascore, "get_json", get_json)
+    games = ps.PandascoreEsports().schedule(date(2026, 10, 9), date(2026, 10, 30))
+    assert [(g.source_id, g.status, g.tier) for g in games] == [("777", "final", 2), ("778", "scheduled", 3), ("779", "scheduled", 0)]
+    by_path = {path: params for path, params in asked}
+    assert [path for path, _ in asked] == ["/tournaments/running", "/tournaments/upcoming", "/tournaments/past", "/matches"]
+    assert by_path["/tournaments/running"]["filter[tier]"] == "s,a" and "filter[videogame_id]" in by_path["/tournaments/running"]
+    assert by_path["/tournaments/upcoming"]["range[begin_at]"] == by_path["/tournaments/past"]["range[end_at]"] == "2026-10-09T00:00:00Z,2026-10-30T23:59:59Z"
+    assert by_path["/matches"]["filter[tournament_id]"] == "3,9" and by_path["/matches"]["range[scheduled_at]"] == "2026-10-09T00:00:00Z,2026-10-30T23:59:59Z"
+
+
+def test_no_big_tournament_no_series_asked_for(monkeypatch):
+    asked = []
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or [])
+    assert ps.PandascoreEsports().schedule(date(2026, 10, 9), date(2026, 10, 30)) == []
+    assert "/matches" not in asked

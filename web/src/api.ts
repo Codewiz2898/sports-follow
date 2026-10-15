@@ -1,7 +1,7 @@
 // The API client. Its types are in types.ts, shared with the Android app (mobile/).
 
 import { report } from './errors'
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Card, Credits, FollowTarget, Form, GameDetail, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, StreamEvent, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Card, Credits, FollowTarget, Form, GameDetail, League, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, StreamEvent, WeekPoster, WireRow } from './types'
 
 export type * from './types'
 
@@ -16,7 +16,7 @@ export class ApiError extends Error {
 }
 
 /** A call to the API. A server error (5xx) is reported (errors.ts) with the request id the answer names. */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
     let message = `Request failed (${res.status})`
@@ -31,7 +31,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+export const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 export const api = {
   following: () => request<{ players: Card[] }>('/api/me/following'),
@@ -50,6 +50,8 @@ export const api = {
   refresh: (playerId: number) => request<{ queued: boolean; reason?: string }>(`/api/players/${playerId}/refresh`, { method: 'POST' }),
   starters: () => request<{ sports: StarterSport[] }>('/api/starters'),
   live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
+  // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.
+  league: (fresh = false) => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`, fresh ? { cache: 'no-store' } : undefined),
   search: (q: string, sport?: string | null, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}${sport ? `&sport=${encodeURIComponent(sport)}` : ''}`, { signal }),
   /** A search result before following: system "wikidata" with a qid and sport for registry athletes. */

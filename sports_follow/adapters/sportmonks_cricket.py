@@ -27,6 +27,8 @@ from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Sna
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
+# Every match of the plan's competitions on some days (schedule): enough for the result and the stage.
+SCHEDULE_INCLUDE = "localteam,visitorteam,league,stage,runs"
 MATCH_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup,manofmatch,bowling,batting.result,batting.bowler,batting.catchstump,batting.runoutby"
 
 _FINAL = {"Finished"}
@@ -93,6 +95,8 @@ def born(value: str | None) -> str | None:
 
 
 def parse_fixture(x: dict[str, Any]) -> Fixture:
+    """A fixture -> ours, with what the sport ranks a league match by (sports.cricket): whether it's between
+    nations, and whether a super over decided it."""
     home, away = _team(x, "localteam"), _team(x, "visitorteam")
     status = _status(x.get("status"))
     runs = x.get("runs") or []
@@ -115,6 +119,7 @@ def parse_fixture(x: dict[str, Any]) -> Fixture:
         locator={"fixture": str(x["id"])},
         detail=x.get("round") or None,
         result=result,
+        facts={k: True for k, v in (("national", bool(home.get("national_team") and away.get("national_team"))), ("super_over", bool(x.get("super_over")))) if v},
     )
 
 
@@ -419,6 +424,12 @@ class SportmonksCricket(Adapter):
     def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
         one = PlayerRef(**{**ref.__dict__, "team_ids": [page["team"]]})
         return [f for f in self._matches(one, date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600) if f.status == "final"]
+
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """Every match of the plan's competitions between two days, whoever plays it: one request on the
+        "Cricket fixtures" endpoint (a page holds 100, about three weeks of the plan's)."""
+        rows = sportmonks.get_all(f"{API}/fixtures", ttl=1800, **{"filter[starts_between]": f"{start.isoformat()},{end.isoformat()}", "include": SCHEDULE_INCLUDE})
+        return [parse_fixture(x) for x in rows]
 
     def live_now(self) -> list[LiveGame]:
         """Every match in the plan's competitions on now, with its playing elevens: one request (livescores)."""

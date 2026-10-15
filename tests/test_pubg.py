@@ -296,3 +296,15 @@ def test_the_minute_is_shared_a_gone_match_is_remembered_and_a_spent_minute_read
     assert pubg.tournaments(max_age=0) == [{"id": "as-pgsc4t", "createdAt": "2026-10-09T07:04:22Z"}]  # spent: the kept list
     with pytest.raises(pubg.RateLimited):
         pubg.tournament_matches("never-read", max_age=0)
+
+
+def test_a_circuits_events_are_rated_the_weekly_series_and_unknown_codes_arent():
+    assert [pe.event_tier(t) for t in ("as-pgsc4t", "eu-pgc2026", "eu-pecff2", "kr-26pws2f", "sea-xyz")] == [3, 3, 2, 0, 0]
+
+
+def test_the_schedule_is_the_lobbies_that_started_on_those_days_from_the_index(index):
+    adapter, calls = index
+    today = datetime.now(timezone.utc).date()
+    [lobby] = adapter.schedule(today - timedelta(days=7), today + timedelta(days=14))
+    assert (lobby.status, lobby.tier, lobby.competition) == ("live", 3, "PUBG Global Series")
+    assert adapter.schedule(today + timedelta(days=1), today + timedelta(days=14)) == []

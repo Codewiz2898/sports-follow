@@ -16,7 +16,7 @@ def main() -> None:
     if not rows:
         print("No source requests counted today.")
     print()
-    for b in budget.known():
+    for b in map(budget.effective, budget.known()):  # as the admin panel left them
         if not b.windows:
             print(f"{b.name}: no published limit")
             continue
