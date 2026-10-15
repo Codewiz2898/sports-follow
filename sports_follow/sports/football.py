@@ -8,13 +8,15 @@ import re
 from collections import Counter
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Seen, Sport, joined, num, number, stat, values
+from .base import Found, Line, Poster, Seen, Sport, joined, num, number, spaced, stat, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
 
 LATE_MINUTE = 80  # a goal from here on that levels the game or puts a side ahead is "late"
 UNDER_WAY = 10  # minutes on the clock: a game first seen live this late was missed, not just started
+# The moments that make a poster in Today's "This week", by their title's first words ("Hat-trick: Saka").
+POSTERS = ("Hat-trick", "Late equaliser", "Equaliser", "Late goal", "Goal", "Assist")
 
 
 def pens(a: int | None, b: int | None) -> str:
@@ -212,6 +214,18 @@ class Football(Sport):
                 again.detail = f"{b}#{times[b]}"
                 found.append(again)
         return found
+
+    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+        """A goal by what it did ("Hat-trick", "Late equaliser"; a second is a "Brace"), or an assist, with
+        its minute: "67' v Chelsea". A hat-trick has three minutes, so it has none."""
+        head, _, rest = title.partition(": ")
+        if head not in POSTERS:
+            return None  # a card, a goal ruled out
+        count = re.search(r" \((\d+)\)$", rest)
+        n = int(count[1]) if count else 1
+        word = head if n == 1 else f"{n} assists" if head == "Assist" else "Brace" if n == 2 else f"{n} goals"
+        minute = re.search(r"\b\d+(?:\+\d+)?'", body) if n == 1 and head != "Hat-trick" else None
+        return Poster(word, spaced(minute[0] if minute else None, versus))
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if ln.get("headline") not in (None, "On the bench")]

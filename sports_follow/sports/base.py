@@ -57,6 +57,15 @@ class Found:
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY (moments.py)
 
 
+@dataclass
+class Poster:
+    """One of a player's big moments this week as Today's "This week" rail draws it (week.py): a word or two
+    in big type ("Hundred", "Hat-trick") and a short line under the player's name ("112 (98) v Australia")."""
+
+    word: str
+    line: str = ""
+
+
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
     for s in (line or {}).get("stats") or []:
         if s.get("label") == label:
@@ -75,6 +84,10 @@ def crossed(before: int, now: int, marks: tuple[int, ...]) -> list[int]:
 
 def joined(*parts: str | None) -> str:
     return " · ".join(p for p in parts if p)
+
+
+def spaced(*parts: str | None) -> str:
+    return " ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------- form: what sports' summaries read
@@ -232,6 +245,14 @@ class Sport:
         the fans who were sent that moment, and reaches no one else (alerts.py). A moment taken back that
         the source shows again may be found again here, under a new detail."""
         return []
+
+    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+        """A moment this sport found, as a poster in Today's "This week" (week.py), read off the title and
+        body this sport wrote it with: the title says what the kind can't (a cricketer's "takes 5 wickets"
+        is a "Five-for"). `versus` is the other side of the game ("v Australia"), or "" when the game's
+        title doesn't say. None for a moment that isn't one of the player's highs: a set, a yellow card, a
+        line-up, being out, the news. A sport no module knows has none."""
+        return None
 
     # ---- live games and cards (structured.py)
 

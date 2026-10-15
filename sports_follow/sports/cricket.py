@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Seen, Sport, crossed, joined, number, stat
+from .base import ORDINAL, Found, Line, Poster, Seen, Sport, crossed, joined, number, spaced, stat
 
 
 def _int(value: Any) -> int:
@@ -79,6 +79,10 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 # ---------------------------------------------------------------- the sport
+
+# A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
+_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
+_HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
 
 
 def _another(was: list[Any], now: list[Any]) -> bool:
@@ -166,6 +170,18 @@ class Cricket(Sport):
             figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
             found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
         return found
+
+    def poster(self, kind: str, title: str, body: str, versus: str) -> Poster | None:
+        """A fifty or more ("Hundred"), or three wickets or more ("Five-for"), with the innings as the body
+        has it: "112 (98) v Australia", "5/23 (4 ov) v Australia"."""
+        figures = body.split(" · ", 1)[0]
+        if m := re.search(r" reaches (\d+)$", title):
+            word = _RUNS.get(int(m[1]), m[1])
+        elif m := re.search(r" takes (\d+) wickets$", title):
+            word = f"{_HAUL.get(int(m[1]), m[1])}-for"
+        else:
+            return None
+        return Poster(word, spaced(figures, versus))
 
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.

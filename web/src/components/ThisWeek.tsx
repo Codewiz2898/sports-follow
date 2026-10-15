@@ -1,0 +1,71 @@
+import { useEffect, useState, type CSSProperties } from 'react'
+import { Link } from 'react-router-dom'
+import { api, type WeekPoster } from '../api'
+import { daysAgo, day, parseDate, shortName } from '../format'
+import { useFollowing } from '../following'
+import { sportKey } from '../sports'
+import { Rail } from './Rail'
+
+const SETTLE_MS = 1500  // one poll can bring several moments: fetch once they've all arrived
+
+/**
+ * The big moments of the fan's players over the last week (GET /api/me/week), biggest first, as their sports
+ * word them: loaded when the follow list changes, and again once the stream has brought new moments.
+ */
+export function useWeek(): WeekPoster[] {
+  const { cards, loaded, heard } = useFollowing()
+  const [posters, setPosters] = useState<WeekPoster[]>([])
+  const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
+
+  useEffect(() => {
+    if (!loaded) return
+    if (!who) { setPosters([]); return }
+    let stale = false
+    const timer = window.setTimeout(() => {
+      api.week().then((r) => { if (!stale) setPosters(r.posters) }).catch(() => {})
+    }, heard ? SETTLE_MS : 0)
+    return () => { stale = true; window.clearTimeout(timer) }
+  }, [loaded, who, heard])
+
+  return posters
+}
+
+/** When it was: "Today", the weekday within the week ("Mon"), else the date. */
+function when(at: string, now: number): string {
+  const days = daysAgo(at, new Date(now))
+  if (days === 0) return 'Today'
+  return days != null && days > 0 && days < 7 ? parseDate(at)!.toLocaleDateString(undefined, { weekday: 'short' }) : day(at)
+}
+
+/** The longest word in a poster's word, in letters: the CSS sizes the word so that one fits on a line. */
+function longest(word: string): number {
+  return Math.max(...word.split(/(?<=-)|\s+/).map((w) => w.length))
+}
+
+/** One big moment: a block of the player's sport colour, its word big, then their name and the line. */
+function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
+  return (
+    <Link to={`/player/${poster.player_id}`} className="poster" data-sport={sportKey(poster.sport)}>
+      <span className="poster-tag">Yours</span>
+      <span className="dsp word" style={{ '--letters': longest(poster.word) } as CSSProperties}>{poster.word}</span>
+      <span className="stack" style={{ gap: 2 }}>
+        <span className="dsp who">{shortName(poster.player)}</span>
+        <span className="line">{[poster.line, when(poster.at, now)].filter(Boolean).join(' · ')}</span>
+      </span>
+    </Link>
+  )
+}
+
+/**
+ * "This week" on Today: the big moments of the fan's players over the last seven days, a poster each,
+ * leaving out the games the Results rail already has (`shown`, their event ids). Nothing when there's none.
+ */
+export function ThisWeek({ posters, shown, now }: { posters: WeekPoster[]; shown: Set<number>; now: number }) {
+  const left = posters.filter((p) => p.event_id == null || !shown.has(p.event_id))
+  if (!left.length) return null
+  return (
+    <Rail title="This week" note="The big moments" all="Every big moment this week" className="week">
+      {left.map((p) => <Poster key={p.id} poster={p} now={now} />)}
+    </Rail>
+  )
+}

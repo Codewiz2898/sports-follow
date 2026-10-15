@@ -192,6 +192,9 @@ export interface PlayerMoment { id: number; title: string; body: string; url: st
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, pushed or not. */
 export interface ActivityItem extends PlayerMoment { priority: number; player: string; event: string | null; muted: boolean; at: string }
 
+/** One of the fan's players' big moments this week, as its sport words it for a poster on Today (GET /api/me/week). */
+export interface WeekPoster { id: number; player_id: number; player: string; sport: string; event_id: number | null; word: string; line: string; url: string; at: string }
+
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =
@@ -293,6 +296,7 @@ export const api = {
     request<{ ok: boolean }>('/api/push/subscriptions', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) }),
   pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
   activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
+  week: () => request<{ posters: WeekPoster[] }>('/api/me/week'),
   mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
   mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
   config: () => request<ServerConfig>('/api/config'),

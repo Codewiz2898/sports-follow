@@ -9,6 +9,7 @@ import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { StartersSection } from '../components/Starters'
+import { ThisWeek, useWeek } from '../components/ThisWeek'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useAccount } from '../account'
 import { useFollowing } from '../following'
@@ -141,6 +142,7 @@ export function LoadFailed() {
 export function TodayPage() {
   const { cards, loaded, failed } = useFollowing()
   const { items: alerts, seen } = useActivity()
+  const posters = useWeek()
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
 
@@ -176,6 +178,8 @@ export function TodayPage() {
   const games = liveGames(cards)
   const done = results(cards, now)
   const coming = comingUp(cards, now)
+  // This week leaves out the games the Results rail has.
+  const onResults = new Set((done?.games ?? []).flatMap((g) => g.players.flatMap((p) => (p.result.event_id != null ? [p.result.event_id] : []))))
 
   return (
     <>
@@ -211,6 +215,10 @@ export function TodayPage() {
             {coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} />)}
           </Rail>
         )}
+      </ErrorBoundary>
+
+      <ErrorBoundary fallback={<BlockError />} resetKey={posters}>
+        <ThisWeek posters={posters} shown={onResults} now={now} />
       </ErrorBoundary>
 
       {cards.length > 0 && cards.length < FEW && <StartersSection />}
