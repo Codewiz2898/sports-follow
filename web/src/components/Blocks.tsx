@@ -103,7 +103,7 @@ export function NextStrip({ event, playerId, sport }: { event: UpcomingEvent & {
 /** What a player's tile says: live, then a game this week, then the last result, then the news. */
 export function statusLine(card: Card, progress?: string[], now = Date.now()): string {
   if (card.status === 'building') return progress?.at(-1) ?? 'Building page…'
-  if (card.status === 'failed') return 'Build failed, open to retry'
+  if (card.status === 'failed') return "Page couldn't be built, open to see why"
   if (card.live.is_live) {
     const lead = card.live.headline ?? (card.live.player_stats?.[0] && `${card.live.player_stats[0].value} ${card.live.player_stats[0].label}`)
     return [card.live.score, lead].filter(Boolean).join(' · ') || 'Live now'
@@ -317,7 +317,9 @@ export function FormStrip({ marks }: { marks: ('W' | 'D' | 'L')[] }) {
   )
 }
 
-export function BuildProgress({ card, messages, onRetry }: { card: Card; messages: string[]; onRetry?: () => void }) {
+/** A page being built, or one that failed. Without the research agent (research false) it's a name being
+ * looked up in the live sources, and a failed one can't be tried again. */
+export function BuildProgress({ card, messages, onRetry, research = true }: { card: Card; messages: string[]; onRetry?: () => void; research?: boolean }) {
   if (card.status === 'failed') {
     return (
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -333,7 +335,9 @@ export function BuildProgress({ card, messages, onRetry }: { card: Card; message
         <span className="spinner" />
         <span className="title">Building {card.player.name}'s page</span>
       </div>
-      <p className="small muted">The first time anyone follows a player, the agent researches them. This takes one to two minutes; every later fan gets the shared page instantly.</p>
+      <p className="small muted">{research
+        ? 'The first time anyone follows a player, the agent researches them. This takes one to two minutes; every later fan gets the shared page instantly.'
+        : 'Looking them up in the live sources.'}</p>
       {messages.length > 0 && <ol className="progress-log">{messages.map((m, i) => <li key={i}>{m}</li>)}</ol>}
     </div>
   )

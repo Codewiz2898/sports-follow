@@ -147,7 +147,8 @@ deploy/seed-registry.sh deploy@<server-ip>
 ```
 
 **6. Check it:** `https://<domain>/api/health` answers `{"ok":true,"db":true,"redis":true}`, the app
-opens, search finds players, and `/credits` lists Sportmonks, Lichess, PandaScore and PUBG only.
+opens, search finds players, and `/credits` lists Sportmonks and Lichess only, with PandaScore and PUBG
+once their tokens are sent ([Esports](#secrets), below).
 
 **7. Turn on the alerts, the off-site backups and the GitHub deploys** (below).
 
@@ -241,8 +242,9 @@ every six hours, the first time within ten minutes of starting. PandaScore's com
 `/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
 
 **Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
-the sources alone (sports with a source keep their scores, games, stats, live and alerts), and nothing
-offers AI research. With the key but out of credit, those pages work too; they say why news is missing.
+the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
+AI research, and pages the agent built before (sports with no source here) stay as they were, no longer
+updated. With the key but out of credit, source pages work too; they say why news is missing.
 
 **On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
 instead of running `push-secrets.sh`:

@@ -481,12 +481,7 @@ async def research_used(fan: str) -> int:
 async def take_research(fan: str, address: str | None, used_up: str) -> list[str]:
     """Count one AI research against the fan's UTC day, their address's day and this hour across all
     fans. Returns the counts taken, for give_back_research; when any is used up, nothing is counted and
-    the fan gets a 429 (`used_up` when it's their own three). With the agent off (config.AGENT) there's
-    no research to count: a player no source has can't be followed, a 404."""
-    from .config import AGENT
-
-    if not AGENT:
-        raise HTTPException(404, "No live source has this player yet, so there's no page to follow. Pick an athlete from the search results.")
+    the fan gets a 429 (`used_up` when it's their own three)."""
     now = datetime.now(timezone.utc)
     limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
     if address:
@@ -578,7 +573,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research.
+    AI research, and with the agent off (config.AGENT) can't be followed.
     """
     from .config import AGENT
 
@@ -592,6 +587,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
+            if found is None and not AGENT:
+                raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
             if found is None:
                 taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
                 try:
@@ -646,6 +643,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
 @app.post("/api/follows")
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    from .config import AGENT
+
     if body.get("system") or body.get("qid"):
         player_id = await _follow_athlete(body, fan, client_address(request))
         return {"player_id": player_id, "card": await read_card(player_id)}
@@ -669,6 +668,9 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
+    if counted and not AGENT:
+        # Without the agent (config.AGENT) a page comes from a live source, picked in search, or not at all.
+        raise HTTPException(404, "No live source has this player, so their page can't be built." if known is not None else "Pick an athlete from the search results: pages here come from live sources.")
     taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
     def save(db: Session) -> tuple[int, bool, dict[str, Any] | None] | None:

@@ -285,7 +285,9 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # the query's letters (pipeline.slugify).
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
     mine = [r for r in local(db, query, fan, sport) if sports.on(r.sport)]
-    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport)]
+    # Without the research agent (config.AGENT) only athletes in a sport with a running source can be
+    # followed: the others are left out before anything is decided on them (asking the sources, "did you mean").
+    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport) and (AGENT or r.live_scores)]
     found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
@@ -324,8 +326,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         results = [r for r in results if (r.system, r.athlete_id) not in blocked]
         suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
     if not AGENT:
-        # No research agent to build a page (config.AGENT): only athletes a running source has, and
-        # players already here, can be followed.
+        # And of the sources' own hits and the spellings offered, likewise.
         results = [r for r in results if r.player_id or r.live_scores]
         suggestions = [r for r in suggestions if r.player_id or r.live_scores]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the

@@ -620,9 +620,6 @@ def build_card(player_id: int) -> None:
     try:
         from .config import AGENT, CARD_MAX_AGE
 
-        if not AGENT:
-            _without_agent(player_id)
-            return
         with session() as db:
             player = db.get(Player, player_id)
             card_row = db.get(PlayerCard, player_id)
@@ -637,8 +634,8 @@ def build_card(player_id: int) -> None:
             # now could only find a namesake.
             from_registry = db.scalar(select(PlayerIdentity.id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata")) is not None
         if first_build and not from_registry:
-            # A name one source recognizes gets its page from that source in seconds; the agent then adds
-            # the profile and news. Anything else waits for the agent to say who it is.
+            # A name one source recognizes gets its page from that source in seconds (no model needed); the
+            # agent then adds the profile and news. Anything else waits for the agent to say who it is.
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
             found = structured.identify(name)
             if found:
@@ -646,7 +643,11 @@ def build_card(player_id: int) -> None:
                 if landed is None or landed != player_id:
                     return  # the athlete was already followed under another name: that page serves this fan
                 name = found[1].name
-                bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
+                if AGENT:
+                    bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
+        if not AGENT:
+            _without_agent(player_id)
+            return
         for event in follow_player(llm(), name, structured.describe(player_id)):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)
@@ -676,6 +677,8 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
     Returns the player the name landed on: this one, or an existing player who already holds the
     athlete (followed earlier under another spelling), into which this one is folded.
     """
+    from .config import AGENT
+
     sport = structured.sport_name(adapter, ref)  # "Football", "Cricket", "Chess"; an esports pro's game: "CS2", "BGMI"
     individual = ref.team_ids == [ref.athlete_id]
     moved_from = None
@@ -695,8 +698,9 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
             player, moved_from = _canonicalize(db, player, ref.name)
             card_row = db.get(PlayerCard, player.id)
             if card_row is not None and card_row.status != "ready":
-                card = {**placeholder_card(player), "status": "ready", "version": (card_row.version or 0) + 1, "pending": ["profile", "news"]}
-                card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+                version = (card_row.version or 0) + 1
+                card = {**placeholder_card(player), "status": "ready", "version": version} | ({"pending": ["profile", "news"]} if AGENT else {})
+                card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", version, None
         landed = player.id
     if moved_from is not None:
         bus.sync_redis().delete(bus.card_key(moved_from))
@@ -715,26 +719,23 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
 
 
 def _without_agent(player_id: int) -> None:
-    """A build with the research agent off (config.AGENT). A player bound to a source has their page from
-    it, whole without the profile and news: one still waiting for the agent stops waiting, and one whose
-    page was the agent's (a failed build tried again) is read from the source. A player no source has
-    can't be built."""
+    """A build with the research agent off (config.AGENT), once a typed name has been looked up in the
+    sources (build_card). A page that exists stays as it is: one from a source that was waiting for the
+    profile and news stops waiting. A first build no source took can't be made."""
     with session() as db:
         card_row = db.get(PlayerCard, player_id)
         if card_row is None or (card_row.status == "ready" and not (card_row.card or {}).get("pending")):
             return
-        reread = card_row.status != "ready"
-        if structured.binding(db, player_id) is None:
-            card = None
-        else:
-            card ={k: v for k, v in (card_row.card or {}).items() if k != "pending"} | {"status": "ready", "version": (card_row.version or 0) + 1}
+        if card_row.status == "ready" or structured.binding(db, player_id) is not None:
+            # A bound card that isn't ready (none should be) gets the source's sections from the scheduler's refresh.
+            card = {k: v for k, v in (card_row.card or {}).items() if k != "pending"} | {"status": "ready", "version": (card_row.version or 0) + 1}
             card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", card["version"], None
+        else:
+            card = None
     if card is None:
         mark_failed(player_id, AGENT_OFF)
         return
     bus.store_card(player_id, card)
-    if reread:
-        structured.refresh(player_id)
 
 
 def refresh_live(player_id: int) -> None:

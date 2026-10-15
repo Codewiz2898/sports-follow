@@ -1037,9 +1037,9 @@ def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_
 
     monkeypatch.setattr(server, "_resolve", nowhere)
     monkeypatch.setattr(pipeline, "start_from_registry", lambda person: pytest.fail("a page for the agent was started"))
-    for body in ({"qid": "Q99", "sport": "football"}, {"query": "Brand New Name"}):
+    for body, said in [({"qid": "Q99", "sport": "football"}, "No live source has Some One's games"), ({"query": "Brand New Name"}, "Pick an athlete from the search results")]:
         answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
-        assert answer.status_code == 404 and answer.json()["detail"].startswith("No live source has this player yet"), body
+        assert answer.status_code == 404 and answer.json()["detail"].startswith(said), body
     assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
     assert not any(k.startswith("research") for k in api.redis.data)
     assert api.call("GET", "/api/config").json()["research"] is False

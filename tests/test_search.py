@@ -347,6 +347,16 @@ def test_without_the_agent_search_lists_only_athletes_a_source_has(monkeypatch):
     monkeypatch.setattr(config, "AGENT", False)
     out = search.run(None, "shane")
     assert [r["name"] for r in out["results"]] == ["Shane Warne"] and not out["researchable"]
+    # A registry athlete in a sport with a running source stays, even without its id there yet (it's
+    # looked up by name and birth date when followed); one in a sport without one is left out before
+    # anything is decided on it, so the live sources are still asked.
+    monkeypatch.setattr(search.registry, "follow_system", lambda sport, ids: "espn_soccer" if sport == "football" else None)
+    bond = athlete("Q1", "Shane Bond", "cricket", sitelinks=40)  # cricket has no running source, here
+    long = athlete("Q2", "Shane Long", "football", sitelinks=40)  # no source id yet
+    searching(monkeypatch, found=[bond, long])
+    assert [r["name"] for r in search.run(None, "shane")["results"]] == ["Shane Long"]
+    asked = searching(monkeypatch, found=[bond], espn=[warne])  # Bond alone would have spared the live sources
+    assert [r["name"] for r in search.run(None, "shane")["results"]] == ["Shane Warne"] and asked == ["shane"]
 
 
 # ---------------------------------------------------------------- native spellings

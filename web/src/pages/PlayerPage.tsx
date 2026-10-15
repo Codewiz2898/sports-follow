@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAccount } from '../account'
 import { useActivity } from '../activity'
 import { api, subscribe, type Card, type StreamEvent, type UpcomingEvent } from '../api'
 import { useNow } from '../clock'
@@ -26,6 +27,7 @@ export function PlayerPage() {
   const following = useFollowing()
   const isFollowing = following.isFollowing(playerId)
   const { listen } = following
+  const research = useAccount().config?.research !== false  // without the agent a failed page isn't tried again
   const [card, setCard] = useState<Card | null>(null)
   const [shown, setShown] = useState<number | null>(null)  // the player whose card has loaded
   const version = useRef(0)
@@ -154,7 +156,7 @@ export function PlayerPage() {
       {failure && <div className="error-box" role="alert">{failure}</div>}
 
       {card.status !== 'ready' ? (
-        <BuildProgress card={card} messages={progress} onRetry={retry} />
+        <BuildProgress card={card} messages={progress} onRetry={research ? retry : undefined} research={research} />
       ) : (
         <>
           {card.pending && (
@@ -204,6 +206,8 @@ function lastChecked(card: Card): string | null {
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
 function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
+  // Without the research agent (GET /api/config) a page no source updates stays as it was found.
+  const research = useAccount().config?.research !== false
   const p = card.player
   const retired = p.status === 'retired'
   const now = useNow()
@@ -239,7 +243,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
       ) : card.live.available === false ? (
         <div className="card card-pad stack">
           <span className="title">No live scores for {sportName(p.sport) || 'this sport'} yet</span>
-          <span className="small muted">News, results and upcoming games on this page update a few times a day.</span>
+          <span className="small muted">{research ? 'News, results and upcoming games on this page update a few times a day.' : "News, results and upcoming games on this page are as they were found, and aren't updated now."}</span>
         </div>
       ) : (
         <div className="card card-pad row">
@@ -251,7 +255,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
         </div>
       )}
       {!card.live.is_live && !retired && next && card.live.available === false && (
-        <p className="tiny muted">No live scores for {sportName(p.sport) || 'this sport'} yet: results and news update a few times a day.</p>
+        <p className="tiny muted">No live scores for {sportName(p.sport) || 'this sport'} yet: {research ? 'results and news update a few times a day.' : "results and news aren't updated now."}</p>
       )}
 
       {last && (
