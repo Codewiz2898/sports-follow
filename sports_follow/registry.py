@@ -628,6 +628,20 @@ def follow_system(sport: str | None, ids: dict[str, str]) -> str | None:
     return live_system(sport)
 
 
+def find_in_source(person: Person) -> tuple[Adapter, PlayerRef] | None:
+    """The person in the source they're followed through (follow_system): their sport's live source, by the
+    id Wikidata has or by name and birth date (resolve, which writes a found id back), or a source side by
+    side with it, by the id their row came with. None when no running source has them."""
+    system = follow_system(person.sport, person.ids)
+    if system is None:
+        return None
+    if system == live_system(person.sport):
+        return resolve(person)
+    adapter = ADAPTERS[system]
+    ref = adapter.player(person.ids[system], person.league)
+    return (adapter, ref) if ref else None
+
+
 def sport_of(system: str) -> str | None:
     """The Wikidata sport a running adapter serves ("football" for both football sources)."""
     adapter = ADAPTERS.get(system)

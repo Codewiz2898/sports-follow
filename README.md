@@ -192,11 +192,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
   for following.
-- **Starter players**, the few a new fan is offered in each sport (the welcome, an empty Today, search's
-  "Try"), are rows too, set with the same command: `starter add <registry id>` (it checks the sport's
-  live source has them, and pins them), `starter remove` (which leaves them pinned; `restore` unpins),
-  `starter list`. A sport that's turned off offers none, and removing a player takes their starter row
-  with them (`sports_follow/starters.py`).
+- **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
+  "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
+  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
+  with a game soon, which the worker finds in their sources once a day. The operator can pin a few
+  ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
+  them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
+  player takes their pin with them.
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and

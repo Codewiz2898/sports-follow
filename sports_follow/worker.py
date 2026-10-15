@@ -20,7 +20,7 @@ from time import perf_counter
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -179,6 +179,14 @@ async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> 
         log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
 
 
+async def refresh_starters(ctx) -> None:
+    """Each sport's top players for new fans, found in their sources with their next games, once a day
+    (starters.refresh); at startup too, unless one ran in the last 12 hours (a deploy restarts the worker)."""
+    if not await ctx["redis"].set("starters:refreshed", "1", nx=True, ex=12 * 3600):
+        return
+    await in_lane('refresh', starters.refresh)
+
+
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
     ended = await asyncio.to_thread(accounts.purge_expired)
@@ -272,6 +280,7 @@ class WorkerSettings:
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
+        cron(_logged(refresh_starters), hour=4, minute=40, second=0, run_at_startup=True, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
