@@ -3,9 +3,10 @@ import { Link, Navigate } from 'react-router-dom'
 import { useActivity } from '../activity'
 import type { ActivityItem, Card, UpcomingEvent } from '../api'
 import { useNow } from '../clock'
-import { ComingCard, highlight, LiveScoreboard, PlayerTile, ResultCard, SectionHead, type GameResult, type LatestMoment } from '../components/Blocks'
+import { ComingCard, highlight, LiveScoreboard, ResultCard, type GameResult, type LatestMoment } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
-import { CloseIcon, PlusIcon, SearchIcon, UserIcon } from '../components/Icons'
+import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
+import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { StartersSection } from '../components/Starters'
 import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
@@ -86,12 +87,6 @@ function comingUp(cards: Card[], now: number): Coming[] {
   return [...merged.values()].sort((a, b) => parseDate(a.event.start_utc)!.getTime() - parseDate(b.event.start_utc)!.getTime())
 }
 
-/** Live first, then whoever plays soonest, then the rest in the order they were followed. */
-function tileOrder(cards: Card[], now: number) {
-  const nextAt = (c: Card) => Math.min(Infinity, ...(c.upcoming ?? []).filter((u) => ahead(u.start_utc, now)).map((u) => parseDate(u.start_utc)!.getTime()))
-  return [...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live) || nextAt(a) - nextAt(b))
-}
-
 /** How big a player's line is: the sport has a word for it (a triple-double, a hundred), it's numbers, or neither. */
 function weight(p: GameResult['players'][number]): number {
   const line = p.result.player_contribution
@@ -129,8 +124,9 @@ function results(cards: Card[], now: number): { games: GameResult[]; day: string
   return { games: ranked, day }
 }
 
-/** The follow list didn't load: say so, rather than "Pick your players" to a fan who has some. */
-function LoadFailed() {
+/** The follow list didn't load: say so, rather than "Pick your players" to a fan who has some (Today, and
+ * the Following page). */
+export function LoadFailed() {
   const { reload } = useFollowing()
   const [trying, setTrying] = useState(false)
   const retry = () => { setTrying(true); reload().finally(() => setTrying(false)) }
@@ -143,7 +139,7 @@ function LoadFailed() {
 }
 
 export function TodayPage() {
-  const { cards, loaded, failed, progress } = useFollowing()
+  const { cards, loaded, failed } = useFollowing()
   const { items: alerts, seen } = useActivity()
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
@@ -184,6 +180,11 @@ export function TodayPage() {
   return (
     <>
       {header}
+      {cards.length > 0 && (
+        <ErrorBoundary fallback={<div className="mobile-only"><BlockError /></div>} resetKey={cards}>
+          <PlayersStrip cards={cards} now={now} />
+        </ErrorBoundary>
+      )}
       {failed && !loaded && <LoadFailed />}
 
       {games.map(([key, group]) => (
@@ -211,18 +212,6 @@ export function TodayPage() {
           </Rail>
         )}
       </ErrorBoundary>
-
-      {cards.length > 0 && (
-        <section className="section" aria-label="Your players">
-          <SectionHead title="Your players"><span className="tag muted">{cards.length}</span></SectionHead>
-          <ErrorBoundary fallback={<BlockError />} resetKey={cards}>
-            <div className="tiles">
-              {tileOrder(cards, now).map((c) => <PlayerTile key={c.player_id} card={c} progress={progress[c.player_id]} />)}
-              <Link to="/search" className="tile add" aria-label="Follow another player"><PlusIcon width={22} height={22} /><span className="dsp">Follow</span></Link>
-            </div>
-          </ErrorBoundary>
-        </section>
-      )}
 
       {cards.length > 0 && cards.length < FEW && <StartersSection />}
     </>

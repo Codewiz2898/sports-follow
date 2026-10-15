@@ -41,4 +41,6 @@ export const football: SportView = {
   ),
   noLine: "isn't in the matchday squad",
   inHeadline: ['Goals', 'Assists'],
+  // The score as the board has it, home first, and the minute: "1–0 · 67'".
+  short: (state: FootballState, live) => [`${state.home.score}–${state.away.score}`, live.clock].filter(Boolean).join(' · '),
 }

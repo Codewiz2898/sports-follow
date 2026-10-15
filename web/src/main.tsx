@@ -6,7 +6,7 @@ import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { BellIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
+import { BellIcon, ChevronIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
 import { FollowingProvider, useFollowing } from './following'
@@ -14,6 +14,7 @@ import { AccountPage } from './pages/AccountPage'
 import { AthletePage } from './pages/AthletePage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
+import { FollowingPage } from './pages/FollowingPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
@@ -117,7 +118,8 @@ function Sidebar() {
         <NavLink to="/account"><UserIcon width={18} height={18} />{me?.signed_in ? 'Account' : 'Sign in'}</NavLink>
       </nav>
       <InstallButton compact />
-      <span className="eyebrow" style={{ marginTop: 8 }}>Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}</span>
+      {/* The heading opens the Following page, every player as a tile. */}
+      <NavLink to="/following" className="eyebrow side-head">Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}<ChevronIcon width={16} height={16} strokeWidth={2.6} /></NavLink>
       <nav aria-label="Your players" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
         <ErrorBoundary fallback={<span className="tiny muted" style={{ padding: '0 10px' }}>Your players couldn't be listed here.</span>} resetKey={cards}>
           {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
@@ -184,6 +186,7 @@ function App() {
           <Routes>
             <Route path="/" element={<TodayPage />} />
             <Route path="/welcome" element={<WelcomePage />} />
+            <Route path="/following" element={<FollowingPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
@@ -196,7 +199,8 @@ function App() {
         </ErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
-        <NavLink to="/" end><HomeIcon width={20} height={20} />Today</NavLink>
+        {/* The Following page is part of Today here (its strip opens it): Today stays lit there. */}
+        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
         <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>

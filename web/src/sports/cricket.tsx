@@ -59,4 +59,9 @@ export const cricket: SportView = {
   },
   noLine: "hasn't batted or bowled yet",
   inHeadline: ['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded'],
+  // The player's own line ("61* (44)"), else the batting side's score as the board has it ("IND 189/5").
+  short: (state: CricketState, live) => {
+    const i = state.innings.find((x) => x.batting)
+    return live.headline || (i ? `${i.abbr || i.team} ${i.runs}${i.wickets < 10 ? `/${i.wickets}` : ''}` : null)
+  },
 }
