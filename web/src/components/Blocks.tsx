@@ -299,11 +299,15 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
   )
 }
 
-/** A stat in words: "3 shots", "2 key passes"; an abbreviation stays as it is ("22 PTS"), and a value that
- * isn't a number follows its label ("Colour Black"). */
+/** A stat in words: "3 shots", "1 key pass"; an abbreviation stays as it is ("22 PTS", "2 4s"), and a value
+ * that isn't a number follows its label ("Colour Black"). */
 function statWords(s: Stat): string {
   if (!/^[\d.,½*/–-]/.test(s.value)) return `${s.label} ${s.value}`
-  return `${s.value} ${s.label === s.label.toUpperCase() ? s.label : s.label.toLowerCase()}`
+  if (s.label === s.label.toUpperCase()) return `${s.value} ${s.label}`
+  const label = s.label.toLowerCase()
+  // One of them: "passes" → "pass", "shots" → "shot"; "4s" stays.
+  const one = /(ss|sh|ch|x)es$/.test(label) ? label.slice(0, -2) : /[a-z]{2}(?<!s)s$/.test(label) ? label.slice(0, -1) : label
+  return `${s.value} ${s.value === '1' ? one : label}`
 }
 
 /**
@@ -313,7 +317,7 @@ function statWords(s: Stat): string {
  * at their alerts.
  */
 function LiveLine({ live, playerName, latest }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null }) {
-  const stats = live.player_stats ?? []
+  const stats = (live.player_stats ?? []).filter((s) => !/^[–—-]*$/.test(s.value.trim()))  // a dash is no number yet
   const view = viewOfKind(live.state?.kind)
   const said = new Set(view?.inHeadline ?? [])
   const numbers = live.headline ? [live.headline, ...stats.filter((s) => !said.has(s.label)).slice(0, 4).map(statWords)] : stats.slice(0, 5).map(statWords)

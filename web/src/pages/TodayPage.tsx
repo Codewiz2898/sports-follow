@@ -57,13 +57,14 @@ function liveGames(cards: Card[]): [string, Card[]][] {
 }
 
 /** The newest moment of the fan's players in a live game (the alerts list is newest first), and whether the
- * fan missed it: it came after they last looked at their alerts. Only a structured score names its game. */
+ * fan missed it: it came after they last looked at their alerts, from a game they haven't muted. Only a
+ * structured score names its game. */
 function latestIn(items: ActivityItem[], group: Card[], seen: number): LatestMoment | null {
   const game = group[0].live.event_id
   if (game == null) return null
   const ids = new Set(group.map((c) => c.player_id))
   const m = items.find((i) => i.event_id === game && ids.has(i.player_id))
-  return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen } : null
+  return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen && !m.muted } : null
 }
 
 interface Coming { key: string; event: UpcomingEvent; players: Card[] }
