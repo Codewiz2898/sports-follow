@@ -28,7 +28,8 @@ from ..config import USER_AGENT
 from . import budget
 from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
 
-API = "https://lichess.org/api"
+# With the slash: the budgets below match requests by this prefix, so every address is API + path.
+API = "https://lichess.org/api/"
 DAYS_BACK = 60
 DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
@@ -53,7 +54,6 @@ def token() -> str | None:
     return value or None
 
 
-API = "https://lichess.org/api/"
 # Every process's requests together, a minute: what the token allows, or what Lichess allows without one.
 BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,))
 # The research agent's requests (tools.fetch_url) carry no token, so Lichess holds them to its limit
@@ -443,7 +443,7 @@ def search(query: str, sport: str | None, adapters: list[Adapter]) -> list[Searc
     """FIDE's list, for a chess-only search: the registry has the titled players, this the other 1.9 million."""
     # Lichess asks for one request at a time; a burst of keystrokes shouldn't queue up behind each
     # other, so a search that can't get the line within a second gives up on chess this time.
-    url = f"{API}/fide/player?q={quote(query)}"
+    url = f"{API}fide/player?q={quote(query)}"
     records = peek(url, ttl=24 * 3600)
     if records is None:
         if not _fide_lock.acquire(timeout=1.0):
@@ -461,7 +461,7 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
     try:
         ref = chess.find_player(query)
         if ref:
-            record = get_json(f"{API}/fide/player/{ref.athlete_id}", ttl=12 * 3600)
+            record = get_json(f"{API}fide/player/{ref.athlete_id}", ttl=12 * 3600)
             if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
                 return chess, ref
     except AdapterError:
@@ -510,7 +510,7 @@ class LichessChess(Adapter):
         queries = [name, *[t for t in _tokens(name) if len(t) >= 4]]
         results: dict[int, dict[str, Any]] = {}
         for q in dict.fromkeys(queries):
-            found = get_json(f"{API}/fide/player?q={quote(q)}", ttl=24 * 3600)
+            found = get_json(f"{API}fide/player?q={quote(q)}", ttl=24 * 3600)
             for r in found if isinstance(found, list) else []:
                 results.setdefault(r["id"], r)
             if pick_player(list(results.values()), name):
@@ -519,7 +519,7 @@ class LichessChess(Adapter):
         return ref_for(best) if best else None
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
-        record = get_json(f"{API}/fide/player/{quote(athlete_id)}", ttl=12 * 3600)
+        record = get_json(f"{API}fide/player/{quote(athlete_id)}", ttl=12 * 3600)
         return ref_for(record) if isinstance(record, dict) and record.get("id") else None
 
     def _tours(self, ref: PlayerRef, now: datetime) -> list[dict[str, Any]]:
@@ -536,17 +536,17 @@ class LichessChess(Adapter):
             try:
                 page = get_json(ref.profile_url, ttl=3600, text=True)
                 for round_id in list(dict.fromkeys(re.findall(r'href="/broadcast/[^/"]+/[^/"]+/([A-Za-z0-9]{8})"', page)))[:MAX_TOURS]:
-                    tour = get_json(f"{API}/broadcast/-/-/{round_id}", ttl=24 * 3600).get("tour") or {}
+                    tour = get_json(f"{API}broadcast/-/-/{round_id}", ttl=24 * 3600).get("tour") or {}
                     if tour.get("id"):
                         found.setdefault(tour["id"], tour)
             except RateLimited:
                 raise
             except AdapterError:
                 pass  # search below still finds the well-known events
-        search = get_json(f"{API}/broadcast/search?q={quote(surname)}", ttl=3600)
+        search = get_json(f"{API}broadcast/search?q={quote(surname)}", ttl=3600)
         for entry in search.get("currentPageResults") or []:
             found.setdefault(entry["tour"]["id"], entry["tour"])
-        top = get_json(f"{API}/broadcast/top", ttl=600)
+        top = get_json(f"{API}broadcast/top", ttl=600)
         for entry in [*(top.get("active") or []), *(top.get("upcoming") or [])]:
             tour = entry["tour"]
             text = naming.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
@@ -567,7 +567,7 @@ class LichessChess(Adapter):
         out: list[Fixture] = []
         for tour in self._tours(ref, now):
             try:
-                rounds = get_json(f"{API}/broadcast/{tour['id']}", ttl=600).get("rounds") or []
+                rounds = get_json(f"{API}broadcast/{tour['id']}", ttl=600).get("rounds") or []
             except RateLimited:
                 raise
             except AdapterError:
@@ -578,7 +578,7 @@ class LichessChess(Adapter):
             if any(r.get("finished") for r in rounds):
                 done = all(r.get("finished") for r in rounds)
                 try:
-                    finished = parse_pgn_rounds(get_json(f"{API}/broadcast/{tour['id']}.pgn", ttl=24 * 3600 if done else 600, text=True))
+                    finished = parse_pgn_rounds(get_json(f"{API}broadcast/{tour['id']}.pgn", ttl=24 * 3600 if done else 600, text=True))
                 except RateLimited:
                     raise
                 except AdapterError:
@@ -592,7 +592,7 @@ class LichessChess(Adapter):
                     data = {"games": finished.get(rnd["id"], [])}
                 else:
                     try:
-                        data = get_json(f"{API}/broadcast/-/-/{rnd['id']}", ttl=60)
+                        data = get_json(f"{API}broadcast/-/-/{rnd['id']}", ttl=60)
                     except RateLimited:
                         raise
                     except AdapterError:
@@ -616,14 +616,14 @@ class LichessChess(Adapter):
         return []
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        data = get_json(f"{API}/broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
+        data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
         return parse_board(data, locator["fide"])
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
-        record = get_json(f"{API}/fide/player/{ref.athlete_id}", ttl=12 * 3600)
+        record = get_json(f"{API}fide/player/{ref.athlete_id}", ttl=12 * 3600)
         stats = [{"label": label, "value": str(record[key])} for key, label in (("standard", "Classical"), ("rapid", "Rapid"), ("blitz", "Blitz")) if record.get(key)]
         if record.get("title"):
             stats.append({"label": "Title", "value": record["title"]})
