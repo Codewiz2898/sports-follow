@@ -28,7 +28,7 @@ from .models import Event, EventPlayer, Follow, Moment, NewsItem, Player, Player
 from .naming import team_key
 
 DAYS = 7
-LIMIT = 20  # posters at most, the biggest first: the app shows 12 once it has left out those on its Results rail
+LIMIT = 12  # posters at most, the biggest first
 
 # The two sides in a game's title: "India v Australia", "GenOne vs 6666", "Spurs at Jazz".
 _SIDES = re.compile(r"\s+(?:v|vs|at)\.?\s+", re.I)
