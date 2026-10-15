@@ -1,4 +1,4 @@
-"""Where the face is in each player photo, so a round avatar shows it (faces.py): the thumbnail's size and the face's box.
+"""Where the face is in each player photo, so the profile shows it (faces.py): the thumbnail's size and the face's box.
 
 Revision ID: e5c1f7a2d9b8
 Revises: a3c9e1f7d2b4

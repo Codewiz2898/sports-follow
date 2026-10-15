@@ -1,4 +1,4 @@
-"""Where the face is in a player's photo, so a small round avatar shows it rather than guessing (photos.py).
+"""Where the face is in a player's photo, so their profile shows it rather than the top of an action shot (photos.py).
 
 The photos job looks once at each thumbnail it keeps, in the worker, with OpenCV's YuNet detector: a
 230 KB model (data/face_detection_yunet_2026may.onnx, MIT, from opencv_zoo), about 6 ms a photo. Only the

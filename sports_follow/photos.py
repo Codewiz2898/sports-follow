@@ -13,9 +13,9 @@ that failed the next day. The job then looks for the face in each new thumbnail 
 followed player's photo into their card, and forgets files fetched over FORGET_DAYS ago that nobody
 follows or is offered now.
 
-Where the face is tells the app how to frame a photo (framing): a large picture keeps the face in view,
-and a small round avatar shows a square around it, head and shoulders, rather than the top of a photo
-that might be a full-length action shot. A photo with no face found keeps the app's top-centre guess.
+Where the face is tells the app how to frame a photo (framing): the profile shows the square around it,
+head and shoulders, rather than the top of a photo that might be a full-length action shot. A photo with
+no face found is shown from near its top.
 
 The app recolours every photo in its sport's colour (a duotone, web/src/styles.css), so each credit says
 so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured". A recoloured CC BY-SA photo stays
