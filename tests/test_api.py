@@ -1203,6 +1203,6 @@ def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch
     answer = api.call("GET", "/api/live", fan="fan")
     assert answer.status_code == 200 and answer.json() == {"sports": games, "refreshing": True}
     assert api.queue.jobs[-1] == ("read_live", "pitch") and api.queue.options["_job_id"] == "read_live:pitch"
-    # The read failed, or hasn't come yet: the next looks within a minute don't ask again.
-    assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is False
+    # The read failed, or hasn't come yet: the next looks within a minute don't ask again, but still say one's coming.
+    assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is True
     assert [j for j in api.queue.jobs if j[0] == "read_live"] == [("read_live", "pitch")]

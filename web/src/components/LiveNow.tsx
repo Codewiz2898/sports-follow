@@ -20,17 +20,19 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   useEffect(() => {
     let current = true
     let timer: number | undefined
+    let latest = 0  // the newest look: an older one's answer starts no second loop
     const look = (tries: number) => {
       window.clearTimeout(timer)
       if (document.hidden) return  // nobody's looking: no reads asked for; showing the tab again looks
+      const mine = ++latest
       api.live()
         .then((r) => {
-          if (!current) return
+          if (!current || mine !== latest) return
           setSports(r.sports)
           // A read was just asked for: look again in a moment, a few times, for the new scores.
           timer = window.setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
         })
-        .catch(() => { if (current) timer = window.setTimeout(() => look(tries), EVERY) })
+        .catch(() => { if (current && mine === latest) timer = window.setTimeout(() => look(tries), EVERY) })
     }
     const shown = () => { if (!document.hidden) look(0) }
     document.addEventListener('visibilitychange', shown)
