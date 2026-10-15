@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from pathlib import Path
 
-from sports_follow.adapters import espn_basketball, espn_tennis, lichess_chess
-from sports_follow.adapters.base import PlayerRef
+import httpx
+import pytest
+
+from sports_follow.adapters import budget, espn_basketball, espn_tennis, lichess_chess
+from sports_follow.adapters.base import AdapterError, PlayerRef
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CLARK, FEVER = "4433403", "5"
@@ -258,6 +262,83 @@ def test_every_lichess_request_goes_to_an_address_lichess_has(monkeypatch):
     assert any(url.startswith("https://lichess.org/api/fide/player") for url in urls)
     # The addresses the reads above don't reach (a tournament's rounds, its PGN, a player's stats): API ends in "/".
     assert lichess_chess.API.endswith("/") and 'f"{API}/' not in Path(lichess_chess.__file__).read_text()
+
+
+CARLSEN_PAGE = "https://lichess.org/fide/1503014/Carlsen_Magnus"
+
+
+def lichess_answering(monkeypatch, answers: dict[str, httpx.Response]) -> None:
+    """Lichess as a fake: each URL's answer, an empty one for the rest; nothing cached, no spacing."""
+    monkeypatch.setattr(lichess_chess, "_client", httpx.Client(transport=httpx.MockTransport(lambda request: answers.get(str(request.url)) or httpx.Response(200, json={"games": []}))))
+    monkeypatch.setattr(lichess_chess, "_cache", {})
+    monkeypatch.setattr(lichess_chess, "SPACING", 0.0)
+
+
+def test_a_429_on_lichess_fide_pages_pauses_only_them(monkeypatch):
+    # 15 Oct 2026: Lichess's FIDE player pages and endpoint ignore the token, and one limit holds every
+    # caller from a datacenter. Its 429s paused the broadcasts live boards read as well, and chess went blank.
+    lichess_answering(monkeypatch, {CARLSEN_PAGE: httpx.Response(429, text="Too many requests. Try again later.")})
+    with pytest.raises(lichess_chess.RateLimited, match=r"\(429\) on /fide/1503014/Carlsen_Magnus; lichess-fide paused for 60 s: Too many requests"):
+        lichess_chess.get_json(CARLSEN_PAGE, ttl=0, text=True)
+    with pytest.raises(lichess_chess.RateLimited, match="lichess-fide asked us to slow down"):
+        lichess_chess.get_json("https://lichess.org/api/fide/player/1503014", ttl=0)  # the same limit
+    assert lichess_chess.get_json("https://lichess.org/api/broadcast/-/-/abcdefgh", ttl=0) == {"games": []}  # live boards still read
+    assert lichess_chess.get_json("https://lichess.org/api/fide/player?q=Carlsen", ttl=0) == {"games": []}  # FIDE search has no such limit
+
+
+def test_a_429_on_lichess_broadcasts_pauses_them_for_its_three_minute_window(monkeypatch):
+    said = "Use an oauth token to get 120 requests per minute. Contact us for more."
+    lichess_answering(monkeypatch, {"https://lichess.org/api/broadcast/top": httpx.Response(429, json={"error": said})})
+    with pytest.raises(lichess_chess.RateLimited, match=r"on /api/broadcast/top; lichess paused for 180 s: .*oauth token"):
+        lichess_chess.get_json("https://lichess.org/api/broadcast/top", ttl=0)
+    with pytest.raises(lichess_chess.RateLimited, match="lichess asked us to slow down"):
+        lichess_chess.get_json("https://lichess.org/api/broadcast/-/-/abcdefgh", ttl=0)
+    paused_until = budget.STORE.get("budget:lichess:paused")
+    assert paused_until and 170 < paused_until - time.time() <= 180
+
+
+def test_lichess_reads_fide_records_through_search_by_id(monkeypatch):
+    # FIDE search answers an id with that one player and isn't behind the limit datacenters share.
+    urls = []
+
+    def fake_get_json(url, ttl, text=False):
+        urls.append(url)
+        if url == "https://lichess.org/api/fide/player?q=46616543":
+            return load("lichess/fide-search-id-gukesh")
+        if url.startswith("https://lichess.org/api/fide/player?q="):
+            return []
+        raise AdapterError(f"Lichess returned HTTP 404 for {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", fake_get_json)
+    chess = lichess_chess.LichessChess()
+    gukesh = chess.player("46616543")
+    assert gukesh and gukesh.name == "Gukesh D"
+    stats, _ = chess.stats(gukesh, [])
+    assert {"label": "Classical", "value": "2710"} in stats and {"label": "Title", "value": "GM"} in stats
+    assert not any("/fide/player/" in url for url in urls)
+    # Were search to stop answering ids, the player endpoint is asked, and its 404 still means no such player.
+    with pytest.raises(AdapterError, match="HTTP 404"):
+        chess.player("1")
+    assert urls[-2:] == ["https://lichess.org/api/fide/player?q=1", "https://lichess.org/api/fide/player/1"]
+
+
+def test_a_refused_fide_page_gives_its_last_copy_and_search_still_finds_events(monkeypatch):
+    page = '<a href="/broadcast/tata-steel-2026/round-1/abcdefgh">Tata Steel 2026</a>'
+    answers = {CARLSEN_PAGE: httpx.Response(200, text=page)}
+    lichess_answering(monkeypatch, answers)
+    chess = lichess_chess.LichessChess()
+    ref = PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"], CARLSEN_PAGE)
+    assert chess._page_rounds(ref) == ["abcdefgh"]
+    read_at, copy = lichess_chess._cache[CARLSEN_PAGE]
+    lichess_chess._cache[CARLSEN_PAGE] = (read_at - lichess_chess.PAGE_TTL - 1, copy)  # due for a new read
+    answers[CARLSEN_PAGE] = httpx.Response(429, text="Too many requests.")
+    assert chess._page_rounds(ref) == ["abcdefgh"]  # the last copy stands in
+    lichess_chess._cache.clear()
+    assert chess._page_rounds(ref) == []  # none read yet: Lichess's FIDE pages are paused, and that's no error
+    # The player's events are still found by search, and no FIDE page refusal fails the read.
+    answers["https://lichess.org/api/broadcast/search?q=carlsen"] = httpx.Response(200, json={"currentPageResults": []})
+    answers["https://lichess.org/api/broadcast/top"] = httpx.Response(200, json={"active": [], "upcoming": []})
+    assert chess.fixtures(ref) == []
 
 
 def test_tournament_pgn_gives_every_round_in_one_read():

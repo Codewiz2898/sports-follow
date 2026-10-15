@@ -5,8 +5,11 @@ API (https://lichess.org/api). Players are identified by FIDE id. A player's tou
 found with broadcast search on their surname plus the broadcasts running now; a "fixture" is one
 round of one tournament for one player, and its snapshot is that player's board in that round.
 
-Lichess asks API clients to make one request at a time and to back off for a minute after a 429,
-so requests here are serialized and a 429 pauses this adapter.
+Lichess asks API clients to make one request at a time and to back off after a 429, so requests
+here are serialized. Its limits differ by endpoint, and so do the budgets here: broadcast reads
+spend the token's allowance, and a 429 pauses them for Lichess's three-minute window; its FIDE
+player pages share one limit with every caller from a datacenter, so they have a budget of their
+own, a 429 there pauses only them, and FIDE records are read through FIDE search, which has none.
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ API = "https://lichess.org/api/"
 DAYS_BACK = 60
 DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
+PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a few times a month
+STALE_PAGE = 7 * 24 * 3600  # the last copy read, while Lichess refuses a new one
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -55,10 +60,22 @@ def token() -> str | None:
 
 
 # Every process's requests together, a minute: what the token allows, or what Lichess allows without one.
-BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,))
+# Lichess counts broadcast reads in three-minute windows, so after a 429 nothing asks for three minutes.
+BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,), pause=180)
+# Lichess's FIDE player pages and its player endpoint ignore the token: one limit, about 60 requests a
+# minute, holds every caller from a datacenter together, a server like ours included, so others can spend
+# it (lila: Fide.scala, Limiters.enumeration.fidePlayer). Requests there are counted apart and kept few,
+# and a 429 they get pauses only them, not the broadcasts live boards read.
+FIDE_URLS = ("https://lichess.org/fide/", f"{API}fide/player/")
+FIDE = budget.Budget("lichess-fide", windows=(budget.Window(60, 10, margin=1),), urls=FIDE_URLS)
 # The research agent's requests (tools.fetch_url) carry no token, so Lichess holds them to its limit
 # without one: with a token they're counted apart, and a 429 they get doesn't pause our own polls.
 ANONYMOUS = budget.Budget("lichess-anonymous", windows=(budget.Window(60, 10, margin=1),), urls=(API,)) if token() else BUDGET
+
+
+def _spends(url: str) -> budget.Budget:
+    """The budget a request spends: FIDE's shared limit for its player pages and endpoint, else ours."""
+    return FIDE if url.startswith(FIDE_URLS) else BUDGET
 
 
 def _headers(url: str, text: bool) -> dict[str, str]:
@@ -83,7 +100,8 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         hit = _cache.get(url)  # another thread may have fetched it while this one waited
         if hit and time.time() - hit[0] < ttl:
             return hit[1]
-        budget.take(BUDGET)
+        spends = _spends(url)
+        budget.take(spends)
         time.sleep(max(0.0, _state["last"] + SPACING - time.time()))
         try:
             res = _client.get(url, headers=_headers(url, text))
@@ -92,8 +110,10 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
         finally:
             _state["last"] = time.time()
         if res.status_code == 429:
-            budget.pause(BUDGET)
-            raise RateLimited("Lichess rate limit (429); paused for a minute")
+            budget.pause(spends)
+            # Where, and Lichess's own words: they say which of its limits it was.
+            said = " ".join(res.text.split())[:160]
+            raise RateLimited(f"Lichess rate limit (429) on {url.removeprefix('https://lichess.org')}; {spends.name} paused for {spends.pause} s: {said}")
         if res.status_code == 401 and token():
             raise AdapterError("Lichess rejected the API token (HTTP 401); check ~/.config/sports-follow/lichess-token")
         if res.status_code != 200:
@@ -183,6 +203,20 @@ def pick_player(results: list[dict[str, Any]], name: str) -> dict[str, Any] | No
     if not candidates:
         return None
     return sorted(candidates, key=lambda r: (bool(r.get("inactive")), -(r.get("standard") or 0)))[0]
+
+
+RECORD_TTL = 24 * 3600  # FIDE publishes its ratings monthly
+
+
+def fide_record(fide_id: str) -> dict[str, Any] | None:
+    """A player's FIDE record (name, title, ratings, inactive), by FIDE id. FIDE search answers an id with
+    that one player, the same record as the player endpoint, and unlike it isn't held to the limit every
+    datacenter shares; the endpoint is asked only if search stops answering ids (an unknown id: its 404)."""
+    found = get_json(f"{API}fide/player?q={quote(fide_id)}", ttl=RECORD_TTL)
+    record = next((r for r in found if str(r.get("id")) == fide_id), None) if isinstance(found, list) else None
+    if record is None:
+        record = get_json(f"{API}fide/player/{quote(fide_id)}", ttl=RECORD_TTL)
+    return record if isinstance(record, dict) and record.get("id") else None
 
 
 def ref_for(record: dict[str, Any]) -> PlayerRef:
@@ -461,7 +495,7 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
     try:
         ref = chess.find_player(query)
         if ref:
-            record = get_json(f"{API}fide/player/{ref.athlete_id}", ttl=12 * 3600)
+            record = fide_record(ref.athlete_id) or {}
             if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
                 return chess, ref
     except AdapterError:
@@ -479,7 +513,7 @@ PROVIDER = Provider(
     search=LiveSearch(find=search, unfiltered=False, min_length=3),
     recognise=recognise,
     research=lambda adapters: f"{API}broadcast/top",  # the broadcasts on now
-    budgets=(BUDGET, ANONYMOUS),
+    budgets=(FIDE, BUDGET, ANONYMOUS),  # FIDE first: the research agent's FIDE pages spend it, not ANONYMOUS
 )
 
 
@@ -520,8 +554,25 @@ class LichessChess(Adapter):
         return ref_for(best) if best else None
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
-        record = get_json(f"{API}fide/player/{quote(athlete_id)}", ttl=12 * 3600)
-        return ref_for(record) if isinstance(record, dict) and record.get("id") else None
+        record = fide_record(athlete_id)
+        return ref_for(record) if record else None
+
+    def _page_rounds(self, ref: PlayerRef) -> list[str]:
+        """A round of each of the player's "Recent tournaments" on their Lichess FIDE page, newest first.
+
+        The page is behind the limit every datacenter shares (FIDE), so it's read a few times a day, and
+        when Lichess refuses it the last copy read stands in. With none, the player's events on now and
+        to come are still found by search; a past one only the page lists comes back once it's read.
+        """
+        if not ref.profile_url:
+            return []
+        try:
+            page = get_json(ref.profile_url, ttl=PAGE_TTL, text=True)
+        except RateLimited:
+            page = peek(ref.profile_url, ttl=STALE_PAGE)
+        except AdapterError:
+            page = None
+        return list(dict.fromkeys(re.findall(r'href="/broadcast/[^/"]+/[^/"]+/([A-Za-z0-9]{8})"', page or "")))[:MAX_TOURS]
 
     def _tours(self, ref: PlayerRef, now: datetime) -> list[dict[str, Any]]:
         """Broadcast tournaments the player is likely in: the "Recent tournaments" on their Lichess
@@ -533,17 +584,15 @@ class LichessChess(Adapter):
         """
         surname = naming.fold(ref.name).split()[-1]
         found: dict[str, dict[str, Any]] = {}
-        if ref.profile_url:
+        for round_id in self._page_rounds(ref):
             try:
-                page = get_json(ref.profile_url, ttl=3600, text=True)
-                for round_id in list(dict.fromkeys(re.findall(r'href="/broadcast/[^/"]+/[^/"]+/([A-Za-z0-9]{8})"', page)))[:MAX_TOURS]:
-                    tour = get_json(f"{API}broadcast/-/-/{round_id}", ttl=24 * 3600).get("tour") or {}
-                    if tour.get("id"):
-                        found.setdefault(tour["id"], tour)
+                tour = get_json(f"{API}broadcast/-/-/{round_id}", ttl=24 * 3600).get("tour") or {}
             except RateLimited:
                 raise
             except AdapterError:
-                pass  # search below still finds the well-known events
+                continue  # search below still finds the well-known events
+            if tour.get("id"):
+                found.setdefault(tour["id"], tour)
         search = get_json(f"{API}broadcast/search?q={quote(surname)}", ttl=3600)
         for entry in search.get("currentPageResults") or []:
             found.setdefault(entry["tour"]["id"], entry["tour"])
@@ -624,7 +673,7 @@ class LichessChess(Adapter):
         return result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
-        record = get_json(f"{API}fide/player/{ref.athlete_id}", ttl=12 * 3600)
+        record = fide_record(ref.athlete_id) or {}
         stats = [{"label": label, "value": str(record[key])} for key, label in (("standard", "Classical"), ("rapid", "Rapid"), ("blitz", "Blitz")) if record.get(key)]
         if record.get("title"):
             stats.append({"label": "Title", "value": record["title"]})
