@@ -86,7 +86,10 @@ def _naming() -> Callable[[str], str | None]:
 def test_a_source_is_known_by_its_system_its_name_or_its_url():
     named = _naming()
     assert [named(t) for t in ("espn_cricket:253802", "e.g. ESPN (", " and OpenDota", "LIQUIPEDIA", "credit PUBG")] == ["espn_cricket", "ESPN", "OpenDota", "LIQUIPEDIA", "PUBG"]
-    assert [named(t) for t in ('if b.name == "espn":', '{"opendota": 1}', "lichess-anonymous")] == ["espn", "opendota", "lichess-anonymous"]
+    assert [named(t) for t in ('if b.name == "espn":', '{"opendota": 1}')] == ["espn", "opendota"]
+    # "lichess-anonymous" is a budget of its own only with a Lichess token (as on a developer's machine):
+    # reported whole then, as "lichess" without one (as in CI). Either way it names the source.
+    assert named("lichess-anonymous") in ("lichess-anonymous", "lichess")
     assert [named(t) for t in ("https://pubg.com/en/news", "https://site.api.espn.com/apis/x", "https://www.opendota.com/matches/1")] == ["pubg.com", "espn.com", "opendota.com"]
     # Not a source: a game (its slug, its name), a website none of them reads.
     assert [named(t) for t in ("valorant|pubg|dota", "PUBG Mobile", "PUBG: Battlegrounds", "ESPNcricinfo pages", "https://www.espncricinfo.com")] == [None] * 5
