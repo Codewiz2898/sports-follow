@@ -1,0 +1,245 @@
+"""The Android app's push transport (fcm.py), against a fake FCM: Google's token endpoint and FCM's
+messages:send, answering as they do. tests/test_fcm_db.py sends planned moments through it to devices
+registered in a real database."""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qs
+
+import httpx
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+from sports_follow import fcm, notify
+
+from .test_api import api  # noqa: F401  (the fixture)
+
+ROOT = Path(__file__).resolve().parent.parent
+PROJECT = "stann-test"
+TOKEN_URI = "https://oauth2.example.test/token"
+EMAIL = "fcm-sender@stann-test.iam.gserviceaccount.com"
+TOKEN = "dGVzdC1pbnN0YW5jZQ:APA91bE" + "x" * 140  # the shape of a real one: an instance id, a colon, the token
+
+
+def unpad(part: str) -> bytes:
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+@dataclass
+class FakeFcm:
+    """Google's token endpoint and FCM's send, for one Firebase project. It checks what a real one checks
+    (the assertion's signature and claims, the bearer token) and answers for each device token as FCM
+    would: `gone` ones are UNREGISTERED, `elsewhere` ones another project's, and with `revoked` the
+    service account may no longer send."""
+
+    key: rsa.RSAPrivateKey
+    sent: list[dict] = field(default_factory=list)
+    sign_ins: list[dict] = field(default_factory=list)
+    gone: set[str] = field(default_factory=set)
+    elsewhere: set[str] = field(default_factory=set)
+    revoked: bool = False
+    failing: int | None = None  # every send answers this status
+    token_endpoint_down: bool = False
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if str(request.url) == TOKEN_URI:
+            return self.sign_in(request)
+        if str(request.url) == f"https://fcm.googleapis.com/v1/projects/{PROJECT}/messages:send":
+            return self.send(request)
+        return httpx.Response(404)
+
+    def sign_in(self, request: httpx.Request) -> httpx.Response:
+        if self.token_endpoint_down:
+            return httpx.Response(503, text="unavailable")
+        form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        assert form["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
+        header, claims, signature = form["assertion"].split(".")
+        self.key.public_key().verify(unpad(signature), f"{header}.{claims}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        said = json.loads(unpad(claims))
+        assert json.loads(unpad(header))["alg"] == "RS256"
+        assert (said["iss"], said["scope"], said["aud"]) == (EMAIL, fcm.SCOPE, TOKEN_URI) and said["exp"] - said["iat"] == 3600
+        self.sign_ins.append(said)
+        return httpx.Response(200, json={"access_token": f"ya29.fake-{len(self.sign_ins)}", "expires_in": 3599, "token_type": "Bearer"})
+
+    def send(self, request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization") != f"Bearer ya29.fake-{len(self.sign_ins)}":
+            return error(401, "UNAUTHENTICATED")
+        message = json.loads(request.content)["message"]
+        if self.revoked:
+            return error(403, "PERMISSION_DENIED")
+        if self.failing:
+            return error(self.failing, "INTERNAL", "INTERNAL")
+        if message["token"] in self.gone:
+            return error(404, "NOT_FOUND", "UNREGISTERED")
+        if message["token"] in self.elsewhere:
+            return error(403, "PERMISSION_DENIED", "SENDER_ID_MISMATCH")
+        self.sent.append(message)
+        return httpx.Response(200, json={"name": f"projects/{PROJECT}/messages/{len(self.sent)}"})
+
+
+def error(code: int, status: str, fcm_code: str | None = None) -> httpx.Response:
+    details = [{"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode": fcm_code}] if fcm_code else []
+    return httpx.Response(code, json={"error": {"code": code, "message": "…", "status": status, "details": details}})
+
+
+def reset() -> None:
+    fcm.account.cache_clear()
+    fcm._forget_access()
+
+
+@pytest.fixture
+def fake_fcm(tmp_path, monkeypatch):
+    """This server with a Firebase service-account key (written as the console downloads it), sending to
+    a fake FCM."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+    path = tmp_path / "fcm-service-account.json"
+    path.write_text(json.dumps({"type": "service_account", "project_id": PROJECT, "private_key_id": "k1", "private_key": pem, "client_email": EMAIL, "token_uri": TOKEN_URI}))
+    fake = FakeFcm(key)
+    monkeypatch.setattr(fcm, "KEY_FILE", path)
+    monkeypatch.setattr(fcm, "_client", httpx.Client(transport=httpx.MockTransport(fake)))
+    reset()
+    yield fake
+    reset()
+
+
+@pytest.fixture
+def no_fcm(tmp_path, monkeypatch):
+    monkeypatch.setattr(fcm, "KEY_FILE", tmp_path / "missing.json")
+    reset()
+    yield
+    reset()
+
+
+GOAL = {"id": 31, "title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'", "url": "/player/7", "tag": "e1", "event_id": 1, "player_id": 7, "kind": "goal", "loud": True, "quiet": False}
+
+
+# ---------------------------------------------------------------- the message
+
+
+def test_a_push_is_its_games_notification_on_the_channel_its_sound_needs():
+    loud = fcm.message(TOKEN, GOAL, 600)
+    assert loud == {
+        "token": TOKEN,
+        "notification": {"title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'"},
+        # Strings only, as FCM takes them: what the app needs to open the player's page and count the open.
+        "data": {"id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"},
+        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "sound": "default", "tag": "e1"}},
+    }
+    # Quiet hours, or a moment that makes no sound: the same notification, silently, without waking the phone.
+    for quiet in ({**GOAL, "quiet": True}, {**GOAL, "loud": False}):
+        android = fcm.message(TOKEN, quiet, 600)["android"]
+        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "quiet", "tag": "e1"})
+    # A player's news, outside any game, has the player's tag; a push with no tag still has one per moment.
+    assert fcm.message(TOKEN, {**GOAL, "tag": "p7", "event_id": None}, 60)["data"] == {"id": "31", "url": "/player/7", "player_id": "7", "kind": "goal", "tag": "p7"}
+    assert fcm.message(TOKEN, {**GOAL, "tag": None}, 60)["android"]["notification"]["tag"] == "moment-31"
+
+
+def test_the_app_makes_the_channels_the_server_sends_on():
+    app = (ROOT / "mobile" / "src" / "push.ts").read_text()
+    assert f"'{fcm.LOUD_CHANNEL}'" in app and f"'{fcm.QUIET_CHANNEL}'" in app
+
+
+def test_tokens_are_checked_before_they_are_stored():
+    assert fcm.valid_token(TOKEN)
+    for bad in ("short:token", "https://fcm.googleapis.com/fcm/send/" + "a" * 40, TOKEN + "\n", "x" * 1001, None, 7):
+        assert not fcm.valid_token(bad)
+
+
+# ---------------------------------------------------------------- sending
+
+
+def test_the_server_signs_in_once_an_hour_and_sends_with_its_access_token(fake_fcm):
+    assert fcm.push(TOKEN, GOAL, 600) is None
+    assert fcm.push(TOKEN, GOAL, 600) is None
+    assert len(fake_fcm.sign_ins) == 1 and [m["data"]["tag"] for m in fake_fcm.sent] == ["e1", "e1"]
+    # A minute before it expires, the next push asks for a new one.
+    fcm._access["expires"] = time.time() + 59
+    assert fcm.push(TOKEN, GOAL, 600) is None
+    assert len(fake_fcm.sign_ins) == 2 and len(fake_fcm.sent) == 3
+
+
+def test_what_fcm_answers_is_what_the_devices_health_reads(fake_fcm):
+    fake_fcm.gone.add("gone-" + TOKEN)
+    fake_fcm.elsewhere.add("other-" + TOKEN)
+    assert fcm.push("gone-" + TOKEN, GOAL, 600) == 404  # uninstalled: the device is removed
+    assert fcm.push("other-" + TOKEN, GOAL, 600) == 410  # another Firebase project's: it never will work
+    fake_fcm.failing = 500
+    assert fcm.push(TOKEN, GOAL, 600) == 500  # FCM's own trouble: counted, removed only after MAX_FAILURES
+    fake_fcm.failing = None
+    fake_fcm.revoked = True
+    assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS  # this server's key: never the device's fault
+    fake_fcm.revoked = False
+    assert fcm.push(TOKEN, GOAL, 600) is None and len(fake_fcm.sign_ins) == 2  # and it signs in again
+    fcm._forget_access()
+    fake_fcm.token_endpoint_down = True
+    assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS
+
+
+def test_a_failed_sign_in_or_revoked_key_isnt_counted_against_the_device():
+    device = SimpleNamespace(failures=0)
+    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+    notify._health(db, 7, fcm.OURS)
+    assert device.failures == 0  # five of these would remove every Android device
+    notify._health(db, 7, 500)
+    assert device.failures == 1
+
+
+def test_a_failed_push_names_neither_the_token_nor_the_fan(fake_fcm, caplog):
+    fake_fcm.gone.add(TOKEN)
+    caplog.set_level(logging.INFO, "sports_follow")
+    assert fcm.push(TOKEN, GOAL, 600) == 404
+    [line] = [r for r in caplog.records if r.name == "sports_follow.fcm"]
+    assert (line.push_service, line.status) == ("fcm", 404) and TOKEN[10:] not in line.getMessage()
+
+
+def test_a_device_gets_its_push_by_its_own_transport(fake_fcm, monkeypatch):
+    web = []
+    monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: web.append((endpoint, topic)) and None)
+    long = {**GOAL, "body": "क" * 3000}
+    assert notify.deliver((1, "webpush", "https://web.push.apple.com/a", "k", "a"), long, 600, "e1") is None
+    assert notify.deliver((2, "fcm", TOKEN, None, None), long, 600, "e1") is None
+    assert web == [("https://web.push.apple.com/a", "e1")]
+    [sent] = fake_fcm.sent
+    # Cut to fit as a Web Push is: FCM takes 4 KB.
+    assert sent["token"] == TOKEN and sent["notification"]["body"].endswith("…") and len(json.dumps(sent, ensure_ascii=False).encode()) < 4096
+    assert notify._service((2, "fcm", TOKEN, None, None)) == "fcm" and notify._service((1, "webpush", "https://web.push.apple.com/a", "k", "a")) == "web.push.apple.com"
+
+
+# ---------------------------------------------------------------- without a key
+
+
+def test_without_a_key_the_transport_is_off_and_says_so(no_fcm, api, caplog):  # noqa: F811
+    caplog.set_level(logging.INFO, "sports_follow")
+    assert not fcm.enabled() and notify.transports() == ("webpush",)
+    assert any("Android notifications are off" in r.getMessage() for r in caplog.records)
+    assert api.call("GET", "/api/push").json()["fcm"] is False
+    answer = api.call("POST", "/api/push/fcm", fan="fan", body={"token": TOKEN})
+    assert answer.status_code == 503 and not [s for s in api.statements if getattr(s, "table", None) is not None and s.table.name == "push_subscription"]
+    assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS  # and if one were sent, it wouldn't count against the device
+
+
+def test_with_a_key_the_api_says_so(fake_fcm, api):  # noqa: F811
+    assert api.call("GET", "/api/push").json()["fcm"] is True and notify.transports() == ("webpush", "fcm")
+
+
+@pytest.mark.parametrize("method, body", [
+    ("POST", {}),
+    ("POST", {"token": "short"}),
+    ("POST", {"token": ["x"]}),
+    ("POST", {"token": "https://evil.example/" + "a" * 40}),
+    ("POST", {"token": TOKEN + "\x00"}),
+    ("DELETE", {"token": None}),
+    ("DELETE", {"token": "a/b" * 20}),
+])
+def test_a_malformed_token_is_refused_plainly(fake_fcm, api, method, body):  # noqa: F811
+    answer = api.call(method, "/api/push/fcm", fan="fan", body=body)
+    assert answer.status_code == 400 and answer.json()["detail"] == "That isn't an FCM token."

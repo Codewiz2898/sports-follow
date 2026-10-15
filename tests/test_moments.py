@@ -236,7 +236,7 @@ def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypat
     def session():
         yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)))
 
-    devices = [(11, (1, "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
+    devices = [(11, (1, "webpush", "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "webpush", "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
     monkeypatch.setattr(notify, "session", session)
     monkeypatch.setattr(notify, "_plan", lambda db, items, at, taken_back: devices)
     monkeypatch.setattr(notify, "push", lambda endpoint, *rest: None if "fcm" in endpoint else 410)

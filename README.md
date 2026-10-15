@@ -308,6 +308,7 @@ that build too: turn them on under Alerts. Always pass
 | `LLM_GATEWAY_URL` | `http://127.0.0.1:8787` | |
 | `SPORTS_FOLLOW_GATEWAY_TOKEN` | from `~/.config/llm-providers/keys.env` | this app's gateway token |
 | `SPORTS_FOLLOW_VAPID_KEY` | `~/.config/sports-follow/vapid-private.pem` | push signing key; never in the repo |
+| `SPORTS_FOLLOW_FCM_KEY_FILE` | `~/.config/sports-follow/fcm-service-account.json` | the Android app's Firebase service-account key (JSON), for its notifications; without it they're off ("Android app", below) |
 | `SPORTS_FOLLOW_COOKIE_SECRET` | from `~/.config/sports-follow/cookie-secret`, made on first start | the key fan cookies are signed with (at least 32 characters; `SPORTS_FOLLOW_COOKIE_SECRET_FILE` names another file). Every API process needs the same one, and it must never change: under a new key every fan starts over |
 | `SPORTS_FOLLOW_RESEND_KEY` | from `SPORTS_FOLLOW_RESEND_KEY_FILE`, else `~/.config/sports-follow/resend-key` | Resend API key for sign-in emails; without it (and `MAIL_FROM`) email sign-in is off |
 | `SPORTS_FOLLOW_MAIL_FROM` | none | the address sign-in emails come from, e.g. `signin@your-domain` (a domain verified in Resend); they're sent from the app's name at that address |

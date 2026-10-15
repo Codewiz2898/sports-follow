@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, bus, credits as credits_page, fcm, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -995,8 +995,9 @@ def _push_host_ok(endpoint: str) -> bool:
 
 @app.get("/api/push")
 def push_info() -> dict[str, Any]:
+    """What this server can push by: Web Push with its public key (`enabled`), and FCM for the Android app (`fcm`)."""
     key = notify.public_key()
-    return {"enabled": key is not None, "public_key": key}
+    return {"enabled": key is not None, "public_key": key, "fcm": fcm.enabled()}
 
 
 def _sent_text(value: Any, longest: int) -> str | None:
@@ -1014,16 +1015,7 @@ def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), signed: accoun
     p256dh, auth = (_sent_text(keys.get("p256dh"), 199), _sent_text(keys.get("auth"), 99)) if isinstance(keys, dict) else (None, None)
     if not (endpoint and p256dh and auth and _push_host_ok(endpoint)):
         raise HTTPException(400, "That isn't a push subscription this server can deliver to.")
-    tz = str(body.get("timezone") or "UTC")[:64]
-    try:
-        from zoneinfo import ZoneInfo
-
-        ZoneInfo(tz)
-    except Exception:
-        tz = "UTC"
-    start, end = body.get("quiet_start"), body.get("quiet_end")
-    start = start if isinstance(start, str) and TIME.match(start) else None
-    end = end if isinstance(end, str) and TIME.match(end) else None
+    tz, start, end = _device_settings(body)
     previous = _sent_text(body.get("previous_endpoint"), 999)
     if "quiet_start" not in body and previous:
         # The browser replaced this device's subscription: keep its quiet hours.
@@ -1055,14 +1047,75 @@ def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session 
     endpoint = _sent_text(body.get("endpoint"), 999)
     if endpoint is None:
         raise HTTPException(400, "That isn't a push subscription.")
-    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == endpoint))
+    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == endpoint, PushSubscription.transport == "webpush"))
+    db.commit()
+    return {"ok": True}
+
+
+def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
+    """A device's timezone (UTC unless it's a real one) and its quiet hours ("22:00" to "07:00", or none)."""
+    tz = str(body.get("timezone") or "UTC")[:64]
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(tz)
+    except Exception:
+        tz = "UTC"
+    start, end = body.get("quiet_start"), body.get("quiet_end")
+    start = start if isinstance(start, str) and TIME.match(start) else None
+    end = end if isinstance(end, str) and TIME.match(end) else None
+    return tz, start, end
+
+
+@app.post("/api/push/fcm")
+def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The Android app turns notifications on for this device with its FCM token (or updates its quiet
+    hours), as a browser does with its subscription. Signed in, the device belongs to this session.
+
+    The token is the device's alone (no other app, page or person is shown it, and this server never logs
+    it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
+    whoever it is now, after a sign-in or a lost cookie, and the device moves with it."""
+    if not fcm.enabled():
+        raise HTTPException(503, "Notifications aren't set up on this server yet.")
+    token = body.get("token")
+    if not fcm.valid_token(token):
+        raise HTTPException(400, "That isn't an FCM token.")
+    tz, start, end = _device_settings(body)
+    previous = body.get("previous_token")
+    if fcm.valid_token(previous) and previous != token:
+        # FCM gave the app a new token: the old one goes, and its quiet hours carry over unless new ones came.
+        old = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == previous, PushSubscription.transport == "fcm"))
+        if old is not None:
+            if "quiet_start" not in body:
+                start, end = old.quiet_start, old.quiet_end
+            db.delete(old)
+    session_id = signed.session_id if signed else None
+    stmt = insert(PushSubscription).values(fan_id=fan, transport="fcm", endpoint=token, p256dh=None, auth=None, timezone=tz, quiet_start=start, quiet_end=end, session_id=session_id)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["endpoint"],
+        set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id},
+        where=PushSubscription.transport == "fcm",
+    )
+    if db.execute(stmt.returning(PushSubscription.id)).first() is None:
+        raise HTTPException(409, "That device's notifications belong to someone else.")  # a Web Push endpoint by that name: never a token
+    notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
+    db.commit()
+    return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
+
+
+@app.delete("/api/push/fcm")
+def unregister_fcm(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    token = body.get("token")
+    if not fcm.valid_token(token):
+        raise HTTPException(400, "That isn't an FCM token.")
+    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == token, PushSubscription.transport == "fcm"))
     db.commit()
     return {"ok": True}
 
 
 @app.post("/api/push/test")
 async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
-    if notify.public_key() is None:
+    if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     return {"sent": await asyncio.to_thread(notify.send_test, fan)}
 

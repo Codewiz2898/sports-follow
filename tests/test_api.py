@@ -584,7 +584,7 @@ class PlanDb:
 
 def test_a_push_goes_to_a_fans_newest_devices_however_many_are_stored():
     def device(i, fan):
-        return SimpleNamespace(id=i, fan_id=fan, endpoint=f"https://fcm.googleapis.com/fcm/send/{i}", p256dh="k", auth="a", timezone="UTC", quiet_start=None, quiet_end=None)
+        return SimpleNamespace(id=i, fan_id=fan, transport="webpush", endpoint=f"https://fcm.googleapis.com/fcm/send/{i}", p256dh="k", auth="a", timezone="UTC", quiet_start=None, quiet_end=None)
 
     devices = sorted([device(i, "big") for i in range(1, 61)] + [device(61, "small")], key=lambda d: -d.id)
     now = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
