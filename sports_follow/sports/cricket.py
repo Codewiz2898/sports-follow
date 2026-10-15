@@ -120,7 +120,7 @@ class Cricket(Sport):
     nation_first = True  # India before Royal Challengers Bengaluru
     games = ("match", "matches")
     draws = True
-    colour = {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
+    colour = {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff", "deep": "#0d2a7a"}
     pattern = r"cricket"
     alerts = {
         "key": ("Line-ups, fifties, wickets and results", "In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers"),

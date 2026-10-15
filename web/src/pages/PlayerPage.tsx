@@ -118,6 +118,7 @@ export function PlayerPage() {
       <PlayerBand
         name={p.name}
         sport={p.sport}
+        photo={p.photo}
         meta={[...(p.teams ?? []).slice(0, 2), p.role, retired && 'Retired'].filter(Boolean).join(' · ')}
         back={<Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>}
         actions={

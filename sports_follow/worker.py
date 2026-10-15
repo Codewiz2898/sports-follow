@@ -20,7 +20,7 @@ from time import perf_counter
 from arq import cron
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, logs, metrics, notify, pipeline, registry, retention, shutdown, structured, tracing
+from . import accounts, bus, db, engine, history, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -206,6 +206,13 @@ async def prune(ctx) -> None:
     await asyncio.to_thread(retention.prune)
 
 
+async def fetch_photos(ctx) -> None:
+    """Followed and starter players' photos from Wikimedia Commons, every 15 minutes (photos.py)."""
+    if await _missed(ctx, "fetch_photos"):
+        return
+    await asyncio.to_thread(photos.run)
+
+
 def _late(ctx) -> bool:
     """Whether this cron run starts more than LATE seconds after its time. arq names a run by its time
     in milliseconds ("cron:tick:1760342400123"); a job called any other way isn't late."""
@@ -284,6 +291,7 @@ class WorkerSettings:
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
+        cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

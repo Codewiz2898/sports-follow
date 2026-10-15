@@ -1,10 +1,36 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
-import type { Card, LatestResult, LiveStatus, NewsItem, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
+import type { Card, LatestResult, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { ahead, countdown, dateOnly, dateTime, day, dayLabel, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName, shortWhen } from '../format'
 import { SportMark, sportKey, sportName, viewOf, viewOfKind } from '../sports'
 import { ErrorBoundary } from './ErrorBoundary'
+
+/** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
+ * its credit goes too. */
+function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
+  const [broken, setBroken] = useState<string | null>(null)
+  return [photo && photo.url !== broken ? photo : null, () => setBroken(photo?.url ?? null)]
+}
+
+/** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css): on
+ * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader. */
+function PlayerPhoto({ photo, onError }: { photo: Photo; onError: () => void }) {
+  return (
+    <span className="duo band-photo" title={photo.credit} aria-hidden="true">
+      <img src={photo.url} alt="" loading="lazy" decoding="async" onError={onError} />
+    </span>
+  )
+}
+
+/** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons, recoloured",
+ * linking to the file's page on Commons. */
+function PhotoCredit({ photo }: { photo: Photo }) {
+  const href = safeHref(photo.page)
+  return href
+    ? <a className="photo-credit" href={href} target="_blank" rel="noreferrer">{photo.credit}</a>
+    : <span className="photo-credit">{photo.credit}</span>
+}
 
 export function Avatar({ name, sport, size }: { name: string; sport?: string | null; size?: 'sm' | 'lg' }) {
   return <span className={`avatar${size ? ` ${size}` : ''}`} data-sport={sportKey(sport)} aria-hidden="true">{initials(name)}</span>
@@ -361,10 +387,13 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
   )
 }
 
-/** The top of a player's page (and an athlete's preview): a block of their sport's colour. */
-export function PlayerBand({ name, sport, meta, back, actions, children }: { name: string; sport?: string | null; meta?: string; back: ReactNode; actions?: ReactNode; children?: ReactNode }) {
+/** The top of a player's page (and an athlete's preview): a block of their sport's colour, with their
+ * photo and its credit when there is one. */
+export function PlayerBand({ name, sport, meta, photo, back, actions, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode }) {
+  const [shown, drop] = usePhoto(photo)
   return (
     <header className="player-band" data-sport={sportKey(sport)}>
+      {shown && <PlayerPhoto photo={shown} onError={drop} />}
       <div className="bar">
         {back}
         <span className="row" style={{ gap: 8 }}>{actions}</span>
@@ -375,6 +404,7 @@ export function PlayerBand({ name, sport, meta, back, actions, children }: { nam
         {meta && <span className="player-meta">{meta}</span>}
       </div>
       {children}
+      {shown && <PhotoCredit photo={shown} />}
     </header>
   )
 }
