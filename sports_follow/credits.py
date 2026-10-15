@@ -64,10 +64,14 @@ def _model() -> str:
     return f"{name} via OpenRouter" if route == "openrouter" else name
 
 
-def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None) -> dict[str, Any]:
+def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None) -> dict[str, Any]:
     """The Credits page for this build: the data providers it runs, the rest it relies on, the software.
-    Each source describes its provider and what it covers (adapters.base.Provider); licensed ones come first."""
+    Each source describes its provider and what it covers (adapters.base.Provider); licensed ones come first.
+    The AI model and the news it summarises only when the research agent runs (config.AGENT)."""
+    from .config import AGENT
+
     running = ADAPTERS if running is None else running
+    agent = AGENT if agent is None else agent
     adapters = {system: adapter for system, adapter in KNOWN.items() if system in running}
     data = []
     for provider, theirs in sorted(providers(adapters), key=lambda pa: not pa[0].licensed):
@@ -92,15 +96,16 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
             "licence": "GPL-3.0",
             "licence_url": "https://www.gnu.org/licenses/gpl-3.0.html",
         })
-    also += [
-        {
-            "name": "AI",
-            "what": f"Player profiles, news summaries, and pages for sports without a live source are written by an AI model ({_model()}) from the sources linked on each page.",
-            "note": "It can get things wrong: check the linked sources before relying on a detail.",
-        },
-        {
-            "name": "News publishers",
-            "what": "Each story links to the publisher's original; we show the headline and a short summary.",
-        },
-    ]
+    if agent:
+        also += [
+            {
+                "name": "AI",
+                "what": f"Player profiles, news summaries, and pages for sports without a live source are written by an AI model ({_model()}) from the sources linked on each page.",
+                "note": "It can get things wrong: check the linked sources before relying on a detail.",
+            },
+            {
+                "name": "News publishers",
+                "what": "Each story links to the publisher's original; we show the headline and a short summary.",
+            },
+        ]
     return {"data": data, "also": also, "software": [{k: v for k, v in s.items() if k != "package"} for s in SOFTWARE], "notices": NOTICES}

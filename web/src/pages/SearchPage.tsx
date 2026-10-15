@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useAccount } from '../account'
 import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
@@ -13,6 +14,7 @@ export function SearchPage() {
   const { data, fresh, loading, error } = useSearch(query, sport)
   const actions = useSearchActions()
   const tries = starterNames(useStarters().sports, 6)  // the starters, a sport at a time (starters.py)
+  const research = useAccount().config?.research !== false
 
   // The query lives in the URL, so back from a preview returns to the same results.
   useEffect(() => {
@@ -56,7 +58,11 @@ export function SearchPage() {
               </div>
             </>
           )}
-          <p className="small muted" style={{ marginTop: 4 }}>Pick an athlete and their live scores start at once; the research agent adds news and background in a couple of minutes. Names no source knows can be researched with AI, a few a day.</p>
+          <p className="small muted" style={{ marginTop: 4 }}>
+            {research
+              ? 'Pick an athlete and their live scores start at once; the research agent adds news and background in a couple of minutes. Names no source knows can be researched with AI, a few a day.'
+              : 'Pick an athlete and their live scores, games and stats start at once.'}
+          </p>
         </section>
       )}
     </>

@@ -147,7 +147,8 @@ deploy/seed-registry.sh deploy@<server-ip>
 ```
 
 **6. Check it:** `https://<domain>/api/health` answers `{"ok":true,"db":true,"redis":true}`, the app
-opens, search finds players, and `/credits` lists Sportmonks and Lichess only.
+opens, search finds players, and `/credits` lists Sportmonks and Lichess only, with PandaScore and PUBG
+once their tokens are sent ([Esports](#secrets), below).
 
 **7. Turn on the alerts, the off-site backups and the GitHub deploys** (below).
 
@@ -226,6 +227,24 @@ pbpaste > ~/.config/sports-follow/openrouter-key && chmod 600 ~/.config/sports-f
 deploy/push-secrets.sh deploy@<server-ip>
 ```
 After that, the Mac's development key can be revoked without taking the app down.
+
+**Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
+only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and
+`pubg-token` (PandaScore's free plan is enough; PUBG's at developer.pubg.com), then send them and restart:
+```bash
+deploy/push-secrets.sh deploy@<server-ip>
+ssh deploy@<server-ip> 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml up -d --force-recreate api worker'
+```
+Then the pros go into search. PUBG's come by themselves: the worker reads them from its tournament index
+every six hours, the first time within ten minutes of starting. PandaScore's come with the weekly import
+(Mondays), or now, in an hour or two (paced, so live series keep their share of the hourly 1,000):
+`c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
+`/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
+
+**Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
+the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
+AI research, and pages the agent built before (sports with no source here) stay as they were, no longer
+updated. With the key but out of credit, source pages work too; they say why news is missing.
 
 **On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
 instead of running `push-secrets.sh`:
@@ -571,7 +590,7 @@ On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose 
 | One request or job's lines | `c logs api worker \| grep <id>`: JSON lines, each with the `rid` of its request or job; a request's id is in its answer's `X-Request-ID` header, and the jobs it queued log under it too |
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
-| Registry import now | `c exec worker python -m sports_follow.registry` |
+| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |

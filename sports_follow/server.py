@@ -416,8 +416,11 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
-    """What this server offers the app: its name, the model, the ways to sign in, who to write to about privacy."""
-    return {"name": APP_NAME, "model": MODEL, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    """What this server offers the app: its name, the model and whether it researches players no source has
+    (config.AGENT), the ways to sign in, who to write to about privacy."""
+    from .config import AGENT
+
+    return {"name": APP_NAME, "model": MODEL, "research": AGENT, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -586,8 +589,10 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research.
+    AI research, and with the agent off (config.AGENT) can't be followed.
     """
+    from .config import AGENT
+
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
@@ -598,6 +603,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
+            if found is None and not AGENT:
+                raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
             if found is None:
                 taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
                 try:
@@ -642,15 +649,18 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         raise
     if created:
         # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
-        # of minutes. Without one: the agent builds the whole page.
+        # of minutes (none with the agent off). Without one: the agent builds the whole page.
         if ref is not None:
             await enqueue("refresh_structured", player_id)
-        await enqueue("build_card", player_id)
+        if ref is None or AGENT:
+            await enqueue("build_card", player_id)
     return player_id
 
 
 @app.post("/api/follows")
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    from .config import AGENT
+
     if body.get("system") or body.get("qid"):
         player_id = await _follow_athlete(body, fan, client_address(request))
         return {"player_id": player_id, "card": await read_card(player_id)}
@@ -674,6 +684,9 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
+    if counted and not AGENT:
+        # Without the agent (config.AGENT) a page comes from a live source, picked in search, or not at all.
+        raise HTTPException(404, "No live source has this player, so their page can't be built." if known is not None else "Pick an athlete from the search results: pages here come from live sources.")
     taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
     def save(db: Session) -> tuple[int, bool, dict[str, Any] | None] | None:

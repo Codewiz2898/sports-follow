@@ -275,6 +275,8 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     """Search every source in parallel and merge. sport narrows to one of SPORTS. may_ask is asked once,
     just before the first of the sources' own searches would go out: False leaves them out (a client over
     its limit, server.search) and the answer comes from Sports Follow and the registry."""
+    from .config import AGENT
+
     query = " ".join(query.split())[:80]
     sport = sport if sport in SPORTS else None
     ask = functools.cache(may_ask)
@@ -283,7 +285,9 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # the query's letters (pipeline.slugify).
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
     mine = [r for r in local(db, query, fan, sport) if sports.on(r.sport)]
-    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport)]
+    # Without the research agent (config.AGENT) only athletes in a sport with a running source can be
+    # followed: the others are left out before anything is decided on them (asking the sources, "did you mean").
+    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport) and (AGENT or r.live_scores)]
     found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
@@ -321,6 +325,10 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     if blocked:
         results = [r for r in results if (r.system, r.athlete_id) not in blocked]
         suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
+    if not AGENT:
+        # And of the sources' own hits and the spellings offered, likewise.
+        results = [r for r in results if r.player_id or r.live_scores]
+        suggestions = [r for r in suggestions if r.player_id or r.live_scores]
     # Everyone with exactly the typed name is listed, however far down the rest would cut them: the
     # picker says how many people that is (Maldini's football and tennis rows are one) and shows each.
     results = [r for i, r in enumerate(results) if i < LIVE_LIMIT + LOCAL_LIMIT or r.exact]
@@ -335,7 +343,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         "suggestions": [_public(r) for r in suggestions],
         "namesakes": namesakes if namesakes > 1 else 0,
         "partial": partial,
-        "researchable": bool(slugify(query)),
+        "researchable": AGENT and bool(slugify(query)),
     }
 
 
