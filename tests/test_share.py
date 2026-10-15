@@ -133,10 +133,24 @@ def test_the_pictures_address_changes_when_the_score_does_and_only_then():
     "简自豪",  # nothing they can draw
 ])
 def test_any_name_draws_a_picture_of_the_size_previews_show(name):
-    data = share.png(share.of_card({**KOHLI, "player": {"name": name, "sport": "Cricket"}}).picture)
-    img = picture(data)
-    assert (img.format, img.size) == ("PNG", (1200, 630))
-    assert len(data) < 300_000  # WhatsApp shows a picture up to about this
+    # On a player's picture the name is the big word; on a game's, the name under the moment's word.
+    for shown in (share.of_card({**KOHLI, "player": {"name": name, "sport": "Cricket"}}), share.of_game(KOHLI, {**HUNDRED, "player": name})):
+        assert shown is not None
+        data = share.png(shown.picture)
+        img = picture(data)
+        assert (img.format, img.size) == ("PNG", (1200, 630))
+        assert len(data) < 300_000  # WhatsApp shows a picture up to about this
+
+
+def test_a_picture_is_drawn_once_and_kept_for_the_next_ask(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(share, "_draw", lambda p: drawn.append(p) or b"png")
+    monkeypatch.setattr(share, "_drawn", share.OrderedDict())
+    monkeypatch.setattr(share, "KEPT", 2)
+    first, second, third = (share.Picture("#000000", "#ffffff", "", word) for word in ("One", "Two", "Three"))
+    assert share.drawn(first) is None and share.png(first) == b"png" and share.png(first) == b"png"
+    share.png(second), share.png(third)  # the oldest goes
+    assert drawn == [first, second, third] and share.drawn(first) is None and share.drawn(third) == b"png"
 
 
 def test_the_picture_is_the_sports_block_with_the_paper_band():

@@ -140,7 +140,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
-  address gets a new one once the score moves. The player page and each This week poster have a Share
+  address gets a new one once the score moves. Each API process keeps the 256 it drew last and draws new
+  ones one at a time, so asking for many can't take the threads the database calls use. The player page and each This week poster have a Share
   button: the phone's share sheet where the browser has one, else the link copied; every link it gives
   carries `s=share`, for when the app counts visits.
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the

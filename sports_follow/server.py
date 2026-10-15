@@ -470,10 +470,19 @@ async def _preview(player_id: int, game: int | None) -> share.Preview | None:
     return (share.of_game(card, poster) if poster else None) or share.of_card(card)
 
 
+# Pictures are drawn one at a time per process (tens of milliseconds each): anyone may ask for one, and a
+# script asking for many new ones would otherwise take the threads every database call waits for.
+DRAWING = asyncio.Semaphore(1)
+
+
 async def _picture(picture: share.Picture) -> Response:
-    """A preview's picture. Its address carries a digest of what it shows, so a crawler sees a new address
-    once it changes; a few minutes' cache is for the crawlers that ask again at once."""
-    data = await run_in_threadpool(share.png, picture)
+    """A preview's picture, from those drawn lately or drawn now. Its address carries a digest of what it
+    shows, so a crawler sees a new address once it changes; a few minutes' cache is for the crawlers that
+    ask again at once."""
+    data = share.drawn(picture)
+    if data is None:
+        async with DRAWING:
+            data = await run_in_threadpool(share.png, picture)
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"})
 
 
@@ -1489,18 +1498,26 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
         return None
 
 
-@app.get("/{path:path}", include_in_schema=False)
-async def spa(path: str, request: Request) -> Response:
-    """Files the build puts at the root (service worker, manifest, icons); every other path is the app, with
-    the page's link preview in its head (share.py), since the crawlers that read those run no JavaScript.
-    Nothing here without a build (`npm run build` in web/)."""
+def _built(path: str) -> Path | str | None:
+    """What the build has at `path`: a file it puts at the root (service worker, manifest, icons), else the
+    app's page (its text); None without a build."""
     root = WEB_DIST.resolve()
     index = root / "index.html"
     file = (root / path).resolve()
     if path and file.is_file() and root in file.parents and file != index:
-        cache = "no-cache" if file.name in NO_CACHE else "public, max-age=86400"
-        return FileResponse(file, media_type=MEDIA.get(file.suffix), headers={"Cache-Control": cache})
-    if not index.is_file():
+        return file
+    return index.read_text(encoding="utf-8") if index.is_file() else None
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def spa(path: str, request: Request) -> Response:
+    """Files the build puts at the root; every other path is the app, with the page's link preview in its
+    head (share.py), since the crawlers that read those run no JavaScript. Nothing here without a build
+    (`npm run build` in web/)."""
+    found = await run_in_threadpool(_built, path)
+    if found is None:
         raise HTTPException(404, "Not Found")
-    page = await run_in_threadpool(index.read_text, encoding="utf-8")
-    return HTMLResponse(share.page(page, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache"})
+    if isinstance(found, Path):
+        cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
+        return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
+    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache"})

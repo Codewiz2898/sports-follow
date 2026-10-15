@@ -19,6 +19,8 @@ import html
 import io
 import math
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -305,10 +307,34 @@ def _pill(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, ground: str, ink
         cx += font.getlength(c) + spaced
 
 
-@lru_cache(maxsize=128)
+KEPT = 256  # pictures kept drawn, the newest used: about 50 KB each
+_drawn: OrderedDict[Picture, bytes] = OrderedDict()
+_kept = threading.Lock()
+
+
+def drawn(picture: Picture) -> bytes | None:
+    """The picture as a PNG, if it was drawn lately: a page shared widely is asked for again and again."""
+    with _kept:
+        if (data := _drawn.get(picture)) is not None:
+            _drawn.move_to_end(picture)
+        return data
+
+
 def png(picture: Picture) -> bytes:
-    """The picture as a PNG: the block, the tag, the words from the bottom up (lines, name, big word), and the
-    paper band with the app's name."""
+    """The picture as a PNG, drawn once and kept (drawn)."""
+    if (data := drawn(picture)) is not None:
+        return data
+    data = _draw(picture)
+    with _kept:
+        _drawn[picture] = data
+        while len(_drawn) > KEPT:
+            _drawn.popitem(last=False)
+    return data
+
+
+def _draw(picture: Picture) -> bytes:
+    """The block, the tag, the words from the bottom up (lines, name, big word), and the paper band with the
+    app's name."""
     img = Image.new("RGB", (WIDTH, HEIGHT), picture.ground)
     draw = ImageDraw.Draw(img)
     width = WIDTH - 2 * PAD
@@ -323,8 +349,8 @@ def png(picture: Picture) -> bytes:
         bottom -= 50
     bottom -= 14
 
-    if picture.name:
-        name, text = _drawable(picture.name.upper(), "anton", "manrope")
+    name, text = _drawable(picture.name.upper(), "anton", "manrope")
+    if text:  # not a name none of the typefaces can draw any of
         font, lines = _fit(text, name, width - 40, 100, range(84, 55, -4), 1)
         bottom = _slanted(img, PAD, bottom, lines[0], font, name, picture.ink) - 18
 
