@@ -162,6 +162,15 @@ def test_the_research_agents_lookups_stay_in_the_lane_that_started_it(monkeypatc
     assert seen == ["live", "live", "live"]
 
 
+def test_a_url_spends_the_budget_of_the_longest_prefix_it_is_under():
+    # Lichess's FIDE pages and player endpoint sit under its API but behind a limit of their own, however
+    # its budgets are listed, and with or without a token.
+    assert budget.for_url("https://lichess.org/fide/1503014/Carlsen_Magnus") is lichess_chess.FIDE
+    assert budget.for_url("https://lichess.org/api/fide/player/1503014") is lichess_chess.FIDE
+    assert budget.for_url("https://lichess.org/api/fide/player?q=1503014") is lichess_chess.ANONYMOUS  # search has no such limit
+    assert budget.for_url("https://lichess.org/fide") is None
+
+
 def test_the_research_agent_spends_a_sources_budget_on_its_api(monkeypatch):
     answers = []
     monkeypatch.setattr(tools._http, "get", lambda url: answers.pop(0) if answers else httpx.Response(200, json={}, request=httpx.Request("GET", url)))

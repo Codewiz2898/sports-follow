@@ -14,6 +14,7 @@ own, a 429 there pauses only them, and FIDE records are read through FIDE search
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -26,7 +27,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .. import naming
+from .. import bus, naming
 from ..config import USER_AGENT
 from . import budget
 from .base import Adapter, AdapterError, Fixture, Line, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
@@ -37,7 +38,7 @@ DAYS_BACK = 60
 DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
 PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a few times a month
-STALE_PAGE = 7 * 24 * 3600  # the last copy read, while Lichess refuses a new one
+STALE_PAGE = 7 * 24 * 3600  # what the last copy read listed, kept in Redis while Lichess refuses a new one
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -85,8 +86,9 @@ def _headers(url: str, text: bool) -> dict[str, str]:
     return headers
 
 
-# Lichess said slow down, or the minute is spent. Unlike a missing round, this must fail the whole read: a
-# fixture list with holes would drop results from the card until the next refresh.
+# A broadcast read refused (Lichess said slow down, or the minute is spent). Unlike a missing round, this
+# must fail the whole read: a fixture list with holes would drop results from the card until the next
+# refresh. A refused FIDE page doesn't (LichessChess._page_rounds).
 RateLimited = budget.RateLimited
 
 
@@ -489,15 +491,28 @@ def search(query: str, sport: str | None, adapters: list[Adapter]) -> list[Searc
     return parse_fide(records if isinstance(records, list) else [], query, 10)
 
 
+def find_record(name: str) -> dict[str, Any] | None:
+    """The FIDE record a name means (pick_player), from FIDE search."""
+    # FIDE search matches the name as typed; "Gukesh Dommaraju" only finds FIDE's "Gukesh, D" by its
+    # given name, so search each long part too and let pick_player decide.
+    queries = [name, *[t for t in _tokens(name) if len(t) >= 4]]
+    results: dict[int, dict[str, Any]] = {}
+    for q in dict.fromkeys(queries):
+        found = get_json(f"{API}fide/player?q={quote(q)}", ttl=24 * 3600)
+        for r in found if isinstance(found, list) else []:
+            results.setdefault(r["id"], r)
+        if pick_player(list(results.values()), name):
+            break
+    return pick_player(list(results.values()), name)
+
+
 def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] | None:
     """A titled or 2200+ active player with this name on FIDE's list."""
     chess = adapters[0]
     try:
-        ref = chess.find_player(query)
-        if ref:
-            record = fide_record(ref.athlete_id) or {}
-            if not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
-                return chess, ref
+        record = find_record(query)
+        if record and not record.get("inactive") and (record.get("title") in CHESS_TITLES or (record.get("standard") or 0) >= 2200):
+            return chess, ref_for(record)
     except AdapterError:
         pass
     return None
@@ -513,7 +528,7 @@ PROVIDER = Provider(
     search=LiveSearch(find=search, unfiltered=False, min_length=3),
     recognise=recognise,
     research=lambda adapters: f"{API}broadcast/top",  # the broadcasts on now
-    budgets=(FIDE, BUDGET, ANONYMOUS),  # FIDE first: the research agent's FIDE pages spend it, not ANONYMOUS
+    budgets=(BUDGET, ANONYMOUS, FIDE),
 )
 
 
@@ -540,17 +555,7 @@ class LichessChess(Adapter):
         }]
 
     def find_player(self, name: str) -> PlayerRef | None:
-        # FIDE search matches the name as typed; "Gukesh Dommaraju" only finds FIDE's "Gukesh, D" by
-        # its given name, so search each long part too and let pick_player decide.
-        queries = [name, *[t for t in _tokens(name) if len(t) >= 4]]
-        results: dict[int, dict[str, Any]] = {}
-        for q in dict.fromkeys(queries):
-            found = get_json(f"{API}fide/player?q={quote(q)}", ttl=24 * 3600)
-            for r in found if isinstance(found, list) else []:
-                results.setdefault(r["id"], r)
-            if pick_player(list(results.values()), name):
-                break
-        best = pick_player(list(results.values()), name)
+        best = find_record(name)
         return ref_for(best) if best else None
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
@@ -561,18 +566,29 @@ class LichessChess(Adapter):
         """A round of each of the player's "Recent tournaments" on their Lichess FIDE page, newest first.
 
         The page is behind the limit every datacenter shares (FIDE), so it's read a few times a day, and
-        when Lichess refuses it the last copy read stands in. With none, the player's events on now and
-        to come are still found by search; a past one only the page lists comes back once it's read.
+        when Lichess refuses it what the last copy listed stands in, kept in Redis through restarts. With
+        none (the page never read), the player's events on now and to come are still found by search.
         """
         if not ref.profile_url:
             return []
+        key = f"lichess:fide-page:{ref.athlete_id}"
         try:
             page = get_json(ref.profile_url, ttl=PAGE_TTL, text=True)
         except RateLimited:
-            page = peek(ref.profile_url, ttl=STALE_PAGE)
+            try:
+                raw: Any = bus.sync_redis().get(key)  # synchronous: a value, whatever redis-py's types allow
+            except Exception:
+                raw = None
+            return json.loads(raw) if raw else []
         except AdapterError:
-            page = None
-        return list(dict.fromkeys(re.findall(r'href="/broadcast/[^/"]+/[^/"]+/([A-Za-z0-9]{8})"', page or "")))[:MAX_TOURS]
+            return []
+        rounds = list(dict.fromkeys(re.findall(r'href="/broadcast/[^/"]+/[^/"]+/([A-Za-z0-9]{8})"', page)))[:MAX_TOURS]
+        if rounds:
+            try:
+                bus.sync_redis().set(key, json.dumps(rounds), ex=STALE_PAGE)
+            except Exception:
+                pass  # Redis down: the next read keeps them
+        return rounds
 
     def _tours(self, ref: PlayerRef, now: datetime) -> list[dict[str, Any]]:
         """Broadcast tournaments the player is likely in: the "Recent tournaments" on their Lichess

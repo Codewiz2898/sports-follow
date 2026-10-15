@@ -10,6 +10,7 @@ import gzip
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -322,19 +323,22 @@ def test_lichess_reads_fide_records_through_search_by_id(monkeypatch):
     assert urls[-2:] == ["https://lichess.org/api/fide/player?q=1", "https://lichess.org/api/fide/player/1"]
 
 
-def test_a_refused_fide_page_gives_its_last_copy_and_search_still_finds_events(monkeypatch):
+def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_events(monkeypatch):
     page = '<a href="/broadcast/tata-steel-2026/round-1/abcdefgh">Tata Steel 2026</a>'
     answers = {CARLSEN_PAGE: httpx.Response(200, text=page)}
     lichess_answering(monkeypatch, answers)
+    kept: dict[str, tuple[str, int | None]] = {}
+    redis = SimpleNamespace(get=lambda key: kept[key][0] if key in kept else None, set=lambda key, value, ex=None: kept.__setitem__(key, (value, ex)))
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: redis)
     chess = lichess_chess.LichessChess()
     ref = PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"], CARLSEN_PAGE)
     assert chess._page_rounds(ref) == ["abcdefgh"]
-    read_at, copy = lichess_chess._cache[CARLSEN_PAGE]
-    lichess_chess._cache[CARLSEN_PAGE] = (read_at - lichess_chess.PAGE_TTL - 1, copy)  # due for a new read
+    assert kept == {f"lichess:fide-page:{CARLSEN}": ('["abcdefgh"]', lichess_chess.STALE_PAGE)}
+    lichess_chess._cache.clear()  # a restart: nothing read in this process
     answers[CARLSEN_PAGE] = httpx.Response(429, text="Too many requests.")
-    assert chess._page_rounds(ref) == ["abcdefgh"]  # the last copy stands in
-    lichess_chess._cache.clear()
-    assert chess._page_rounds(ref) == []  # none read yet: Lichess's FIDE pages are paused, and that's no error
+    assert chess._page_rounds(ref) == ["abcdefgh"]  # what the last copy listed stands in
+    kept.clear()
+    assert chess._page_rounds(ref) == []  # never read: Lichess's FIDE pages are paused, and that's no error
     # The player's events are still found by search, and no FIDE page refusal fails the read.
     answers["https://lichess.org/api/broadcast/search?q=carlsen"] = httpx.Response(200, json={"currentPageResults": []})
     answers["https://lichess.org/api/broadcast/top"] = httpx.Response(200, json={"active": [], "upcoming": []})
