@@ -41,7 +41,7 @@ KEEP = 15 * 60  # and Redis drops it after this
 GAMES = 6  # the most games a sport shows
 PLAYERS = 4  # and the most players a game offers
 KEPT = 3 * PLAYERS  # players kept a game by a read: room for those on Sports Follow to come first
-READ_GAMES = 30  # games kept a read, best known first
+READ_GAMES = 30  # games kept a read, the biggest events' first, then the best known
 
 
 def sources() -> list[Adapter]:

@@ -106,7 +106,8 @@ class LiveGame:
     # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
     fixtures: list[str] = field(default_factory=list)
     # How big the source rates the game's event, where it rates them (an esports tournament's tier): a bigger
-    # tier's games come first in Live now, before the most followed and the best known (live.offer).
+    # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
+    # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
     tier: int = 0
 
 

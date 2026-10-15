@@ -151,6 +151,24 @@ def test_the_biggest_events_games_come_first_however_followed_or_known(db, redis
     assert [(p["name"], p["following"]) for p in esports["games"][3]["players"]] == [("Yatoro", True)]
 
 
+def test_a_big_events_game_outlasts_the_cuts_however_little_known(db, redis, sources, monkeypatch):
+    # A busy day: smaller events' games with better known pros outnumber what a read keeps, and what the API
+    # ranks; the big event's game, with no pro the registry knows, is kept by both.
+    registry.upsert(db, [athlete(f"pandascore:{i}", "esports", f"Pro {i}", {"arena": str(i)}, teams=[f"Team {i}"], sitelinks=10 - i, league="dota-2") for i in (1, 2, 3)])
+    db.commit()
+
+    def on(source_id: str, title: str, tier: int) -> LiveGame:
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier)
+
+    sources.arena = [on("1", "Team 1 vs A", 1), on("2", "Team 2 vs B", 1), on("3", "Team 3 vs C", 1), on("4", "T1 vs Gen.G", 3)]
+    monkeypatch.setattr(live, "GAMES", 1)  # the API ranks GAMES * 2 of a sport's games
+    live.read("arena", NOW)
+    assert [g["title"] for g in live.offer(db, None, NOW)[0][0]["games"]] == ["T1 vs Gen.G"]
+    monkeypatch.setattr(live, "READ_GAMES", 3)
+    live.read("arena", NOW)
+    assert [g["title"] for g in live.last_read("arena")["games"]] == ["T1 vs Gen.G", "Team 1 vs A", "Team 2 vs B"]
+
+
 def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, sources, monkeypatch):
     sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"))]
     live.read("pitch", NOW)

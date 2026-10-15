@@ -517,7 +517,8 @@ class PandascoreEsports(Adapter):
         match names no players, and the registry knows the teams' pros."""
         games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
         # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": 50})
+        # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
         out = []
