@@ -64,6 +64,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
   linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
   data provider's photos (their terms don't license them), and never generated likenesses.
+  The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
+  detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker
+  only), and keeps its box on the photo row. The app gets the head-and-shoulders square around it
+  (`crop`) with the photo, and the profile shows that square; a photo with no face found is shown from
+  near its top.
   `python -m sports_follow.photos` runs the job once.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
@@ -370,8 +375,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
   is what fixtures use. Chess ratings aren't in it (the FIDE list needs FIDE's permission for commercial
   use), so chess rows show title and country.
 - Photos are fetched only for followed and starter players, so the preview of another athlete shows one
-  only once someone follows them. Each is the one file Wikidata names, however old, and isn't cropped to
-  the face: it's shown from near its top, where faces usually are.
+  only once someone follows them. Each is the one file Wikidata names (its preferred one, when it names
+  several), however old. When a photo has several faces, the profile shows the largest, which is usually
+  the player's but can be someone standing nearer the camera.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance
   and no sport filter, and Lichess allows one request at a time.
 - Search reads names in Latin letters only (accents folded; "Đoković" and "mueller" also find Djokovic

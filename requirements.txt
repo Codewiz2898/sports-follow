@@ -15,6 +15,9 @@ arq==0.28.0
 redis==5.3.1
 pywebpush==2.5.0
 httpx==0.28.1
+# Finding the face in a player's photo (faces.py), in the worker only: OpenCV's YuNet detector.
+opencv-python-headless==5.0.0.93
+numpy==2.5.4
 # tools.py gives httpx's connection pool its own network backend: check it when either moves.
 httpcore==1.0.9
 # Client for the llm-providers gateway, at a commit. From a checkout: pip install -e ~/repos/llm-providers/python

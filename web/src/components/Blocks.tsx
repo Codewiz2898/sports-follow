@@ -14,11 +14,14 @@ function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
 }
 
 /** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css): on
- * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader. */
+ * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader.
+ * The square around their face, when the photos job found it, fills the picture (.duo.framed). */
 function PlayerPhoto({ photo, onError }: { photo: Photo; onError: () => void }) {
+  const c = photo.crop
+  const square = c && ({ '--cw': c.w, '--ch': c.h, '--cx': c.x + c.w / 2, '--cy': c.y + c.h / 2 } as CSSProperties)
   return (
-    <span className="duo band-photo" title={photo.credit} aria-hidden="true">
-      <img src={photo.url} alt="" loading="lazy" decoding="async" onError={onError} />
+    <span className={`duo band-photo${c ? ' framed' : ''}`} title={photo.credit} aria-hidden="true">
+      <img src={photo.url} alt="" loading="lazy" decoding="async" style={square} onError={onError} />
     </span>
   )
 }
