@@ -236,7 +236,7 @@ def _playing(db: Session, followed: list[Player], top: list[Offered], fan: str |
             on.append((p, nxt, "live"))
         elif nxt and (why := _on(_when(nxt.get("start_utc")), now)) == "soon":
             on.append((p, nxt, why))  # a followed player's card knows whether a started game is live
-    on.sort(key=lambda o: (o[2] != "live", str(o[1].get("start_utc") or "")))
+    on.sort(key=lambda o: (o[2] != "live", _when(o[1].get("start_utc")) or now))
     on = on[:POOL]
     rows = {r.player_id: r for r in search.offered_players(db, [p for p, _, _ in on], fan)}
     playing: list[Offered] = []
@@ -249,7 +249,7 @@ def _playing(db: Session, followed: list[Player], top: list[Offered], fan: str |
         if why is not None:
             playing.append((r, why))
     order = {"live": 0, "started": 1, "soon": 2}
-    return sorted(playing, key=lambda o: (order[o[1]], (o[0].next or {}).get("start_utc") or ""))
+    return sorted(playing, key=lambda o: (order[o[1]], _when((o[0].next or {}).get("start_utc")) or now))
 
 
 def _top(db: Session, sport: str, fan: str | None, now: datetime) -> list[Offered]:

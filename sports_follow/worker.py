@@ -185,9 +185,15 @@ STARTERS_DONE = "starters:refreshed"  # set once a refresh finishes; a worker st
 
 async def refresh_starters(ctx) -> None:
     """Each sport's top players for new fans, found in their sources with their next games: once a day,
-    and when a worker starts with no refresh in the last day (startup), say on a fresh server."""
-    await in_lane('refresh', starters.refresh)
-    await ctx["redis"].set(STARTERS_DONE, "1", ex=20 * 3600)
+    and when a worker starts with no refresh in the last day (startup), say on a fresh server. One at a
+    time: a restart's refresh and 04:40's don't both ask the sources."""
+    if not await ctx["redis"].set("starters:refreshing", "1", nx=True, ex=2400):
+        return
+    try:
+        await in_lane('refresh', starters.refresh)
+        await ctx["redis"].set(STARTERS_DONE, "1", ex=23 * 3600)
+    finally:
+        await ctx["redis"].delete("starters:refreshing")
 
 
 async def purge_sessions(ctx) -> None:
