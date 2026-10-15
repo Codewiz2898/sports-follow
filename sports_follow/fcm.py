@@ -147,10 +147,15 @@ def _pause_locked(now: float) -> None:
     _access["paused_until"] = now + PAUSE
 
 
-def _pause() -> None:
-    """FCM refused this server's key: forget its access token, and send nothing for PAUSE seconds."""
+def _pause() -> bool:
+    """FCM refused this server's key: forget its access token, and send nothing for PAUSE seconds. Whether
+    this call began the pause (pushes already sending with the refused token come back refused too)."""
     with _access_lock:
-        _pause_locked(time.time())
+        now = time.time()
+        if _access.get("paused_until", 0) > now:
+            return False
+        _pause_locked(now)
+        return True
 
 
 # ---------------------------------------------------------------- messages
@@ -202,8 +207,8 @@ def push(token: str, payload: dict[str, Any], ttl: int) -> int | str | None:
         return None
     code, said = _error(answer)
     if answer.status_code == 401 or code in ("PERMISSION_DENIED", "THIRD_PARTY_AUTH_ERROR"):
-        log.error("fcm: FCM refused %s's key (%s %s), so no Android pushes for %ss", acc.client_email, answer.status_code, code, PAUSE, extra={"push_service": "fcm", "status": answer.status_code})
-        _pause()
+        if _pause():
+            log.error("fcm: FCM refused %s's key (%s %s), so no Android pushes for %ss", acc.client_email, answer.status_code, code, PAUSE, extra={"push_service": "fcm", "status": answer.status_code})
         return OURS
     log.warning("push to fcm %s… failed (%s %s)", token[:8], answer.status_code, code, extra={"push_service": "fcm", "status": answer.status_code})
     if code == "UNREGISTERED":

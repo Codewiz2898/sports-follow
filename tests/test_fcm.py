@@ -188,6 +188,7 @@ def test_what_fcm_answers_is_what_the_devices_health_reads(fake_fcm):
     fake_fcm.failing = None
     fake_fcm.revoked = True
     assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS  # this server's key: never the device's fault
+    assert not fcm._pause()  # already paused: a push that was sending with the refused token logs nothing more
     fake_fcm.revoked = False
     assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS and len(fake_fcm.sent) == 0  # paused, not asked again at once
     fcm._access["paused_until"] = time.time() - 1
