@@ -993,6 +993,18 @@ def test_a_typed_name_with_a_control_character_is_refused(api):
     assert not any(k.startswith("research") for k in api.redis.data)  # and nothing was counted
 
 
+@pytest.mark.parametrize("name", ["Kane<script>alert(1)</script>", "Kane<img src=x onerror=alert(2)>", "Kane >"])
+def test_a_typed_name_with_markup_is_refused(api, name):
+    answer = api.call("POST", "/api/follows", fan="fan", body={"query": name})
+    assert answer.status_code == 400 and "<" in answer.json()["detail"]
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert not [s for s in api.statements if isinstance(s, Insert)]  # no player, alias or follow kept
+
+
+def test_a_typed_name_with_an_apostrophe_or_ampersand_is_still_a_name(api):
+    assert api.call("POST", "/api/follows", fan="fan", body={"query": "N'Golo Kanté & co"}).status_code == 200
+
+
 @pytest.mark.parametrize("method, body", [
     ("POST", {"subscription": "x"}),
     ("POST", {"subscription": {**SUBSCRIPTION, "keys": "zz"}}),

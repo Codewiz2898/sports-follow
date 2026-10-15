@@ -202,6 +202,14 @@ def test_a_failed_first_build_waits_for_a_fan():
     assert not pipeline.rebuild_due(card, NOW)
 
 
+@pytest.mark.parametrize("raw", ["openrouter: HTTP 402 Payment Required", "This request requires more credits, or fewer max_tokens"])
+def test_running_out_of_credit_is_not_told_to_fans(raw):
+    # The card's error is public (GET /api/players/{id}/card): the provider's bill stays in the worker log.
+    said = pipeline.fan_message(raw)
+    assert said == "AI research isn't available right now. Try again later."
+    assert "credit" not in said.lower()
+
+
 # ---------------------------------------------------------------- without the research agent
 
 
