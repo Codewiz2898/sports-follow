@@ -330,7 +330,8 @@ def test_the_token_goes_in_a_header_and_a_429_pauses_reads(monkeypatch):
 
 def test_live_now_lists_every_series_on_by_its_teams(monkeypatch):
     asked = []
-    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or [LIVE, _match("finished", 2, 0, id=99)])
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append((path, sorted(params))) or [LIVE, _match("finished", 2, 0, id=99)])
     [game] = ps.PandascoreEsports().live_now()
-    assert asked == ["/matches/running"]
+    # By game, as /matches/running names its filter: it answers "filter[videogame_id]" with HTTP 400.
+    assert asked == [("/matches/running", ["filter[videogame]", "page[size]"])]
     assert game.snapshot.status == "live" and game.players == [] and len(game.teams) == 2  # a match names no players: live.py asks the registry

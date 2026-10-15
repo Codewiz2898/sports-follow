@@ -508,7 +508,8 @@ class PandascoreEsports(Adapter):
         """Every series on now in the plan's games (matches/running): one request. Its teams, not its players:
         a match names no players, and the registry knows the teams' pros."""
         games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame_id]": games, "page[size]": 50})
+        # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": 50})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
         out = []
