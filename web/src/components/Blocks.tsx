@@ -257,15 +257,7 @@ export interface LatestMoment { text: string; missed: boolean }
  */
 export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
-  const state = live.state
-  const view = viewOfKind(state?.kind)
-  const key = sportKey(sport ?? state?.kind)
-  const plain = (
-    <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-      <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
-      {live.clock && <div className="num clock">{live.clock}</div>}
-    </div>
-  )
+  const key = sportKey(sport ?? live.state?.kind)
   return (
     <section className={`board${compact ? ' compact' : ''}${seed ? ' drawn' : ''}`} data-sport={key} aria-label="Live now">
       {/* On Today, the sport's line art behind it, turned its own way for this game (seed). */}
@@ -275,8 +267,8 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
         {live.event && <span className="eyebrow" style={{ textAlign: 'right' }}>{live.event}</span>}
       </div>
       {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
-      <ErrorBoundary fallback={plain} resetKey={live}>
-        {view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} live={live} /> : plain}
+      <ErrorBoundary fallback={<PlainScore live={live} />} resetKey={live}>
+        <GameBoard live={live} compact={compact} teams={teams} />
         {compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />}
         {!compact && live.moments && live.moments.length > 0 && (
           <ul className="moments">
@@ -297,6 +289,24 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
       </div>
     </section>
   )
+}
+
+/** A live game's score and clock as text: a score the research agent read off a web page, or a state no view draws. */
+export function PlainScore({ live }: { live: LiveStatus }) {
+  return (
+    <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      <div className="num score" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{live.score || '—'}</div>
+      {live.clock && <div className="num clock">{live.clock}</div>}
+    </div>
+  )
+}
+
+/** A live game's score as its sport's view draws it (sports/), or the plain score where none draws this state.
+ * `teams`: the followed player's, marked on a board that lists many (a battle royale lobby). */
+export function GameBoard({ live, compact, teams }: { live: LiveStatus; compact?: boolean; teams?: string[] }) {
+  const state = live.state
+  const view = viewOfKind(state?.kind)
+  return view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} live={live} /> : <PlainScore live={live} />
 }
 
 /** A stat in words: "3 shots", "1 key pass"; an abbreviation stays as it is ("22 PTS", "2 4s"), and a value

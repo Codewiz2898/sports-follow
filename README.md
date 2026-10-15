@@ -3,7 +3,8 @@
 Follow any athlete in any sport. Each followed player gets one shared page: live score and the
 player's own numbers while they play, upcoming games, news, recent results and season stats. The
 Today screen puts all of your players together: on a phone a row of them along the top (the live
-score, or when they next play), then live games, a row of every result since yesterday and a row of
+score, or when they next play), then their live games, a row of the other games on anywhere ("Also
+live", outlined, with players to follow from each), a row of every result since yesterday and a row of
 every game in the next two weeks, each scrolling sideways. The Following page has a tile for each
 player in their sport's colour.
 

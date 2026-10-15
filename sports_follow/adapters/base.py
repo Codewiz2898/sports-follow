@@ -102,6 +102,9 @@ class LiveGame:
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
     league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+    # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
+    # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
+    fixtures: list[str] = field(default_factory=list)
 
 
 @dataclass

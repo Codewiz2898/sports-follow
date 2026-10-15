@@ -402,3 +402,5 @@ def test_chess_live_now_shows_the_top_boards_still_being_played(monkeypatch):
         ("D Gukesh v Magnus Carlsen", "Grand Swiss · Round 5", ["46616543", "1503014"]),
         ("R Praggnanandhaa v Fabiano Caruana", "Grand Swiss · Round 5", ["25059530", "2020009"])]
     assert all(g.snapshot.status == "live" and g.snapshot.state["kind"] == "chess" for g in games)
+    # A board is a fixture of each of its players, as a followed player's card has it: Today shows it once, as theirs.
+    assert games[0].fixtures == ["r5-46616543", "r5-1503014"]

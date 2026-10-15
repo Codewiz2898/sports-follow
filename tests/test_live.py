@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import live, registry, sports
 from sports_follow.adapters import ADAPTERS, LiveGame, PlayerRef, Snapshot
-from sports_follow.models import AthleteOverride, Follow, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import AthleteOverride, Event, Follow, Player, PlayerCard, PlayerIdentity
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -27,7 +27,7 @@ NOW = datetime(2026, 10, 15, 14, tzinfo=timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter, event RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -136,9 +136,24 @@ def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, s
     live.read("pitch", NOW)
     live.read("arena", NOW)
     assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "games": [
-        {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": []}]}], [])
+        {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": [], "event_ids": []}]}], [])
     games, stale = live.offer(db, None, NOW + timedelta(seconds=90))
     assert stale == ["pitch", "arena"] and games  # a minute on: still served, and a read asked for
     assert live.offer(db, None, NOW + timedelta(seconds=live.SERVE + 1))[0] == []  # too old to call live
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "football"))
     assert live.offer(db, None, NOW)[0] == []
+
+
+def test_a_game_names_the_events_it_is_here_by_the_sources_fixture_ids(db, redis, sources):
+    # A followed player's card names its live game by event id: an event's key is "system:fixture id". A chess
+    # board is a fixture of each of its players; a game no one here follows is no event.
+    db.add_all([Event(key="pitch:100", sport="football", title="A vs B"), Event(key="pitch:r5-7", sport="football", title="C v D"),
+                Event(key="pitch:r5-8", sport="football", title="C v D"), Event(key="other:101", sport="football", title="E vs F")])
+    db.commit()
+    ids = {key: event_id for key, event_id in db.execute(text("SELECT key, id FROM event"))}
+    sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0")),
+                     LiveGame(source_id="r5:g1", title="C v D", competition="Cup", start_utc=None, snapshot=snapshot("0 – 0"), fixtures=["r5-7", "r5-8"]),
+                     LiveGame(source_id="101", title="E vs F", competition="Cup", start_utc=None, snapshot=snapshot("2 – 2"))]
+    live.read("pitch", NOW)
+    games = {g["title"]: g["event_ids"] for g in live.offer(db, None, NOW)[0][0]["games"]}
+    assert games == {"A vs B": [ids["pitch:100"]], "C v D": sorted([ids["pitch:r5-7"], ids["pitch:r5-8"]]), "E vs F": []}  # another source's 101 isn't this one
