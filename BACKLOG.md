@@ -228,11 +228,12 @@ by lock index if chess traffic outgrows it.
 
 ### 6. Player headshots
 
-**Built (BHA-13).** Followed and starter players show their Wikimedia Commons photo (Wikidata P18),
-recoloured in their sport's colour, with its credit; initials otherwise (`sports_follow/photos.py`). The
-registry has a photo for 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known ones (75%,
-those with 20+ Wikipedia editions). Next: crop to the face rather than zooming toward the top of the photo
-(BHA-67), and a styled avatar for players without one (BHA-69).
+**Built (BHA-13), on the profile only.** A followed player's page, and the preview before following, show
+their Wikimedia Commons photo (Wikidata P18), recoloured in their sport's colour, with its credit
+(`sports_follow/photos.py`). The home page, lists and search keep initials: the user chose (15 Oct 2026)
+real photos for the profile only, and each sport's own line art for the home page. The registry has a
+photo for 65,205 of 323,298 athletes (20%), and 12,332 of the 16,449 well-known ones (75%, those with 20+
+Wikipedia editions). Next: crop to the face rather than showing the photo from near its top (BHA-67).
 
 **Done when** a player's page, search results and the Following list show a photo with its credit
 where a properly licensed one exists, and initials otherwise.

@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
-import type { ActivityItem, AlertLevel, Photo } from '../api'
+import type { ActivityItem, AlertLevel } from '../api'
 import { useNow } from '../clock'
-import { Avatar, PhotosNote } from '../components/Blocks'
+import { Avatar } from '../components/Blocks'
 import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
@@ -41,7 +41,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
   const { markSeen } = activity
   useEffect(() => { markSeen() }, [markSeen])
   const now = useNow()
-  const profileOf = (id: number) => cards.find((c) => c.player_id === id)?.player
+  const sportOf = (id: number) => cards.find((c) => c.player_id === id)?.player.sport
 
   if (!activity.loaded) return <div className="card empty small"><span className="spinner" /></div>
   if (!activity.items.length) {
@@ -64,22 +64,21 @@ function Latest({ onSettings }: { onSettings: () => void }) {
         <section key={label} className="section" aria-label={label}>
           <span className="eyebrow">{label}</span>
           <ul className="card list">
-            {items.map((item) => <LatestRow key={item.id} item={item} sport={profileOf(item.player_id)?.sport} photo={profileOf(item.player_id)?.photo} fresh={item.id > seenAtOpen} />)}
+            {items.map((item) => <LatestRow key={item.id} item={item} sport={sportOf(item.player_id)} fresh={item.id > seenAtOpen} />)}
           </ul>
         </section>
       ))}
-      <PhotosNote photos={activity.items.map((item) => profileOf(item.player_id)?.photo)} />
       {activity.more && <MoreButton more={activity.more} />}
     </>
   )
 }
 
-function LatestRow({ item, sport, photo, fresh }: { item: ActivityItem; sport?: string | null; photo?: Photo | null; fresh: boolean }) {
+function LatestRow({ item, sport, fresh }: { item: ActivityItem; sport?: string | null; fresh: boolean }) {
   const now = useNow()
   const [context] = item.body.split('\n')
   return (
     <li className={`alert-row${fresh ? ' fresh' : ''}${item.level === 'minor' ? ' minor' : ''}`}>
-      <Avatar name={item.player} sport={sport} size="sm" photo={photo} />
+      <Avatar name={item.player} sport={sport} size="sm" />
       <Link to={item.url} className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
         <span className="title">{item.title}</span>
         {context && <span className="small muted">{context}</span>}
@@ -181,7 +180,7 @@ function Settings() {
               return (
                 <li key={c.player_id} className="stack" style={{ gap: 10 }}>
                   <span className="row" style={{ justifyContent: 'flex-start' }}>
-                    <Avatar name={c.player.name} sport={c.player.sport} size="sm" photo={c.player.photo} />
+                    <Avatar name={c.player.name} sport={c.player.sport} size="sm" />
                     <span className="stack" style={{ gap: 0 }}>
                       <Link to={`/player/${c.player_id}`} className="title">{c.player.name}</Link>
                       <span className="tiny muted">{levelText(level, c.player.sport).brief}</span>
@@ -194,7 +193,6 @@ function Settings() {
             })}
           </ul>
         )}
-        <PhotosNote photos={cards.map((c) => c.player.photo)} />
       </section>
     </>
   )

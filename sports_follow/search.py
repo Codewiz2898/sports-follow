@@ -27,7 +27,7 @@ from typing import Any, Callable
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import naming, photos, pipeline, registry, sports, structured
+from . import naming, pipeline, registry, sports, structured
 from .adapters import ADAPTERS, Adapter, AdapterError, Provider, SearchResult, budget, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
@@ -148,7 +148,6 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
             status=status,
             next=_next(card or {}),
             qid=qid,
-            photo=((card or {}).get("player") or {}).get("photo"),
             matched=bool(alias) or naming.prefix_match(query, player.name),
             _rank=(float(similarity or 0),),
         ))
@@ -187,7 +186,6 @@ def from_athlete(a: Athlete, query: str) -> SearchResult:
         born=a.birth_date.year if a.birth_date else None,
         matched=aka is not None or naming.prefix_match(query, a.name),
         popularity=a.sitelinks or 0,
-        image=a.image,
     )
 
 
@@ -235,7 +233,6 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
         held.qid = held.qid or r.qid
         held.born = held.born or r.born
         held.popularity = max(held.popularity, r.popularity)
-        held.image, held.photo = held.image or r.image, held.photo or r.photo
         if not held.system and r.system:
             held.system, held.athlete_id, held.league = r.system, r.athlete_id, r.league
         if r.player_id and not held.player_id:
@@ -339,7 +336,6 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     for r in results:
         if namesakes > 1 and r.exact and r.born and str(r.born) not in r.detail:
             r.detail = " · ".join(x for x in (r.detail, f"born {r.born}") if x)
-    photos.attach(db, [*results, *suggestions])
     return {
         "query": query,
         "sport": sport,
@@ -468,14 +464,12 @@ def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[dict[
     running source covers by id, or who have a page, so following one never needs AI research."""
     rows = [from_athlete(a, "") for a in athletes]
     _ours(db, rows, fan)
-    rows = [r for r in rows if r.player_id or (r.system and r.athlete_id)]
-    photos.attach(db, rows)
-    return [_public(r) for r in rows]
+    return [_public(r) for r in rows if r.player_id or (r.system and r.athlete_id)]
 
 
 def _public(r: SearchResult) -> dict[str, Any]:
     out = asdict(r)
-    for hidden in ("_rank", "matched", "popularity", "image"):
+    for hidden in ("_rank", "matched", "popularity"):
         out.pop(hidden, None)
     return out
 

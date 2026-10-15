@@ -1,5 +1,6 @@
 """Player photos: each followed or starter athlete's photo from Wikimedia Commons (the registry's file, from
-Wikidata's P18), with its credit, served from our own origin.
+Wikidata's P18), with its credit, served from our own origin. The app shows them on a player's profile
+(their page, and the preview before following) and nowhere else: the home page draws each sport's art.
 
 The worker's photos job (every 15 minutes) asks the Commons API about the files it hasn't got, BATCH to a
 request: the WIDTH-pixel thumbnail (one of the sizes Wikimedia serves; any other width comes back at the
@@ -272,17 +273,15 @@ def for_card(player: Player) -> dict[str, Any]:
     return {"photo": found} if found else {}
 
 
-def attach(db: Session, rows: list[Any]) -> None:
-    """Fill in the photo of search results (search.SearchResult) that have a registry file and none yet."""
-    missing = [r for r in rows if r.image and not r.photo]
-    found = _shown(db, [r.image for r in missing])
-    for r in missing:
-        r.photo = found.get(_file(r.image))
+def of_source(db: Session, system: str, athlete_id: str) -> dict[str, Any] | None:
+    """The photo for an athlete a source knows by this id, when the registry has them (a preview from search)."""
+    image = db.scalar(select(Athlete.image).where(Athlete.ids.contains({system: athlete_id}), Athlete.image.is_not(None)).limit(1))
+    return of_file(db, image)
 
 
 def used(db: Session) -> list[dict[str, Any]]:
     """Every photo the app may show, for the Credits page: whose it is, and its credit. Not only those
-    wanted now: one not yet forgotten still shows in search, and on the card of a player nobody follows."""
+    wanted now: one not yet forgotten still shows on the page of a player nobody follows any more."""
     rows = db.scalars(select(Photo).where(Photo.status == "ok", Photo.digest.is_not(None))).all()
     return sorted(({"name": p.name or "", **public(p)} for p in rows), key=lambda p: p["name"])
 

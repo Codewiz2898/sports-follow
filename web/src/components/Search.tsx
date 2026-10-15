@@ -5,7 +5,7 @@ import { APP_NAME } from '../app'
 import { relative } from '../format'
 import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
-import { Avatar, PhotosNote } from './Blocks'
+import { Avatar } from './Blocks'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
 /**
@@ -148,7 +148,7 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
   const busy = actions.pending === r.key
   const body = (
     <>
-      <Avatar name={r.name} sport={r.sport} photo={r.photo} />
+      <Avatar name={r.name} sport={r.sport} />
       <span className="stack">
         <span className="title"><Highlight name={r.name} query={query} /></span>
         <span className="small muted">
@@ -256,7 +256,6 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
           </ul>
         </section>
       ))}
-      <PhotosNote photos={[...data.results, ...data.suggestions].map((r) => r.photo)} />
       {data.partial.length > 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</p>
       )}

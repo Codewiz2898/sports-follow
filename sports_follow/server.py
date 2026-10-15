@@ -1283,7 +1283,7 @@ async def athlete_preview(system: str, athlete_id: str, league: str | None = Non
         raise HTTPException(502, "The live source didn't answer. Try again in a moment.")
     if found is None:
         raise HTTPException(404, "No such athlete.")
-    return found
+    return {**found, "photo": await in_db(photos.of_source, system, athlete_id)}
 
 
 # ---------------------------------------------------------------- realtime

@@ -144,7 +144,6 @@ export interface SearchResult {
   qid?: string | null  // the player registry's (Wikidata) id
   born?: number | null
   aka?: string | null  // the alias it was found by, when the name doesn't start with what was typed
-  photo?: Photo | null
 }
 
 export interface Research { used: number; limit: number; left: number; resets_at: string }

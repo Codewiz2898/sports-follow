@@ -63,7 +63,7 @@ export function AthletePage() {
         name={name || 'Athlete'}
         sport={athleteSport}
         meta={about}
-        photo={preview?.photo ?? hint.result?.photo}
+        photo={preview?.photo}
         back={<Link to={hint.back ?? '/search'} className="btn icon" aria-label="Back to search"><BackIcon width={20} height={20} /></Link>}
         actions={
           <button type="button" className="btn primary" disabled={!name || Boolean(actions.pending) || (noSource && !research)} onClick={follow}>

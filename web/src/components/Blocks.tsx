@@ -13,8 +13,8 @@ export function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
   return [photo && photo.url !== broken ? photo : null, () => setBroken(photo?.url ?? null)]
 }
 
-/** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css).
- * Their name is always beside it, so the picture itself says nothing to a screen reader. */
+/** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css): on
+ * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader. */
 export function PlayerPhoto({ photo, className, onError }: { photo: Photo; className?: string; onError: () => void }) {
   return (
     <span className={`duo${className ? ` ${className}` : ''}`} title={photo.credit} aria-hidden="true">
@@ -32,23 +32,8 @@ export function PhotoCredit({ photo }: { photo: Photo }) {
     : <span className="photo-credit">{photo.credit}</span>
 }
 
-/** Under a list with small photos, where a credit each wouldn't fit: where they're from, and the Credits
- * page, which names each one's author and licence (their player's page shows it too). */
-export function PhotosNote({ photos }: { photos: (Photo | null | undefined)[] }) {
-  if (!photos.some(Boolean)) return null
-  return (
-    <p className="tiny muted">
-      Photos from Wikimedia Commons, recoloured · <Link to="/credits#photos" className="link">Credits</Link>
-    </p>
-  )
-}
-
-/** A player in a list: their photo in a circle, or their initials on the sport's colour. */
-export function Avatar({ name, sport, size, photo }: { name: string; sport?: string | null; size?: 'sm' | 'lg'; photo?: Photo | null }) {
-  const [shown, drop] = usePhoto(photo)
-  const className = `avatar${size ? ` ${size}` : ''}`
-  if (shown) return <span className={`${className} duo`} data-sport={sportKey(sport)} title={shown.credit} aria-hidden="true"><img src={shown.url} alt="" loading="lazy" decoding="async" onError={drop} /></span>
-  return <span className={className} data-sport={sportKey(sport)} aria-hidden="true">{initials(name)}</span>
+export function Avatar({ name, sport, size }: { name: string; sport?: string | null; size?: 'sm' | 'lg' }) {
+  return <span className={`avatar${size ? ` ${size}` : ''}`} data-sport={sportKey(sport)} aria-hidden="true">{initials(name)}</span>
 }
 
 export function StatGrid({ stats, empty = 'No stats yet.' }: { stats?: Stat[]; empty?: string }) {
@@ -93,19 +78,17 @@ export function highlight(sport: string | null | undefined, text?: string | null
   return viewOf(sportKey(sport))?.highlight?.(text) ?? null
 }
 
-/** Today's big moment: the newest finished game, in the player's colour, their numbers huge, and their
- * photo with its credit when there is one. */
-export function ResultHero({ result, sport, photo }: { result: LatestResult; sport?: string | null; photo?: Photo | null }) {
+/** Today's big moment: the newest finished game, in the player's colour, their numbers huge. */
+export function ResultHero({ result, sport }: { result: LatestResult; sport?: string | null }) {
   const key = sportKey(sport)
-  const [shown, drop] = usePhoto(photo)
   const stats = lineStats(result.player_contribution)?.slice(0, 3)
   const word = highlight(sport, result.player_contribution)
   // A line that only restates the result ("Lost in 2 sets") gives way to the score.
   const restates = /^(won|lost|drew)\b/i.test(result.player_contribution ?? '')
   const big = result.player_contribution && !restates ? result.player_contribution : result.result.replace(/^(Won|Lost|Drew)\s+/, '')
   return (
-    <article className="hero" data-sport={key}>
-      {shown ? <PlayerPhoto photo={shown} className="hero-photo" onError={drop} /> : <SportMark sport={key} className="hero-mark" />}
+    <Link to={`/player/${result.player_id}`} className="hero" data-sport={key} aria-label={`${result.player_name}: ${result.title}, ${result.result}`}>
+      <SportMark sport={key} className="hero-mark" />
       <span className="row">
         <span className="pill ink" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{dayLabel(playedOn(result))}</span>
         {result.competition && <span className="tag soft" style={{ textAlign: 'right' }}>{result.competition}</span>}
@@ -125,9 +108,7 @@ export function ResultHero({ result, sport, photo }: { result: LatestResult; spo
         </span>
         {word && <span className="pill outline">{word}</span>}
       </span>
-      <Link to={`/player/${result.player_id}`} className="hero-link" aria-label={`${result.player_name}: ${result.title}, ${result.result}`} />
-      {shown && <PhotoCredit photo={shown} />}
-    </article>
+    </Link>
   )
 }
 
@@ -168,10 +149,8 @@ export function statusLine(card: Card, progress?: string[], now = Date.now()): s
 export function PlayerTile({ card, progress }: { card: Card; progress?: string[] }) {
   const now = useNow()
   const live = card.live.is_live
-  const [photo, drop] = usePhoto(card.player.photo)
   return (
-    <Link to={`/player/${card.player_id}`} className={`tile${photo ? ' pictured' : ''}`} data-sport={sportKey(card.player.sport)}>
-      {photo && <PlayerPhoto photo={photo} className="tile-photo" onError={drop} />}
+    <Link to={`/player/${card.player_id}`} className="tile" data-sport={sportKey(card.player.sport)}>
       <span className="sport">{sportName(card.player.sport) || 'Player'}</span>
       <span className="corner">
         {card.status === 'building' ? <span className="spinner" /> : live ? <span className="badge-live">Live</span> : null}
@@ -397,7 +376,7 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
   return (
     <Link to={`/player/${card.player_id}`} className="row" style={{ padding: '8px 10px', minHeight: 44, borderRadius: 12 }}>
       <div className="row" style={{ justifyContent: 'flex-start', minWidth: 0 }}>
-        <Avatar name={card.player.name} sport={card.player.sport} size="sm" photo={card.player.photo} />
+        <Avatar name={card.player.name} sport={card.player.sport} size="sm" />
         <div className="stack" style={{ gap: 1 }}>
           <span className="title" style={{ fontSize: 14 }}>{card.player.name}</span>
           <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{statusLine(card, progress, now)}</span>

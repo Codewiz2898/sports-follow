@@ -16,9 +16,8 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import credits, photos, pipeline, registry, search
-from sports_follow.adapters import SearchResult
-from sports_follow.models import Athlete, Follow, Photo, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow import credits, photos, pipeline, registry
+from sports_follow.models import Follow, Photo, Player, PlayerCard, PlayerIdentity, Starter
 
 from .test_api import api  # noqa: F401  (the fixture)
 
@@ -319,18 +318,13 @@ def test_photos_nobody_wants_are_forgotten_after_a_month(squad, commons):
 
 
 @needs_db
-def test_search_results_starters_and_new_cards_carry_the_photo(squad, commons):
+def test_new_cards_and_previews_carry_the_photo(squad, commons):
+    """A player's profile shows it: their page, from a new card on, and the preview of an athlete picked in
+    search, found by their id in the source (a starter's, here, fetched before anyone follows them)."""
     db = squad
     photos.refresh()
-    bumrah = photos.public(_photo(db, BUMRAH))
-    rows = [SearchResult(key="a", name="Jasprit Bumrah", sport="Cricket", detail="", image=BUMRAH), SearchResult(key="b", name="Kylian Mbappé", sport="Football", detail="", image="Mbappe.jpg")]
-    photos.attach(db, rows)
-    assert rows[0].photo == bumrah and rows[1].photo is None
-    assert "image" not in search._public(rows[0])
-
-    starter = db.scalars(select(Athlete).where(Athlete.qid == "Q16227998")).all()
-    assert [p["photo"] for p in search.offered(db, list(starter), None)] == [bumrah]
-
+    assert photos.of_source(db, "espn_cricket", "625383") == photos.public(_photo(db, BUMRAH))
+    assert photos.of_source(db, "espn_cricket", "1") is None
     saka = db.get(Player, 1)
     assert pipeline.placeholder_card(saka)["player"]["photo"] == photos.public(_photo(db, SAKA))
     assert "photo" not in pipeline.placeholder_card(db.get(Player, 3))["player"]

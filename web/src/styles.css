@@ -122,16 +122,15 @@ p { margin: 0; }
 .wl.D { background: var(--raised); color: var(--text); }
 .wl.L { box-shadow: inset 0 0 0 2px var(--text); color: var(--text); }
 
-/* A player's photo in a circle, or their initials on the sport's colour when there's none. */
-.avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; background: var(--sport); color: var(--on-sport); font-size: 14px; font-weight: 800; letter-spacing: 0.02em; }
-.avatar.sm { width: 32px; height: 32px; font-size: 11px; }
-.avatar.lg { width: 64px; height: 64px; font-size: 20px; }
-/* So small, a photo is mostly the face: closer in, toward the top where faces sit. */
-.avatar.duo img { transform: scale(1.5); transform-origin: 50% 10%; }
+/* Initials on the sport's colour, until there are headshots. */
+.avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; background: var(--sport); color: var(--on-sport); font-size: 14px; font-weight: 800; letter-spacing: 0.02em; }
+.avatar.sm { width: 32px; height: 32px; border-radius: 9px; font-size: 11px; }
+.avatar.lg { width: 64px; height: 64px; border-radius: 18px; font-size: 20px; }
 
-/* A photo in its sport's colour: a duotone, its darks in --photo-dark and its lights in the sport colour.
-   The grey photo is multiplied by --photo-light and --photo-dark is screened over it; the server works
-   --photo-light out so that comes out exactly (sports.photo_tones). Faces sit high in most photos. */
+/* A player's photo on their profile (never on the home page), in the sport's colour: a duotone, its darks
+   in --photo-dark and its lights in the sport colour. The grey photo is multiplied by --photo-light and
+   --photo-dark is screened over it; the server works --photo-light out so that comes out exactly
+   (sports.photo_tones). Faces sit high in most photos. */
 .duo { position: relative; overflow: hidden; isolation: isolate; background: var(--photo-light); }
 .duo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; filter: grayscale(1) contrast(1.1); mix-blend-mode: multiply; }
 .duo::after { content: ""; position: absolute; inset: 0; background: var(--photo-dark); mix-blend-mode: screen; pointer-events: none; }
@@ -190,12 +189,6 @@ a.photo-credit:hover { text-decoration: underline; }
 /* The day's big moment: a finished game in the player's sport colour, the numbers huge. */
 .hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--sport); color: var(--on-sport); }
 .hero > * { position: relative; }
-/* The player's photo down the right, fading into the block; the whole card is one link, but its credit
-   is a link of its own, above it. */
-.hero > .hero-photo { position: absolute; top: 0; right: 0; bottom: 0; width: min(48%, 300px); -webkit-mask-image: linear-gradient(to right, transparent, #000 55%); mask-image: linear-gradient(to right, transparent, #000 55%); pointer-events: none; }
-.hero > .hero-link { position: absolute; inset: 0; z-index: 1; border-radius: inherit; --focus: var(--on-sport); }
-.hero > .hero-link:focus-visible { outline-offset: -5px; border-radius: 22px; }
-.hero > .photo-credit { z-index: 2; align-self: flex-start; max-width: 58%; margin-top: -6px; }
 .hero-mark { position: absolute; right: -90px; top: -64px; width: 280px; height: 280px; opacity: 0.14; pointer-events: none; }
 .hero-name { font-size: clamp(36px, 13vw, 60px); overflow-wrap: anywhere; }
 .hero-stats { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 8px; max-width: 460px; }
@@ -213,11 +206,7 @@ a.photo-credit:hover { text-decoration: underline; }
 
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (min-width: 720px) { .tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
-.tile { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-height: 116px; padding: 14px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); transition: transform 0.12s; }
-/* The player's photo cut in at the bottom right, fading into the tile, behind the words. */
-.tile-photo { position: absolute; right: 0; bottom: 0; width: 46%; max-width: 120px; height: 88%; -webkit-mask-image: linear-gradient(to right, transparent, #000 50%); mask-image: linear-gradient(to right, transparent, #000 50%); pointer-events: none; }
-.tile .name, .tile .status, .tile .sport { position: relative; }
-.tile.pictured .status { padding-right: min(34%, 88px); }  /* small type stays off most of the photo */
+.tile { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-height: 116px; padding: 14px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); transition: transform 0.12s; }
 .tile:hover { transform: translateY(-2px); }
 .tile .name { font-size: 30px; overflow-wrap: anywhere; }
 .tile .status { font-size: 12px; font-weight: 800; line-height: 1.3; }

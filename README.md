@@ -22,7 +22,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
-                                ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons
+                                ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
@@ -49,20 +49,21 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`python -m sports_follow.registry esports`, part of the weekly run). A run by hand takes the weekly
   run's lock, so it refuses to start while that one is going; a sport (or esports source) that fails
   keeps last week's rows and the rest still run.
-- **Player photos from Wikimedia Commons, credited.** `sports_follow/photos.py`: every 15 minutes the worker
-  asks the Commons API about the registry's photo file of each followed and starter athlete it hasn't got,
-  50 to a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY,
-  CC BY-SA, GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their
-  330-pixel thumbnails, author, licence and file page go in the `photo` table, and the app gets them from
-  our own origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the cards, search
-  results and starters. Each file is asked about again every 90 days (a new upload, licence or author, or a
-  file Commons deleted, which then stops showing), one that failed the next day; a file fetched over 30
-  days ago that nobody follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone from the
-  sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so every credit
-  says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", linking to the file's page,
-  beside the large ones (a player's page, Today's big result); under a list of small ones, a line points
-  to the Credits page, which lists them all. Players without a photo keep their initials. Never a data
-  provider's photos (their terms don't license them), and never generated likenesses.
+- **Player photos from Wikimedia Commons, on the profile only.** A player's page, and the preview of an
+  athlete before following, show their Commons photo; the home page, lists and search don't (the home page
+  is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
+  the Commons API about the registry's photo file of each followed and starter athlete it hasn't got, 50 to
+  a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY, CC BY-SA,
+  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 330-pixel
+  thumbnails, author, licence and file page go in the `photo` table, and the app gets them from our own
+  origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
+  file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
+  which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
+  follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone
+  from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
+  credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
+  linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
+  data provider's photos (their terms don't license them), and never generated likenesses.
   `python -m sports_follow.photos` runs the job once.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
@@ -366,9 +367,9 @@ for hosting and a Google Play developer account, and ships to closed testing fir
 - The registry's current teams are Wikidata's, which can lag a transfer by weeks; the live source's team
   is what fixtures use. Chess ratings aren't in it (the FIDE list needs FIDE's permission for commercial
   use), so chess rows show title and country.
-- Photos are fetched only for followed and starter players, so search shows another athlete's only once
-  someone follows them. Each is the one file Wikidata names, however old, and isn't cropped to the face: a
-  small avatar zooms in toward the top of the photo, where faces usually are.
+- Photos are fetched only for followed and starter players, so the preview of another athlete shows one
+  only once someone follows them. Each is the one file Wikidata names, however old, and isn't cropped to
+  the face: it's shown from near its top, where faces usually are.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance
   and no sport filter, and Lichess allows one request at a time.
 - Search reads names in Latin letters only (accents folded; "Đoković" and "mueller" also find Djokovic
