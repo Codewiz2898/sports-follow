@@ -98,9 +98,9 @@ function wordSize(word: string, hero?: boolean): string {
 /**
  * A finished game of the fan's on Today: a block of its sport's colour with one big word (the sport's word
  * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
- * and their win, draw or loss. Players on opposite sides (a fan of both) share the card, so then the result
- * is the score alone and each player's line says how their game went. The hero, the first card on a day with
- * nothing live, is bigger and has the first player's numbers.
+ * and their win, draw or loss. Players whose games went differently (opponents, or teams apart in one lobby)
+ * share the card too: then it shows the score alone, or the game, and each player's line says how theirs went.
+ * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers.
  */
 export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
   const lead = game.players[0]
@@ -108,19 +108,23 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
   const key = sportKey(lead.sport)
   const several = game.players.length > 1
   const marks = game.players.map((p) => outcome(p.result.result, p.teams))
-  const split = new Set(marks.filter(Boolean)).size > 1  // they played each other: one won, one didn't
-  // The result from nobody's side: the score without "Won", or the game.
-  const result = split ? r.result.replace(/^(won|lost|drew)\s+/i, '') || r.title : r.result
+  // Their games went differently: they played each other (one won), or finished apart in a lobby ("3rd of
+  // 16" and "9th of 16"). Then no one result is everyone's.
+  const split = new Set(marks).size > 1 || new Set(game.players.map((p) => p.result.result)).size > 1
+  // The card's result from nobody's side: the score without "Won" when each side's is a win, draw or loss,
+  // else the game itself.
+  const result = !split ? r.result : marks.every(Boolean) ? r.result.replace(/^(won|lost|drew)\s+/i, '') || r.title : r.title
   const word = highlight(lead.sport, r.player_contribution) ?? (result || r.player_contribution || r.title)
   const wl = split ? null : marks[0]
   const when = dayLabel(playedOn(r), new Date(now))
   const stats = hero ? lineStats(r.player_contribution)?.slice(0, 3) : undefined
-  const match = !result || word === result ? r.title : `${result} · ${r.title}`
+  const match = result && result !== r.title && word !== result ? `${result} · ${r.title}` : r.title
   // Each player's own line (with how their game went, when the card can't say it once); the hero's numbers
   // say the first one's.
   const lines = game.players.flatMap((p, i) => {
     const line = stats && p === lead ? null : p.result.player_contribution
-    const how = split && marks[i] ? WON[marks[i]] : null
+    const mark = marks[i]
+    const how = split ? (mark ? WON[mark] : p.result.result) : null
     const said = [how, line].filter(Boolean).join(' · ')
     return said ? [several ? `${shortName(p.result.player_name)}: ${said}` : said] : []
   })
@@ -144,7 +148,7 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
             </span>
           </span>
         )}
-        {!hero && <span className="line">{match}</span>}
+        {!hero && match !== word && <span className="line">{match}</span>}
         {lines.map((l) => <span key={l} className="line strong">{l}</span>)}
       </span>
       {hero && (
