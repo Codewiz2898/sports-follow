@@ -372,6 +372,7 @@ def test_signing_out_ends_the_session_and_leaves_a_new_empty_fan(api, store, out
 ENDINGS = {  # each way a session ends that another device or the admin panel sets off
     "signed out everywhere": lambda api, other, panel: api.call("POST", "/api/auth/signout", body={"everywhere": True}, headers=cookies(session=other)),
     "account deleted": lambda api, other, panel: api.call("DELETE", "/api/me/account", body={"confirm": True}, headers=cookies(session=other)),
+    "deleted by an admin": lambda api, other, panel: api.call("DELETE", "/api/admin/users/1", body={"confirm": True}, headers=panel),
     "signed out by an admin": lambda api, other, panel: api.call("POST", "/api/admin/users/1/signout", headers=panel),
     "blocked by an admin": lambda api, other, panel: api.call("PUT", "/api/admin/users/1/block", body={"blocked": True}, headers=panel),
 }

@@ -805,8 +805,11 @@ def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
 async def _forget_sessions(token_hashes: list[str]) -> None:
     """Ended sessions are signed out at once: their cached copies say so ("") rather than going, since a
     request that looked one up just before it ended would cache it again for SESSION_CACHE otherwise."""
-    for h in token_hashes:
-        await state["redis"].set(f"session:{h}", "", ex=SESSION_CACHE)
+    if token_hashes:
+        async with state["redis"].pipeline() as ended:  # one round trip, and all of them or none (MULTI)
+            for h in token_hashes:
+                ended.set(f"session:{h}", "", ex=SESSION_CACHE)
+            await ended.execute()
 
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
