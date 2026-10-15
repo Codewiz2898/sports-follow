@@ -192,7 +192,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
   `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
   `sports_follow/live.py`; where a game's id isn't the fixture id a player's card has it under, its
-  `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs),
+  `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
+  the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
+  esports does by PandaScore's tournament tiers),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
