@@ -106,7 +106,7 @@ function Sidebar() {
   const live = cards.filter((c) => c.live.is_live)
   return (
     <aside className="sidebar" aria-label="Followed players">
-      <NavLink to="/" className="brand">Sports Follow</NavLink>
+      <NavLink to="/" className="brand"><img src="/icons/mark.svg" alt="" width={36} height={36} />stann</NavLink>
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>

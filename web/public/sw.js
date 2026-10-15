@@ -14,7 +14,7 @@
 // opens the player's page and tells the server it was opened. The app icon's badge counts what's
 // in the tray, where the platform has badges.
 
-const VERSION = 'v2'  // v2: the Matchday look; new icons and fonts, so the v1 caches go
+const VERSION = 'v3'  // v3: the stann icons, so the v2 caches go (v2: the Matchday look)
 // This build of the app, stamped in by vite.config.ts: every deploy that changes anything changes this
 // file, so the browser installs the new worker and the app offers Reload (pwa.tsx).
 const BUILD = 'dev'
