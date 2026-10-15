@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
@@ -60,10 +60,34 @@ function stampServiceWorker(): Plugin {
   }
 }
 
+/**
+ * The build's source maps, for the server to read the app's error stacks with (sports_follow/web_errors.py):
+ * "hidden" (the code doesn't point browsers at them), and moved from dist to web/sourcemaps, which the API
+ * doesn't serve. Before stampServiceWorker hashes the build, so they aren't part of it.
+ */
+function sourceMapsAside(): Plugin {
+  return {
+    name: 'source-maps-aside',
+    apply: 'build',
+    writeBundle: {
+      order: 'pre',
+      handler({ dir }) {
+        if (!dir) return
+        const assets = join(dir, 'assets')
+        const aside = join(dir, '..', 'sourcemaps')
+        rmSync(aside, { recursive: true, force: true })
+        mkdirSync(aside, { recursive: true })
+        for (const file of readdirSync(assets).filter((f) => f.endsWith('.map'))) renameSync(join(assets, file), join(aside, file))
+      },
+    },
+  }
+}
+
 // In dev, the API (FastAPI on 8421) is proxied so the app and its SSE streams share one origin.
 // SPORTS_FOLLOW_API points a second checkout's app at its own API.
 export default defineConfig({
-  plugins: [react(), appName(), stampServiceWorker()],
+  plugins: [react(), appName(), sourceMapsAside(), stampServiceWorker()],
+  build: { sourcemap: 'hidden' },
   server: {
     proxy: {
       '/api': { target: process.env.SPORTS_FOLLOW_API ?? 'http://127.0.0.1:8421', changeOrigin: false },

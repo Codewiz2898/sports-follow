@@ -9,6 +9,11 @@ work shares: the request (server.RequestLog) or the job run (worker._logged) sta
 anything that knows more adds to it with bind(), and a job queued from a request takes its id along
 (carry()). asyncio.to_thread and Starlette's thread pool copy the context into their threads; a plain
 ThreadPoolExecutor doesn't, so work handed to one goes through carried().
+
+A line logged with an exception carries `error` (its class) and `place` (where in this app it was
+raised), which group the same failure across lines (the Errors dashboard), and its stack. An exception's
+stack is logged once: a later line about it (the job that failed with it, arq's or uvicorn's own line
+after ours) says what happened without it, and arq's and uvicorn's such lines are left out.
 """
 
 from __future__ import annotations
@@ -84,6 +89,30 @@ def carried(fn: Callable[..., T]) -> Callable[..., T]:
     return functools.partial(contextvars.copy_context().run, fn)
 
 
+# Set on an exception once a line has logged its stack.
+_LOGGED = "_sports_follow_logged"
+_PACKAGE = __name__.rpartition(".")[0]
+
+
+def error_type(exc: BaseException) -> str:
+    """An exception's class as the log groups it: "ValueError", "httpx.ConnectTimeout"."""
+    cls = type(exc)
+    return cls.__qualname__ if cls.__module__ == "builtins" else f"{cls.__module__}.{cls.__qualname__}"
+
+
+def place(exc: BaseException) -> str | None:
+    """Where an exception was raised, as the log groups it: the innermost frame of this app's own code it
+    passed through, else the innermost of all, as module:function ("sports_follow.adapters.sportmonks:get").
+    No line number, so a deploy that moves the code keeps the group."""
+    ours = last = None
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        module = frame.f_globals.get("__name__", "?")
+        last = f"{module}:{frame.f_code.co_name}"
+        if module == _PACKAGE or module.startswith(f"{_PACKAGE}."):
+            ours = last
+    return ours or last
+
+
 def fan(fan_id: str) -> str:
     """How a fan appears in logs: never their id (it's what their cookie or session stands for), but the
     same short hash on every line, which the database's fan ids can be matched against."""
@@ -102,7 +131,24 @@ def _record(*args: Any, **kwargs: Any) -> logging.LogRecord:
     if span.is_valid:
         context |= {"trace_id": format(span.trace_id, "032x"), "span_id": format(span.span_id, "016x")}
     record.context = context
+    exc = record.exc_info[1] if record.exc_info else None
+    if exc is not None:
+        if getattr(exc, _LOGGED, False):
+            record.exc_info, record._repeat = None, True
+        else:
+            record.error, record.place = error_type(exc), place(exc)
+            # Only our own lines count as having logged it: a library's (one never shipped, say) doesn't.
+            if record.name == _PACKAGE or record.name.startswith(f"{_PACKAGE}."):
+                try:
+                    setattr(exc, _LOGGED, True)
+                except (AttributeError, TypeError):  # an exception that takes no attributes is logged again
+                    pass
     return record
+
+
+def _said(record: logging.LogRecord) -> bool:
+    """Not arq's or uvicorn's line about an exception a line of ours has logged already."""
+    return not (getattr(record, "_repeat", False) and not record.name.startswith(_PACKAGE))
 
 
 def _fields(record: logging.LogRecord) -> dict[str, Any]:
@@ -158,6 +204,7 @@ def setup() -> None:
         root.removeHandler(old)
     handler = _Stdout()
     handler.setFormatter(JsonFormatter() if LOG_FORMAT == "json" else TextFormatter())
+    handler.addFilter(_said)
     root.addHandler(handler)
     logging.setLogRecordFactory(_record)
     root.setLevel(logging.WARNING)
@@ -191,11 +238,14 @@ def ship(provider: Any) -> None:
             context = context if isinstance(context, dict) else {}
             # The trace and span go in the record's own fields, not as attributes; None isn't a value.
             fields = {**{k: v for k, v in context.items() if k not in ("trace_id", "span_id")}, **attributes}
-            return {k: v for k, v in fields.items() if v is not None}, event
+            if "exc" in fields:  # a stack logged as text (the web app's: web_errors.py)
+                fields["exception.stacktrace"] = fields.pop("exc")
+            return {k: v for k, v in fields.items() if v is not None and not k.startswith("_")}, event
 
     root = logging.getLogger()
     for old in [h for h in root.handlers if isinstance(h, LoggingHandler)]:
         root.removeHandler(old)
     handler = Shipped(logger_provider=provider)
     handler.addFilter(lambda record: not record.name.startswith(UNSHIPPED))
+    handler.addFilter(_said)
     root.addHandler(handler)

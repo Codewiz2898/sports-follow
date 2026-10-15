@@ -1,5 +1,7 @@
 // Types mirror sports_follow/schema.py and the card built in sports_follow/pipeline.py and structured.py.
 
+import { report } from './errors'
+
 export interface Stat { label: string; value: string }
 
 export interface PlayerProfile {
@@ -199,10 +201,12 @@ export class ApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
     super(message)
+    this.name = 'ApiError'
     this.status = status
   }
 }
 
+/** A call to the API. A server error (5xx) is reported (errors.ts) with the request id the answer names. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: 'same-origin', ...init })
   if (!res.ok) {
@@ -211,7 +215,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await res.json()
       if (typeof body.detail === 'string') message = body.detail
     } catch { /* not JSON */ }
-    throw new ApiError(message, res.status)
+    const error = new ApiError(message, res.status)
+    if (res.status >= 500) report({ kind: 'api', call: `${init?.method ?? 'GET'} ${path}`, status: res.status, requestId: res.headers.get('x-request-id') }, error)
+    throw error
   }
   return res.json() as Promise<T>
 }

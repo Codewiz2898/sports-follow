@@ -8,6 +8,7 @@ import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { BellIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
+import { report, watchErrors } from './errors'
 import { FollowingProvider, useFollowing } from './following'
 import { AccountPage } from './pages/AccountPage'
 import { AthletePage } from './pages/AthletePage'
@@ -203,9 +204,17 @@ function App() {
   )
 }
 
+watchErrors()
+
+// A render that failed is reported, whether an ErrorBoundary showed its fallback (caught) or nothing did.
+function failedRender(error: unknown, info: { componentStack?: string }) {
+  console.error(error)
+  report({ kind: 'render', componentStack: info.componentStack }, error)
+}
+
 // The sports this app knows come from the server; the first render waits for them (from this device's
 // copy when there is one, so only a first visit waits on the network).
-void loadSports().then(() => createRoot(document.getElementById('root')!).render(
+void loadSports().then(() => createRoot(document.getElementById('root')!, { onCaughtError: failedRender, onUncaughtError: failedRender }).render(
   <StrictMode>
     <BrowserRouter>
       <PwaProvider>

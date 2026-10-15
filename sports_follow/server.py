@@ -17,7 +17,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -30,15 +30,17 @@ from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi import Path as InPath
+from fastapi.routing import APIRoute
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
+from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing
+from . import accounts, bus, credits as credits_page, google_signin, logs, mail, metrics, moments, notify, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -127,7 +129,11 @@ class RequestLog:
     request, and every job it queues (enqueue), carries it, and the answer names it in X-Request-ID.
     The line gives the route, status and time taken: never the query string (a search's words) or the
     client's address. A passing health check and the web app's files aren't logged. An API request is
-    also a span (tracing.py), the root of its trace, which its jobs continue."""
+    also a span (tracing.py), the root of its trace, which its jobs continue.
+
+    An exception that escapes a route is this line's, with its stack (logs.py groups it), and the answer
+    is a 500 as Starlette's would be; uvicorn has nothing left to log. One that escapes once the answer
+    has started (a stream) goes on to uvicorn, which ends the connection."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -138,12 +144,15 @@ class RequestLog:
         rid = logs.given_id(Headers(scope=scope).get("x-request-id")) or logs.new_id()
         logs.begin(rid=rid)
         status = 500  # unless an answer starts: an exception escaped, and the server answers 500
+        answering = False
+        failure: Exception | None = None
+        streamed = False
         started = time.perf_counter()
 
-        async def answer(message: dict) -> None:
-            nonlocal status
+        async def answer(message: MutableMapping[str, Any]) -> None:
+            nonlocal status, answering
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status, answering = message["status"], True
                 message = {**message, "headers": [*message.get("headers", []), (b"x-request-id", rid.encode())]}
             await send(message)
 
@@ -151,15 +160,22 @@ class RequestLog:
         with tracing.request_span(method, path) as span:
             try:
                 await self.app(scope, receive, answer)
+            except Exception as exc:
+                failure, streamed = exc, answering
+                if not streamed:
+                    await PlainTextResponse("Internal Server Error", status_code=500)(scope, receive, answer)
             finally:
                 route = getattr(scope.get("route"), "path", None)
-                tracing.answered(span, method, route, status, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
+                tracing.answered(span, method, route, status, failure, **{"request.id": rid, "enduser.pseudo.id": logs.current().get("fan")})
                 ms = (time.perf_counter() - started) * 1000
                 if tracing.measured(path):
                     metrics.request(method, route, status, ms / 1000)
                 if status >= 400 or (path.startswith("/api/") and path != "/api/health"):
-                    request_log.log(logging.WARNING if status >= 500 else logging.INFO, "%s %s %d %.0fms", method, path, status, ms,
+                    level = logging.ERROR if failure else logging.WARNING if status >= 500 else logging.INFO
+                    request_log.log(level, "%s %s %d %.0fms", method, path, status, ms, exc_info=failure,
                                     extra={"method": method, "path": path, "route": route, "status": status, "duration_ms": round(ms, 1)})
+        if failure is not None and streamed:
+            raise failure
 
 
 app.add_middleware(RequestLog)  # outermost of ours: requests SameOriginWrites turns away are logged too
@@ -1318,6 +1334,33 @@ def assetlinks() -> list[dict[str, Any]]:
         "relation": ["delegate_permission/common.handle_all_urls"],
         "target": {"namespace": "android_app", "package_name": ANDROID_PACKAGE, "sha256_cert_fingerprints": ANDROID_CERT_SHA256},
     }]
+
+
+# ---------------------------------------------------------------- the web app's errors (BHA-196)
+
+
+@app.post("/api/errors", status_code=204)
+async def web_error(request: Request, report: web_errors.Report, fan: str = Depends(fan_id)) -> None:
+    """An error in the web app (src/errors.ts), logged beside the server's own (web_errors.py). A fan, an
+    address and everyone together send only so many an hour: past that, a 429 and nothing logged."""
+    address = client_address(request)
+    limits = [(f"weberrors:fan:{fan}", web_errors.PER_FAN), ("weberrors:all", web_errors.PER_HOUR)]
+    if address:
+        limits.insert(1, (f"weberrors:address:{address}", web_errors.PER_ADDRESS))
+    for key, limit in limits:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once
+        if used > limit:
+            raise HTTPException(429, "This app has sent all the error reports it may this hour.")
+    await run_in_threadpool(web_errors.record, report, _route_of)
+
+
+def _route_of(method: str, path: str) -> str | None:
+    """The API route a request to `path` goes to ("/api/players/{player_id}/card"), if any."""
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/api/") and route.matches({"type": "http", "path": path, "method": method})[0] == Match.FULL:
+            return route.path
+    return None
 
 
 # ---------------------------------------------------------------- the built frontend (production)

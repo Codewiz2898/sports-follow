@@ -480,6 +480,14 @@ over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it th
 - **Log lines:** every line the app writes to stdout, with its fields as attributes: `rid`, the fan's
   hash, `job`, `player_id`, `route`, `status`, `duration_ms`. A line logged inside a trace carries its
   trace id, so Grafana links the line to the trace and the trace to its lines.
+- **Errors:** a line with an exception has its stack (`exception_stacktrace`), what failed (`error`, its
+  class) and where (`place`, the innermost function of the app's own code it passed through, e.g.
+  `sports_follow.adapters.sportmonks:get`). An exception that escapes a route is that request's line, and
+  a failed job's closing line has its stack. Each stack is logged once. The web app sends its own errors
+  (uncaught ones, failed renders, calls answered with a 5xx) to `/api/errors`. Those lines are logged by
+  the API on `sports_follow.web`, with the page, the app's build (`version`) and a failed call's request
+  id (`call_rid`). Their stacks are mapped back to `web/src` through the build's source maps, which the
+  image keeps in `web/sourcemaps` and doesn't serve.
 - **Metrics:** every minute, the API's requests by route, the worker's jobs, pushes, moments, card
   builds and refreshes, and source requests by host; and what the worker reads each minute: live games
   and how long since each was polled, the job queue, cards by status, each source's allowance used and
@@ -509,6 +517,8 @@ over OTLP: the same free stack the alerts use, its Tempo and Loki. Without it th
    and query `{service_name="sports-follow-api"}`.
 
 **Finding things:**
+- **What's failing:** the **Errors** dashboard (below). Each group's lines are in Loki as
+  `{service_name=~"sports-follow.*"} | error="<error>" | place="<place>"`.
 - **A request a fan reports:** its id is in the answer's `X-Request-ID` header. In Loki, query
   `{service_name=~"sports-follow.*"} | rid="<id>"` for its lines and its jobs' lines. Open the trace from
   any of them.
@@ -525,7 +535,7 @@ whole traces (Alloy's tail sampling) in between.
 
 ## Dashboards
 
-Four dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+Five dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
 from the traces, log lines and metrics (above), so they need nothing more on the server:
 
 | Dashboard | Shows | From |
@@ -534,6 +544,7 @@ from the traces, log lines and metrics (above), so they need nothing more on the
 | **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
 | **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
 | **Notifications** | moments found by kind; pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines and metrics, the "opened" requests |
+| **Errors** | errors from the API, the worker and the web app, grouped by what failed and where, with how many lines and when each was first and last seen; the error lines with their stacks | lines with an exception, and the web app's error lines |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
 trace** (a correlation from Tempo to Loki). The dashboards find their Loki and Tempo data sources
