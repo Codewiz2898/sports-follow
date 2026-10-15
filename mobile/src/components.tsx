@@ -5,7 +5,7 @@ import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import type { ReactNode } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native'
-import { relative, shortWhen } from '../../web/src/format'
+import { initials, relative, shortWhen } from '../../web/src/format'
 import { absolute, type Card, type LiveStatus } from './api'
 import { useSports, useTone } from './sports'
 import { colour, font, GUTTER, type } from './theme'
@@ -122,10 +122,9 @@ export function Avatar({ card, size = 56 }: { card: Card; size?: number }) {
   const photo = card.player.photo
   const box = { width: size, height: size, borderRadius: size / 2 }
   if (!photo?.url) {
-    const initials = card.player.name.split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
     return (
       <View style={[box, styles.initials, { backgroundColor: tone.on }]}>
-        <Text style={[styles.initialsText, { color: tone.block, fontSize: size * 0.36 }]}>{initials}</Text>
+        <Text style={[styles.initialsText, { color: tone.block, fontSize: size * 0.36 }]}>{initials(card.player.name)}</Text>
       </View>
     )
   }

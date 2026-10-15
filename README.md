@@ -215,7 +215,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   before the first render and kept on the device. How a sport is drawn is its view,
   `web/src/sports/<sport>.tsx` (its live board, its ground as line art behind Today's cards (`backdrop`),
   how its line reads, its score in a few characters for a live player's pill (`short`)), plus one line in
-  `VIEWS`; a sport without one shows the plain score and no line art.
+  `VIEWS`; a sport without one shows the plain score and no line art. The Android app (`mobile/`) takes
+  the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text on it,
+  softer text on it, and itself as text on ink).
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
   and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry
@@ -237,11 +239,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
-  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `android/generate.mjs` gives it to the
-  Android app. `tests/test_app_name.py` fails if any of them writes the name out itself.
+  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `mobile/app.config.ts` gives it to the
+  Android app, whose code reads it from Expo's config. `tests/test_app_name.py` fails if any of them
+  writes the name out itself.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
-  database and `alembic check`; and the web app's type-check and build. In `web/src`,
+  database and `alembic check`; the web app's type-check and build; and the Android app's type-check
+  (route names are checked only locally, where Expo has generated their types). In `web/src`,
   `tests/test_web_names.py` lets only a sport's view name a sport, and holds the files that still name a
   source to how many times they do now, so they can lose those names but not gain them.
 

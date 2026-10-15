@@ -5,6 +5,7 @@
 // The fan is the same cookie as on the web: React Native keeps cookies, so the app is one fan from its first
 // request on.
 
+import Constants from 'expo-constants'
 import type { Card, FollowTarget, LiveSport, SearchResponse, SportCatalog } from '../../web/src/types'
 
 export type * from '../../web/src/types'
@@ -26,12 +27,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(API_URL + path, {
       ...init,
-      credentials: 'include', // without it React Native sends no cookie, and every request is a new fan
+      credentials: 'include', // the fan's cookie, as on the web (React Native sends it by default too)
       headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}) },
     })
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
-    throw new ApiError("Can't reach stann. Check your connection.", 0)
+    throw new ApiError(`Can't reach ${Constants.expoConfig?.name ?? 'the server'}. Check your connection.`, 0)
   }
   if (!res.ok) {
     let message = `Request failed (${res.status})`

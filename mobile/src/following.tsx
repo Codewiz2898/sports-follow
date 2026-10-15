@@ -25,10 +25,15 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  // Counts follows and unfollows begun and finished: a reload that overlapped one may have read the list
+  // from before it, so its answer is dropped and the next one wins.
+  const writes = useRef(0)
 
   const reload = useCallback(async () => {
+    const before = writes.current
     try {
       const { players } = await api.following()
+      if (writes.current !== before) return
       setCards(players)
       setError(null)
     } catch (e) {
@@ -53,13 +58,15 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   }, [reload])
 
   const follow = useCallback(async (target: FollowTarget) => {
-    const { card } = await api.follow(target)
+    writes.current++
+    const { card } = await api.follow(target).finally(() => { writes.current++ })
     setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
     return card
   }, [])
 
   const unfollow = useCallback(async (playerId: number) => {
-    await api.unfollow(playerId)
+    writes.current++
+    await api.unfollow(playerId).finally(() => { writes.current++ })
     setCards((prev) => prev.filter((c) => c.player_id !== playerId))
   }, [])
 

@@ -12,7 +12,6 @@ export const colour = {
   muted: '#55575C',
   live: '#DC2016',
   liveText: '#B8190F',
-  brand: '#1F5BEF', // stann's own blue, whatever the sports wear (web/scripts/make_icons.py)
 }
 
 // The names the expo-font plugin gives the files in app.config.ts.

@@ -1,7 +1,7 @@
 """The app's name as fans see it is written once, in sports_follow/app.json (config.APP_NAME), so the next
 rename is a one-line change (README, "Renaming the app"). The API reads it there; the web build fills it
-in for %APP_NAME% (web/vite.config.ts) and APP_NAME (web/src/app.ts); android/generate.mjs gives it to
-the Android app. These tests fail if anything fans see writes the name out itself. Comments don't count,
+in for %APP_NAME% (web/vite.config.ts) and APP_NAME (web/src/app.ts); mobile/app.config.ts gives it to
+the Android app, whose code reads it from Expo's config (android/generate.mjs, to the old TWA). These tests fail if anything fans see writes the name out itself. Comments don't count,
 and nor does the domain ("stann.in"), which is a different setting."""
 
 from __future__ import annotations
@@ -49,6 +49,14 @@ def test_the_web_apps_code_takes_the_name_from_app_ts():
         code = without_comments(path.read_text())
         found += [f"web/{path.relative_to(WEB).as_posix()}: {m[0]!r}" for m in NAME.finditer(code)]
     assert not found, "Use APP_NAME (web/src/app.ts) instead of writing the name out:\n" + "\n".join(found)
+
+
+def test_the_android_apps_code_takes_the_name_from_config():
+    found = []
+    for path in sorted(p for p in (ROOT / "mobile" / "src").rglob("*") if p.suffix in (".ts", ".tsx")):
+        code = without_comments(path.read_text())
+        found += [f"mobile/{path.relative_to(ROOT / 'mobile').as_posix()}: {m[0]!r}" for m in NAME.finditer(code)]
+    assert not found, "Use Constants.expoConfig.name (from mobile/app.config.ts) instead of writing the name out:\n" + "\n".join(found)
 
 
 def test_the_android_app_is_named_by_generate_mjs():

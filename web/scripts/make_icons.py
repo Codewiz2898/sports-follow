@@ -48,9 +48,8 @@ SCALLOPS, RING, SCALLOP, CORE, S_HEIGHT = 14, 0.786, 0.214, 0.81, 0.62
 # fills the square and keeps the badge well inside the 40%-radius safe zone launchers never crop;
 # "monochrome" is the badge alone in white with the s cut out, for themed icons and the notification
 # badge; "mark" is the badge alone in colour, edge to edge, for the header's logo. The Android app's
-# adaptive icon (mobile/app.config.ts) is two layers on a clear ground: a launcher shows only a circle
-# a third of the canvas wide around the centre, so its badge is smaller, inside Android's 66dp-in-108dp
-# safe zone.
+# adaptive icon (mobile/app.config.ts) is a layer on a clear ground that a launcher masks to a shape
+# 72 of its 108dp wide, so its badge is smaller, inside Android's 66dp safe circle.
 VARIANTS = {
     "icon": {"ground": 112, "radius": 215, "mono": False},
     "maskable": {"ground": 0, "radius": 176, "mono": False},

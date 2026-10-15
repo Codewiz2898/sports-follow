@@ -13,4 +13,5 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
   browser, and add to them rather than writing a second copy here.
 - **Sports and sources come from the API**, as in the web app (the root CLAUDE.md):
   `tests/test_web_names.py` fails if `mobile/src` names one.
-- Check with `npm run typecheck` (CI runs it) and on the emulator.
+- Check with `npm run typecheck` and on the emulator. CI runs the type-check too, but without the route
+  types Expo generates when it starts (`.expo/types`), so only a local check catches a misspelt route.

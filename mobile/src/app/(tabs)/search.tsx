@@ -16,13 +16,16 @@ const WAIT_MS = 250
 
 export default function SearchScreen() {
   const [query, setQuery] = useState('')
-  const [answer, setAnswer] = useState<SearchResponse | null>(null)
+  const [answer, setAnswer] = useState<{ asked: string; found: SearchResponse } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const latest = useRef<AbortController | null>(null)
+  const q = query.trim()
 
+  // As the web's search (web/src/components/Search.tsx): a new name drops the last answer's error and
+  // its "no one" line, and an answer for an older name never lands.
   useEffect(() => {
-    const q = query.trim()
     latest.current?.abort()
+    setError(null)
     if (q.length < 2) {
       setAnswer(null)
       return
@@ -31,13 +34,17 @@ export default function SearchScreen() {
     latest.current = ask
     const timer = setTimeout(() => {
       api.search(q, ask.signal)
-        .then((r) => { setAnswer(r); setError(null) })
+        .then((found) => setAnswer({ asked: q, found }))
         .catch((e: Error) => { if (e.name !== 'AbortError') setError(e.message) })
     }, WAIT_MS)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [q])
 
-  const results = answer ? (answer.results.length ? answer.results : answer.suggestions) : []
+  // The last answer's people stay while the next name is asked; what it says about the name only while
+  // that is still the name.
+  const found = answer?.found
+  const current = answer?.asked === q ? found : null
+  const results = found ? (found.results.length ? found.results : found.suggestions) : []
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -55,8 +62,8 @@ export default function SearchScreen() {
           accessibilityLabel="Search players"
         />
         {error ? <Text style={[type.small, styles.error]}>{error}</Text> : null}
-        {answer && !answer.results.length && answer.suggestions.length ? <Text style={type.small}>Nothing for “{answer.query}”. Did you mean:</Text> : null}
-        {answer && !results.length ? <Text style={type.small}>No one called “{answer.query}” yet.</Text> : null}
+        {current && !current.results.length && current.suggestions.length ? <Text style={type.small}>Nothing for “{current.query}”. Did you mean:</Text> : null}
+        {current && !results.length ? <Text style={type.small}>No one called “{current.query}” yet.</Text> : null}
       </View>
       <FlatList
         data={results}
