@@ -101,10 +101,14 @@ p { margin: 0; }
 .page-title { font-size: 54px; }
 @media (min-width: 1024px) { .page-title { font-size: 64px; } }
 /* The home page's title is the logo at a title's size, smaller where the buttons beside it leave less room
-   (on a 320px phone): the lockup is about 3.6em wide, so 27% of its column's width per em fits. */
-.home-title { flex: 1; min-width: 0; container-type: inline-size; }
-.page-title.brand { gap: 0.18em; font-size: min(54px, 27cqi); }
-@media (min-width: 1024px) { .page-title.brand { font-size: min(64px, 27cqi); } }
+   (a 320px phone): the badge and its gap are about 1.15em wide and each letter of the name about 0.5em, so
+   it fits its column whatever the name. A column narrower than 11rem (Android's Install button beside the
+   others) sends the buttons to a line of their own instead. */
+.home-head { flex-wrap: wrap; }
+.home-head > .row { margin-left: auto; }
+.home-title { flex: 1 1 11rem; container-type: inline-size; }
+.page-title.brand { gap: 0.18em; font-size: min(54px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); }
+@media (min-width: 1024px) { .page-title.brand { font-size: min(64px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); } }
 .page-title.brand img { width: 0.95em; height: 0.95em; }
 
 /* ---------------------------------------------------------------- building blocks */
