@@ -109,11 +109,28 @@ put_group() {
 put_group server "$HERE/rules.json" KeepLast
 put_group app "$HERE/app-rules.json" OK
 
+if [ -n "$TEST" ]; then
+  # Grafana 13 (Grafana Cloud) tests a contact point through its receivers API; older ones through the
+  # Alertmanager config API, which 13 removed.
+  ns=$(api GET /api/frontend/settings | jq -r '.namespace // "default"')
+  receivers="/apis/notifications.alerting.grafana.app/v1beta1/namespaces/$ns/receivers"
+  if receiver=$(api GET "$receivers" 2>/dev/null | jq -r --arg t "$CONTACT_NAME" '[.items[] | select(.spec.title == $t)][0].metadata.name // empty') && [ -n "$receiver" ]; then
+    api POST "$receivers/$receiver/test" "$(jq -n --arg uid "$CONTACT_UID" --arg to "$ALERT_EMAIL" \
+      '{integration: {uid: $uid, type: "email", version: "v1", settings: {addresses: $to, singleEmail: true}},
+        alert: {labels: {alertname: "Sports Follow test"}, annotations: {summary: "A test from deploy/grafana/apply-alerts.sh: Sports Follow alerts reach this address."}}}')" >/dev/null
+  else
+    api POST /api/alertmanager/grafana/config/api/v1/receivers/test "$(jq -n --arg uid "$CONTACT_UID" --arg name "$CONTACT_NAME" --arg to "$ALERT_EMAIL" \
+      '{receivers: [{name: $name, grafana_managed_receiver_configs: [{uid: $uid, name: $name, type: "email", settings: {addresses: $to, singleEmail: true}}]}]}')" >/dev/null
+  fi
+  say "test email sent to $ALERT_EMAIL (from Grafana; check spam too)"
+fi
+
 # The uptime check: two of Grafana's public probes, outside the server and India's nearest first, ask the
 # app's /api/health every minute over HTTPS, as a fan's phone would. Everything inside the server can be up
 # while fans can't reach it (DNS, Caddy, the certificate, the firewall); sf-unreachable in rules.json emails
-# when no probe has had a healthy answer for 3 minutes. Two probes a minute is 86,400 checks a month, within
-# the free tier's 100,000. Synthetic Monitoring is switched on once in the stack's Grafana (README.md,
+# when no probe has had a healthy answer for 3 minutes, and sf-uptime-silent when the check stops reporting.
+# Two probes a minute is at most 89,280 checks a month, within the free tier's 100,000. It runs last, so the
+# test email above goes out whatever happens here. Synthetic Monitoring is switched on once in the stack's Grafana (README.md,
 # "Alerts"); until it is, this says so and the rest above still stands.
 UPTIME_JOB=sports-follow-uptime
 UPTIME_NEAR='["Mumbai", "Singapore", "Sydney", "Tokyo", "Frankfurt"]'
@@ -145,20 +162,4 @@ else
     api POST "$smapi/check/add" "$check" >/dev/null
   fi
   say "uptime check: $target every minute from $(jq -r 'map(.name) | join(" and ")' <<<"$probes")"
-fi
-
-if [ -n "$TEST" ]; then
-  # Grafana 13 (Grafana Cloud) tests a contact point through its receivers API; older ones through the
-  # Alertmanager config API, which 13 removed.
-  ns=$(api GET /api/frontend/settings | jq -r '.namespace // "default"')
-  receivers="/apis/notifications.alerting.grafana.app/v1beta1/namespaces/$ns/receivers"
-  if receiver=$(api GET "$receivers" 2>/dev/null | jq -r --arg t "$CONTACT_NAME" '[.items[] | select(.spec.title == $t)][0].metadata.name // empty') && [ -n "$receiver" ]; then
-    api POST "$receivers/$receiver/test" "$(jq -n --arg uid "$CONTACT_UID" --arg to "$ALERT_EMAIL" \
-      '{integration: {uid: $uid, type: "email", version: "v1", settings: {addresses: $to, singleEmail: true}},
-        alert: {labels: {alertname: "Sports Follow test"}, annotations: {summary: "A test from deploy/grafana/apply-alerts.sh: Sports Follow alerts reach this address."}}}')" >/dev/null
-  else
-    api POST /api/alertmanager/grafana/config/api/v1/receivers/test "$(jq -n --arg uid "$CONTACT_UID" --arg name "$CONTACT_NAME" --arg to "$ALERT_EMAIL" \
-      '{receivers: [{name: $name, grafana_managed_receiver_configs: [{uid: $uid, name: $name, type: "email", settings: {addresses: $to, singleEmail: true}}]}]}')" >/dev/null
-  fi
-  say "test email sent to $ALERT_EMAIL (from Grafana; check spam too)"
 fi

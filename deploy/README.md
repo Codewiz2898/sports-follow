@@ -403,8 +403,8 @@ Alerts come by **email from Grafana Cloud**, on its free tier.
   server is down. That's one of the things they catch.
 - **The uptime check:** Grafana's Synthetic Monitoring asks `https://<domain>/api/health` every minute
   from two of its probes, nearest to India first, as a fan's phone would. It catches what the server
-  can't see from inside: DNS, Caddy, the certificate or the firewall. That's 86,400 checks a month, within
-  the free tier's 100,000.
+  can't see from inside: DNS, Caddy, the certificate or the firewall. That's at most 89,280 checks a
+  month, within the free tier's 100,000.
 
 Each one emails when it starts, again every 6 hours while it lasts, and "Resolved" when it clears:
 
@@ -412,6 +412,7 @@ Each one emails when it starts, again every 6 hours while it lasts, and "Resolve
 |---|---|
 | The server stopped sending metrics | nothing has arrived for 10 minutes: the server is down or unreachable, or Alloy stopped |
 | Fans can't reach the app | for 3 minutes, no probe outside the server got a healthy answer from `/api/health` |
+| The uptime check stopped reporting | no results from it for 15 minutes (it also says so until it's set up) |
 | The server checks stopped running | `server-check.sh` hasn't run for 15 minutes |
 | Disk | any disk is over 80% full for 10 minutes |
 | Memory | for 10 minutes, tasks waited for memory over 10% of the time, or under 5% of memory was free |
@@ -489,6 +490,12 @@ silent server sends one "stopped sending metrics" email and no false "Resolved" 
   right, and "Resolved" follows within about 10.
 - **The server going quiet:** `sudo systemctl stop alloy`. The email comes after about 11 minutes. Then
   `sudo systemctl start alloy`.
+- **Fans can't reach the app:** this takes the app away from fans while it lasts, so pick a quiet time.
+  ```bash
+  cd /opt/sports-follow && docker compose -f deploy/compose.yaml stop caddy
+  ```
+  "Fans can't reach the app" arrives in about 4 to 5 minutes. Then `docker compose -f deploy/compose.yaml
+  start caddy` within 10 minutes, or the containers alert fires too. "Resolved" follows within about 5.
 
 `server-check.sh` can still push to an ntfy topic as well, but the emails cover the same ground. For that,
 save the topic's URL in `~/.config/sports-follow/alert-url` and run `push-secrets.sh`. The checks' log:
