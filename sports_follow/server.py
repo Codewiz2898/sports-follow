@@ -857,8 +857,11 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     await state["redis"].delete(f"auth-tries:{who}")
     try:
         await asyncio.to_thread(mail.send_code, email, code)
-    except mail.MailError:
+    except mail.MailError as exc:
         await state["redis"].delete(f"auth-code:{who}", f"auth-wait:{who}")
+        if isinstance(exc, mail.Undeliverable):
+            # The address, not the server: a 400, so a typo isn't counted as the API failing.
+            raise HTTPException(400, "Emails can't be sent to that address. Check it, or use another one.")
         raise HTTPException(502, "Couldn't send the email just now. Try again in a moment.")
     return {"ok": True, "resend_in": RESEND_AFTER}
 
