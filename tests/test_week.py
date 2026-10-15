@@ -110,7 +110,7 @@ def test_tennis_posters_are_upsets():
     final = Seen("final", state={"players": [{"id": "3782", "winner": True, "seed": 5}, {"id": "9", "name": "Jannik Sinner", "seed": 1}]}, line=line("Won in 3 sets", Sets="2–1"), score="6-4 3-6 6-2")
     result, upset = detect("Tennis", "Carlos Alcaraz", "3782", before, final)
     assert poster("Tennis", upset) == Poster("Upset", "beat Jannik Sinner, the No. 1 seed")
-    assert poster("Tennis", result) is None  # a win is a result: the Results rail has it
+    assert poster("Tennis", result) is None  # a plain win isn't a big moment; an upset is
 
 
 def test_chess_posters_are_wins():
