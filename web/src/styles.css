@@ -90,6 +90,10 @@ p { margin: 0; }
 .side-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 700; color: var(--muted); }
 .side-nav a:hover { color: var(--text); }
 .side-nav a.active { background: var(--surface); color: var(--text); }
+/* The sidebar's "Following · N": the whole heading opens the Following page. */
+.side-head { display: flex; align-items: center; gap: 6px; align-self: flex-start; min-height: 32px; margin: 2px -8px -6px; padding: 0 8px; border-radius: 10px; }
+.side-head:hover { color: var(--text); background: var(--surface); }
+.side-head.active { color: var(--text); }
 .nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: var(--live); color: #fff; font-size: 11px; font-weight: 800; }
 .tabbar .nav-count { margin-left: -2px; }
 
@@ -276,6 +280,24 @@ a.photo-credit:hover { text-decoration: underline; }
 .tile.add { align-items: center; justify-content: center; background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--text); border: 0; }
 .tile.add .dsp { font-size: 26px; }
 @media (prefers-reduced-motion: reduce) { .tile { transition: none; } .tile:hover { transform: none; } }
+
+/* Your players along the top of Today on a phone (PlayersStrip.tsx): a rail of pills in each player's sport
+   colour, under a heading that is one link to the Following page, its chevron saying "see all". */
+.strip { gap: 0; margin-top: -8px; }
+.strip .rail { gap: 8px; }
+.strip-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.strip-head svg { flex-shrink: 0; }
+.strip-pill { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 14px; border-radius: 999px; background: var(--sport); color: var(--on-sport); white-space: nowrap; }
+.strip-pill:focus-visible { border-radius: 999px; }
+.strip-pill .dsp { font-size: 19px; line-height: 1; }
+.strip-pill .when { max-width: 140px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+.strip-pill .live-dot { box-shadow: 0 0 0 2px var(--on-sport); }  /* red reads on any sport's colour */
+.strip-pill .spinner { width: 14px; height: 14px; border-color: color-mix(in srgb, var(--on-sport) 25%, transparent); border-top-color: var(--on-sport); }
+.strip-pill.add { background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--text); }
+
+/* The Following page's way back to Today. */
+.back-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 32px; }
+.back-link:hover { color: var(--text); }
 
 /* ---------------------------------------------------------------- player page */
 /* The header is a block of the sport's colour, edge to edge on a phone. */

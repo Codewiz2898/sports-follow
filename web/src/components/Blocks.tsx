@@ -228,7 +228,7 @@ export function statusLine(card: Card, progress?: string[], now = Date.now()): s
   return card.news?.[0]?.headline ?? sportName(card.player.sport)
 }
 
-/** One followed player on Today: a block of their sport's colour. */
+/** One followed player on the Following page: a block of their sport's colour. */
 export function PlayerTile({ card, progress }: { card: Card; progress?: string[] }) {
   const now = useNow()
   const live = card.live.is_live

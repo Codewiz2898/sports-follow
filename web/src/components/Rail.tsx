@@ -12,10 +12,11 @@ function motion(): ScrollBehavior {
 /**
  * A section whose cards run sideways in one row, out to the page's edge, so it can hold every game without
  * making the page taller: each card snaps to the page padding with the next one peeking in, the arrows page
- * it on a desktop, and an "All N" card at the end lays them all out at once. Its children are the cards,
- * each a fixed width (styles.css, "rails").
+ * it on a desktop, and with `all` (what the end card says) an "All N" card at the end lays them all out at
+ * once. Its children are the cards, each a fixed width (styles.css, "rails"). A `head` takes the place of
+ * the title row, and of its arrows with it (Today's players strip, which a desktop doesn't show).
  */
-export function Rail({ title, note, all, children }: { title: string; note?: string; all?: string; children: ReactNode }) {
+export function Rail({ title, note, all, head, className, children }: { title: string; note?: string; all?: string; head?: ReactNode; className?: string; children: ReactNode }) {
   const id = useId()
   const section = useRef<HTMLElement>(null)
   const row = useRef<HTMLDivElement>(null)
@@ -63,8 +64,8 @@ export function Rail({ title, note, all, children }: { title: string; note?: str
   }, [open])
 
   return (
-    <section ref={section} className="section" aria-label={title}>
-      <SectionHead title={title}>
+    <section ref={section} className={`section${className ? ` ${className}` : ''}`} aria-label={title}>
+      {head ?? <SectionHead title={title}>
         <span className="row" style={{ gap: 12 }}>
           {note && <span className="eyebrow">{note}</span>}
           {!open && !(edges.start && edges.end) && (
@@ -74,10 +75,10 @@ export function Rail({ title, note, all, children }: { title: string; note?: str
             </span>
           )}
         </span>
-      </SectionHead>
+      </SectionHead>}
       <div ref={row} id={id} className={`rail${open ? ' open' : ''}`}>
         {children}
-        {count >= ALL_FROM && (
+        {all && count >= ALL_FROM && (
           <button type="button" className="rail-all" aria-expanded={open} aria-controls={id} onClick={toggle}>
             <span className="dsp">{open ? 'Fewer' : `All ${count}`}</span>
             <span className="small muted" style={{ fontWeight: 700 }}>{open ? 'Back to one row' : all}</span>

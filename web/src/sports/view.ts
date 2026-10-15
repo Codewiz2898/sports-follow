@@ -24,4 +24,5 @@ export interface SportView {
   highlight?: (line?: string | null) => string | null // a line worth a word: "Triple-double", "Hundred"
   noLine?: string | null // a player with no line while live ("isn't in the matchday squad"); null: say nothing
   inHeadline?: string[] // stats its headline already says ("67* (71)" says Runs and Balls)
+  short?: (state: never, live: LiveStatus) => string | null // the game in a few characters, for a live player's pill on Today ("1–0 · 67'"); without it, the pill says the player's headline
 }
