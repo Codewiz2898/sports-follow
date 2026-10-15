@@ -957,6 +957,9 @@ def test_the_follow_list_carries_every_result_the_card_keeps():
     summary = server._summary(card)
     assert summary["recent_results"] == results and summary["recent_results"][0]["title"] == "Game 0"
     assert len(summary["news"]) == 3
+    # An agent that wrote more than it was asked for sends no more than a bound player's card keeps.
+    many = [*results, *results]
+    assert server._summary({**card, "recent_results": many})["recent_results"] == results
     # A card without results (one still building) sends an empty list, as before.
     assert server._summary({"player_id": 2, "status": "building"})["recent_results"] == []
 

@@ -98,22 +98,32 @@ function wordSize(word: string, hero?: boolean): string {
 /**
  * A finished game of the fan's on Today: a block of its sport's colour with one big word (the sport's word
  * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
- * and the first one's win, draw or loss. The hero, the first card on a day with nothing live, is bigger and
- * has that player's numbers.
+ * and their win, draw or loss. Players on opposite sides (a fan of both) share the card, so then the result
+ * is the score alone and each player's line says how their game went. The hero, the first card on a day with
+ * nothing live, is bigger and has the first player's numbers.
  */
 export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
   const lead = game.players[0]
   const r = lead.result
   const key = sportKey(lead.sport)
-  const word = highlight(lead.sport, r.player_contribution) ?? r.result
-  const wl = outcome(r.result, lead.teams)
+  const several = game.players.length > 1
+  const marks = game.players.map((p) => outcome(p.result.result, p.teams))
+  const split = new Set(marks.filter(Boolean)).size > 1  // they played each other: one won, one didn't
+  // The result from nobody's side: the score without "Won", or the game.
+  const result = split ? r.result.replace(/^(won|lost|drew)\s+/i, '') || r.title : r.result
+  const word = highlight(lead.sport, r.player_contribution) ?? (result || r.player_contribution || r.title)
+  const wl = split ? null : marks[0]
   const when = dayLabel(playedOn(r), new Date(now))
   const stats = hero ? lineStats(r.player_contribution)?.slice(0, 3) : undefined
-  const match = word === r.result ? r.title : `${r.result} · ${r.title}`
-  // Each player's own line; the hero's numbers say the first one's.
-  const lines = game.players
-    .filter((p) => p.result.player_contribution && !(stats && p === lead))
-    .map((p) => (game.players.length > 1 ? `${shortName(p.result.player_name)}: ${p.result.player_contribution}` : p.result.player_contribution!))
+  const match = !result || word === result ? r.title : `${result} · ${r.title}`
+  // Each player's own line (with how their game went, when the card can't say it once); the hero's numbers
+  // say the first one's.
+  const lines = game.players.flatMap((p, i) => {
+    const line = stats && p === lead ? null : p.result.player_contribution
+    const how = split && marks[i] ? WON[marks[i]] : null
+    const said = [how, line].filter(Boolean).join(' · ')
+    return said ? [several ? `${shortName(p.result.player_name)}: ${said}` : said] : []
+  })
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   return (
     <Link to={`/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
@@ -127,8 +137,11 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
       <span className="stack" style={{ gap: hero ? 12 : 2 }}>
         <span className="dsp who">{game.players.map((p) => shortName(p.result.player_name)).join(' · ')}</span>
         {stats && (
-          <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
-            {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag soft">{s.label}</span></span>)}
+          <span className="stack" style={{ gap: 4 }}>
+            {several && <span className="tag soft">{shortName(r.player_name)}</span>}
+            <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
+              {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag soft">{s.label}</span></span>)}
+            </span>
           </span>
         )}
         {!hero && <span className="line">{match}</span>}

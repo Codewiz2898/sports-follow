@@ -43,7 +43,8 @@ export function Rail({ title, note, all, children }: { title: string; note?: str
       el.removeEventListener('scroll', measure)
     }
   }, [measure])
-  useEffect(measure, [measure, count, open])
+  // And after every render: the cards can change width (the hero comes and goes) while the row doesn't.
+  useEffect(measure)
 
   const page = (direction: 1 | -1) => {
     const el = row.current
