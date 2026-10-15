@@ -581,7 +581,9 @@ Traces' panels may miss the last few minutes on a long range; a shorter range sh
 
 ## Operating
 
-On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`:
+On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`.
+To find out why something went wrong (a fan's missing push, a stuck card, a stale score), Claude sessions
+follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what's safe to run here.
 
 | | |
 |---|---|

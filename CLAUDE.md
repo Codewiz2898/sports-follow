@@ -2,6 +2,8 @@
 
 Work is tracked in Linear (team BHA, project Sports Follow). Whenever you merge or open a pull request, or create or update a Linear issue, follow the `linear` skill (`.claude/skills/linear/SKILL.md`): a merged PR closes its issues with a comment linking the PR, and issues waiting on Bharath carry the `Needs you` label.
 
+To find out why something went wrong, locally or on the production server (a fan didn't get a push, a card is stuck, a live score is stale, an alert email), follow the `debug` skill (`.claude/skills/debug/SKILL.md`). It also says what's safe to run on production and what needs Bharath first.
+
 ## Code organization
 
 Sports, players and data sources are things we add, remove and switch often, so each of these must stay a small change in one place:
