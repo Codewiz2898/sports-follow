@@ -21,17 +21,21 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
     let current = true
     let timer: number | undefined
     const look = (tries: number) => {
+      window.clearTimeout(timer)
+      if (document.hidden) return  // nobody's looking: no reads asked for; showing the tab again looks
       api.live()
         .then((r) => {
           if (!current) return
           setSports(r.sports)
-          // A source's last read was old and the worker is reading it again: look again in a moment, a few times.
-          timer = window.setTimeout(() => look(tries + 1), r.refreshing && tries < 3 ? SOON : EVERY)
+          // A read was just asked for: look again in a moment, a few times, for the new scores.
+          timer = window.setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
         })
         .catch(() => { if (current) timer = window.setTimeout(() => look(tries), EVERY) })
     }
+    const shown = () => { if (!document.hidden) look(0) }
+    document.addEventListener('visibilitychange', shown)
     look(0)
-    return () => { current = false; window.clearTimeout(timer) }
+    return () => { current = false; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
   }, [])
 
   const ordered = [...sports].sort((a, b) => Number(!first.includes(a.key)) - Number(!first.includes(b.key)))

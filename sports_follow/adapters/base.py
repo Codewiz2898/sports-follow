@@ -101,6 +101,7 @@ class LiveGame:
     snapshot: Snapshot
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
+    league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
 
 
 @dataclass
@@ -248,11 +249,10 @@ class Adapter:
     # keyed as given, leaving out events the source didn't return. An adapter with it has all its
     # armed and live events polled together, one request a round (structured.poll_lane).
     #
-    # Optional, for a source that can list everything it has on now, league-wide, in a request or a few
-    # (Sportmonks' livescores, Lichess's top broadcasts, PandaScore's running matches):
+    # Optional, for a source that can list everything it has on now, league-wide, in a request or a few:
     #   def live_now(self) -> list[LiveGame]
-    # the games in play now, whoever follows them, for "Live now" (live.py). Asked at most once a minute,
-    # and only while fans are looking.
+    # the games in play now, whoever follows them, each game's players in the order the source would put
+    # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""

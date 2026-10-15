@@ -5,6 +5,7 @@ one; see tests/test_players.py for setting it up. Sources and Redis are made up 
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import live, registry, sports
 from sports_follow.adapters import ADAPTERS, LiveGame, PlayerRef, Snapshot
-from sports_follow.models import Follow, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import AthleteOverride, Follow, Player, PlayerCard, PlayerIdentity
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -23,11 +24,23 @@ NOW = datetime(2026, 10, 15, 14, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
         c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter RESTART IDENTITY CASCADE"))
-    s = sessionmaker(bind=engine, expire_on_commit=False)()
+    made = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def unit():
+        s = made()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    monkeypatch.setattr(live, "session", unit)  # the worker's read ranks players in a session of its own
+    s = made()
     yield s
     s.close()
     engine.dispose()
@@ -67,48 +80,65 @@ def athlete(qid: str, sport: str, name: str, ids: dict, **extra) -> dict:
 
 
 def test_a_games_players_come_on_stann_first_then_best_known_then_the_sources_order(db, redis, sources):
-    # On stann and followed by two fans; a star the registry knows well; two the registry doesn't know.
+    # On stann and followed by two fans; two stars the registry knows by the source's id, and one by name only;
+    # two it doesn't know.
     db.add(Player(id=5, slug="kane", name="Harry Kane", sport="Football"))
     db.flush()
     db.add_all([PlayerCard(player_id=5, status="ready", card={}), PlayerIdentity(player_id=5, system="pitch", external_id="9", confidence=1.0),
                 Follow(fan_id="fan", player_id=5, alert_rules={}), Follow(fan_id="other", player_id=5, alert_rules={})])
-    registry.upsert(db, [athlete("Q1", "football", "Jamal Musiala", {"pitch": "7"}, sitelinks=60), athlete("Q2", "football", "Leroy Sane", {"pitch": "8"}, sitelinks=40)])
+    registry.upsert(db, [athlete("Q1", "football", "Jamal Musiala", {"pitch": "7"}, sitelinks=60), athlete("Q2", "football", "Leroy Sane", {"pitch": "8"}, sitelinks=40),
+                         athlete("Q3", "football", "Thomas Muller", {}, sitelinks=50)])
     db.commit()
     sources.pitch = [
         LiveGame(source_id="100", title="Bayern vs Leipzig", competition="Bundesliga", start_utc=NOW - timedelta(minutes=67), snapshot=snapshot("Bayern 2 – 1 Leipzig"),
-                 players=[ref("1", "Keeper One", "Leipzig"), ref("8", "Leroy Sane", "Bayern"), ref("2", "Defender Two", "Leipzig"), ref("9", "Harry Kane", "Bayern"), ref("7", "Jamal Musiala", "Bayern")],
+                 players=[ref("1", "Keeper One", "Leipzig"), ref("8", "Leroy Sane", "Bayern"), ref("2", "Defender Two", "Leipzig"), ref("9", "Harry Kane", "Bayern"),
+                          ref("6", "Thomas Muller", "Bayern"), ref("7", "Jamal Musiala", "Bayern")],
                  teams=["Bayern", "Leipzig"]),
         LiveGame(source_id="101", title="Quiet vs Small", competition="Bundesliga", start_utc=None, snapshot=snapshot("0 – 0"), players=[ref("3", "Nobody", "Quiet")]),
     ]
     assert live.read("pitch", NOW) == 2
     [football], stale = live.offer(db, "fan", NOW)
-    assert stale == ["arena"]  # never read: the caller queues a read
+    assert stale == ["arena"]  # never read: the caller asks for a read
     assert football["key"] == "football" and [g["title"] for g in football["games"]] == ["Bayern vs Leipzig", "Quiet vs Small"]  # the followed player's game first
     game = football["games"][0]
     assert game["live"]["score"] == "Bayern 2 – 1 Leipzig" and game["live"]["is_live"] is True and game["key"] == "pitch:100"
-    # Kane is on stann (and this fan follows him), then the registry's best known, then the source's order; PLAYERS of them.
+    # Kane is on stann (and this fan follows him); then the registry's best known, by the source's id or by name; PLAYERS of them.
     assert [(p["name"], p["player_id"], p["following"]) for p in game["players"]] == [
-        ("Harry Kane", 5, True), ("Jamal Musiala", None, False), ("Leroy Sane", None, False), ("Keeper One", None, False)]
+        ("Harry Kane", 5, True), ("Jamal Musiala", None, False), ("Thomas Muller", None, False), ("Leroy Sane", None, False)]
     assert (game["players"][1]["system"], game["players"][1]["athlete_id"]) == ("pitch", "7")  # followed by the source's id
 
 
-def test_a_game_naming_only_its_teams_offers_the_pros_the_registry_knows(db, redis, sources):
-    registry.upsert(db, [athlete("pandascore:1", "esports", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=3, league="dota-2"),
-                         athlete("pandascore:2", "esports", "Collapse", {"arena": "12"}, teams=["Team Spirit"]),
-                         athlete("pandascore:3", "esports", "Retired Pro", {"arena": "13"}, teams=["Team Spirit"], current=False),
-                         athlete("pandascore:4", "esports", "Elsewhere", {"arena": "14"}, teams=["Other Team"])])
+def test_a_removed_player_isnt_offered(db, redis, sources):
+    db.add(AthleteOverride(qid="Q2", sport="football", action="remove", name="Leroy Sane", ids={"pitch": "8"}))
     db.commit()
-    sources.arena = [LiveGame(source_id="7", title="Team Spirit vs Tundra", competition="The International", start_utc=None, snapshot=snapshot("1 – 0"), teams=["Team Spirit", "Tundra"])]
+    sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"),
+                              players=[ref("8", "Leroy Sane", "A"), ref("1", "Someone Else", "B")])]
+    live.read("pitch", NOW)
+    assert [p["name"] for p in live.offer(db, None, NOW)[0][0]["games"][0]["players"]] == ["Someone Else"]
+
+
+def test_a_game_naming_only_its_teams_offers_its_titles_pros_the_registry_knows(db, redis, sources):
+    registry.upsert(db, [athlete("pandascore:1", "esports", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=3, league="dota-2"),
+                         athlete("pandascore:2", "esports", "Collapse", {"arena": "12"}, teams=["Team Spirit"], league="dota-2"),
+                         athlete("pandascore:5", "esports", "Donk", {"arena": "15"}, teams=["Team Spirit"], sitelinks=9, league="cs-go"),  # same team, another title
+                         athlete("pandascore:3", "esports", "Retired Pro", {"arena": "13"}, teams=["Team Spirit"], current=False, league="dota-2"),
+                         athlete("pandascore:4", "esports", "Elsewhere", {"arena": "14"}, teams=["Other Team"], league="dota-2")])
+    db.commit()
+    sources.arena = [LiveGame(source_id="7", title="Team Spirit vs Tundra", competition="The International", start_utc=None, snapshot=snapshot("1 – 0"),
+                              teams=["Team Spirit", "Tundra"], league="dota-2")]
     live.read("arena", NOW)
     [esports] = live.offer(db, None, NOW)[0]
-    assert [(p["name"], p["athlete_id"], p["league"]) for p in esports["games"][0]["players"]] == [("Yatoro", "11", "dota-2"), ("Collapse", "12", None)]
+    assert [(p["name"], p["athlete_id"], p["league"]) for p in esports["games"][0]["players"]] == [("Yatoro", "11", "dota-2"), ("Collapse", "12", "dota-2")]
 
 
-def test_a_read_is_served_for_a_minute_and_a_sport_thats_off_shows_nothing(db, redis, sources, monkeypatch):
+def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, sources, monkeypatch):
     sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"))]
     live.read("pitch", NOW)
     live.read("arena", NOW)
-    assert live.offer(db, None, NOW + timedelta(seconds=30))[1] == []  # fresh: nothing to ask
-    assert live.offer(db, None, NOW + timedelta(seconds=90))[1] == ["pitch", "arena"]  # a minute on: read again
+    assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "games": [
+        {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": []}]}], [])
+    games, stale = live.offer(db, None, NOW + timedelta(seconds=90))
+    assert stale == ["pitch", "arena"] and games  # a minute on: still served, and a read asked for
+    assert live.offer(db, None, NOW + timedelta(seconds=live.SERVE + 1))[0] == []  # too old to call live
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "football"))
     assert live.offer(db, None, NOW)[0] == []

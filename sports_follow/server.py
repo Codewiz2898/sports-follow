@@ -479,9 +479,17 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
     (live.py). Served from the last read; a source's read older than a minute queues another for the
     worker, so "refreshing" says newer games may come in a moment."""
     games, stale = await in_db(live.offer, fan)
+    asked = False
     for system in stale:
-        await enqueue("read_live", system, _job_id=f"read_live:{system}")  # one queued read a source at a time
-    return {"sports": games, "refreshing": bool(stale)}
+        try:
+            # One read asked for a minute, whether the last one came or failed: a source that's down isn't
+            # asked again on every fan's look.
+            if await state["redis"].set(f"live:asked:{system}", "1", nx=True, ex=live.FRESH):
+                await enqueue("read_live", system, _job_id=f"read_live:{system}")
+                asked = True
+        except Exception:
+            log.warning("live: couldn't ask for %s's games", system, exc_info=True)
+    return {"sports": games, "refreshing": asked}
 
 
 @app.get("/api/starters")

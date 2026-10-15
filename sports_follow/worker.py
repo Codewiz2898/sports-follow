@@ -207,8 +207,9 @@ async def refresh_starters(ctx) -> None:
 
 async def read_live(ctx, system: str) -> None:
     """What a source has on now, league-wide, for "Live now" (live.read): queued by the API when a fan looks
-    and the last read is over a minute old. In the fans' lane: a fan is waiting for it."""
-    await in_lane('fan', live.read, system)
+    and it last asked over a minute ago. In the refresh lane: no fan waits on it, so it stops short of the
+    allowance kept for followed players' live games."""
+    await in_lane('refresh', live.read, system)
 
 
 async def purge_sessions(ctx) -> None:

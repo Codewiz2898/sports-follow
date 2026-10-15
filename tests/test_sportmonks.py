@@ -290,3 +290,12 @@ def test_live_now_lists_every_match_in_play_with_its_starting_elevens(monkeypatc
     # The starting elevens only, as the line-ups name them, with their team.
     assert [(p.system, p.athlete_id, p.name, p.team_names) for p in game.players] == [
         ("sportmonks_football", str(STAR), "Mohamed Salah", ["Trabzonspor"]), ("sportmonks_football", str(KEEPER), "A. Keeper", ["Galatasaray"])]
+
+
+def test_a_live_matchs_players_come_attackers_first_the_sides_in_turn():
+    def starter(pid: int, team: int, position: int, name: str) -> dict:
+        return {"player_id": pid, "team_id": team, "type_id": 11, "position_id": position, "player_name": name}
+
+    lineups = [starter(1, HOME, 24, "Home Keeper"), starter(2, HOME, 27, "Home Striker"), starter(3, AWAY, 25, "Away Back"), starter(4, AWAY, 27, "Away Striker")]
+    [game] = sm.parse_live([_match("INPLAY_1ST_HALF", 0, 0, lineups=lineups)], "sportmonks_football")
+    assert [p.name for p in game.players] == ["Home Striker", "Away Striker", "Home Keeper", "Away Back"]

@@ -275,11 +275,11 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
         if snap.status != "live":
             continue
         teams = dict(zip(f.team_ids, f.team_names))
-        players = []
-        for p in x.get("lineup") or []:
-            team = str((p.get("lineup") or {}).get("team_id") or "")
-            if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution"):
-                players.append(PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")]))
+        playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
+        sides = [[p for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+        # The sides in turn, each in the line-up's order: a game's best known come from both.
+        players = [PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
+                   for i in range(max((len(s) for s in sides), default=0)) for team, side in zip(f.team_ids, sides) if i < len(side) for p in [side[i]]]
         out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
     return out
 

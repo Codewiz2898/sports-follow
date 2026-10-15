@@ -507,14 +507,17 @@ class PandascoreEsports(Adapter):
     def live_now(self) -> list[LiveGame]:
         """Every series on now in the plan's games (matches/running): one request. Its teams, not its players:
         a match names no players, and the registry knows the teams' pros."""
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"page[size]": 50})
+        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame_id]": games, "page[size]": 50})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
         out = []
         for f in parse_fixtures(rows):
-            snap = parse_match(by_id[f.source_id])
+            m = by_id[f.source_id]
+            snap = parse_match(m)
             if snap.status == "live":
-                out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names))
+                out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
+                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug")))
         return out
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:

@@ -717,7 +717,7 @@ class LichessChess(Adapter):
         out: list[LiveGame] = []
         for entry in (top.get("active") or [])[:LIVE_TOURS]:
             rnd = entry.get("round") or {}
-            if rnd.get("id") and not rnd.get("finished"):
+            if rnd.get("id") and rnd.get("ongoing"):  # one not started yet has no boards to read
                 out.extend(live_boards(get_json(f"{API}broadcast/-/-/{rnd['id']}", ttl=60), self.system, now))
         return out
 

@@ -233,6 +233,14 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
+_UPFRONT = {27: 0, 26: 1, 25: 2, 24: 3}  # position ids, attackers first: attacker, midfielder, defender, goalkeeper
+
+
+def _taking_turns(sides: list[list[Any]]) -> list[Any]:
+    """The sides' players in turn, the home side's first: a game's best known come from both."""
+    return [side[i] for i in range(max((len(s) for s in sides), default=0)) for side in sides if i < len(side)]
+
+
 def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
     """Livescores in play -> the games on now, each with its starting players, named as the line-ups name them."""
     out = []
@@ -243,9 +251,11 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
             continue
         f = fixtures[0]
         teams = dict(zip(f.team_ids, f.team_names))
+        starters = [r for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")]
+        sides = [sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2)) for team in f.team_ids]
         players = [
             PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[str(r.get("team_id"))], team_names=[teams.get(str(r.get("team_id")), "")])
-            for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")
+            for r in _taking_turns(sides)
         ]
         out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
     return out
