@@ -107,9 +107,13 @@ p { margin: 0; }
 .home-head { flex-wrap: wrap; }
 .home-head > .row { margin-left: auto; }
 .home-title { flex: 1 1 11rem; container-type: inline-size; }
-.page-title.brand { gap: 0.18em; font-size: min(54px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); }
-@media (min-width: 1024px) { .page-title.brand { font-size: min(64px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); } }
+.page-title.brand { gap: 0.18em; }
 .page-title.brand img { width: 0.95em; height: 0.95em; }
+/* A browser without container units keeps .page-title's size (with var() in it, the rule would unset it). */
+@supports (width: 1cqi) {
+  .page-title.brand { font-size: min(54px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); }
+  @media (min-width: 1024px) { .page-title.brand { font-size: min(64px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); } }
+}
 
 /* ---------------------------------------------------------------- building blocks */
 .section { display: flex; flex-direction: column; gap: 10px; }
