@@ -51,8 +51,9 @@ STOP_WAIT = 5
 def _logged(fn, quiet: bool = False, deep: bool = True):
     """A job whose lines carry its own id, or that of the request that queued it (server.enqueue), its
     name and its player, game or source, and which ends with one line: how long it waited in the queue,
-    how long it ran and how it ended. It's a span too, in the trace of the request that queued it, or
-    of its own; a job that isn't deep has only that span, none for the requests and queries it makes."""
+    how long it ran and how it ended (a failed job's line has the exception's stack, unless a line of the
+    job's own logged it). It's a span too, in the trace of the request that queued it, or of its own; a
+    job that isn't deep has only that span, none for the requests and queries it makes."""
     signature = inspect.signature(fn)
 
     @functools.wraps(fn)
@@ -64,13 +65,13 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
         queued = ctx.get("enqueue_time")
         waited = (datetime.now(timezone.utc) - queued).total_seconds() if isinstance(queued, datetime) else None
 
-        def ended(outcome: str, how: str) -> None:
+        def ended(outcome: str, how: str, failure: Exception | None = None) -> None:
             took = perf_counter() - started
             metrics.job(fn.__name__, outcome, took, waited)
             if quiet and outcome == "ok" and took < QUIET_UNDER:
                 return
             queue = "" if waited is None else f", after {waited:.1f}s in the queue"
-            log.log(logging.INFO if outcome == "ok" else logging.WARNING, "%s %s in %.1fs%s", fn.__name__, how, took, queue, extra={
+            log.log(logging.INFO if outcome == "ok" else logging.WARNING, "%s %s in %.1fs%s", fn.__name__, how, took, queue, exc_info=failure, extra={
                 "outcome": outcome, "duration_ms": round(took * 1000, 1), "waited_ms": None if waited is None else round(waited * 1000),
                 "job_id": ctx.get("job_id"), "attempt": ctx.get("job_try"),
             })
@@ -84,7 +85,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
                 tracing.failed(span, "cancelled")
                 raise
             except Exception as exc:
-                ended("failed", f"failed ({type(exc).__name__}: {exc})")
+                ended("failed", f"failed ({type(exc).__name__}: {exc})", exc)
                 raise
             ended("ok", "done")
             return result

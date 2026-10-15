@@ -5,7 +5,8 @@ interface Props { children: ReactNode; fallback?: ReactNode; resetKey?: unknown 
 
 /**
  * Keeps one bad render (a card in a shape the app doesn't expect) from blanking the whole app: what's
- * inside shows its fallback instead. A new `resetKey` (another page, a newer card) tries again.
+ * inside shows its fallback instead. A new `resetKey` (another page, a newer card) tries again. What
+ * it catches is reported to the server (main.tsx's root, errors.ts).
  */
 export class ErrorBoundary extends Component<Props, { failed: boolean; key: unknown }> {
   state = { failed: false, key: this.props.resetKey }

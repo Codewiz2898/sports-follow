@@ -26,6 +26,8 @@ COPY alembic.ini ./
 COPY migrations/ migrations/
 COPY sports_follow/ sports_follow/
 COPY --from=web /web/dist web/dist
+# The web app's source maps, not served: the API reads its error stacks with them (web_errors.py).
+COPY --from=web /web/sourcemaps web/sourcemaps
 RUN useradd --system --uid 10001 app
 USER app
 # Whose X-Forwarded-For and -Proto uvicorn believes: the proxy's, on the compose network (Docker gives its

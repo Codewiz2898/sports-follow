@@ -7,6 +7,7 @@
 **/.pytest_cache
 web/node_modules
 web/dist
+web/sourcemaps
 android
 docs
 tests

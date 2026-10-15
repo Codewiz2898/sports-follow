@@ -10,7 +10,8 @@ are fans, but fans from before keep their ids (BUG-013). The card is private and
 fan's own fields (BUG-038). Ids no row can have, odd bodies and source ids of the wrong shape are
 refused plainly, never a 500 (BUG-039, BUG-078). The research counter never goes below zero (BUG-079).
 Each request is logged once, under an id its jobs take along (BHA-192), and is the root span of a
-trace they continue (BHA-193).
+trace they continue (BHA-193). An exception that escapes a route is that line's, with its stack, and the
+web app's errors are logged with their page, build, request id and source, so many an hour (BHA-196).
 Redis, the database and the job queue are fakes.
 """
 
@@ -26,12 +27,12 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, starters, structured
+from sports_follow import alerts, bus, db as db_module, logs, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -413,6 +414,83 @@ def test_a_proxys_request_id_is_kept_and_the_query_string_never_logged(api, capl
     lines = _request_lines(caplog)
     assert [line.context["rid"] for line in lines] == [kept.headers["x-request-id"], made.headers["x-request-id"]]
     assert all(line.path == "/api/sports" and "private" not in line.getMessage() for line in lines)
+
+
+# ---------------------------------------------------------------- errors (BHA-196)
+
+
+def test_an_exception_in_a_route_is_its_requests_line_with_the_stack_and_a_500(api, monkeypatch, caplog, spans):
+    def broken(db, query):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(pipeline, "resolve_or_create", broken)
+    caplog.set_level(logging.INFO, "sports_follow")
+
+    async def go():
+        # Nothing goes on to uvicorn, which would log the stack again: this transport would raise it here.
+        transport = httpx.ASGITransport(app=server.app, client=(PUBLIC, 50000), raise_app_exceptions=True)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/api/follows", json={"query": "Brand New Name"}, headers={"Cookie": f"sf_fan={server.sign_fan('fan')}"})
+
+    answer = asyncio.run(go())
+    assert (answer.status_code, answer.text) == (500, "Internal Server Error") and logs.given_id(answer.headers["x-request-id"])
+    [line] = _request_lines(caplog)
+    assert line.levelno == logging.ERROR and line.status == 500 and line.route == "/api/follows" and line.exc_info[0] is RuntimeError
+    assert line.error == "RuntimeError" and line.place.startswith("sports_follow.") and line.context["rid"] == answer.headers["x-request-id"]
+    [request] = [s for s in spans.get_finished_spans() if s.kind == SpanKind.SERVER]
+    assert request.status.status_code == StatusCode.ERROR and [e.name for e in request.events] == ["exception"]
+
+
+# A source map for the build "index-B3kd8.js": its first line's columns 0, 10 and 20 come from PlayerPage.tsx
+# (lines 1 and 5) and from react-dom (line 10).
+SOURCE_MAP = {"version": 3, "sources": ["../../src/pages/PlayerPage.tsx", "../../node_modules/react-dom/x.js"], "names": [], "mappings": "AAAA,UAIE,UCKF"}
+
+
+def _web_lines(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "sports_follow.web"]
+
+
+def test_a_web_app_error_is_logged_with_its_page_build_source_and_the_failed_calls_id(api, monkeypatch, caplog, tmp_path):
+    (tmp_path / "index-B3kd8.js.map").write_text(json.dumps(SOURCE_MAP))
+    monkeypatch.setattr(web_errors, "MAPS", tmp_path)
+    web_errors._map.cache_clear()
+    caplog.set_level(logging.INFO, "sports_follow")
+    stack = "TypeError: c is undefined\n    at Xe (https://stann.in/assets/index-B3kd8.js:1:25)\n    at Ye (https://stann.in/assets/index-B3kd8.js?v=2:1:12)"
+    render = api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "render", "name": "TypeError", "message": "c is undefined, from https://stann.in/search?q=private", "stack": stack,
+        "page": "/search?q=private+words", "version": "index-B3kd8",
+    })
+    call = api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "api", "name": "ApiError", "message": "Request failed (502)", "page": "/player/7", "version": "index-B3kd8",
+        "call": "get /api/players/7/card?fresh=1", "status": 502, "request_id": "ab12cd34ef56ab78",
+    })
+    assert render.status_code == call.status_code == 204
+    one, two = _web_lines(caplog)
+    assert (one.error, one.place, one.kind, one.page, one.version) == ("TypeError", "web/src/pages/PlayerPage.tsx", "render", "/search", "index-B3kd8")
+    assert one.exc.splitlines() == ["TypeError: c is undefined", "    at Xe (web/node_modules/react-dom/x.js:10:1)", "    at Ye (web/src/pages/PlayerPage.tsx:5:3)"]
+    assert "private" not in one.getMessage() + str(vars(one)) and one.context["fan"] == logs.fan("fan")
+    assert (two.error, two.place, two.call, two.call_status, two.call_rid) == ("HTTP 502", "GET /api/players/{id}/card", "GET /api/players/7/card", 502, "ab12cd34ef56ab78")
+    # A stack from a build this server doesn't have stays as it came; a request id that isn't one is left out.
+    api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "error", "name": "Error", "message": "boom", "stack": "Error: boom\n    at https://stann.in/assets/index-0ld.js:1:5", "page": "/", "request_id": "not an id",
+    })
+    old = _web_lines(caplog)[-1]
+    assert old.exc.splitlines()[1] == "    at assets/index-0ld.js:1:5" and old.place == "assets/index-0ld.js" and not hasattr(old, "call_rid")
+
+
+def test_the_web_app_sends_only_so_many_errors_an_hour(api, monkeypatch, caplog):
+    monkeypatch.setattr(web_errors, "PER_FAN", 2)
+    monkeypatch.setattr(web_errors, "PER_ADDRESS", 3)
+    caplog.set_level(logging.INFO, "sports_follow")
+
+    def send(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/errors", fan=fan, address=address, body={"kind": "error", "message": "boom", "page": "/"}).status_code
+
+    assert [send("fan"), send("fan"), send("fan")] == [204, 204, 429]
+    assert [send("other"), send("other")] == [204, 429]  # the address's third, then its fourth
+    assert send("third", "81.2.69.143") == 204  # another address isn't held up
+    assert len(_web_lines(caplog)) == 4
+    assert api.call("POST", "/api/errors", fan="fan", body={"kind": "nonsense", "page": "/"}).status_code == 422
 
 
 # ---------------------------------------------------------------- writes (BUG-029)
