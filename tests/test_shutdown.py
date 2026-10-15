@@ -80,6 +80,17 @@ def test_the_roster_import_still_waits_six_hours_after_a_restart(monkeypatch, re
     assert imported == [source]
 
 
+def test_the_warm_pass_moves_the_players_of_a_source_that_renamed_them(monkeypatch, redis):
+    # BHA-216: every ten minutes, so every player bound to it moves, followed or not (structured.rekey_bound).
+    moved = []
+    renamed = type("Source", (), {"system": "renamed", "rekey": lambda self, ref: None})()
+    plain = type("Source", (), {"system": "plain"})()  # never renamed anyone: not asked
+    monkeypatch.setattr("sports_follow.adapters.ADAPTERS", {"renamed": renamed, "plain": plain})
+    monkeypatch.setattr(worker.structured, "rekey_bound", lambda adapter: moved.append(adapter.system) or 0)
+    worker._warm_sources()
+    assert moved == ["renamed"]
+
+
 # ---------------------------------------------------------------- long jobs end at their next step
 
 
