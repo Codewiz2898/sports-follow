@@ -347,11 +347,13 @@ class SportmonksCricket(Adapter):
     # A match livescores leaves out is read on its own every round while it's in play and changing, else
     # once this many seconds have passed: every minute's round, before the toss or through a long break.
     ALONE_EVERY = 50
+    ALONE_RETRY = 30  # seconds before a match whose own read failed is tried again, as poll_event waits after an error
     WINDOW_BACK, WINDOW_AHEAD = 120, 90  # days of fixtures a refresh reads (two requests per team)
     HISTORY_DAYS = 360  # how far before that window history.py reads, once: four 90-day pages per team
 
     def __init__(self) -> None:
         self._lane: dict[str, _Watched] = {}  # the live lane's matches, by fixture id (snapshots)
+        self._failed: dict[str, float] = {}  # when a lane match's own read last failed, by fixture id
         self._thin_told = False
 
     def spare(self) -> bool:
@@ -457,8 +459,8 @@ class SportmonksCricket(Adapter):
         request (not paged, and not cached: each round wants the matches as they are now). A match it
         doesn't carry, or carries without one of MATCH_INCLUDE's relations, is read on its own, uncached:
         at once when livescores has just dropped it (it finished), then every round while it's in play
-        and changing, else every ALONE_EVERY seconds, the last answer standing in between. Keyed as
-        given; a match neither answers for is left out."""
+        and changing, else every ALONE_EVERY seconds, the last answer standing in between; after a failed
+        read, ALONE_RETRY seconds on. Keyed as given; a match neither answers for is left out."""
         now = time.time()
         wanted = {key: str(loc["fixture"]) for key, loc in locators.items()}
         ids = set(wanted.values())
@@ -467,32 +469,41 @@ class SportmonksCricket(Adapter):
         for x in rows:
             fixture = str(x.get("id")) if isinstance(x, dict) else ""
             if fixture in ids and _INCLUDED <= x.keys():
-                carried[fixture] = parse_match(x)
+                carried[fixture] = x
             elif fixture in ids and not self._thin_told:
                 self._thin_told = True
                 log.warning("Sportmonks livescores sent cricket match %s without %s; matches it sends so are read on their own, a request each (told once)", fixture, ", ".join(sorted(_INCLUDED - x.keys())))
+        self._lane = {fixture: seen for fixture, seen in self._lane.items() if fixture in ids}
+        self._failed = {fixture: at for fixture, at in self._failed.items() if fixture in ids}
         found = {}
         for fixture in sorted(ids):
-            seen = self._lane.get(fixture)
-            snap = carried.get(fixture)
-            if snap is None and seen is not None and not seen.due(now, self.ALONE_EVERY):
-                found[fixture] = seen.snap
-                continue
-            if snap is None:
+            x = carried.get(fixture)
+            if x is None:
+                seen, failed = self._lane.get(fixture), self._failed.get(fixture)
+                if seen is not None and not seen.due(now, self.ALONE_EVERY):
+                    found[fixture] = seen.snap
+                    continue
+                if failed is not None and now - failed < self.ALONE_RETRY:
+                    continue
                 try:
-                    snap = parse_match(self._match(fixture, 0))
+                    x = self._match(fixture, 0)
                 except AdapterError:
-                    continue  # one match unread (gone, or its endpoint's allowance spent) doesn't hold up the rest
-            found[fixture] = self._note(fixture, snap, now, alone=fixture not in carried)
-        self._lane = {fixture: seen for fixture, seen in self._lane.items() if fixture in ids}
+                    self._failed[fixture] = now  # one match unread (gone, or its endpoint's allowance spent) doesn't hold up the rest
+                    continue
+                self._failed.pop(fixture, None)
+            found[fixture] = self._note(fixture, x, now, alone=fixture not in carried)
         # Copies: apply_poll marks a snapshot's state, and the one kept here is compared with the next.
         return {key: copy.deepcopy(found[fixture]) for key, fixture in wanted.items() if fixture in found}
 
-    def _note(self, fixture: str, snap: Snapshot, now: float, alone: bool) -> Snapshot:
-        """Keep the lane's latest snapshot of a match. An answer that has it not started once it has
-        (a read lagging livescores) doesn't take it back: the match would leave the lane."""
+    def _note(self, fixture: str, x: dict[str, Any], now: float, alone: bool) -> Snapshot:
+        """Keep the lane's latest snapshot of a match, from its answer this round. An answer that has a
+        started match not started ("NS": a read lagging livescores) doesn't take it back, which would send
+        it out of the lane; "Delayed" (rain after the toss) does count. What a match has done is kept in
+        this process only: after a restart its first answer stands, and a lagging "NS" then sends it out
+        of the lane until the next minute's tick arms it again."""
+        snap = parse_match(x)
         seen = self._lane.get(fixture)
-        if seen is not None and snap.status == "scheduled" and seen.snap.status in ("live", "final"):
+        if seen is not None and x.get("status") == "NS" and seen.snap.status in ("live", "final"):
             snap = seen.snap
         moved = seen.moved if seen is not None and snap == seen.snap else now
         self._lane[fixture] = _Watched(snap, moved, now if alone else None)

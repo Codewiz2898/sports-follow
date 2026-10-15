@@ -250,13 +250,13 @@ class Sportmonks:
     """Sportmonks cricket behind the real client (sportmonks.get_json, with its cache and the source
     budget), on a clock the test moves. The match is at STAGES[stage], or, timed, at the stage the clock
     has reached. Livescores carries it, beside a match nobody follows, while carried(row) says so (thin:
-    without its batting). The match endpoint answers as of fixture_stage when that's set (lagging), and
+    without its batting). The match endpoint answers with fixture_row when that's set (lagging, say), and
     404 for any other match. Every request is kept, as (seconds since the start, endpoint)."""
 
     START = 1_790_000_000.0
 
     def __init__(self, monkeypatch, carried=CARRIED["all-day"], timed=False, thin=False):
-        self.now, self.stage, self.fixture_stage = self.START, 0, None
+        self.now, self.stage, self.fixture_row = self.START, 0, None
         self.carried, self.timed, self.thin, self.sent = carried, timed, thin, []
         monkeypatch.setattr(time, "time", lambda: self.now)
         monkeypatch.setattr(time, "monotonic", lambda: self.now)
@@ -276,7 +276,7 @@ class Sportmonks:
             ours = [{k: v for k, v in row.items() if k != "batting"} if self.thin else row] if self.carried(row) else []
             body, status = {"data": [ELSEWHERE, *ours]}, 200
         elif path == "/fixtures/71215":
-            body, status = {"data": STAGES[self.at() if self.fixture_stage is None else self.fixture_stage]}, 200
+            body, status = {"data": STAGES[self.at()] if self.fixture_row is None else self.fixture_row}, 200
         else:
             body, status = {"message": "No result(s) found"}, 404
         return SimpleNamespace(status_code=status, headers={}, json=lambda: copy.deepcopy(body))
@@ -370,22 +370,39 @@ def test_the_live_lane_tells_a_match_as_its_own_poll_did(monkeypatch, carried):
     assert all(b - a >= sc.SportmonksCricket.ALONE_EVERY for a, b in zip(before_toss, before_toss[1:]))
 
 
-@pytest.mark.parametrize("lagging", [False, True], ids=["read-again", "match-endpoint-lagging"])
-def test_a_match_livescores_drops_in_play_stays_in_play(monkeypatch, lagging):
-    # Read on its own before the toss, carried once it starts, then left out a round (a gap in livescores):
-    # it's read again at once, uncached, and never taken back to not started, which would take it out of
-    # the lane. A 50-second cache of the read before the toss did that (BHA-49 review).
+DELAYED = _row("Delayed", [FIRST], XI, batting=[FIFTY])  # rain in the break
+
+
+@pytest.mark.parametrize(("answer", "status"), [(None, "live"), (STAGES[TOSS], "live"), (DELAYED, "scheduled")], ids=["read-again", "match-endpoint-lagging", "delayed"])
+def test_a_match_livescores_drops_in_play_is_read_at_once(monkeypatch, answer, status):
+    # Read on its own before the toss, carried once it starts, quiet through a break for over a minute,
+    # then left out (a gap in livescores): it's read again at once, uncached. An answer lagging livescores
+    # ("NS") doesn't take it back to not started, which would take it out of the lane (a 50-second cache
+    # of the read before the toss did that, BHA-49 review); a delay after the start is told.
     sm = Sportmonks(monkeypatch, carried=_in_play)
     adapter = sc.SportmonksCricket()
     assert adapter.snapshots({7: LOC})[7].status == "scheduled"
-    sm.now, sm.stage = sm.now + 10, START
-    assert adapter.snapshots({7: LOC})[7].status == "live"
-    sm.now, sm.carried = sm.now + 10, CARRIED["never"]
-    if lagging:
-        sm.fixture_stage = TOSS
+    sm.stage = BREAK
+    for _ in range(10):
+        sm.now += 10
+        assert adapter.snapshots({7: LOC})[7].clock_label == "Innings Break"
+    sm.now, sm.carried, sm.fixture_row = sm.now + 10, CARRIED["never"], answer
     snap = adapter.snapshots({7: LOC})[7]
-    assert snap.status == "live" and snap.lines[str(OPENER)].headline == "48* (30)"
-    assert sm.requests() == ["/livescores", "/fixtures/71215", "/livescores", "/livescores", "/fixtures/71215"]
+    assert snap.status == status
+    assert snap.lines.get(str(OPENER)) == (sc.parse_match(STAGES[BREAK]).lines[str(OPENER)] if status == "live" else None)
+    assert [(at, path) for at, path in sm.sent if path != "/livescores"] == [(0, "/fixtures/71215"), (110, "/fixtures/71215")]
+
+
+def test_a_match_whose_read_fails_is_tried_again_thirty_seconds_on(monkeypatch):
+    # A match Sportmonks has no more (renumbered, removed), or whose read keeps failing: tried again every
+    # ALONE_RETRY seconds, not every round, while the matches livescores carries go on.
+    sm = Sportmonks(monkeypatch, carried=_in_play)
+    sm.stage = START
+    adapter = sc.SportmonksCricket()
+    for _ in range(8):
+        assert set(adapter.snapshots({1: LOC, 3: {"fixture": "999"}})) == {1}
+        sm.now += 10
+    assert [at for at, path in sm.sent if path == "/fixtures/999"] == [0, 30, 60]
 
 
 def test_a_match_livescores_finished_is_read_final_afterwards(monkeypatch):
