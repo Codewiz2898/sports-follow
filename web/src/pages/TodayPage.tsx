@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useActivity } from '../activity'
 import type { ActivityItem, Card, UpcomingEvent } from '../api'
+import { APP_NAME } from '../app'
 import { useNow } from '../clock'
 import { ComingCard, highlight, LiveScoreboard, ResultCard, type GameResult, type LatestMoment } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
@@ -150,9 +151,10 @@ export function TodayPage() {
 
   const header = (
     <header className="page-head">
-      <div className="stack" style={{ gap: 6 }}>
+      <div className="stack home-title" style={{ gap: 6 }}>
         <span className="eyebrow">{today}</span>
-        <h1 className="dsp page-title">Today</h1>
+        {/* The home page goes by the app's name, as the logo writes it; the date above it says which day. */}
+        <h1 className="brand page-title"><img src="/icons/mark.svg" alt="" />{APP_NAME}</h1>
       </div>
       <div className="row mobile-only" style={{ gap: 8, paddingBottom: 4 }}>
         <InstallButton compact />
