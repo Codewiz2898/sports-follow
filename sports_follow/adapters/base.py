@@ -105,6 +105,9 @@ class LiveGame:
     # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
     # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
     fixtures: list[str] = field(default_factory=list)
+    # How big the source rates the game's event, where it rates them (an esports tournament's tier): a bigger
+    # tier's games come first in Live now, before the most followed and the best known (live.offer).
+    tier: int = 0
 
 
 @dataclass
@@ -258,6 +261,8 @@ class Adapter:
     # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
     # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
     # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
+    # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
+    # out the small ones and set each game's tier, so the biggest come first.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""
