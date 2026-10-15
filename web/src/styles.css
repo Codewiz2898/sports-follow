@@ -100,6 +100,20 @@ p { margin: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .page-title { font-size: 54px; }
 @media (min-width: 1024px) { .page-title { font-size: 64px; } }
+/* The home page's title is the logo at a title's size, smaller where the buttons beside it leave less room
+   (a 320px phone): the badge and its gap are about 1.15em wide and each letter of the name about 0.5em, so
+   it fits its column whatever the name. A column narrower than 11rem (Android's Install button beside the
+   others) sends the buttons to a line of their own instead. */
+.home-head { flex-wrap: wrap; }
+.home-head > .row { margin-left: auto; }
+.home-title { flex: 1 1 11rem; container-type: inline-size; }
+.page-title.brand { gap: 0.18em; }
+.page-title.brand img { width: 0.95em; height: 0.95em; }
+/* A browser without container units keeps .page-title's size (with var() in it, the rule would unset it). */
+@supports (width: 1cqi) {
+  .page-title.brand { font-size: min(54px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); }
+  @media (min-width: 1024px) { .page-title.brand { font-size: min(64px, calc(100cqi / (1.15 + 0.5 * var(--letters, 5)))); } }
+}
 
 /* ---------------------------------------------------------------- building blocks */
 .section { display: flex; flex-direction: column; gap: 10px; }
