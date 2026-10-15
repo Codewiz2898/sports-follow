@@ -205,3 +205,24 @@ def test_live_now_lists_every_match_on_with_its_playing_elevens(monkeypatch):
     assert asked == ["Cricket livescores"]
     assert (game.title, game.teams, game.snapshot.status) == ("India v Afghanistan", ["India", "Afghanistan"], "live")
     assert [(p.athlete_id, p.name, p.team_names) for p in game.players] == [(str(OPENER), "Abhishek Sharma", ["India"]), (str(SPINNER), "Rashid Khan", ["Afghanistan"])]
+
+
+def test_a_fixture_says_whether_nations_played_it_and_a_super_over_decided_it():
+    nations = {**INDIA, "national_team": True}
+    assert sc.parse_fixture(_match("Finished", [FIRST, CHASE], localteam=nations, visitorteam={**AFGHANISTAN, "national_team": True}, super_over=True)).facts == {"national": True, "super_over": True}
+    assert sc.parse_fixture(_match("Finished", [FIRST, CHASE], localteam=nations)).facts == {}
+
+
+def test_the_schedule_is_every_match_between_two_days_in_one_request(monkeypatch):
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((sportmonks._bucket(path), params))
+        return {"data": [_match("Finished", [FIRST, CHASE], note="India won by 127 runs", winner_team_id=IND), _match("NS", [], id=71216)], "meta": {"current_page": 1, "last_page": 1}}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    games = sc.SportmonksCricket().schedule(date(2026, 10, 9), date(2026, 10, 30))
+    assert [(g.source_id, g.status) for g in games] == [("71215", "final"), ("71216", "scheduled")]
+    [(bucket, params)] = asked
+    assert bucket == "Cricket fixtures" and params["filter[starts_between]"] == "2026-10-09,2026-10-30"
+    assert not any("team" in k for k in params if k.startswith("filter"))  # whoever plays

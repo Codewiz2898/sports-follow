@@ -51,6 +51,9 @@ _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "
 # region's league or the qualifier for an S event (CBLOL, The International's). Most closed qualifiers are
 # C or D, a second division (ESEA Advanced) D: left out, so on a quiet day esports shows nothing.
 LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
+# And whose series are among the big results and big games coming up (schedule): world events and top leagues.
+SCHEDULE_TIERS = ("s", "a")
+SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
 
 # Nationalities come as ISO 3166 codes; the countries most pros play for, by name. Others show as the code.
 COUNTRIES = {
@@ -530,6 +533,31 @@ class PandascoreEsports(Adapter):
                 out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
                                     teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier))
         return sorted(out, key=lambda g: -g.tier)
+
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its
+        event's tier. PandaScore lists series by tournament but can't filter them by tier, and only about
+        one in eight is S or A, so the S and A tournaments come first (on now, starting in the window, ended
+        in it: a request each), then their series in the window, a page of 100 a request."""
+        span = f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z"
+        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        # Tournaments filter by game as "videogame_id", and by tier.
+        which = {"filter[videogame_id]": games, "filter[tier]": ",".join(SCHEDULE_TIERS), "page[size]": pandascore.PAGE}
+        tiers: dict[str, int] = {}
+        for path, window in (("/tournaments/running", {}), ("/tournaments/upcoming", {"range[begin_at]": span}), ("/tournaments/past", {"range[end_at]": span})):
+            found = pandascore.get_json(path, ttl=1800, **which, **window)
+            for t in found if isinstance(found, list) else []:
+                if t.get("id") and t.get("tier") in SCHEDULE_TIERS:
+                    tiers[str(t["id"])] = LIVE_TIERS[t["tier"]]
+        if not tiers:
+            return []
+        rows = pandascore.get_all("/matches", ttl=1800, pages=SCHEDULE_PAGES, **{"filter[tournament_id]": ",".join(sorted(tiers)), "range[scheduled_at]": span, "sort": "scheduled_at"})
+        tier_of = {str(m.get("id")): tiers.get(str(m.get("tournament_id") or (m.get("tournament") or {}).get("id")), 0) for m in rows}
+        out = []
+        for f in parse_fixtures(self._keep(rows)):
+            f.tier = tier_of.get(f.source_id, 0)
+            out.append(f)
+        return out
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many series at once, MULTI_MAX to a request: the live lane's one fetch a round. Keyed as

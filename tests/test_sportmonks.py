@@ -299,3 +299,27 @@ def test_a_live_matchs_players_come_attackers_first_the_sides_in_turn():
     lineups = [starter(1, HOME, 24, "Home Keeper"), starter(2, HOME, 27, "Home Striker"), starter(3, AWAY, 25, "Away Back"), starter(4, AWAY, 27, "Away Striker")]
     [game] = sm.parse_live([_match("INPLAY_1ST_HALF", 0, 0, lineups=lineups)], "sportmonks_football")
     assert [p.name for p in game.players] == ["Home Striker", "Away Striker", "Home Keeper", "Away Back"]
+
+
+def test_a_fixture_carries_both_sides_places_in_their_table():
+    placed = _match("FT", 1, 0)
+    placed["participants"][0]["meta"]["position"], placed["participants"][1]["meta"]["position"] = 14, 2  # away first, as Sportmonks may list them
+    assert sm.parse_fixtures([placed])[0].facts == {"table": [2, 14]}  # home's place, then away's
+    assert sm.parse_fixtures([_match("FT", 1, 0)])[0].facts == {}
+
+
+def test_the_schedule_is_every_league_match_between_two_days_counted_as_fixtures(monkeypatch):
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, sportmonks._bucket(path), params))
+        page = params["page"]
+        return {"data": [_match("FT", 2, 1, id=554 + page)], "pagination": {"has_more": page < 2}}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    games = sm.SportmonksFootball().schedule(date(2026, 10, 9), date(2026, 10, 30))
+    assert [g.source_id for g in games] == ["555", "556"] and games[0].result["home"]["score"] == "2"
+    # No team: every match of the plan's leagues, a page of 50 a request, each a Fixture request.
+    assert [(path, bucket, params["per_page"], params["page"]) for path, bucket, params in asked] == [
+        ("/football/fixtures/between/2026-10-09/2026-10-30", "Fixture", 50, 1), ("/football/fixtures/between/2026-10-09/2026-10-30", "Fixture", 50, 2)]
+    assert set(asked[0][2]["include"].split(";")) >= {"participants", "scores", "state", "league", "round"}

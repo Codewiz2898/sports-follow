@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, bus, credits as credits_page, google_signin, league, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
@@ -488,6 +488,27 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
         except Exception:
             log.warning("live: couldn't ask for %s's games", system, exc_info=True)
     return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
+
+
+@app.get("/api/league")
+async def league_games(response: Response, tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0) -> dict[str, Any]:
+    """Today's big results (since yesterday, else the latest day that had some: days where the fan is, tz
+    minutes east of UTC) and big games coming up (the next fortnight) in the competitions the running
+    sources cover, whoever follows them, ranked by each sport (league.py). The same for every fan in a time
+    zone, so no cookie and a public cache. Served from the last reads; a source's read a few hours old queues
+    another for the worker, so "refreshing" says new games may come in a moment."""
+    games, stale = await in_db(league.cached, tz)
+    for system in stale:
+        try:
+            # One read asked for an hour, whether the last one came or failed: a source that's down isn't
+            # asked again on every look.
+            if await state["redis"].set(f"league:asked:{system}", "1", nx=True, ex=league.ASK):
+                await enqueue("read_league", system, _job_id=f"read_league:{system}")
+        except Exception:
+            log.warning("league: couldn't ask for %s's games", system, exc_info=True)
+    # While a read is due, the app looks again in a moment: nothing in between may keep this answer.
+    response.headers["cache-control"] = "no-cache" if stale else f"public, max-age={league.CACHE}"
+    return {**games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the hour
 
 
 @app.get("/api/starters")
