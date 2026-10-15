@@ -405,6 +405,9 @@ def test_a_goal_var_rules_out_is_corrected_once():
     # Re-credited to a teammate (Sportmonks rescinds the event and adds one at the same minute): not ruled out.
     recredited = scored(1, 0, [goal("23'", athlete="9"), marked], goals=0)
     assert detect("Football", "Mohamed Salah", "173896", recredited, recredited, [("goal", "goal@23'")]) == []
+    # Or as an own goal: its team is the other side's, the one it was scored against.
+    own_goal = scored(1, 0, [goal("23'", athlete="5", team="2", own_goal=True), marked], goals=0)
+    assert detect("Football", "Mohamed Salah", "173896", own_goal, own_goal, [("goal", "goal@23'")]) == []
 
 
 def test_one_poll_short_takes_nothing_back():
@@ -429,9 +432,39 @@ def test_the_goal_taken_back_is_found_by_its_play():
     two, one = scored(2, 0, [goal("23'", id="101")], goals=2, clock="60'"), scored(1, 0, [goal("60'", id="102")], clock="62'")
     assert detect("Football", "Mohamed Salah", "173896", two, one, told) == []  # short for one poll only
     assert kinds(detect("Football", "Mohamed Salah", "173896", one, one, told)) == [("correction", "goal:goal@101")]
-    # A goal from before anyone followed (play 100, never told) doesn't hide a told one ruled out.
-    early = scored(1, 0, [goal("10'", id="100")], clock="52'")
-    assert kinds(detect("Football", "Mohamed Salah", "173896", early, early, [("goal", "goal@102")])) == [("correction", "goal:goal@102")]
+
+
+def test_a_play_the_source_moves_is_the_same_goal():
+    # Without play ids (Sportmonks) a goal is keyed by its minute, and the minute can be revised (23' to
+    # 24', 45' to 45+1' once its added time is in). The count hasn't dropped: nothing is taken back.
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [goal("23'")], clock="23'"), scored(1, 0, [goal("24'")], clock="25'"), scored(1, 0, [goal("24'")], clock="26'")]
+    assert _told(polls) == [("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'")]
+
+    def assisted(n: int, minute: str | None) -> Seen:
+        plays = [goal(minute, athlete_ids=["9", "173896"])] if minute else []
+        return Seen("live", state=FOOTBALL, line=line("Started", Assists=str(n)), score="Egypt 1 – 0 South Africa", events=plays)
+
+    polls = [assisted(0, None), assisted(1, "45'"), assisted(1, "45+1'"), assisted(1, "45+1'")]
+    assert [title for title, _ in _told(polls)] == ["Assist: Mohamed Salah"]
+
+
+def test_a_goal_ruled_out_as_the_game_ends_is_corrected():
+    # The drop first shows in the poll that says it's over, and polling stops there: no second poll to wait for.
+    over = Seen("final", state=FOOTBALL, line=line("Started", Goals="0"), score="Egypt 0 – 0 South Africa", clock="FT")
+    found = detect("Football", "Mohamed Salah", "173896", scored(1, 0, [goal("88'", id="101")], clock="88'"), over, [("goal", "goal@101")])
+    assert kinds(found) == [("final", ""), ("correction", "goal:goal@101")]
+
+
+def test_a_goal_taken_back_from_older_copies_is_told_again():
+    # Two polls in a row from an older copy of the game take the goal back. When the source shows it again,
+    # as his, with the count back in both polls, it's told again, once; and it can still be taken back.
+    play = goal("23'", id="101")
+    polls = [scored(0, 0, [], goals=0, clock="20'"), scored(1, 0, [play], clock="23'"), scored(0, 0, [], goals=0, clock="24'"), scored(0, 0, [], goals=0, clock="24'"),
+             scored(1, 0, [play], clock="25'"), scored(1, 0, [play], clock="26'"), scored(1, 0, [play], clock="27'"), scored(0, 0, [], goals=0, clock="30'"), scored(0, 0, [], goals=0, clock="31'")]
+    assert _told(polls) == [
+        ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 24'"),
+        ("Goal: Mohamed Salah puts Egypt ahead", "Egypt 1 – 0 South Africa · 23'"), ("Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 31'"),
+    ]
 
 
 def test_priorities_rank_moments():

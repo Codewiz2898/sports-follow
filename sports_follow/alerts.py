@@ -21,8 +21,9 @@ sports app, not a feed of every poll:
 - **Late is worse than never** for a live moment: one older than its TTL isn't pushed.
 - **Corrections.** A moment the source takes back (a goal VAR rules out) is corrected on the same
   notification, by the same rules, for the fans who were sent that moment; a fan who never heard it
-  hears nothing, and a moment taken back before it went isn't sent at all. The moment leaves the
-  story underneath.
+  hears nothing, and a moment taken back before it went isn't sent at all. The same rules include the
+  fan's level now: one who has since set the player to results only or off isn't sent the correction.
+  The moment leaves the story underneath.
 
 Quiet hours are per device, so notify.py applies them after this.
 """

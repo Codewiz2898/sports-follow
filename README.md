@@ -115,7 +115,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
   in it; "Mute this game" stops it. A goal VAR rules out is corrected on that notification, for the
-  fans who were sent it (a goal the source credits to another player instead is left as it was).
+  fans who were sent it, and told again if the source shows it again (a goal the source credits to
+  another player instead is left as it was).
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it by Web Push (VAPID) to each device at once, and the tick sweeps up

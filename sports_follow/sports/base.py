@@ -227,7 +227,8 @@ class Sport:
         """What the source has taken back since the last poll (a goal VAR rules out), of the moments found
         for the player in this game so far (`told`: each one's kind and detail, oldest first). Each is a
         "correction" whose detail names the moment it takes back; it replaces the game's notification for
-        the fans who were sent that moment, and reaches no one else (alerts.py)."""
+        the fans who were sent that moment, and reaches no one else (alerts.py). A moment taken back that
+        the source shows again may be found again here, under a new detail."""
         return []
 
     # ---- live games and cards (structured.py)

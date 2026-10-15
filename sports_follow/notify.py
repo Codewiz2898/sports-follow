@@ -181,9 +181,12 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects) for m in rows]
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
+        # A correction's toast follows its moment's: one sent in an earlier batch (not taken back before it went).
+        corrects = {i.corrects for i in items if i.corrects is not None}
+        toasted = set(db.scalars(select(Moment.id).where(Moment.id.in_(corrects), Moment.id.not_in(claimed), Moment.sent_at.is_not(None))).all()) if corrects else set()
     # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself.
     for item in items:
-        if item.id not in taken_back and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
+        if item.id not in taken_back and (item.corrects is None or item.corrects in toasted) and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
             bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
     if not jobs:
         return 0

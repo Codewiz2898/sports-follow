@@ -83,7 +83,8 @@ def test_a_goal_var_rules_out_corrects_the_games_notification(db, monkeypatch):
     monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)  # polled all along
     monkeypatch.setattr(notify, "dispatch", notify.send)  # at once, not in the background
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: pushed.append((endpoint.rsplit("/", 1)[1], payload["tag"], payload["title"], payload["body"], payload["loud"])))
-    monkeypatch.setattr(notify.bus, "publish", lambda *args: None)
+    toasts: list[str] = []
+    monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: toasts.append(event["moment"]["title"]))
 
     def heard() -> set[tuple[str, str, str, str, bool]]:
         out = set(pushed)
@@ -108,6 +109,7 @@ def test_a_goal_var_rules_out_corrects_the_games_notification(db, monkeypatch):
     # The goal's notification (same tag) becomes the correction, without the goal under it; silent, as
     # the game made a sound a moment ago. Only the fan who was sent the goal and still wants the game hears.
     assert heard() == {("sent", "e1", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 South Africa · 26'", False)}
+    assert toasts[-1] == "Goal ruled out: Mohamed Salah"  # in the app too, after the goal's toast
     [correction] = db.scalars(select(Moment).where(Moment.kind == "correction")).all()
     assert correction.corrects == db.scalar(select(Moment.id).where(Moment.kind == "goal"))
     # The activity list has it with the goal, and not for a fan who followed since.
@@ -125,7 +127,7 @@ def test_a_goal_var_rules_out_corrects_the_games_notification(db, monkeypatch):
 
 def test_a_goal_taken_back_before_it_went_isnt_sent(db, monkeypatch):
     # A restart dropped the goal's batch; its correction went to nobody, as nobody had the goal. The
-    # tick's sweep then finds the goal, still young enough to send: no push, and no toast of the goal.
+    # tick's sweep then finds the goal, still young enough to send: no push, and no toast of either.
     pushed, toasts = [], []
     monkeypatch.setattr(notify, "push", lambda *args, **kwargs: pushed.append(args))
     monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: toasts.append(event["moment"]["title"]))
@@ -135,4 +137,4 @@ def test_a_goal_taken_back_before_it_went_isnt_sent(db, monkeypatch):
     db.commit()
     assert notify.send([correction_id]) == 0
     assert notify.send([goal_id]) == 0
-    assert pushed == [] and "Goal: Mohamed Salah" not in toasts
+    assert (pushed, toasts) == ([], [])
