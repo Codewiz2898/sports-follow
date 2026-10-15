@@ -256,6 +256,8 @@ class Adapter:
     #   def live_now(self) -> list[LiveGame]
     # the games in play now, whoever follows them, each game's players in the order the source would put
     # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
+    # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
+    # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""
