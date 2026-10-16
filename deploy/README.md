@@ -639,7 +639,7 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 | One request or job's lines | `c logs api worker \| grep <id>`: JSON lines, each with the `rid` of its request or job; a request's id is in its answer's `X-Request-ID` header, and the jobs it queued log under it too |
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
-| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
+| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry chess`; every esports game: `… registry esports`, or one: `… registry valorant`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |
