@@ -211,13 +211,15 @@ def download(url: str) -> tuple[bytes, str]:
 def thumbnail(url: str) -> tuple[bytes, str]:
     """A thumbnail's bytes and media type at WIDTH, or at the first size of SMALLER that's under MAX_BYTES
     when that one isn't (a PNG photo: Commons keeps its thumbnails PNG)."""
-    sizes = (WIDTH, *SMALLER) if f"/{WIDTH}px-" in url else (WIDTH,)  # not a thumbnail: Commons' own file
+    # The size is the last part of a thumbnail's address: a file's own name may start "960px-" too.
+    head, found, tail = url.rpartition(f"/{WIDTH}px-")
+    sizes = (WIDTH, *SMALLER) if found else (WIDTH,)  # not a thumbnail: Commons' own file
     for width in sizes[:-1]:
         try:
-            return download(url.replace(f"/{WIDTH}px-", f"/{width}px-"))
+            return download(f"{head}/{width}px-{tail}")
         except TooBig:
             pass
-    return download(url.replace(f"/{WIDTH}px-", f"/{sizes[-1]}px-"))
+    return download(f"{head}/{sizes[-1]}px-{tail}" if found else url)
 
 
 # ---------------------------------------------------------------- whose photos
