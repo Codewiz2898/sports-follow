@@ -5,30 +5,13 @@ import { APP_NAME } from './app'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
 import { sportInfo } from './sports'
+import { LEVELS, levelText as sportLevelText, wanted } from './alerts'
 
-export const LEVELS: { value: AlertLevel; label: string; short: string }[] = [
-  { value: 'key', label: 'Key moments', short: 'Key' },
-  { value: 'everything', label: 'Everything', short: 'All' },
-  { value: 'results', label: 'Results only', short: 'Results' },
-  { value: 'off', label: 'Off', short: 'Off' },
-]
+export { LEVELS, wanted }
 
-/** A level in a line (`brief`) and in full (`hint`), for a player of this sport: what key moments are, and
- * what everything adds, as the sport says (its alerts, from GET /api/sports; sports_follow/sports/). */
+/** A level in a line and in full, for a player of this sport (alerts.ts). */
 export function levelText(level: AlertLevel, sport?: string | null): { brief: string; hint: string } {
-  const { key, more } = sportInfo(sport).alerts
-  if (level === 'key') return { brief: key[0], hint: key[1] }
-  if (level === 'everything') return { brief: `Plus ${more[0]}, without sound`, hint: `Key moments, plus ${more[1]}. Those arrive without sound` }
-  if (level === 'results') return { brief: 'Just the final result', hint: 'Just the final result' }
-  return { brief: 'Nothing for this player', hint: 'No notifications for this player' }
-}
-
-/** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
-export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | 'kind'>): boolean {
-  if (level === 'everything') return true
-  if (level === 'results') return moment.kind === 'final'
-  if (level === 'off') return false
-  return moment.level === 'key'
+  return sportLevelText(level, sportInfo(sport))
 }
 
 const QUIET = 'sf-quiet-hours'

@@ -221,7 +221,7 @@ COOKIE_DAYS = 5 * 365
 # Chrome caps any cookie at).
 REFRESH_DAYS = 7
 NEW_ID = re.compile(r"[A-Za-z0-9_-]{32}")  # what secrets.token_urlsafe(24) mints: never taken unsigned
-SESSION_CACHE = 600  # seconds a signed-in session's lookup is kept in Redis; ending a session deletes it at once
+SESSION_CACHE = 600  # seconds a signed-in session's lookup is kept in Redis; ending a session overwrites it at once
 
 
 @lru_cache(maxsize=1)
@@ -342,7 +342,8 @@ async def account_of(request: Request) -> accounts.Signed | None:
     if cached is not None:
         return accounts.Signed(**json.loads(cached)) if cached else None
     signed = await in_db(accounts.session_for, accounts.token_hash(token))
-    await state["redis"].set(key, json.dumps(signed.__dict__) if signed else "", ex=SESSION_CACHE)
+    # Only into an empty key: a session that ended while this looked it up has left "" there (_forget_sessions).
+    await state["redis"].set(key, json.dumps(signed.__dict__) if signed else "", ex=SESSION_CACHE, nx=True)
     return signed
 
 
@@ -868,8 +869,13 @@ def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
 
 
 async def _forget_sessions(token_hashes: list[str]) -> None:
+    """Ended sessions are signed out at once: their cached copies say so ("") rather than going, since a
+    request that looked one up just before it ended would cache it again for SESSION_CACHE otherwise."""
     if token_hashes:
-        await state["redis"].delete(*[f"session:{h}" for h in token_hashes])
+        async with state["redis"].pipeline() as ended:  # one round trip, and all of them or none (MULTI)
+            for h in token_hashes:
+                ended.set(f"session:{h}", "", ex=SESSION_CACHE)
+            await ended.execute()
 
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:

@@ -117,6 +117,10 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
     assert body["other"]["key"] == "other" and body["other"]["alerts"]["key"][0] == "Big news"
     esports = next(s for s in body["sports"] if s["key"] == "esports")
     assert esports["team_results"] and esports["keeps_names"] and esports["stats_title"] == "Overview"
+    # The Android app can't read /api/sports.css: each sport brings its colours here too, "other" none.
+    cricket = next(s for s in body["sports"] if s["key"] == "cricket")
+    assert cricket["colour"] == {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
+    assert all(s["colour"] for s in body["sports"]) and body["other"]["colour"] is None
 
 
 def test_each_sport_brings_its_colour(api):
@@ -149,8 +153,10 @@ def test_a_photo_is_recoloured_from_the_sports_deep_colour_to_its_block_colour(s
 WEB = PACKAGE.parent / "web" / "src"
 
 
-def test_every_web_view_is_of_a_sport_the_server_knows():
-    views = {m.group(1): p.name for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
+def test_every_apps_sport_facts_are_of_a_sport_the_server_knows():
+    """web/src/sports/facts/ holds what both apps draw a sport by (its scoreboard kinds, its line art)."""
+    facts = list((WEB / "sports" / "facts").glob("*.ts"))
+    views = {m.group(1): p.name for p in facts for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
     assert views and set(views) <= set(sports.BY_KEY), views
-    kinds = {k for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  kinds: \[(.*)\],$", p.read_text(), re.M) for k in re.findall(r"'(\w+)'", m.group(1))}
+    kinds = {k for p in facts for m in re.finditer(r"^  kinds: \[(.*)\],$", p.read_text(), re.M) for k in re.findall(r"'(\w+)'", m.group(1))}
     assert kinds <= {k for s in sports.ALL for k in s.kinds}
