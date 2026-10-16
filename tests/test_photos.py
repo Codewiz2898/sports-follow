@@ -374,6 +374,22 @@ def test_a_photo_is_asked_about_again_after_a_while_and_one_no_longer_free_leave
 
 
 @needs_db
+def test_a_photo_taken_back_leaves_a_card_nobody_follows_now_and_none_is_added_to_one(squad, commons):
+    db = squad
+    photos.refresh()
+    db.execute(text("DELETE FROM follow"))
+    db.commit()
+    assert photos.stamp(db) == 0  # still Saka's photo: it stays
+    db.execute(text("UPDATE athlete SET image = NULL WHERE qid = 'Q59306386'"))  # taken back (players unmatch)
+    db.execute(text("UPDATE athlete SET image = :f WHERE qid = 'pandascore:1'"), {"f": SAKA})  # and one his card never showed
+    db.commit()
+    assert photos.stamp(db) == 1
+    db.expire_all()
+    assert "photo" not in db.get(PlayerCard, 1).card["player"] and "photo" not in db.published[1]["player"]
+    assert "photo" not in db.get(PlayerCard, 3).card["player"]  # nobody follows TenZ: no photo is added
+
+
+@needs_db
 def test_a_failed_download_is_tried_again_the_next_day(squad, commons, monkeypatch):
     db = squad
 

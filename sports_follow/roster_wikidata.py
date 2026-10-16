@@ -28,6 +28,9 @@ pro two people could be, or a person two pros could be, is matched to no one; bi
 that differ rule a person out. A run that read everyone also takes back a match that no longer holds (an
 edit on Wikidata), with its photo; one that didn't only adds.
 
+An operator who finds a wrong match takes it back with `players unmatch <pro> [Q…]` (athlete_unmatch):
+the pro loses the Wikidata id and photo, and no run matches them to that person again, or to anyone.
+
     .venv/bin/python -m sports_follow.roster_wikidata                      # every roster sport, as the weekly import does after it
     .venv/bin/python -m sports_follow.roster_wikidata --dry-run --show 20  # what it would match, 20 at random, written nowhere
 """
@@ -42,16 +45,16 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import unquote
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from . import bus, logs, naming, registry, sports
 from .adapters import KNOWN
 from .db import session
-from .models import Athlete
+from .models import Athlete, AthleteUnmatch
 
 log = logging.getLogger("sports_follow.roster_wikidata")
 
@@ -339,9 +342,12 @@ def _id(value: str) -> str:
     return value.replace(" ", "_")
 
 
-def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -> list[Match]:
+def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = (), vetoes: Mapping[str, set[str | None]] | None = None) -> list[Match]:
     """Each row's Wikidata person, where only one can be them and they can be only that row (pure). filler:
-    the words of the sport's team names that don't tell teams apart (Sport.team_filler)."""
+    the words of the sport's team names that don't tell teams apart (Sport.team_filler). vetoes: who an
+    operator said rows aren't (players unmatch), by registry id: a person never matched to that row, or None
+    for anyone; such a row still keeps the people it could be from going to another row."""
+    vetoes = vetoes or {}
     by_id: dict[tuple[str, str], list[Person]] = defaultdict(list)
     by_handle: dict[str, list[Person]] = defaultdict(list)
     by_name: dict[tuple[str, ...], list[Person]] = defaultdict(list)
@@ -359,15 +365,16 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
 
     each: list[dict[str, Match]] = []  # who each row could be
     for row in rows:
+        never = vetoes.get(row.qid, set())
         could: dict[str, Match] = {}
         for key in row.ids:
-            could |= {p.qid: Match(row, p, "id") for p in by_id.get((key[0], _id(key[1])), []) if not other_day(row, p)}
+            could |= {p.qid: Match(row, p, "id") for p in by_id.get((key[0], _id(key[1])), []) if not other_day(row, p) and p.qid not in never}
         if could:
             each.append(could)
             continue
         names = [n for alias in row.aliases if not tagged(alias, {handle(row.handle)}, row.teams) for n in plain(alias) if len(n) >= 2]
         for p in by_handle.get(handle(row.handle), []):
-            if other_day(row, p):
+            if other_day(row, p) or p.qid in never:
                 continue
             who = (row.born is not None and row.born == p.born) or any(names_agree(n, m) for n in names for m in p.names)
             where = (row.plays and row.plays in p.plays) or same_team(row.teams, p.teams, filler)
@@ -376,7 +383,7 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
         if not could and row.born:
             for n in names:
                 for p in by_name.get(tuple(sorted(spelt(n))), []):
-                    if p.born == row.born:
+                    if p.born == row.born and p.qid not in never:
                         could[p.qid] = Match(row, p, "name and birth date")
         each.append(could)
     # A row two people could be is no one's; so is a person two rows could be, unless one row is theirs by id.
@@ -389,6 +396,8 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
         if len(could) != 1:
             continue
         [m] = could.values()
+        if None in vetoes.get(m.row.qid, ()):
+            continue
         by_id_too = [r for r in rivals[m.person.qid] if r.how == "id"]
         if len(rivals[m.person.qid]) == 1 or (m.how == "id" and len(by_id_too) == 1):
             out.append(m)
@@ -398,10 +407,38 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
 # ---------------------------------------------------------------- the registry
 
 
+def vetoes(db: Session, sport: str) -> dict[str, set[str | None]]:
+    """Who an operator said each of a sport's athletes isn't (players unmatch), by registry id: a Wikidata
+    person, or None for anyone."""
+    out: dict[str, set[str | None]] = defaultdict(set)
+    for qid, person in db.execute(select(AthleteUnmatch.qid, AthleteUnmatch.person).where(AthleteUnmatch.sport == sport)).all():
+        out[qid].add(person)
+    return dict(out)
+
+
+def vetoed(vetoes: Mapping[str, set[str | None]], row: str, person: str | None) -> bool:
+    """Whether an operator said this row isn't this person (None: whoever they're matched to)."""
+    never = vetoes.get(row, set())
+    return None in never or person in never
+
+
+def forget(db: Session, sport: str, qids: Iterable[str], person: str | None = None) -> list[str]:
+    """Take these athletes' matches back, their Wikidata id and photo; given a person, only a match to them.
+    Returns whose were taken back."""
+    held = [Athlete.ids[KEY].astext == person] if person else [or_(Athlete.ids.has_key(KEY), Athlete.image.is_not(None))]
+    stmt = update(Athlete).where(Athlete.qid.in_(list(qids)), Athlete.sport == sport, *held).values(ids=Athlete.ids.op("-")(KEY), image=None)
+    return list(db.scalars(stmt.returning(Athlete.qid)))
+
+
 def record(db: Session, sport: str, found: list[Match], complete: bool) -> dict[str, int]:
-    """Write each match into its row (their Wikidata id, and photo file or none), and, after a complete
-    read, take back the matches that no longer hold. Returns how many rows changed and were taken back."""
-    now = {m.row.qid: (m.person.qid, m.person.image) for m in found}
+    """Write each match into its row (their Wikidata id, and photo file or none), and take back the matches
+    that no longer hold after a complete read, and those an operator took back (players unmatch) after any.
+    Returns how many rows changed and were taken back."""
+    # The vetoes as of now, not as of the read before Wikidata's: one made meanwhile waits for this to
+    # commit, and then takes its match back itself.
+    db.execute(text("LOCK TABLE athlete_unmatch IN SHARE MODE"))
+    off = vetoes(db, sport)
+    now = {m.row.qid: (m.person.qid, m.person.image) for m in found if not vetoed(off, m.row.qid, m.person.qid)}
     held = Athlete.ids[KEY].astext
     have = {qid: (wd, image) for qid, wd, image in db.execute(select(Athlete.qid, held, Athlete.image).where(Athlete.sport == sport, or_(Athlete.ids.has_key(KEY), Athlete.image.is_not(None))))}
     changed = 0
@@ -409,9 +446,9 @@ def record(db: Session, sport: str, found: list[Match], complete: bool) -> dict[
         if have.get(row) != (qid, image):
             db.execute(update(Athlete).where(Athlete.qid == row, Athlete.sport == sport).values(ids=Athlete.ids.op("||")(func.jsonb_build_object(KEY, qid)), image=image))
             changed += 1
-    gone = [row for row in have if row not in now] if complete else []
+    gone = [row for row, (wd, _) in have.items() if row not in now and (complete or vetoed(off, row, wd))]
     if gone:
-        db.execute(update(Athlete).where(Athlete.qid.in_(gone), Athlete.sport == sport).values(ids=Athlete.ids.op("-")(KEY), image=None))
+        forget(db, sport, gone)
     return {"changed": changed, "taken_back": len(gone)}
 
 
@@ -431,8 +468,8 @@ def match_sport(sport: str, write: bool = True) -> tuple[list[Match], dict[str, 
     kind = sports.BY_KEY[sport]
     everyone, complete = read_people(kind)
     with session() as db:
-        athletes = rows(db, kind)
-    found = match(athletes, everyone, kind.team_filler)
+        athletes, off = rows(db, kind), vetoes(db, sport)
+    found = match(athletes, everyone, kind.team_filler, off)
     done: dict[str, Any] = {"people": len(everyone), "athletes": len(athletes), **tally(found), "complete": complete}
     if write:
         with session() as db:
@@ -447,8 +484,14 @@ def run(sport: str) -> dict[str, Any]:
     return done
 
 
+def matches(kind: sports.Sport) -> bool:
+    """Whether a sport's athletes are matched to Wikidata people here: they come from its sources' own
+    lists, and it counts some people on Wikidata as its own."""
+    return bool(kind.roster and (kind.people_ids or kind.people_occupations))
+
+
 def roster_sports() -> list[str]:
-    return [s.key for s in sports.ENABLED if s.roster and (s.people_ids or s.people_occupations)]
+    return [s.key for s in sports.ENABLED if matches(s)]
 
 
 def show(m: Match) -> str:

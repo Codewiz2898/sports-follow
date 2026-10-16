@@ -61,7 +61,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and never where two people fit one pro or one person two pros. It records the Wikidata id in the pro's
   `ids` and the photo file in `image`, which the weekly roster leaves alone. On 16 Oct 2026, 542 of
   41,870 pros matched, 238 of them with a photo (TenZ, ZywOo, Faker, s1mple…).
-  `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match. A run by hand
+  `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match, and
+  `players unmatch` takes a wrong one back (below). A run by hand
   takes the weekly run's lock, so it refuses to start while that one is going; a sport (or esports
   source) that fails keeps last week's rows and the rest still run.
 - **Player photos from Wikimedia Commons, on the profile only.** A player's page, and the preview of an
@@ -74,7 +75,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
   file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
   which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
-  follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone
+  follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
+  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app recolours each photo in its sport's colour (a duotone
   from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
   credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
   linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
@@ -295,7 +297,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
-  for following.
+  for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
+  shown with someone else's face: it takes the match and photo back at once (off every card showing it,
+  followed or not, and off the Credits page) and
+  no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
+  `rematch <ref> [Q…]` takes that back, and the next weekly run may match them again. Unmatches are rows
+  in `athlete_unmatch`, apart from the keep and remove decisions: a kept pro can be unmatched, and a
+  removed one stays unmatched, so restoring them doesn't bring the face back.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
