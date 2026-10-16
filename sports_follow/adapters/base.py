@@ -119,6 +119,19 @@ class LiveGame:
 
 
 @dataclass
+class Absence:
+    """A player out of their team's games, injured or suspended, as a source lists them (an adapter's
+    sidelined()): one spell, by the source's own id for it, whoever follows the player."""
+
+    source_id: str  # the source's id for the spell: one player may have two (an injury and a ban)
+    ref: PlayerRef  # who, by the source's id for them, with their team and birth date as it has them
+    kind: str  # "injury", "suspension", or "other" (not available for another reason): its sport words it
+    what: str  # as the source says it: "Back Injury", "Red Card Suspension"
+    since: date | None = None
+    until: date | None = None  # when they're expected back, if the source says
+
+
+@dataclass
 class Rostered:
     """An athlete as a source's own list has them, for the registry: esports pros come from their
     sources, not Wikidata (registry.import_roster)."""
@@ -285,6 +298,14 @@ class Adapter:
     # (league.py), each ranked by its sport (Sport.notable) from its tier, facts, stage and result. Asked a
     # few times a day at most, and only while fans are looking. Where the source rates its events, leave out
     # the small ones and set each game's tier.
+    #
+    # Optional, for a source that lists every player out of its competitions' games, injured or suspended,
+    # in a few requests:
+    #   def sidelined(self) -> dict[str, list[Absence]]
+    # each team it covers, by its id, with every spell the source has a player of it out for now (a team
+    # with nobody out has an empty list): Today's Wire tells who's out and who's back (sidelined.py), each
+    # read compared with the last, so a spell missing from a team listed here is over. Raise rather than
+    # leave a team out: a read that fails changes nothing. Asked twice a day.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""

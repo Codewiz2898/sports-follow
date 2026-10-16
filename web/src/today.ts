@@ -3,10 +3,10 @@
 // components) and the Android app (mobile/), so it touches nothing of a browser's. A sport is passed by
 // its key (each app finds it its own way).
 
-import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortWhen } from './format'
+import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { drawable } from './sports/facts'
-import type { ActivityItem, Card, LeagueGame, LiveStatus, Starter, UpcomingEvent } from './types'
+import type { ActivityItem, Card, LeagueGame, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
 
 export const FEW = 3  // until a fan follows this many, Today keeps offering starters
 export const AHEAD_DAYS = 14  // how far Coming up looks
@@ -143,6 +143,13 @@ export function posterWhen(at: string, now: number): string {
 /** The longest word in a poster's word, in letters: the poster sizes the word so that one fits on a line. */
 export function longestWord(word: string): number {
   return Math.max(...word.split(/(?<=-)|\s+/).map((w) => w.length))
+}
+
+/** A Wire row's line as it reads: with the player's name first ("Saka: …") when it doesn't say it (a story's
+ * headline); a fact or a line-up always does. */
+export function wireText(row: WireRow): string {
+  const name = shortName(row.player)
+  return row.text.toLowerCase().includes(name.toLowerCase()) ? row.text : `${name}: ${row.text}`
 }
 
 /** When a Wire row is from: the time today ("07:40"), the weekday within the week ("Wed"), else the date. */

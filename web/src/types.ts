@@ -203,8 +203,13 @@ export interface ActivityItem extends PlayerMoment { priority: number; player: s
  */
 export interface WeekPoster { id: number | null; player_id: number; player: string; sport: string; event_id: number | null; word: string; line: string; url: string; at: string }
 
-/** A row of Today's Wire (GET /api/me/week): a line-up, or a story about one of the fan's players by its own headline, with the site that ran it. */
-export interface WireRow { id: number; player_id: number; player: string; sport: string; tag: string; text: string; source: string | null; url: string; at: string }
+/**
+ * A row of Today's Wire (GET /api/me/week): a fact a source gave about a player (who's out, who's back), a line-up,
+ * or a story about one of the fan's players by its own headline, each with where it's from. `yours`: about one of
+ * the fan's players; the rest are facts about the best-known players they don't follow, whose `player_id` is null
+ * until someone follows them (`url` then opens the source's athlete page).
+ */
+export interface WireRow { id: string; player_id: number | null; player: string; sport: string; tag: string; text: string; source: string | null; url: string; yours: boolean; at: string }
 
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 

@@ -17,7 +17,7 @@ from typing import Any, overload
 from .. import controls
 from ..config import SPORTS
 from . import basketball, chess, cricket, esports, football, tennis
-from .base import Found, Notable, Seen, Sport
+from .base import Fact, Found, Notable, Seen, Sport
 
 # In the order the app lists them.
 ALL: tuple[Sport, ...] = (football.SPORT, cricket.SPORT, basketball.SPORT, tennis.SPORT, chess.SPORT, esports.SPORT)
@@ -169,4 +169,4 @@ def names_of(sport: Sport) -> list[str]:
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "ALLOWED", "BY_KEY", "ENABLED", "OTHER", "Found", "Notable", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]
+__all__ = ["ALL", "ALLOWED", "BY_KEY", "ENABLED", "OTHER", "Fact", "Found", "Notable", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]

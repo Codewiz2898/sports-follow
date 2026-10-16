@@ -10,6 +10,8 @@
   on a push older than that only goes uncounted (the opened route answers ok: false). A moment's key
   stops it being told twice only while its game can still be polled, so the moments of a game not yet
   final stay.
+- **Who was out** (sidelined): a spell no read of its source has listed for sidelined.KEEP_DAYS, and the
+  Wire's facts about it with it. One still listed stays, over or not: the next read compares with it.
 - **Hot copies of cards** (card:<id> in Redis) of players nobody follows get a day to live:
   server.read_card rebuilds a missing one from Postgres.
 
@@ -33,7 +35,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from . import bus, logs
+from . import bus, logs, sidelined
 from .config import KEEP_MOMENTS_DAYS, KEEP_TIMELINE_DAYS
 from .db import session
 from .models import Follow
@@ -77,6 +79,7 @@ OLD_MOMENTS = """
     SELECT m.id FROM moment m LEFT JOIN event e ON e.id = m.event_id
     WHERE m.created_at < :cutoff AND (e.id IS NULL OR e.status = 'final')"""
 OLD_NOTIFICATIONS = "SELECT id FROM notification WHERE created_at < :cutoff"
+OLD_SIDELINED = "SELECT id FROM sidelined WHERE seen_at < :cutoff"
 
 
 @contextmanager
@@ -159,6 +162,7 @@ def run(count: bool = False, now: datetime | None = None) -> dict[str, int]:
         "player_line": _lines(timeline, count),
         "moment": _old("moment", OLD_MOMENTS, old, count),
         "notification": _old("notification", OLD_NOTIFICATIONS, old, count),
+        "sidelined": _old("sidelined", OLD_SIDELINED, now - timedelta(days=sidelined.KEEP_DAYS), count),
         "card_keys": _cards(count),
     }
 
@@ -173,7 +177,7 @@ def prune() -> dict[str, int] | None:
         done = run()
     finally:
         bus.release(LOCK, token)
-    log.info("retention: %(event_state)d game states, %(player_line)d player lines, %(moment)d moments and %(notification)d notifications removed; %(card_keys)d idle cards set to expire", done)
+    log.info("retention: %(event_state)d game states, %(player_line)d player lines, %(moment)d moments, %(notification)d notifications and %(sidelined)d spells out removed; %(card_keys)d idle cards set to expire", done)
     return done
 
 

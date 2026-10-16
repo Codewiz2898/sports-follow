@@ -1,12 +1,13 @@
-// This week and the Wire for the fan's players (GET /api/me/week), as the web's ThisWeek.tsx and Wire.tsx: the
-// big moments of the last week as posters in their sport's colour, and the line-ups and news in an ink card.
+// This week and the Wire (GET /api/me/week), as the web's ThisWeek.tsx and Wire.tsx: the fan's players' big
+// moments of the last week as posters in their sport's colour, and who's out and who's back, line-ups and news
+// in an ink card, theirs first, then a few of the best-known players they don't follow.
 
 import { router } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { safeHref, shortName } from '../../../web/src/format'
 import { sharePoster } from '../../../web/src/share'
-import { longestWord, posterWhen, wireWhen } from '../../../web/src/today'
+import { longestWord, posterWhen, wireText, wireWhen } from '../../../web/src/today'
 import { api, type WeekPoster, type WireRow } from '../api'
 import { toneOf, useSports } from '../catalog'
 import { useFollowing } from '../following'
@@ -18,14 +19,14 @@ import { breakable, Pill } from '../ui'
 interface Week { posters: WeekPoster[]; wire: WireRow[] }
 const NONE: Week = { posters: [], wire: [] }
 
-/** This week and the Wire: loaded when the follow list changes, and again when it comes back changed. */
+/** This week and the Wire: loaded when the follow list changes, and again when it comes back changed. A fan who
+ * follows nobody still has a Wire: the best-known players' facts. */
 export function useWeek(): Week {
   const { cards, loaded, heard } = useFollowing()
   const [week, setWeek] = useState<Week>(NONE)
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   useEffect(() => {
     if (!loaded) return
-    if (!who) { setWeek(NONE); return }
     let stale = false
     api.week().then((r) => { if (!stale) setWeek(r) }).catch(() => {})
     return () => { stale = true }
@@ -71,21 +72,22 @@ export function ThisWeek({ posters, now }: { posters: WeekPoster[]; now: number 
   )
 }
 
-/** One row: its tag in the player's sport colour, the line (a story's headline with the site that ran it, the
- * player's name first when the headline doesn't say it), and when. A story opens at its site, a line-up on
- * the player's page. */
+/** One row: its tag in the player's sport colour (outlined for a player the fan doesn't follow), the line (a
+ * fact, a line-up, or a story's headline with the player's name first when it doesn't say it), where it's from,
+ * and when. A story opens at its site; a fact or a line-up on the player's page, or the source's athlete page
+ * for a player nobody follows yet. */
 function Line({ row, now, last }: { row: WireRow; now: number; last: boolean }) {
   const tone = toneOf(useSports(), row.sport)
-  const name = shortName(row.player)
-  const named = row.text.toLowerCase().includes(name.toLowerCase())
   const away = safeHref(row.url)
   const inside = row.url.startsWith('/') && !row.url.startsWith('//')
   const open = away ? () => Linking.openURL(away) : inside ? () => router.push(row.url as never) : undefined
   return (
     <Pressable disabled={!open} onPress={open} style={[s.row, !last && s.rowLine]}>
-      <Pill small label={row.tag} bg={tone.sport} color={tone.on} style={{ flexShrink: 0 }} />
+      {row.yours
+        ? <Pill small label={row.tag} bg={tone.sport} color={tone.on} style={{ flexShrink: 0 }} />
+        : <Pill small outline label={row.tag} color={tone.ink} style={{ flexShrink: 0 }} />}
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text style={s.text} numberOfLines={2}>{named ? '' : `${name}: `}{row.text}</Text>
+        <Text style={s.text} numberOfLines={2}>{wireText(row)}</Text>
         {row.source ? <Text style={s.source} numberOfLines={1}>{row.source}</Text> : null}
       </View>
       <Text style={s.time}>{wireWhen(row.at, now)}</Text>
@@ -93,7 +95,8 @@ function Line({ row, now, last }: { row: WireRow; now: number; last: boolean }) 
   )
 }
 
-/** The Wire on Today: an ink card of the fan's players' line-ups and news, newest first. Nothing when there's none. */
+/** The Wire on Today: an ink card of who's out and who's back, line-ups and news, the fan's players' first. Nothing
+ * when there's none. */
 export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
   if (!rows.length) return null
   return (

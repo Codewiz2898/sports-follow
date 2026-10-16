@@ -6,9 +6,10 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Notable, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
+from .base import Fact, Found, Line, Notable, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -24,6 +25,9 @@ STAGE_RANK = {3: 95, 2: 85, 1: 70}
 TOP, NEAR_TOP = 4, 7  # two of the top four meeting is a top-of-the-table game; two of the top seven, nearly
 UPSET_PLACES = 8  # a winner this many places below the side it beat
 ROUT, GOALS = 3, 6  # a win by this many goals, or this many in the game
+# Who's out, on the Wire (out_fact): an injury and a ban are news; being ineligible (not registered for the
+# competition) isn't. How each is over, said of the player.
+BACK = {"injury": "is fit again", "suspension": "is back from suspension"}
 
 
 def pens(a: int | None, b: int | None) -> str:
@@ -284,6 +288,18 @@ class Football(Sport):
             elif abs(goals[0] - goals[1]) >= ROUT or sum(goals) >= GOALS:
                 bonus, said = 10, f"{sum(goals)} goals"
         return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", why=why or said)
+
+    def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
+        """ "Out", then who, what ("back injury", "red card suspension"; an "Unknown Injury" is an injury) and
+        until when, if the source says: "William Saliba · back injury · until 11 Dec"."""
+        if kind not in BACK:
+            return None
+        what = re.sub(r"^unknown\s+", "", what.strip().lower()) or kind
+        return Fact("Out", joined(who, what, f"until {until.day} {until:%b}" if until else None))
+
+    def back_fact(self, who: str, kind: str) -> Fact | None:
+        """ "Back": "William Saliba is fit again", "Phil Foden is back from suspension"."""
+        return Fact("Back", f"{who} {BACK[kind]}") if kind in BACK else None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if ln.get("headline") not in (None, "On the bench")]

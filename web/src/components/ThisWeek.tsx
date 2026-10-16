@@ -15,9 +15,10 @@ interface Week { posters: WeekPoster[]; wire: WireRow[] }
 const NONE: Week = { posters: [], wire: [] }
 
 /**
- * This week and the Wire for the fan's players (GET /api/me/week): the big moments of the last week,
- * biggest first, as their sports word them, and the line-ups and news, newest first. Loaded when the follow
- * list changes, and again once the stream has brought new moments.
+ * This week and the Wire (GET /api/me/week): the big moments of the fan's players over the last week, biggest
+ * first, as their sports word them, and the Wire's facts, line-ups and news, theirs first. A fan who follows
+ * nobody still has a Wire: the best-known players' facts. Loaded when the follow list changes, and again once
+ * the stream has brought new moments.
  */
 export function useWeek(): Week {
   const { cards, loaded, heard } = useFollowing()
@@ -26,7 +27,6 @@ export function useWeek(): Week {
 
   useEffect(() => {
     if (!loaded) return
-    if (!who) { setWeek(NONE); return }
     let stale = false
     const timer = window.setTimeout(() => {
       api.week().then((r) => { if (!stale) setWeek(r) }).catch(() => {})
