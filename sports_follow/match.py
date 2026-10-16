@@ -156,9 +156,12 @@ def _merged(newer: list[dict[str, Any]], older: list[dict[str, Any]]) -> list[di
     def same(e: dict[str, Any]) -> tuple[Any, Any]:
         return e.get("clock"), e.get("text")
 
+    # Two alike (a player scoring twice in a minute): the newest board's oldest is the read's as many-th one
+    # alike as the newest board has, so neither goal shows twice or goes missing.
     oldest = same(newer[-1])
-    at = next((i for i, e in enumerate(older) if same(e) == oldest), None)
-    return newer if at is None else newer + older[at + 1:]
+    nth = sum(same(e) == oldest for e in newer)
+    alike = [i for i, e in enumerate(older) if same(e) == oldest]
+    return newer + older[alike[nth - 1] + 1:] if len(alike) >= nth else newer
 
 
 def _boards(db: Session, system: str, events: list[Event], game: dict[str, Any] | None, listed: dict[str, Any] | None, as_of: str | None) -> list[tuple[str, str, dict[str, Any], list[dict[str, Any]]]]:

@@ -246,6 +246,11 @@ def test_a_cards_newest_events_come_first_and_a_reads_before_them():
     assert match._merged([card(80), card(60)], [card(70), card(60), card(50)]) == [card(80), card(60), card(50)]  # 70' taken back since
     assert match._merged(newest, [card(10)]) == newest  # where the read's go can't be told
     assert match._merged([], [card(10)]) == [card(10)]
+    # Two alike in one minute (one player booked twice, say): each shows once, whether the newest board holds
+    # both or only the later.
+    read = [card(80), card(60), card(60), card(50)]
+    assert match._merged([card(80), card(60), card(60)], read) == read
+    assert match._merged([card(80), card(60)], read) == read
 
 
 @needs_db
