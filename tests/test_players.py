@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -36,7 +36,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -177,7 +177,7 @@ def test_restoring_lets_the_import_bring_them_back(db, capsys):
     registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli")])
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q213854"]
-    assert players.main(["list"]) == 0 and "Nothing added or removed yet." in capsys.readouterr().out
+    assert players.main(["list"]) == 0 and "Nothing added, removed or unmatched yet." in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------- unmatching
@@ -185,12 +185,15 @@ def test_restoring_lets_the_import_bring_them_back(db, capsys):
 PHOTO = {"url": "/api/photos/abc.jpg", "credit": "Someone, CC BY 2.0"}
 
 
-def tenz(db) -> None:
-    """TenZ matched to a Wikidata person, with their photo, followed, his card showing it."""
+def tenz(db, followed: bool = True) -> None:
+    """TenZ matched to a Wikidata person, with their photo (on the Credits page), his card showing it, and
+    followed unless not."""
     db.add(Player(id=3, slug="tenz", name="TenZ", sport="Valorant"))
     db.flush()
-    db.add_all([PlayerIdentity(player_id=3, system="wikidata", external_id="pandascore:20401", confidence=1.0), Follow(fan_id="a", player_id=3, alert_rules={}),
-                PlayerCard(player_id=3, status="ready", card={"player": {"name": "TenZ", "photo": PHOTO}}, version=1)])
+    db.add_all([PlayerIdentity(player_id=3, system="wikidata", external_id="pandascore:20401", confidence=1.0),
+                PlayerCard(player_id=3, status="ready", card={"player": {"name": "TenZ", "photo": PHOTO}}, version=1),
+                Photo(file="SEN TENZ 2023.jpg", name="TenZ", status="ok", digest="abc", media_type="image/jpeg", fetched_at=LONG_AGO),
+                *([Follow(fan_id="a", player_id=3, alert_rules={})] if followed else [])])
     registry.upsert(db, [athlete("pandascore:20401", "esports", "TenZ", {"pandascore_esports": "20401", "wikidata": "Q113450352"}, image="SEN TENZ 2023.jpg")])
     db.commit()
 
@@ -201,12 +204,13 @@ def test_unmatching_a_pro_takes_their_photo_off_at_once_and_rematching_takes_it_
     monkeypatch.setattr(bus, "store_card", published.__setitem__)
     assert players.main(["unmatch", "3", "--note", "someone else's face"]) == 0
     out = capsys.readouterr().out
-    assert "Took back TenZ (esports, pandascore:20401); no run matches them to anyone again." in out and "Took the photo off 1 followed card(s)." in out
+    assert "Took back TenZ (esports, pandascore:20401); no run matches them to anyone again." in out and "Took the photo off 1 card(s)." in out
     db.expire_all()
     [a] = db.scalars(select(Athlete)).all()
     assert a.ids == {"pandascore_esports": "20401"} and a.image is None
     card = db.get(PlayerCard, 3)
     assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}  # off the fans' screens too
+    assert not db.scalars(select(Photo)).all()  # and off the Credits page
     [u] = db.scalars(select(AthleteUnmatch)).all()
     assert (u.qid, u.sport, u.person, u.note) == ("pandascore:20401", "esports", None, "someone else's face")
     assert players.main(["list"]) == 0 and "pandascore:20401      TenZ  not anyone  (someone else's face)" in capsys.readouterr().out
@@ -218,6 +222,16 @@ def test_unmatching_a_pro_takes_their_photo_off_at_once_and_rematching_takes_it_
     assert players.main(["rematch", "pandascore:20401"]) == 0 and "No longer unmatched from anyone: TenZ" in capsys.readouterr().out
     assert not db.scalars(select(AthleteUnmatch)).all()
     assert players.main(["rematch", "pandascore:20401"]) == 2 and "no match of pandascore:20401 was taken back" in capsys.readouterr().err
+
+
+def test_unmatching_takes_the_photo_off_a_card_nobody_follows_now(db, monkeypatch):
+    tenz(db, followed=False)  # anyone may still open his page
+    published: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", published.__setitem__)
+    assert players.main(["unmatch", "3"]) == 0
+    db.expire_all()
+    card = db.get(PlayerCard, 3)
+    assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}
 
 
 def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):

@@ -24,8 +24,8 @@ following leave out their ids in the sources. A name typed for research isn't bl
 who that is. Removing shows what it will delete and asks first, unless given --yes.
 
 Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
-(roster_wikidata.py): it takes the match and photo back at once, off followed cards too, and kept in
-athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
+(roster_wikidata.py): it takes the match and photo back at once, off every card showing it and the
+Credits page too, and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
 removing: a kept pro can be unmatched, and removing one leaves it, so restoring them doesn't bring the face
 back. Rematching takes it back; the next weekly run (or roster_wikidata by hand) may match them again.
 
@@ -208,10 +208,10 @@ def restore(db: Session, ref: str, sport: str | None = None) -> list[AthleteOver
     return rows
 
 
-def unmatch(db: Session, found: Found, person: str | None = None, note: str | None = None) -> list[tuple[Athlete, bool]]:
+def unmatch(db: Session, found: Found, person: str | None = None, note: str | None = None) -> list[tuple[Athlete, bool, str | None]]:
     """Say the athletes a reference found aren't this Wikidata person, or with none anyone, so no run
     matches them again (roster_wikidata.py), and take back a match to them now: their Wikidata id and photo.
-    Returns each athlete and whether a match was taken back."""
+    Returns each athlete, whether a match was taken back, and the photo file taken back with it."""
     if person is not None and not QID.fullmatch(person):
         raise Refused(f"{person!r} isn't a Wikidata id, like Q1234")
     if not found.athletes:
@@ -226,7 +226,9 @@ def unmatch(db: Session, found: Found, person: str | None = None, note: str | No
         # it wrote is taken back below.
         stmt = insert(AthleteUnmatch).values(qid=a.qid, sport=a.sport, person=person, name=a.name[:200], note=note)
         db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport", "person"], set_={"name": a.name[:200], "note": note, "created_at": func.now()}))
-        out.append((a, bool(roster_wikidata.forget(db, a.sport, [a.qid], person))))
+        image = a.image
+        taken = bool(roster_wikidata.forget(db, a.sport, [a.qid], person))
+        out.append((a, taken, image if taken else None))
     return out
 
 
@@ -247,10 +249,12 @@ def unmatches(db: Session) -> list[AthleteUnmatch]:
     return list(db.scalars(select(AthleteUnmatch).order_by(AthleteUnmatch.created_at.desc())))
 
 
-def take_photos_off() -> int:
-    """Take the photo off followed cards whose athlete no longer has one, now rather than at the photos job's
-    next run (photos.stamp). Returns how many cards changed."""
+def take_photos_off(files: list[str]) -> int:
+    """Take photos taken back off the Credits page, unless an athlete's is the same file, and off every card
+    that shows one its athlete no longer has, followed or not: now, not at the photos job's next run.
+    Returns how many cards changed."""
     with session() as db:
+        photos.forget(db, files)
         return photos.stamp(db)
 
 
@@ -361,9 +365,10 @@ def main(argv: list[str], ask: Any = input) -> int:
                 rows = decisions(db)
                 for o in rows:
                     print(f"{o.action:6}  {o.sport:10}  {o.qid:20}  {o.name}{f'  {o.ids}' if o.ids else ''}{f'  ({o.note})' if o.note else ''}  {o.created_at:%Y-%m-%d}")
-                if not rows:
-                    print("Nothing added or removed yet.")
-                for u in unmatches(db):
+                unmatched = unmatches(db)
+                if not rows and not unmatched:
+                    print("Nothing added, removed or unmatched yet.")
+                for u in unmatched:
                     print(f"{'unmatch':7} {u.sport:10}  {u.qid:20}  {u.name}  not {u.person or 'anyone'}{f'  ({u.note})' if u.note else ''}  {u.created_at:%Y-%m-%d}")
         elif args.command == "add":
             with session() as db:
@@ -395,12 +400,12 @@ def main(argv: list[str], ask: Any = input) -> int:
         elif args.command == "unmatch":
             with session() as db:
                 done = unmatch(db, find(db, args.ref, args.sport), args.person, args.note)
-            cards = take_photos_off() if any(now for _, now in done) else 0
-            for a, now in done:
+            cards = take_photos_off([image for _, _, image in done if image]) if any(now for _, now, _ in done) else 0
+            for a, now, _ in done:
                 print(f"{'Took back' if now else 'Nothing to take back now for'} {a.name} ({a.sport}, {a.qid}){f' (not matched to {args.person})' if args.person and not now else ''}; "
                       f"no run matches them to {args.person or 'anyone'} again.")
             if cards:
-                print(f"Took the photo off {cards} followed card(s).")
+                print(f"Took the photo off {cards} card(s).")
         elif args.command == "rematch":
             with session() as db:
                 for u in rematch(db, args.ref, args.sport, args.person):

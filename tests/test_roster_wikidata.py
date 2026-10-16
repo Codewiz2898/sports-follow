@@ -340,10 +340,10 @@ def test_a_pro_an_operator_unmatched_stays_unmatched_through_the_weekly_runs_unt
     rw.match_sport("esports")
     assert _row(db, "pandascore:20401").image == "SEN TENZ 2023.jpg"
 
-    [(_, now)] = players.unmatch(db, players.find(db, "pandascore:20401"), note="someone else's face")
+    [(_, now, image)] = players.unmatch(db, players.find(db, "pandascore:20401"), note="someone else's face")
     db.commit()
     row = _row(db, "pandascore:20401")
-    assert now and row.ids == {"pandascore_esports": "20401"} and row.image is None
+    assert now and image == "SEN TENZ 2023.jpg" and row.ids == {"pandascore_esports": "20401"} and row.image is None
     [u] = db.scalars(select(AthleteUnmatch)).all()
     assert (u.qid, u.sport, u.person, u.name, u.note) == ("pandascore:20401", "esports", None, "TenZ", "someone else's face")
 
@@ -367,7 +367,7 @@ def test_a_match_found_before_the_operator_unmatched_isnt_written_and_one_held_i
     registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
     db.commit()
     found = rw.match(rw.rows(db, ESPORTS), [wikidata_tenz()])  # the run read the registry and Wikidata, then:
-    [(_, now)] = players.unmatch(db, players.find(db, "pandascore:20401"), "Q113450352")
+    [(_, now, _)] = players.unmatch(db, players.find(db, "pandascore:20401"), "Q113450352")
     db.commit()
     assert not now  # he wasn't matched to them yet
     assert rw.record(db, "esports", found, complete=False) == {"changed": 0, "taken_back": 0}

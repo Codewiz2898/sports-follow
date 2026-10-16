@@ -42,7 +42,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote, urlparse, urlunparse
 
 import httpx
-from sqlalchemy import delete, exists, or_, select, union
+from sqlalchemy import and_, delete, exists, or_, select, union
 from sqlalchemy.orm import Session, object_session, undefer
 
 from . import bus, faces, logs, sports
@@ -376,13 +376,15 @@ def look() -> int:
 
 def stamp(db: Session) -> int:
     """Write each followed player's photo into their card, or take one out that may no longer show, and
-    publish the cards that changed. Returns how many."""
+    publish the cards that changed. Returns how many. A card nobody follows now is looked at too while it
+    shows a photo: anyone may still open it, so a photo taken back (players unmatch) must leave it."""
     qids = _qids()
+    followed = exists(select(Follow.id).where(Follow.player_id == PlayerCard.player_id))
     players = db.execute(
         select(PlayerCard.player_id, Athlete.image, PlayerCard.card["player"]["photo"])
         .join(qids, qids.c.player_id == PlayerCard.player_id)
         .join(Athlete, Athlete.qid == qids.c.qid)
-        .where(exists(select(Follow.id).where(Follow.player_id == PlayerCard.player_id)), or_(Athlete.image.is_not(None), PlayerCard.card["player"].has_key("photo")))
+        .where(or_(and_(followed, Athlete.image.is_not(None)), PlayerCard.card["player"].has_key("photo")))
     ).all()
     shown = _shown(db, [image for _, image, _ in players if image])
     want: dict[int, dict[str, Any] | None] = {}
@@ -411,6 +413,14 @@ def stamp(db: Session) -> int:
     for player_id, card in changed:
         bus.store_card(player_id, card)
     return len(changed)
+
+
+def forget(db: Session, files: Iterable[str]) -> int:
+    """Forget these photos now, unless still wanted (a followed or starter athlete's is the same file): one
+    taken back (players unmatch) leaves the Credits page, and the cards that show it at the next stamp.
+    Returns how many."""
+    gone = {_file(f) for f in files} - set(wanted(db))
+    return len(db.execute(delete(Photo).where(Photo.file.in_(gone)).returning(Photo.id)).all()) if gone else 0
 
 
 def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]:

@@ -75,7 +75,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
   file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
   which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
-  follows or is offered now is forgotten. The app recolours each photo in its sport's colour (a duotone
+  follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
+  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app recolours each photo in its sport's colour (a duotone
   from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
   credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
   linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
@@ -297,7 +298,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
   for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
-  shown with someone else's face: it takes the match and photo back at once (off followed cards too) and
+  shown with someone else's face: it takes the match and photo back at once (off every card showing it,
+  followed or not, and off the Credits page) and
   no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
   `rematch <ref> [Q…]` takes that back, and the next weekly run may match them again. Unmatches are rows
   in `athlete_unmatch`, apart from the keep and remove decisions: a kept pro can be unmatched, and a
