@@ -164,6 +164,7 @@ def test_player_keeps_current_teams_club_first():
     ref = sm.parse_player(player, today=date(2026, 9, 30))
     assert (ref.system, ref.athlete_id, ref.born) == ("sportmonks_football", str(STAR), "1992-06-15")
     assert ref.team_ids == [str(HOME), "18546"] and ref.team_names == ["Trabzonspor", "Egypt"]
+    assert sm.parse_player({"id": 1, "display_name": "Lautaro Martínez\u00a0"}).name == "Lautaro Martínez"  # padded, as Sportmonks sends some
 
 
 def test_season_stats_add_up_this_seasons_competitions_for_the_players_teams():

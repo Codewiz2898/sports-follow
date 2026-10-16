@@ -252,7 +252,7 @@ def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
             continue
         sport = sports.of(s.sport)
         player, followed = held.get(key, (None, False))
-        who = player.name if player else s.name
+        who = (player.name if player else s.name).strip()  # a name stored before the source's padding was cut
         for at, back in ((s.out_at, False), (s.back_at, True)):
             if at is None or at < since or (key in newest and newest[key][0] >= at):
                 continue

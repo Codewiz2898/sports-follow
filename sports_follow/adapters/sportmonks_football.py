@@ -307,7 +307,8 @@ def parse_player(p: dict[str, Any], today: date | None = None) -> PlayerRef:
     return PlayerRef(
         system="sportmonks_football",
         athlete_id=str(p["id"]),
-        name=p.get("display_name") or p.get("common_name") or p.get("name") or "",
+        # Names come padded, with a no-break space at times ("Lautaro Martínez\u00a0"): strip() takes both.
+        name=str(p.get("display_name") or p.get("common_name") or p.get("name") or "").strip(),
         team_ids=[tid for _, tid, _ in current],
         team_names=[name for _, _, name in current],
         born=p.get("date_of_birth"),
@@ -368,7 +369,6 @@ def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_footb
             player = spell.get("player") or {}
             if not spell.get("id") or not player.get("id") or spell.get("completed"):
                 continue
-            # Names come padded, with a no-break space at times ("William Saliba\u00a0"): strip() takes both.
             name = str(player.get("display_name") or player.get("common_name") or player.get("name") or "").strip()
             ref = PlayerRef(system=system, athlete_id=str(player["id"]), name=name, team_ids=[str(team["id"])], team_names=[team.get("name") or ""],
                             born=player.get("date_of_birth"))
