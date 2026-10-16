@@ -6,7 +6,7 @@ import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { BellIcon, ChevronIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
+import { BellIcon, ChevronIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
 import { FollowingProvider, useFollowing } from './following'
@@ -16,6 +16,7 @@ import { CampaignPage } from './pages/CampaignPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
 import { FollowingPage } from './pages/FollowingPage'
+import { LivePage } from './pages/LivePage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
@@ -119,6 +120,7 @@ function Sidebar() {
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
+        <NavLink to="/live"><LiveIcon width={18} height={18} />Live now</NavLink>
         <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts<Unread /></NavLink>
         <NavLink to="/account"><UserIcon width={18} height={18} />{me?.signed_in ? 'Account' : 'Sign in'}</NavLink>
       </nav>
@@ -192,6 +194,7 @@ function App() {
             <Route path="/" element={<TodayPage />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/following" element={<FollowingPage />} />
+            <Route path="/live" element={<LivePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
@@ -206,8 +209,8 @@ function App() {
         </ErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
-        {/* The Following page is part of Today here (its strip opens it): Today stays lit there. */}
-        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
+        {/* The Following and Live pages are part of Today here (Today opens them): Today stays lit there. */}
+        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' || pathname === '/live' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
         <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>
