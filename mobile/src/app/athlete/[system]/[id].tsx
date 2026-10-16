@@ -9,7 +9,7 @@ import { safeHref } from '../../../../../web/src/format'
 import { previewAbout } from '../../../../../web/src/search'
 import { useAccount } from '../../../account'
 import { api, type AthletePreview, type SearchResult } from '../../../api'
-import { PlayerBand, ResultsList, StatGrid, UpcomingList } from '../../../blocks'
+import { b, PlayerBand, ResultsList, StatGrid, UpcomingList } from '../../../blocks'
 import { toneOf, useSports } from '../../../catalog'
 import { BackIcon, PlusIcon } from '../../../icons'
 import { useSearchActions } from '../../../search'
@@ -73,7 +73,7 @@ export default function AthleteScreen() {
         back={<Btn kind="icon" accessibilityLabel="Back to search" colours={{ bg: tone.on }} icon={<BackIcon size={20} color={tone.sport} />} onPress={() => (router.canGoBack() ? router.back() : router.replace('/search'))} />}
         actions={<Btn label="Follow" icon={<PlusIcon size={16} color={tone.sport} />} colours={{ fg: tone.sport, bg: tone.on, border: tone.on }} busy={Boolean(actions.pending)} disabled={!name || (noSource && !research)} onPress={follow} />}
       >
-        <Text style={{ fontFamily: font[600], fontSize: 13, lineHeight: 18.5, color: tone.onSoft }}>
+        <Text style={[{ fontFamily: font[600], fontSize: 13, lineHeight: 18.5, color: tone.onSoft }, preview?.photo ? b.besidePhoto : null]}>
           {noSource
             ? research
               ? 'No live source has this athlete yet, so the research agent builds their page (1 to 3 minutes). That uses one of your AI researches for today.'
