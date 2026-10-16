@@ -1,13 +1,16 @@
 """The admin panel (admin.py, controls.py): sports and sources turned off and on while the app runs, within
 what the server's settings allow; what a source may spend, changed and put back; and the panel's own
-password, which is the only way in. What it does to accounts needs Postgres (test_admin_db.py).
+password and authenticator code, the only way in, each sign-in counted for the alert that emails it. What it does to accounts needs Postgres (test_admin_db.py).
 Redis, the database and the job queue are fakes here (test_api.Api)."""
 
 from __future__ import annotations
 
 import pytest
 
-from sports_follow import admin, adapters, controls, server, sports
+import base64
+import time
+
+from sports_follow import admin, adapters, controls, metrics, server, sports
 from sports_follow.adapters import ADAPTERS, KNOWN, budget
 from tests.test_api import Api, api  # noqa: F401  (the fixture)
 
@@ -195,6 +198,119 @@ def test_without_a_password_set_the_panel_isnt_there(api, tmp_path, monkeypatch)
     assert api.call("GET", "/api/admin/sports").status_code == 404
 
 
+# ---------------------------------------------------------------- the authenticator code
+
+KEY = base64.b32encode(b"12345678901234567890").decode()  # RFC 6238's test key
+
+
+def test_codes_are_the_ones_authenticator_apps_show():
+    # RFC 6238's SHA-1 test vectors (8 digits there; an app shows the last 6).
+    for at, eight in ((59, "94287082"), (1111111109, "07081804"), (1234567890, "89005924"), (2000000000, "69279037")):
+        assert admin.code_at(KEY, at // admin.CODE_STEP) == eight[-6:]
+
+
+def test_a_code_works_a_step_either_side_for_a_clock_a_little_off_and_no_further():
+    now = 1_000_000_000.0
+    step = int(now // admin.CODE_STEP)
+    for off in (-1, 0, 1):
+        assert admin.code_step(KEY, admin.code_at(KEY, step + off), now) == step + off
+    for off in (-2, 2):
+        assert admin.code_step(KEY, admin.code_at(KEY, step + off), now) is None
+    for typed in ("", "12345", "1234567", "abcdef", None, 123456, "١٢٣٤٥٦", "１２３４５６"):  # other scripts' digits too
+        assert admin.code_step(KEY, typed, now) is None
+
+
+@pytest.fixture
+def with_code(password):
+    password.write_text(admin.Keys(password.read_text().strip(), KEY).text())
+    return password
+
+
+def code_now() -> str:
+    return admin.code_at(KEY, int(time.time() // admin.CODE_STEP))
+
+
+def test_with_an_authenticator_key_the_password_alone_doesnt_open_the_panel(api, with_code, monkeypatch):
+    counted = []
+    monkeypatch.setattr(metrics, "admin_sign_in", counted.append)
+    alone = sign_in(api)
+    assert alone.status_code == 401 and alone.json()["detail"] == "That password or code isn't right."  # never says which
+    wrong_code = api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": PASSWORD, "code": "000000" if code_now() != "000000" else "111111"})
+    assert wrong_code.status_code == 401
+    code = code_now()
+    assert api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": "wrong", "code": code}).status_code == 401
+    answer = api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": PASSWORD, "code": code})
+    assert answer.status_code == 200
+    assert api.call("GET", "/api/admin/me", headers=admin_cookie(answer)).json() == {"admin": True, "code": True}
+    # A code works once: seen over a shoulder, or sent twice, it's refused.
+    assert api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": PASSWORD, "code": code}).status_code == 401
+    assert counted == ["wrong", "wrong", "wrong", "ok", "wrong"]
+
+
+@pytest.mark.parametrize("password_tried", [PASSWORD, "a wrong guess"])
+def test_a_code_in_another_scripts_digits_is_just_wrong_whatever_the_password(api, with_code, password_tried):
+    # Never an error after a right password and a 401 after a wrong one: that would tell a guesser which.
+    answer = api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": password_tried, "code": "١٢٣٤٥٦"})
+    assert answer.status_code == 401 and answer.json()["detail"] == "That password or code isn't right."
+
+
+def test_adding_an_authenticator_key_signs_every_admin_out(api, password):
+    cookie = admin_cookie(sign_in(api))
+    assert api.call("GET", "/api/admin/me", headers=cookie).json() == {"admin": True, "code": False}  # the panel says so
+    password.write_text(admin.Keys(password.read_text().strip(), KEY).text())
+    assert api.call("GET", "/api/admin/me", headers=cookie).status_code == 401
+
+
+def test_the_code_command_keeps_a_key_only_once_a_code_from_the_app_checks_out(password, monkeypatch, capsys):
+    hashed = password.read_text().strip()
+    shown = {}
+
+    def app_reads_the_key(prompt):
+        if "key" not in shown:  # the key it printed, typed into the app
+            shown["key"] = "".join(capsys.readouterr().out.split("Add this key")[1].split("\n\n")[1].split())
+        return admin.code_at(shown["key"], int(time.time() // admin.CODE_STEP))
+
+    assert admin.set_code(ask=lambda prompt: "12345x") == 1  # never a right code: nothing kept
+    assert password.read_text().strip() == hashed
+    capsys.readouterr()
+    assert admin.set_code(ask=app_reads_the_key) == 0
+    keys = admin.stored()
+    assert keys is not None and keys.password == hashed and keys.totp == shown["key"]
+    assert oct(password.stat().st_mode & 0o777) == "0o600"
+    # A new password keeps the key, and the key needs a password first.
+    monkeypatch.setattr(admin.getpass, "getpass", lambda prompt: "a brand new long password")
+    assert admin.set_password() == 0
+    renewed = admin.stored()
+    assert renewed is not None and renewed.totp == shown["key"] and admin.check_password("a brand new long password", renewed.password)
+    password.unlink()
+    assert admin.set_code(ask=lambda prompt: "123456") == 1
+
+
+def test_a_file_without_a_password_on_its_first_line_is_no_panel(password):
+    password.write_text(f"totp:{KEY}\n")
+    assert admin.stored() is None
+
+
+def test_a_key_pasted_in_fours_or_with_windows_line_ends_still_reads(password):
+    hashed = password.read_text().strip()
+    fours = " ".join(KEY[i:i + 4] for i in range(0, len(KEY), 4)).lower()
+    password.write_bytes(f"{hashed}\r\ntotp:{fours}\r\n".encode())
+    assert admin.stored() == admin.Keys(hashed, KEY.rstrip("="))
+
+
+@pytest.mark.parametrize("line", ["totp:ABC", "totp:not a key!", "totp:0189"])
+def test_a_key_that_isnt_one_shuts_the_panel_rather_than_opening_on_the_password(api, password, line, caplog):
+    password.write_text(password.read_text().strip() + f"\n{line}\n")
+    assert admin.stored() is None
+    assert "isn't a key" in caplog.text
+    assert sign_in(api).status_code == 404
+
+
+def test_search_engines_are_told_not_to_list_the_admin_page():
+    assert server._not_indexed("admin") == server._not_indexed("admin/users/3") == {"X-Robots-Tag": "noindex, nofollow"}
+    assert server._not_indexed("") == server._not_indexed("player/7") == server._not_indexed("administrator") == {}
+
+
 def test_the_panel_opens_with_its_password_only(api, password):
     assert api.call("GET", "/api/admin/me").status_code == 401
     assert api.call("GET", "/api/admin/sports", headers={"Cookie": f"{admin.COOKIE}=made-up"}).status_code == 401
@@ -204,7 +320,7 @@ def test_the_panel_opens_with_its_password_only(api, password):
     assert answer.status_code == 200
     set_cookie = answer.headers["set-cookie"].lower()
     assert "httponly" in set_cookie and "samesite=strict" in set_cookie and "path=/api/admin" in set_cookie
-    assert api.call("GET", "/api/admin/me", headers=admin_cookie(answer)).json() == {"admin": True}
+    assert api.call("GET", "/api/admin/me", headers=admin_cookie(answer)).json() == {"admin": True, "code": False}
 
 
 def test_a_new_password_signs_every_admin_out(api, password):
