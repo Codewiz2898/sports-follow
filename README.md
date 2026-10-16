@@ -275,8 +275,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   it's kept, both in `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE`. Without a password the panel isn't there (404);
   without a key it asks for the password alone and says so on every page. An admin stays signed in 12
   hours, a new password or key signs every admin out, and tries are limited per address and, for wrong
-  ones, across everyone. Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails every one that
-  works, and many that don't. The page tells search engines not to list it (`X-Robots-Tag`), and it's its
+  ones, across everyone. Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
+  how many in the last 5 minutes), and when many don't. The page tells search engines not to list it (`X-Robots-Tag`), and it's its
   own chunk of the web build, so fans don't download it.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,

@@ -124,10 +124,10 @@
     "uid": "sf-admin-sign-in",
     "title": "Someone signed in to the admin panel",
     "for": "0s",
-    "expr": "sum(increase(sports_follow_admin_sign_ins_total{job=\"sports-follow-api\", result=\"ok\"}[10m]))",
+    "expr": "sum(increase(sports_follow_admin_sign_ins_total{job=\"sports-follow-api\", result=\"ok\"}[5m]))",
     "op": "gt",
     "threshold": 0,
-    "summary": "A sign-in to the admin panel in the last 10 minutes. If it wasn't you, set a new password and code at once (deploy/README.md, \"The admin panel\"): that signs every admin out.",
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} sign-in(s) to the admin panel in the last 5 minutes (another within these 5 minutes sends no email of its own). If it wasn't you, set a new password and code at once (deploy/README.md, \"The admin panel\"): that signs every admin out.",
     "no_data": "OK"
   },
   {

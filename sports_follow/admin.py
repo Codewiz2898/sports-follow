@@ -20,6 +20,7 @@ import base64
 import getpass
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -40,6 +41,8 @@ from . import accounts, controls, sports
 from .adapters import ADAPTERS, ALL, KNOWN, budget
 from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, Follow, Player, PushSubscription
+
+log = logging.getLogger("sports_follow.admin")
 
 PASSWORD_PATH = Path.home() / ".config" / "sports-follow" / "admin-password"
 MIN_PASSWORD = 12
@@ -84,6 +87,14 @@ def stored() -> Keys | None:
     if not lines or not lines[0].startswith("scrypt$"):
         return None
     totp = next((line[len("totp:"):] for line in lines[1:] if line.startswith("totp:")), None)
+    if totp is not None:
+        totp = "".join(totp.split()).upper().rstrip("=")  # pasted by hand, as `code` prints it, in fours
+        try:
+            base64.b32decode(totp + "=" * (-len(totp) % 8))
+        except ValueError:
+            # Shut, never open: without its code the panel would take the password alone.
+            log.error("admin panel: the authenticator key in %s isn't a key; the panel is shut until it is (python -m sports_follow.admin code)", password_file())
+            return None
     return Keys(lines[0], totp or None)
 
 
@@ -131,7 +142,9 @@ def code_at(key: str, step: int) -> str:
 def code_step(key: str, code: object, now: float | None = None) -> int | None:
     """The step a typed code belongs to (now, or CODE_DRIFT either side), or None if it's none of them.
     The caller refuses a step it has seen before, so a code works once."""
-    if not isinstance(code, str) or not re.fullmatch(rf"\d{{{CODE_DIGITS}}}", code.strip()):
+    # [0-9], not \d: Python's \d takes any script's digits ("١٢٣٤٥٦"), which compare_digest refuses with an
+    # error, and an error only after a right password would tell a guesser the password was right.
+    if not isinstance(code, str) or not re.fullmatch(rf"[0-9]{{{CODE_DIGITS}}}", code.strip()):
         return None
     step = int((time.time() if now is None else now) // CODE_STEP)
     found = None

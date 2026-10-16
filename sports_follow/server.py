@@ -1098,12 +1098,6 @@ def _switch(body: dict, field: str) -> bool:
     return value
 
 
-@app.get("/api/admin/login")
-async def admin_login_asks() -> dict[str, Any]:
-    """What the sign-in asks for: the password, and a code from the authenticator app once one is set."""
-    return {"code": (await _admin_keys()).totp is not None}
-
-
 @app.post("/api/admin/login")
 async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
     """Sign in to the admin panel with its password and, once one is set, a code from the authenticator

@@ -216,7 +216,7 @@ def test_a_code_works_a_step_either_side_for_a_clock_a_little_off_and_no_further
         assert admin.code_step(KEY, admin.code_at(KEY, step + off), now) == step + off
     for off in (-2, 2):
         assert admin.code_step(KEY, admin.code_at(KEY, step + off), now) is None
-    for typed in ("", "12345", "1234567", "abcdef", None, 123456):
+    for typed in ("", "12345", "1234567", "abcdef", None, 123456, "١٢٣٤٥٦", "１２３４５６"):  # other scripts' digits too
         assert admin.code_step(KEY, typed, now) is None
 
 
@@ -233,7 +233,6 @@ def code_now() -> str:
 def test_with_an_authenticator_key_the_password_alone_doesnt_open_the_panel(api, with_code, monkeypatch):
     counted = []
     monkeypatch.setattr(metrics, "admin_sign_in", counted.append)
-    assert api.call("GET", "/api/admin/login").json() == {"code": True}
     alone = sign_in(api)
     assert alone.status_code == 401 and alone.json()["detail"] == "That password or code isn't right."  # never says which
     wrong_code = api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": PASSWORD, "code": "000000" if code_now() != "000000" else "111111"})
@@ -248,10 +247,16 @@ def test_with_an_authenticator_key_the_password_alone_doesnt_open_the_panel(api,
     assert counted == ["wrong", "wrong", "wrong", "ok", "wrong"]
 
 
+@pytest.mark.parametrize("password_tried", [PASSWORD, "a wrong guess"])
+def test_a_code_in_another_scripts_digits_is_just_wrong_whatever_the_password(api, with_code, password_tried):
+    # Never an error after a right password and a 401 after a wrong one: that would tell a guesser which.
+    answer = api.call("POST", "/api/admin/login", address="81.2.69.142", body={"password": password_tried, "code": "١٢٣٤٥٦"})
+    assert answer.status_code == 401 and answer.json()["detail"] == "That password or code isn't right."
+
+
 def test_adding_an_authenticator_key_signs_every_admin_out(api, password):
     cookie = admin_cookie(sign_in(api))
     assert api.call("GET", "/api/admin/me", headers=cookie).json() == {"admin": True, "code": False}  # the panel says so
-    assert api.call("GET", "/api/admin/login").json() == {"code": False}
     password.write_text(admin.Keys(password.read_text().strip(), KEY).text())
     assert api.call("GET", "/api/admin/me", headers=cookie).status_code == 401
 
@@ -284,6 +289,21 @@ def test_the_code_command_keeps_a_key_only_once_a_code_from_the_app_checks_out(p
 def test_a_file_without_a_password_on_its_first_line_is_no_panel(password):
     password.write_text(f"totp:{KEY}\n")
     assert admin.stored() is None
+
+
+def test_a_key_pasted_in_fours_or_with_windows_line_ends_still_reads(password):
+    hashed = password.read_text().strip()
+    fours = " ".join(KEY[i:i + 4] for i in range(0, len(KEY), 4)).lower()
+    password.write_bytes(f"{hashed}\r\ntotp:{fours}\r\n".encode())
+    assert admin.stored() == admin.Keys(hashed, KEY.rstrip("="))
+
+
+@pytest.mark.parametrize("line", ["totp:ABC", "totp:not a key!", "totp:0189"])
+def test_a_key_that_isnt_one_shuts_the_panel_rather_than_opening_on_the_password(api, password, line, caplog):
+    password.write_text(password.read_text().strip() + f"\n{line}\n")
+    assert admin.stored() is None
+    assert "isn't a key" in caplog.text
+    assert sign_in(api).status_code == 404
 
 
 def test_search_engines_are_told_not_to_list_the_admin_page():

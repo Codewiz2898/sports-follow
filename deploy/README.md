@@ -241,8 +241,8 @@ each sign-in, and a new password or key signs every admin out.
 .venv/bin/python -m sports_follow.admin code         # adds the authenticator app's key to it
 deploy/push-secrets.sh deploy@<server-ip>
 ```
-Every sign-in that works is emailed ("Someone signed in to the admin panel"), and so are 10 wrong ones in
-an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
+A sign-in that works is emailed ("Someone signed in to the admin panel", with how many in the last 5
+minutes; another within those 5 minutes sends no email of its own), and so are 10 wrong ones in an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
 If a sign-in wasn't you, make a new password and key at once, and send them: that signs every admin out.
 The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
 --force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
@@ -472,7 +472,7 @@ first failures after a deploy count:
 | Pushes aren't going out | for 5 minutes, a moment found over 3 minutes ago hasn't been sent |
 | Pushes are failing | over 20% of the last 30 minutes' pushes failed (unsubscribed devices aside), at least 3 |
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
-| Someone signed in to the admin panel | a sign-in to `/admin` worked, in the last 10 minutes: if it wasn't you, see "The admin panel" |
+| Someone signed in to the admin panel | a sign-in to `/admin` worked in the last 5 minutes (it says how many): if it wasn't you, see "The admin panel" |
 | Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
 
 **Setting it up** (you, once):

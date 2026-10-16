@@ -72,10 +72,8 @@ export default function AdminApp() {
 function SignIn({ onIn }: { onIn: () => void }) {
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
-  const [asksCode, setAsksCode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => { admin.asks().then((a) => setAsksCode(a.code), () => {}) }, [])
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
@@ -95,17 +93,14 @@ function SignIn({ onIn }: { onIn: () => void }) {
         <h1 className="dsp page-title">Admin</h1>
         <label htmlFor="admin-password" className="small muted">The admin password</label>
         <input id="admin-password" className="field" type="password" autoComplete="current-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
-        {asksCode && (
-          <>
-            <label htmlFor="admin-code" className="small muted">The code from your authenticator app</label>
-            <input
-              id="admin-code" className="field code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="000000"
-              value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-            />
-          </>
-        )}
+        {/* Always here: the page doesn't say whether the password alone would do. The server ignores it until a key is set. */}
+        <label htmlFor="admin-code" className="small muted">The code from your authenticator app</label>
+        <input
+          id="admin-code" className="field code" inputMode="numeric" autoComplete="one-time-code" placeholder="000000"
+          value={code} onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+        />
         {error && <div className="error-box" role="alert">{error}</div>}
-        <button type="submit" className="btn primary" disabled={busy || !password || (asksCode && code.length !== 6)}>{busy ? <span className="spinner" /> : 'Sign in'}</button>
+        <button type="submit" className="btn primary" disabled={busy || !password}>{busy ? <span className="spinner" /> : 'Sign in'}</button>
         <a href="/" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Back to {APP_NAME}</a>
       </form>
     </div>

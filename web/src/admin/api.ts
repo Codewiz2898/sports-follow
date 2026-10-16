@@ -68,8 +68,6 @@ const at = (path: string) => `/api/admin/${path}`
 export const admin = {
   /** Signed in; and whether sign-in asks for an authenticator code. */
   me: () => request<{ admin: true; code: boolean }>(at('me')),
-  /** What sign-in asks for: the password, and a code from the authenticator app once one is set. */
-  asks: () => request<{ code: boolean }>(at('login')),
   login: (password: string, code: string) => request<{ admin: true }>(at('login'), json('POST', { password, code })),
   logout: () => request<{ admin: false }>(at('logout'), { method: 'POST' }),
   sports: () => request<{ sports: AdminSport[] }>(at('sports')),
