@@ -583,19 +583,32 @@ async def campaign(slug: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
     return shown
 
 
-async def _follow_row(row: dict[str, Any], fan: str, address: str | None) -> int | None:
-    """Follow one of a campaign's rows as the app would (key alerts, the default); None if it couldn't be."""
+CAMPAIGN_FOLLOWS_AT_ONCE = 3  # a whole team's follows, a few at a time: each may ask its source and take a pooled connection
+
+
+async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns: asyncio.Semaphore) -> int | None:
+    """Follow one of a campaign's rows as the app would (key alerts, the default); None if it couldn't be, for
+    whatever reason, so one player's failure never fails the rest."""
     target = campaigns.to_follow(row)
     if target is None:
         return None
-    try:
-        if "player_id" in target:
-            # On Sports Follow with a working card (search._ours fills in no other): one row, no build.
-            await in_db(lambda db: db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing()))
-            return target["player_id"]
-        return await _follow_athlete(target, fan, address)
-    except HTTPException as exc:
-        log.info("campaign follow of %s: %s", row.get("key"), exc.detail)
+    async with turns:
+        try:
+            if "player_id" in target:
+                # On Sports Follow with a card that isn't failed (search._ours offers no other): the follow row, and
+                # the build again for a card still building, as /api/follows does, in case its job was lost.
+                def save(db: Session) -> str | None:
+                    db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing())
+                    return db.scalar(select(PlayerCard.status).where(PlayerCard.player_id == target["player_id"]))
+
+                if await in_db(save) == "building":
+                    await enqueue("build_card", target["player_id"])
+                return target["player_id"]
+            return await _follow_athlete(target, fan, address)
+        except HTTPException as exc:
+            log.info("campaign follow of %s: %s", row.get("key"), exc.detail)
+        except Exception:
+            log.warning("campaign follow of %s failed", row.get("key"), exc_info=True)
         return None
 
 
@@ -617,7 +630,8 @@ async def campaign_follow(request: Request, slug: str, body: dict = Body(...), f
         raise HTTPException(400, "Say which: a team, or the players.")
     address = client_address(request)
     already = [r["player_id"] for r in rows if r.get("following") and r.get("player_id")]
-    done = await asyncio.gather(*(_follow_row(r, fan, address) for r in rows if not (r.get("following") and r.get("player_id"))))
+    turns = asyncio.Semaphore(CAMPAIGN_FOLLOWS_AT_ONCE)
+    done = await asyncio.gather(*(_follow_row(r, fan, address, turns) for r in rows if not (r.get("following") and r.get("player_id"))))
     followed = already + [pid for pid in done if pid is not None]
     return {"player_ids": list(dict.fromkeys(followed)), "failed": sum(pid is None for pid in done)}
 

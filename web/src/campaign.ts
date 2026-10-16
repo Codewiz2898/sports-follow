@@ -9,10 +9,19 @@ export function campaignRows(c: Campaign): SearchResult[] {
   return [...c.players, ...c.teams.flatMap((t) => t.players)]
 }
 
+/** A moment in a zone, from its parts (never a formatted string's order or spacing): "Tue 24 Nov", "3:00 pm",
+ * and its date as "2026-11-24", which sorts. */
 function parts(at: Date, zone: string): { day: string; time: string; date: string } {
-  const get = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-GB', { timeZone: zone, ...o }).format(at)
-  const hm = new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', minute: '2-digit', hour12: true }).format(at)
-  return { day: `${get({ weekday: 'short' })} ${get({ day: 'numeric', month: 'short' })}`, time: hm.replace(' AM', ' am').replace(' PM', ' pm'), date: get({ year: 'numeric', month: '2-digit', day: '2-digit' }) }
+  const bits = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(at).map((p) => [p.type, p.value]))
+  const hour = Number(bits.hour) % 24
+  const month = new Intl.DateTimeFormat('en-GB', { timeZone: zone, month: '2-digit' }).format(at)
+  return {
+    day: `${bits.weekday} ${bits.day} ${bits.month}`,
+    time: `${hour % 12 || 12}:${bits.minute} ${hour < 12 ? 'am' : 'pm'}`,
+    date: `${bits.year}-${month}-${String(bits.day).padStart(2, '0')}`,
+  }
 }
 
 export interface ScheduledGame extends CampaignGame {

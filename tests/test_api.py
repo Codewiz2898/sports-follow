@@ -1280,7 +1280,7 @@ def _row(key: str, name: str, player_id: int | None = None, following: bool = Fa
 WORLDS = {"slug": "worlds", "sport": "esports", "title": "Worlds final", "event": None, "lines": [], "games": [], "zone": {"name": "Asia/Kolkata", "label": "IST"},
           "players": [], "teams": [{"team_id": "126061", "name": "T1", "game": "League of Legends", "players": [
               _row("pandascore_esports:585", "Faker", 3, True), _row("pandascore_esports:9", "Zeus", 4), _row("pandascore_esports:10", "Oner"),
-              _row("pandascore_esports:11", "Gone")]}]}
+              _row("pandascore_esports:11", "Gone"), _row("pandascore_esports:12", "Broken")]}]}
 
 
 def test_a_campaign_page_is_its_rows_for_this_fan_and_none_at_an_address_that_isnt_one(api, monkeypatch):
@@ -1305,17 +1305,23 @@ def test_following_a_whole_team_follows_each_player_on_its_roster_with_key_alert
         picked.append((body, fan))
         if body["athlete_id"] == "11":
             raise server.HTTPException(404, "That athlete isn't in the source any more.")
+        if body["athlete_id"] == "12":
+            raise TimeoutError("no pooled connection")  # not the API's own refusal: still one player's failure only
         return 20 + len(picked)
 
     monkeypatch.setattr(server, "_follow_athlete", follow_athlete)
+    # Zeus's card is still building: following him asks for the build again, as /api/follows does.
+    real = Db.scalar
+    monkeypatch.setattr(Db, "scalar", lambda self, stmt: "building" if stmt.column_descriptions[0]["expr"] is PlayerCard.status else real(self, stmt))
     got = api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "126061"})
-    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 21], "failed": 1}
+    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 21], "failed": 2}
     # Faker was followed already; Zeus is on Sports Follow, so one follow row with the default (key) alerts;
-    # Oner and Gone through their source, by its ids, never by name.
+    # the rest through their source, by its ids, never by name.
     inserts = [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow"]
     assert [(_param(s, "fan_id"), _param(s, "player_id"), _param(s, "alert_rules")) for s in inserts] == [("fan", 4, {})]
-    assert [b for b, _ in picked] == [{"system": "pandascore_esports", "athlete_id": "10", "league": "league-of-legends", "qid": None},
-                                      {"system": "pandascore_esports", "athlete_id": "11", "league": "league-of-legends", "qid": None}]
+    assert ("build_card", 4) in api.queue.jobs
+    assert [b["athlete_id"] for b, _ in picked] == ["10", "11", "12"]
+    assert picked[0][0] == {"system": "pandascore_esports", "athlete_id": "10", "league": "league-of-legends", "qid": None}
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "999"}).status_code == 404
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": 126061}).status_code == 400
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={}).status_code == 400

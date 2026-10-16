@@ -126,12 +126,14 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
   const [error, setError] = useState<string | null>(null)
 
   const toggleOne = (r: SearchResult) => void follow.toggle(r).then(reload)
-  const toggleAll = async (key: string, rows: SearchResult[], which: { team: string } | { players: true }) => {
+  const toggleAll = async (key: string, rows: SearchResult[], which: { team: string } | { players: true }, ask: string) => {
     if (busy) return
     setBusy(key)
     setError(null)
     try {
       if (allFollowed(rows, follow.followed)) {
+        // Some may have been followed elsewhere first, with their own alerts: ask before they all go.
+        if (!window.confirm(ask)) return
         for (const r of rows) if (r.player_id != null && following.isFollowing(r.player_id)) await following.unfollow(r.player_id)
       } else {
         const done = await api.campaignFollow(c.slug, which)
@@ -167,7 +169,7 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
             })}
           </div>
           {c.players.length > 1 && (
-            <FollowAll on={allFollowed(c.players, follow.followed)} busy={busy === 'players'} onClick={() => void toggleAll('players', c.players, { players: true })}
+            <FollowAll on={allFollowed(c.players, follow.followed)} busy={busy === 'players'} onClick={() => void toggleAll('players', c.players, { players: true }, `Unfollow ${both === 'both' ? 'both' : `all ${c.players.length}`}?`)}
               label={`Follow ${both}`} done={`Following ${both}`} />
           )}
         </>
@@ -194,7 +196,7 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
             <span className="small soft">The line-up is coming soon.</span>
           )}
           {t.players.length > 0 && (
-            <FollowAll on={allFollowed(t.players, follow.followed)} busy={busy === t.team_id} onClick={() => void toggleAll(t.team_id, t.players, { team: t.team_id })}
+            <FollowAll on={allFollowed(t.players, follow.followed)} busy={busy === t.team_id} onClick={() => void toggleAll(t.team_id, t.players, { team: t.team_id }, `Unfollow all ${t.players.length} of ${t.name}'s players?`)}
               label={`Follow ${t.name} · ${t.players.length} players`} done={`Following ${t.name}`} onSport />
           )}
         </article>
@@ -255,6 +257,7 @@ function HowToGetAlerts() {
     <li key="android">
       <span className="title">Android</span>
       <span className="small">In Chrome, tap <b>Install app</b> (or the <b>⋮</b> menu, then <b>Install app</b>). Open {APP_NAME} from your home screen and turn alerts on.</span>
+      <span className="small muted">Opened from WhatsApp? Tap <b>⋮</b>, then <b>Open in Chrome</b> first.</span>
       {canInstall && <InstallButton compact />}
     </li>
   )
@@ -262,6 +265,7 @@ function HowToGetAlerts() {
     <li key="iphone">
       <span className="title">iPhone</span>
       <span className="small">In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>. Open {APP_NAME} from your Home Screen and turn alerts on: an iPhone sends alerts only to apps on its Home Screen.</span>
+      <span className="small muted">Opened from WhatsApp? Tap the <b>Safari</b> button (or <b>Open in Safari</b>) first.</span>
     </li>
   )
   return (
