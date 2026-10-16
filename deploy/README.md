@@ -396,7 +396,9 @@ the site.
 **From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
 It waits for your approval too. A deploy goes ahead only if the CI workflow passed for that commit. A run
 by hand cancels a deploy waiting after CI (a rollback would otherwise queue behind it); re-run that one
-later to deploy it. Deploys never run for pull requests: a fork's PR must not reach the deploy key.
+later to deploy it. One catch: a rollback queued behind a deploy that's running is replaced if a merge's
+deploy queues too (GitHub keeps one run waiting per group), so after such a merge check that the rollback
+is still there. Deploys never run for pull requests: a fork's PR must not reach the deploy key.
 
 **By hand:** `ssh deploy@<server-ip> /opt/sports-follow/deploy/deploy.sh deploy` (or `deploy <commit>`,
 `rollback`, `status`).

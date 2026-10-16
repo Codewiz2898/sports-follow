@@ -8,7 +8,7 @@
 # (DEPLOY_SUMMARY_URL), whichever are set. With nothing waiting, it says so and sends nothing.
 # deploy.yml sends the first deploy to wait; deploy-summary.yml, every morning, the one waiting then.
 # What's live: the commit /api/health names, or, from an image built before it did, the last deploy GitHub
-# recorded. The site's address: APP_URL, else the production environment's, from that deploy.
+# recorded. The site's address: APP_URL (a repository variable), else the one GitHub recorded with that deploy.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,7 +45,7 @@ while IFS='|' read -r id sha; do
   IFS='|' read -r state url at < <(api "deployments/$id/statuses?per_page=1" \
     --jq '.[0] // empty | [.state, (.environment_url // ""), .created_at] | join("|")') || continue
   if [ "${state:-}" = success ]; then deployed=$sha deployed_at=$at site=$url; break; fi
-done < <(api "deployments?environment=production&per_page=30" --jq '.[] | [(.id | tostring), .sha] | join("|")')
+done < <(api "deployments?environment=production&per_page=100" --jq '.[] | [(.id | tostring), .sha] | join("|")')
 site="${APP_URL:-$site}"
 site="${site%/}"
 
@@ -62,7 +62,7 @@ if [ -z "$want" ]; then
   title="$APP_NAME: a rollback is waiting for you"
   { echo "Approve or reject it: $run_url"; } >"$body"
 else
-  git cat-file -e "$want^{commit}" 2>/dev/null || git fetch --quiet origin "$want" || true
+  for c in "$want" ${live:+"$live"}; do git cat-file -e "$c^{commit}" 2>/dev/null || git fetch --quiet origin "$c" || true; done
   range="" range_note=""
   if [ -z "$live" ] || ! git cat-file -e "$live^{commit}" 2>/dev/null; then
     range_note="What's live is unknown, so the changes aren't listed."
@@ -91,7 +91,7 @@ else
     git log --format=%B "$range" >>"$texts"
   fi
   count=$(wc -l <"$changes" | tr -d ' ')
-  issues=$(grep -oiE '(^|[^a-z])(fix(e[sd])?|close[sd]?|resolve[sd]?) +BHA-[0-9]+' "$texts" | grep -oE 'BHA-[0-9]+' |
+  issues=$(grep -oiE '(^|[^a-z])(fix(e[sd])?|close[sd]?|resolve[sd]?) +BHA-[0-9]+((,| and|, and) +BHA-[0-9]+)*' "$texts" | grep -oE 'BHA-[0-9]+' |
     sort -t- -k2,2n -u | paste -sd, - | sed 's/,/, /g') || true
 
   # Whether CI passed for it, and for main's newest commit if that isn't it.

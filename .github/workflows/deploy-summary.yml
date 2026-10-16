@@ -28,6 +28,7 @@ jobs:
       - name: Send it, if a deploy is waiting
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
           DEPLOY_SUMMARY_TO: ${{ secrets.DEPLOY_SUMMARY_TO }}
           DEPLOY_SUMMARY_URL: ${{ secrets.DEPLOY_SUMMARY_URL }}

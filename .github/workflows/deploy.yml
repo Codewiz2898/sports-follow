@@ -61,7 +61,7 @@ jobs:
             # Without a required reviewer the deploy job wouldn't wait, so a merge would go live unseen.
             reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
               --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-            if [ "$reviewers" -eq 0 ]; then
+            if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
               echo "::error::The production environment has no required reviewer, so ${SHA:0:7} won't deploy by itself. Add one (deploy/README.md, Deploying), or run Deploy by hand."
               exit 1
             fi
@@ -78,7 +78,9 @@ jobs:
           echo "go=$go" >>"$GITHUB_OUTPUT"
       # A run waiting for approval holds the production concurrency group, so the next one would queue
       # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
-      # a deploy that's running is never stopped (its status is in_progress, not waiting).
+      # a deploy that's running isn't stopped: each run is read again just before its cancel and skipped
+      # unless it's still waiting. GitHub has no "cancel only if waiting", so an approval in that second
+      # could still be cancelled; a failed cancel (rejected meanwhile) only warns.
       - name: Cancel the waiting deploys this one replaces
         id: replaced
         if: steps.newest.outputs.go == 'true'
@@ -88,9 +90,14 @@ jobs:
           count=0
           while read -r id title; do
             [ -n "$id" ] || continue
+            status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status || true)
+            if [ "$status" != waiting ]; then echo "\"$title\" (run $id) is $status now: left alone"; continue; fi
             echo "Cancelling \"$title\" (run $id), which was waiting for approval"
-            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" --silent
-            count=$((count + 1))
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" --silent; then
+              count=$((count + 1))
+            else
+              echo "::warning::Couldn't cancel run $id; it may have been approved or rejected just now"
+            fi
           done <<<"$runs"
           echo "count=$count" >>"$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
@@ -106,6 +113,7 @@ jobs:
         continue-on-error: true
         env:
           REPLACED: ${{ steps.replaced.outputs.count }}
+          APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
           DEPLOY_SUMMARY_TO: ${{ secrets.DEPLOY_SUMMARY_TO }}
           DEPLOY_SUMMARY_URL: ${{ secrets.DEPLOY_SUMMARY_URL }}
