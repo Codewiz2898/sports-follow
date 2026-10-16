@@ -48,8 +48,9 @@ def test_no_campaign_can_take_an_address_the_android_app_has():
     assert pages and pages <= campaigns.TAKEN, pages - campaigns.TAKEN
     assert "[slug]" in routes  # the campaign page itself
     # It claims every one-word address for campaigns, so a one-word page of the web app's that it doesn't have
-    # would open its Not found: the admin panel is the one that may (README.md, "Android app").
-    web = set(re.findall(r'<Route path="/([a-z]+)', (WEB / "main.tsx").read_text()))
+    # would open its Not found: the admin panel is the one that may (README.md, "Android app"). A longer
+    # address it has no folder for, such as /match/<source>/<game>, isn't claimed and stays in the browser.
+    web = set(re.findall(r'<Route path="/([a-z]+)(?:/\*)?"', (WEB / "main.tsx").read_text()))
     assert web - pages == {"admin"}, web - pages
 
 

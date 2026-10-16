@@ -518,7 +518,8 @@ shared on WhatsApp, a campaign's link in a launch post. The app claims the addre
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/search` and the
 rest, and any one-word address for a campaign (Android 12 and later; older phones open campaigns in the
 browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the app's "Not found";
-typed into Chrome, it stays there. Android trusts the claim only once
+typed into Chrome, it stays there. A page the app doesn't have yet, such as a match's `/match/…` (BHA-272),
+isn't claimed, so its links open in the browser. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
 certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.stann.app` and
 `SPORTS_FOLLOW_ANDROID_CERT_SHA256` with the upload key's and Play App Signing's fingerprints, comma
