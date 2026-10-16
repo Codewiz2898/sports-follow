@@ -540,9 +540,9 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
 async def league_games(response: Response, tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0) -> dict[str, Any]:
     """Today's big results (since yesterday, else the latest day that had some: days where the fan is, tz
     minutes east of UTC) and big games coming up (the next fortnight) in the competitions the running
-    sources cover, whoever follows them, ranked by each sport (league.py). The same for every fan in a time
-    zone, so no cookie and a public cache. Served from the last reads; a source's read a few hours old queues
-    another for the worker, so "refreshing" says new games may come in a moment."""
+    sources cover, whoever follows them, ranked by each sport, the sports taking turns (league.py). The same
+    for every fan in a time zone, so no cookie and a public cache. Served from the last reads; a source's
+    read a few hours old queues another for the worker, so "refreshing" says new games may come in a moment."""
     games, stale = await in_db(league.cached, tz)
     for system in stale:
         try:
@@ -1783,8 +1783,10 @@ def _built(path: str) -> Path | str | None:
 @app.get("/{path:path}", include_in_schema=False)
 async def spa(path: str, request: Request) -> Response:
     """Files the build puts at the root; every other path is the app, with the page's link preview in its
-    head (share.py), since the crawlers that read those run no JavaScript. Nothing here without a build
-    (`npm run build` in web/)."""
+    head (share.py), since the crawlers that read those run no JavaScript. Never under /api/: an API path
+    that isn't one is a JSON 404, not the app. Nothing here without a build (`npm run build` in web/)."""
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(404, "Not Found")
     found = await run_in_threadpool(_built, path)
     if found is None:
         raise HTTPException(404, "Not Found")

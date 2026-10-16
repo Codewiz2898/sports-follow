@@ -175,6 +175,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             locator={"match": str(m["id"])},
             detail=" · ".join(x for x in (_stage(m), _format(m)) if x) or None,
             result=result,
+            facts={"game": game} if (game := game_name((m.get("videogame") or {}).get("slug"))) else {},
         ))
     return out
 
