@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { admin, type AdminSource, type Allowance, type Limits, type SourcesView } from './api'
-import { Note, count, useFailure } from './shared'
+import { Note, breakable, count, useFailure } from './shared'
 
 const REFRESH_MS = 30_000
 // Each window, as "a minute", "an hour", "a day".
@@ -55,7 +55,7 @@ export function SourcesTab() {
                 <li key={s.system} className="admin-row">
                   <div className="stack">
                     <span className="title">{s.name} <span className="muted small">{s.provider !== s.name ? `· ${s.provider} ` : ''}{s.licensed ? '' : '· development only'}</span></span>
-                    <span className="small muted">{sourceStatus(s)}</span>
+                    <span className="small muted">{breakable(sourceStatus(s))}</span>
                   </div>
                   <button
                     type="button" role="switch" className="switch" aria-checked={s.allowed && s.token && s.on} aria-label={`${s.name} (${sport}) on`}

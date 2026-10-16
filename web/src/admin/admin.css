@@ -17,8 +17,8 @@
 /* A sport: its colour block while it runs, paper with a ring while it's off. */
 .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 10px; }
 .admin-sport { display: flex; flex-direction: column; justify-content: space-between; gap: 22px; min-height: 148px; padding: 16px 18px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); --focus: var(--on-sport); }
-.admin-sport .dsp { font-size: 36px; }
-.admin-sport .small { color: var(--on-sport-soft); font-weight: 700; }
+.admin-sport .dsp { max-width: 100%; font-size: 36px; overflow-wrap: anywhere; }
+.admin-sport .small { min-width: 0; overflow-wrap: anywhere; color: var(--on-sport-soft); font-weight: 700; }
 .admin-sport[data-off] { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 2px var(--line); --focus: var(--text); }
 .admin-sport[data-off] .small { color: var(--muted); }
 .admin-sport:not([data-off]) .switch[aria-checked='true'] { background: var(--on-sport); }
