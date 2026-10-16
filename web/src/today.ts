@@ -1,12 +1,12 @@
 // What Today shows, worked out from the fan's players: their live games, results, the games coming up, the
-// order of their pills, and how each piece says when. Shared by the web app (pages/TodayPage.tsx and its
+// order of their pills, and how each piece says when; and which of the games on now are theirs. Shared by the web app (pages/TodayPage.tsx and its
 // components) and the Android app (mobile/), so it touches nothing of a browser's. A sport is passed by
 // its key (each app finds it its own way).
 
 import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { drawable } from './sports/facts'
-import type { ActivityItem, Card, LeagueGame, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
+import type { ActivityItem, Card, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
 
 export const FEW = 3  // until a fan follows this many, Today keeps offering starters
 export const AHEAD_DAYS = 14  // how far Coming up looks
@@ -159,6 +159,41 @@ export function wireWhen(at: string, now: number): string {
   if (!d || days == null) return ''
   if (days <= 0) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   return days < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : day(at)
+}
+
+// ---------------------------------------------------------------- every game on now (GET /api/live)
+
+/** A game on now with its sport's key, and the sport's name to call it by when it has no competition. */
+export interface GameOn { game: LiveGame & { sport: string }; label: string }
+
+/**
+ * Every game the sources have on (GET /api/live), in the order the server ranks them, split into the fan's
+ * and the rest. A game is the fan's when one of their live cards (`mine`) names one of its events, or a player
+ * it offers is one of theirs who's live; never by a name. So a game shows once, as theirs.
+ */
+export function gamesOn(sports: LiveSport[], mine: Card[]): { theirs: GameOn[]; others: GameOn[] } {
+  const events = new Set(mine.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
+  const players = new Set(mine.map((c) => c.player_id))
+  const isTheirs = (g: LiveGame) => (g.event_ids ?? []).some((id) => events.has(id)) || g.players.some((p) => p.player_id != null && players.has(p.player_id))
+  const all = sports.flatMap((s) => s.games.map((g) => ({ game: { ...g, sport: s.key }, label: s.label })))
+  return { theirs: all.filter((x) => isTheirs(x.game)), others: all.filter((x) => !isTheirs(x.game)) }
+}
+
+/** Games on now by sport, the sports in the order the server gives them; a sport with none isn't there. */
+export function bySport(games: GameOn[]): { sport: string; label: string; games: GameOn[] }[] {
+  const sports = new Map<string, { sport: string; label: string; games: GameOn[] }>()
+  for (const x of games) {
+    const found = sports.get(x.game.sport)
+    if (found) found.games.push(x)
+    else sports.set(x.game.sport, { sport: x.game.sport, label: x.label, games: [x] })
+  }
+  return [...sports.values()]
+}
+
+/** Today's way to the games on now that none of the fan's players are in: "12 other games on now" under the
+ * fan's own live games (`theirsOn`), "12 games on now" with none of theirs on. */
+export function moreOn(count: number, theirsOn: boolean): string {
+  return `${count} ${theirsOn ? 'other ' : ''}${count === 1 ? 'game' : 'games'} on now`
 }
 
 // ---------------------------------------------------------------- the big games (GET /api/league)

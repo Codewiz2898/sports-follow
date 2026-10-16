@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, type Card, type LiveGame, type LiveSport } from '../api'
 import { shortName } from '../format'
 import { Backdrop } from '../sports'
+import { gamesOn, moreOn } from '../today'
 import { GameBoard, PlainScore } from './Blocks'
 import { BlockError, ErrorBoundary } from './ErrorBoundary'
-import { CheckIcon, PlusIcon } from './Icons'
+import { CheckIcon, ChevronIcon, PlusIcon } from './Icons'
 import { Rail } from './Rail'
 import { useFollowToggle } from './Starters'
 
 const EVERY = 60_000  // the server reads a source again at most this often
 const SOON = 5_000  // when it says a read is under way, the next look
 const SHOWN = 6  // Also live's row: the most games before its "All N" card
+const NONE: LiveSport[] = []
+
+/** What the server last said is on: `loaded` once it has answered, `failed` while its last look failed. */
+export interface LiveAnswer { sports: LiveSport[]; loaded: boolean; failed: boolean }
 
 /**
  * Every game the sources have on, whoever follows it (GET /api/live, live.py), by sport, looked at again once
@@ -18,8 +24,8 @@ const SHOWN = 6  // Also live's row: the most games before its "All N" card
  * most once a minute, whoever looks, so more fans looking costs no more of a source's allowance
  * (adapters/budget.py). A hidden tab doesn't look; showing it again does.
  */
-export function useLive(): LiveSport[] {
-  const [sports, setSports] = useState<LiveSport[]>([])
+export function useLiveAnswer(): LiveAnswer {
+  const [answer, setAnswer] = useState<LiveAnswer>({ sports: NONE, loaded: false, failed: false })
   useEffect(() => {
     let current = true
     let timer: number | undefined
@@ -31,18 +37,27 @@ export function useLive(): LiveSport[] {
       api.live()
         .then((r) => {
           if (!current || mine !== latest) return
-          setSports(r.sports)
+          setAnswer({ sports: r.sports, loaded: true, failed: false })
           // A read was just asked for: look again in a moment, a few times, for the new scores.
           timer = window.setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
         })
-        .catch(() => { if (current && mine === latest) timer = window.setTimeout(() => look(tries), EVERY) })
+        .catch(() => {
+          if (!current || mine !== latest) return
+          setAnswer((a) => (a.failed ? a : { ...a, failed: true }))
+          timer = window.setTimeout(() => look(tries), EVERY)
+        })
     }
     const shown = () => { if (!document.hidden) look(0) }
     document.addEventListener('visibilitychange', shown)
     look(0)
     return () => { current = false; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
   }, [])
-  return sports
+  return answer
+}
+
+/** The games on now (useLiveAnswer), none until the server answers. */
+export function useLive(): LiveSport[] {
+  return useLiveAnswer().sports
 }
 
 type Follow = ReturnType<typeof useFollowToggle>
@@ -96,8 +111,9 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   )
 }
 
-/** One game on Today that none of the fan's players are in: outlined, so it doesn't pass for theirs. */
-function OtherGame({ game, label, follow }: { game: LiveGame & { sport: string }; label: string; follow: Follow }) {
+/** One game on now that none of the fan's players are in, on Today or the Live page (LivePage.tsx):
+ * outlined, so it doesn't pass for theirs. */
+export function OtherGame({ game, label, follow }: { game: LiveGame & { sport: string }; label: string; follow: Follow }) {
   return (
     <article className="live-other" data-sport={game.sport} aria-label={`${label}: ${game.title}, live`}>
       <Backdrop sport={game.sport} seed={game.key} />
@@ -115,19 +131,15 @@ function OtherGame({ game, label, follow }: { game: LiveGame & { sport: string }
 }
 
 /**
- * Today's tail of the live section, for every fan: the games on anywhere (GET /api/live) that none of the
- * fan's players are in, in the order the server ranks them, after the fan's own live boards (`mine`, their
- * live cards). A game is the fan's when one of their live cards names one of its events, or a player it
- * offers is one of theirs who's live; never by a name. It shows once, as theirs. Titled "Also live" under
- * the fan's own; with none of theirs on, it's the whole of "Live now". Nothing when nothing else is on.
+ * The games on anywhere (GET /api/live) that none of the fan's players are in (gamesOn), in the order the
+ * server ranks them, after the fan's own live boards (`mine`, their live cards): titled "Also live" under the
+ * fan's own; with none of theirs on, it's the whole of "Live now". Today shows it to a fan who follows nobody
+ * yet, to pick players from; a fan with players gets MoreLive's link instead. Nothing when nothing else is on.
  */
 export function AlsoLive({ mine }: { mine: Card[] }) {
   const sports = useLive()
   const follow = useFollowToggle()
-  const events = new Set(mine.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
-  const players = new Set(mine.map((c) => c.player_id))
-  const theirs = (g: LiveGame) => (g.event_ids ?? []).some((id) => events.has(id)) || g.players.some((p) => p.player_id != null && players.has(p.player_id))
-  const games = sports.flatMap((s) => s.games.filter((g) => !theirs(g)).map((g) => ({ game: { ...g, sport: s.key }, label: s.label })))
+  const games = gamesOn(sports, mine).others
   if (!games.length) return null
   return (
     <ErrorBoundary fallback={<BlockError />} resetKey={sports}>
@@ -136,5 +148,20 @@ export function AlsoLive({ mine }: { mine: Card[] }) {
       </Rail>
       {follow.error && <div className="error-box">{follow.error}</div>}
     </ErrorBoundary>
+  )
+}
+
+/**
+ * Today's way to every other game on now, under the fan's own live boards (`mine`, their live cards): a quiet
+ * link to the Live page, "12 other games on now", or with none of theirs on, "12 games on now". A game of
+ * theirs isn't counted (gamesOn). Nothing when nothing else is on.
+ */
+export function MoreLive({ mine }: { mine: Card[] }) {
+  const others = gamesOn(useLive(), mine).others.length
+  if (!others) return null
+  return (
+    <Link to="/live" className="eyebrow more-live">
+      {moreOn(others, mine.length > 0)}<ChevronIcon width={16} height={16} strokeWidth={2.6} />
+    </Link>
   )
 }
