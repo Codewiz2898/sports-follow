@@ -373,3 +373,29 @@ def test_who_is_out_is_read_a_season_at_a_time_counted_as_teams(monkeypatch):
     assert [(path, bucket, ttl) for path, bucket, ttl, _ in asked] == [
         ("/football/leagues", "League", 24 * 3600), ("/football/teams/seasons/28083", sportmonks.TEAMS, 0), ("/football/teams/seasons/28321", sportmonks.TEAMS, 0)]
     assert asked[0][3]["include"] == sm.LEAGUES_INCLUDE and set(asked[1][3]["include"].split(";")) == {"sidelined.player", "sidelined.type"}
+
+
+def test_a_match_page_reads_one_match_with_its_timeline_lines_and_both_elevens(monkeypatch):
+    def starter(pid: int, team: int, position: int, name: str) -> dict:
+        return {"player_id": pid, "team_id": team, "type_id": 11, "position_id": position, "player_name": name, "details": [_detail("MINUTES_PLAYED", 60)]}
+
+    lineups = [starter(1, HOME, 24, "Home Keeper"), starter(2, HOME, 27, "Home Striker"), starter(3, AWAY, 25, "Away Back"),
+               {"player_id": 5, "team_id": AWAY, "type_id": 12, "player_name": "Away Sub", "details": []}]
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, sportmonks._bucket(path), params["include"]))
+        return {"data": _match("INPLAY_2ND_HALF", 1, 0, lineups=lineups, events=EVENTS[:1])}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    game = sm.SportmonksFootball().match("555")
+    assert asked == [("/football/fixtures/555", "Fixture", sm.MATCH_INCLUDE)]  # one request, counted as a fixture
+    assert game is not None and (game.source_id, game.title, game.teams) == ("555", "Trabzonspor vs Galatasaray", ["Trabzonspor", "Galatasaray"])
+    # The home eleven, then the away one, attackers first; not the bench.
+    assert [(p.name, p.team_names) for p in game.players] == [("Home Striker", ["Trabzonspor"]), ("Home Keeper", ["Trabzonspor"]), ("Away Back", ["Galatasaray"])]
+    assert game.snapshot.moments[0]["kind"] == "GOAL" and game.snapshot.lines["2"].headline == "Started"
+    # A guessed line-up names nobody yet; a match Sportmonks hasn't got is none.
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": _match("NS", 0, 0, lineups=lineups, metadata=_confirmed(False))})
+    assert sm.SportmonksFootball().match("555").players == []
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": None})
+    assert sm.SportmonksFootball().match("555") is None

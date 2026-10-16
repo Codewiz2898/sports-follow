@@ -383,6 +383,16 @@ class Sport:
         kind it doesn't tell."""
         return None
 
+    # ---- a game's match page (match.py)
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """What a game's match page shows under its board, as sections its sport's web view draws by name
+        (web/src/sports/<sport>.tsx, Match), from its scoreboard (Snapshot.state), the source's key events,
+        newest first (Snapshot.moments), every player's line the source gave, by their id there, and who those
+        are ({id: (name, team)}). By default the key events as they come, which the page lists for any sport
+        ({"events": [{"clock", "kind", "text"}]}); a sport whose board says it all (chess) has nothing more."""
+        return {"events": [{k: e.get(k) for k in ("clock", "kind", "text")} for e in events]} if events else {}
+
     # ---- live games and cards (structured.py)
 
     def result_text(self, score: str, clock: str) -> str:

@@ -10,6 +10,13 @@ export interface CricketState {
   player_of_match?: string | null
 }
 
+// A match page's scorecard (the server's Cricket.match_page): each side in the order they batted, who batted for
+// it ("out" is how they were out; empty, not out) and who bowled at it.
+export interface ScorecardBatter { name: string; runs: string; balls: string; fours: string; sixes: string; strike_rate: string; out: string }
+export interface ScorecardBowler { name: string; overs: string; runs: string; wickets: string; economy: string }
+export interface ScorecardSide { team: string; score: string; batting: ScorecardBatter[]; bowling: ScorecardBowler[] }
+export interface CricketPage { scorecard?: ScorecardSide[] }
+
 /** An innings' score as the board writes it: "189/5", "412/9d", "245" all out. */
 export function inningsScore(i: CricketInnings): string {
   return `${i.runs}${i.wickets < 10 ? `/${i.wickets}` : ''}${i.declared ? 'd' : ''}`

@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
@@ -534,6 +534,33 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
         except Exception:
             log.warning("live: couldn't ask for %s's games", system, exc_info=True)
     return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
+
+
+@app.get("/api/match/{system}/{game}")
+async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """One game's match page (match.py): its board, key moments and both sides' players this fan can follow,
+    by its source and the id a fixture of it has there. Served from what's stored and last read; a read
+    over a minute old queues another for the worker, so "refreshing" says a newer one may come in a moment.
+    A game no source has named here, or of a sport turned off, is a 404: an address made up asks nothing of a
+    source."""
+    if system not in KNOWN or not match.ID.fullmatch(game):
+        raise HTTPException(404, "No such game.")
+    page, ask = await in_db(match.view, fan, system, game)
+    if ask:
+        try:
+            # One read a minute of a game, whether the last one came or failed, and at most match.READS a
+            # minute of a source's allowance (Sportmonks' football and cricket share one), whichever games
+            # fans have open.
+            if await state["redis"].set(f"match:asked:{system}:{game}", "1", nx=True, ex=match.FRESH):
+                spent = f"match:reads:{match.allowance(system)}:{int(time.time() // 60)}"
+                if await state["redis"].incr(spent) <= match.READS:
+                    await enqueue("read_match", system, game, _job_id=f"read_match:{system}:{game}")
+                await state["redis"].expire(spent, 120, nx=True)
+        except Exception:
+            log.warning("match: couldn't ask for %s:%s", system, game, exc_info=True)
+    if page is None:
+        raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
+    return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
 @app.get("/api/league")

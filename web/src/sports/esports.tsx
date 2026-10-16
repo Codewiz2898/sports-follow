@@ -1,6 +1,7 @@
 import './esports.css'
-import { dotaLine, esports as facts, isLobby, lobbyRows, place, points, shortTeam, type BattleRoyaleState, type DotaLiveMap, type EsportsState, type EsportsTeam } from './facts/esports'
-import type { BoardProps, SportView } from './view'
+import { dotaLine, esports as facts, isLobby, lobbyRows, place, points, shortTeam, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam } from './facts/esports'
+import { MatchSection } from './section'
+import type { BoardProps, MatchProps, SportView } from './view'
 
 /**
  * A battle royale lobby: the top of the standings (and the followed player's team, wherever it is),
@@ -86,4 +87,43 @@ function EsportsBoard(props: BoardProps<EsportsState | BattleRoyaleState>) {
   return isLobby(props.state) ? <LobbyBoard {...(props as BoardProps<BattleRoyaleState>)} /> : <SeriesBoard {...(props as BoardProps<EsportsState>)} />
 }
 
-export const esports: SportView = { ...facts, Board: EsportsBoard as SportView['Board'] }
+/** A match page's part: a series map by map (who took each, the one being played, a Dota 2 map's best
+ * numbers), or a lobby's whole standings and who won each of its matches. */
+function EsportsMatch({ page }: MatchProps<EsportsPage>) {
+  if (page.standings?.length) {
+    const won = (page.games ?? []).filter((g) => g.winner)
+    return (
+      <MatchSection title="Standings" note={`${page.standings.length} teams`}>
+        <div className="card card-pad stack" style={{ gap: 12 }}>
+          <table className="linescore lobby">
+            <thead><tr><th>#</th><th>Team</th><th title="Matches won">Won</th><th title="Finishes">Fin.</th><th>Pts</th></tr></thead>
+            <tbody>
+              {page.standings.map((t) => (
+                <tr key={`${t.place}-${t.name}`}><td>{place(t.place)}</td><td className="who">{t.name}</td><td>{t.wins}</td><td>{t.kills}</td><td className="total">{points(t.points)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          {won.length > 0 && <span className="small muted">{won.map((g) => `M${g.n}${g.map ? ` (${g.map})` : ''}: ${g.winner}`).join(' · ')}</span>}
+        </div>
+      </MatchSection>
+    )
+  }
+  if (!page.maps?.length) return null
+  return (
+    <MatchSection title="Maps">
+      <ol className="card list">
+        {page.maps.map((m) => (
+          <li key={m.n} className="row">
+            <span className="stack">
+              <span className="title">Map {m.n}</span>
+              {m.best && <span className="small muted">{m.best}</span>}
+            </span>
+            {m.winner ? <span className="title" style={{ textAlign: 'right' }}>{m.winner}</span> : m.status === 'running' ? <span className="badge-live">Now</span> : <span className="small muted">To play</span>}
+          </li>
+        ))}
+      </ol>
+    </MatchSection>
+  )
+}
+
+export const esports: SportView = { ...facts, Board: EsportsBoard as SportView['Board'], Match: EsportsMatch as SportView['Match'] }

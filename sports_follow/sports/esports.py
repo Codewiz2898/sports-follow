@@ -254,6 +254,27 @@ class Esports(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
+        Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
+        won each of its matches."""
+        if state.get("kind") == "battle_royale":
+            teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
+            return {
+                "standings": [{k: t.get(k) for k in ("place", "name", "points", "kills", "wins")} for t in state.get("standings") or []],
+                "games": [{"n": g.get("n"), "map": g.get("map"), "winner": teams.get(g.get("winner"))} for g in state.get("games") or []],
+            }
+        teams = {t.get("id"): t.get("name") for t in state.get("teams") or []}
+        dota = {m.get("n"): m.get("players") or {} for m in (state.get("dota") or {}).get("maps") or []}
+        maps = []
+        for m in state.get("maps") or []:
+            numbers = dota.get(m.get("n")) or {}
+            best = max(numbers.items(), key=lambda p: (p[1].get("kills") or 0, -(p[1].get("deaths") or 0)), default=None)
+            who = best and names.get(best[0], ("", ""))[0]
+            maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
+                         "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
+        return {"maps": maps} if maps else {}
+
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
         lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""
