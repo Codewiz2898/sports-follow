@@ -15,6 +15,8 @@ arq==0.28.0
 redis==5.3.1
 pywebpush==2.5.0
 httpx==0.28.1
+# Drawing link previews' pictures (share.py): a wheel with FreeType inside, no system packages.
+pillow==12.3.0
 # Finding the face in a player's photo (faces.py), in the worker only: OpenCV's YuNet detector.
 opencv-python-headless==5.0.0.93
 numpy==2.5.4
