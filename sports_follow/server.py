@@ -1816,9 +1816,9 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
 
 @app.get("/.well-known/assetlinks.json")
 def assetlinks() -> list[dict[str, Any]]:
-    """Digital Asset Links: proves this site belongs to the Android app (a Trusted Web Activity), so
-    Android opens it full screen with no browser bar. Empty until the app's package and signing
-    certificate are configured."""
+    """Digital Asset Links: proves this site belongs to the Android app, so Android opens the app for a
+    stann.in link to a page it has (App Links, mobile/app.config.ts). Empty until the app's package and
+    signing certificates are configured."""
     if not ANDROID_PACKAGE or not ANDROID_CERT_SHA256:
         return []
     return [{

@@ -68,11 +68,12 @@ export function useFollowToggle() {
   return { followed, toggle, busy: (r: SearchResult) => pending.includes(r.key), error }
 }
 
-/** A tile to tap rather than open (.tile.pick): a starter to follow, or a sport in the welcome; ringed once picked. */
-export function PickTile({ sport, top, name, detail, on, busy, onPress, big }: { sport: string; top?: string; name: string; detail?: string; on: boolean; busy?: boolean; onPress: () => void; big?: boolean }) {
+/** A tile to tap rather than open (.tile.pick): a starter to follow, or a sport in the welcome; ringed once picked.
+ * `big`, a name at 30px (.tile.pick.sport); `tall`, a campaign's player (.tile.pick.campaign-player). */
+export function PickTile({ sport, top, name, detail, on, busy, onPress, big, tall }: { sport: string; top?: string; name: string; detail?: string; on: boolean; busy?: boolean; onPress: () => void; big?: boolean; tall?: boolean }) {
   const tone = toneOf(useSports(), sport)
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Follow ${name}`} accessibilityState={{ selected: on, busy }} onPress={onPress} style={[s.tile, { backgroundColor: tone.sport }, on && { borderWidth: 3, borderColor: tone.on }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Follow ${name}`} accessibilityState={{ selected: on, busy }} onPress={onPress} style={[s.tile, tall && { minHeight: 148 }, { backgroundColor: tone.sport }, on && { borderWidth: 3, borderColor: tone.on }]}>
       <View style={s.corner}>{busy ? <Spinner color={tone.on} /> : on ? <CheckIcon size={20} color={tone.on} /> : <PlusIcon size={20} color={tone.on} />}</View>
       {top ? <Text style={[s.top, { color: tone.onSoft }]} numberOfLines={1}>{top}</Text> : null}
       <Text style={[dsp(big ? 30 : 21), { color: tone.on, paddingRight: 24 }]}>{name}</Text>
