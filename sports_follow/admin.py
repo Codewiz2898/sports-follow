@@ -1,11 +1,14 @@
 """The admin panel (/admin): turn sports and sources off and on, set what each source may spend, and look
 after accounts (sign one out everywhere, block it, delete it), on the running app.
 
-It opens with a password of its own, not a fan's account. Only its scrypt hash is kept, in
-SPORTS_FOLLOW_ADMIN_PASSWORD_FILE (else ~/.config/sports-follow/admin-password); without one the panel
-is off and every /api/admin route is a 404. Set it, or change it (which signs every admin out), with:
+It opens with a password of its own, not a fan's account, and a 6-digit code from an authenticator app
+(TOTP, RFC 6238: Google Authenticator, 1Password, Authy…). Both live in one file,
+SPORTS_FOLLOW_ADMIN_PASSWORD_FILE (else ~/.config/sports-follow/admin-password): the password's scrypt
+hash, and the app's key. Without the file the panel is off and every /api/admin route is a 404; without a
+key it asks for the password alone, and says so. Set either, or change it (which signs every admin out):
 
     .venv/bin/python -m sports_follow.admin password
+    .venv/bin/python -m sports_follow.admin code        # the authenticator app's key, checked before it's kept
 
 What the panel changes is kept by controls.py, within what the server's settings allow; the routes are
 in server.py.
@@ -18,10 +21,15 @@ import getpass
 import hashlib
 import hmac
 import os
+import re
 import secrets
+import struct
 import sys
 import threading
+import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +38,7 @@ from sqlalchemy.orm import Session
 
 from . import accounts, controls, sports
 from .adapters import ADAPTERS, ALL, KNOWN, budget
-from .config import SOURCES
+from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, Follow, Player, PushSubscription
 
 PASSWORD_PATH = Path.home() / ".config" / "sports-follow" / "admin-password"
@@ -40,7 +48,10 @@ COOKIE = "sf_admin"
 COOKIE_PATH = "/api/admin"
 SESSION_LIFE = 12 * 3600  # seconds an admin stays signed in, however busy
 ATTEMPTS_PER_ADDRESS = 10  # tries a quarter of an hour from one client address
-FAILURES_PER_HOUR = 30  # wrong passwords an hour from everyone: past it the panel waits out the hour
+FAILURES_PER_HOUR = 30  # wrong passwords or codes an hour from everyone: past it the panel waits out the hour
+CODE_STEP = 30  # seconds each authenticator code lasts
+CODE_DIGITS = 6
+CODE_DRIFT = 1  # steps either side a code still works, for a phone whose clock is a little off
 PAGE = 50  # accounts a page
 
 
@@ -51,12 +62,29 @@ def password_file() -> Path:
     return Path(os.environ.get("SPORTS_FOLLOW_ADMIN_PASSWORD_FILE") or PASSWORD_PATH)
 
 
-def stored_hash() -> str | None:
-    """The password's hash, read on each use: a new one works at once, without a restart."""
+@dataclass(frozen=True)
+class Keys:
+    """What the admin signs in with, as the file keeps it: the password's hash on its first line, and the
+    authenticator app's key on a line "totp:<base32>", or none."""
+
+    password: str
+    totp: str | None = None
+
+    def text(self) -> str:
+        return f"{self.password}\n" + (f"totp:{self.totp}\n" if self.totp else "")
+
+
+def stored() -> Keys | None:
+    """The admin's keys, read on each use: a new password or code works at once, without a restart. None
+    when there's no file, or its first line isn't a password's hash: the panel is off."""
     try:
-        return password_file().read_text().strip() or None
+        lines = [line.strip() for line in password_file().read_text().splitlines() if line.strip()]
     except (FileNotFoundError, PermissionError, IsADirectoryError):
         return None
+    if not lines or not lines[0].startswith("scrypt$"):
+        return None
+    totp = next((line[len("totp:"):] for line in lines[1:] if line.startswith("totp:")), None)
+    return Keys(lines[0], totp or None)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -81,15 +109,36 @@ def check_password(password: str, stored: str) -> bool:
 _checking = threading.BoundedSemaphore(2)  # a burst of sign-ins waits its turn, rather than taking every core
 
 
-def try_password(password: str, stored: str) -> bool:
+def try_password(password: str, hashed: str) -> bool:
     """check_password, two at a time at most: each takes about 50 ms of a core and 16 MB."""
     with _checking:
-        return check_password(password, stored)
+        return check_password(password, hashed)
 
 
-def fingerprint(stored: str) -> str:
-    """What an admin session remembers of the password it was opened with: a new password ends it."""
-    return hashlib.sha256(stored.encode()).hexdigest()[:16]
+def fingerprint(keys: Keys) -> str:
+    """What an admin session remembers of the keys it was opened with: a new password or code ends it."""
+    return hashlib.sha256(keys.text().encode()).hexdigest()[:16]
+
+
+def code_at(key: str, step: int) -> str:
+    """The authenticator app's code for a 30-second step (RFC 6238 over RFC 4226: HMAC-SHA1, 6 digits)."""
+    secret = base64.b32decode(key.upper() + "=" * (-len(key) % 8))
+    digest = hmac.new(secret, struct.pack(">Q", step), hashlib.sha1).digest()
+    at = digest[-1] & 0x0F
+    return f"{(struct.unpack('>I', digest[at:at + 4])[0] & 0x7FFFFFFF) % 10**CODE_DIGITS:0{CODE_DIGITS}d}"
+
+
+def code_step(key: str, code: object, now: float | None = None) -> int | None:
+    """The step a typed code belongs to (now, or CODE_DRIFT either side), or None if it's none of them.
+    The caller refuses a step it has seen before, so a code works once."""
+    if not isinstance(code, str) or not re.fullmatch(rf"\d{{{CODE_DIGITS}}}", code.strip()):
+        return None
+    step = int((time.time() if now is None else now) // CODE_STEP)
+    found = None
+    for s in range(step - CODE_DRIFT, step + CODE_DRIFT + 1):
+        if hmac.compare_digest(code_at(key, s), code.strip()):
+            found = s
+    return found
 
 
 def session_key(token: str) -> str:
@@ -324,10 +373,17 @@ def sign_out(db: Session, account_id: int) -> list[str] | None:
 # ---------------------------------------------------------------- the command
 
 
-def main(argv: list[str]) -> int:
-    if argv[:1] != ["password"]:
-        print(__doc__)
-        return 2
+def _save(keys: Keys) -> Path:
+    path = password_file()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(keys.text())
+    tmp.replace(path)
+    return path
+
+
+def set_password() -> int:
     first = getpass.getpass(f"New admin password (at least {MIN_PASSWORD} characters): ")
     if len(first) < MIN_PASSWORD:
         print(f"Too short: at least {MIN_PASSWORD} characters.", file=sys.stderr)
@@ -335,14 +391,41 @@ def main(argv: list[str]) -> int:
     if getpass.getpass("Again: ") != first:
         print("The two didn't match.", file=sys.stderr)
         return 1
-    path = password_file()
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}")
-    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
-        f.write(hash_password(first) + "\n")
-    tmp.replace(path)
+    had = stored()
+    path = _save(Keys(hash_password(first), had.totp if had else None))
     print(f"Saved its hash to {path}. Every admin signed in before is signed out.")
     return 0
+
+
+def set_code(ask: Any = input) -> int:
+    """A new key for the authenticator app: shown once, and kept only after a code from the app checks out,
+    so a key typed wrong into the app can't lock the panel."""
+    had = stored()
+    if had is None:
+        print("Set the admin password first: python -m sports_follow.admin password", file=sys.stderr)
+        return 1
+    key = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    label = quote(f"{APP_NAME} admin")
+    print("Add this key to your authenticator app (\"Enter a setup key\", time-based, 6 digits):\n")
+    print("    " + " ".join(key[i:i + 4] for i in range(0, len(key), 4)) + "\n")
+    print(f"or open this in an app that takes links (1Password):\n\n    otpauth://totp/{label}?secret={key}&issuer={quote(APP_NAME)}&digits={CODE_DIGITS}&period={CODE_STEP}\n")
+    for _ in range(3):
+        if code_step(key, ask("The code the app shows now: ").strip()) is not None:
+            path = _save(Keys(had.password, key))
+            print(f"Saved in {path}. Sign-in asks for a code from now on; every admin signed in before is signed out.")
+            print("Send it to the server: deploy/push-secrets.sh deploy@<server-ip> (from a checkout at the latest main).")
+            return 0
+        print("That code doesn't match: check the key in the app and its clock, and try the next one.", file=sys.stderr)
+    print("Nothing changed: the key wasn't kept.", file=sys.stderr)
+    return 1
+
+
+def main(argv: list[str]) -> int:
+    commands = {"password": set_password, "code": set_code}
+    if len(argv) != 1 or argv[0] not in commands:
+        print(__doc__)
+        return 2
+    return commands[argv[0]]()
 
 
 if __name__ == "__main__":

@@ -229,14 +229,21 @@ deploy/push-secrets.sh deploy@<server-ip>
 After that, the Mac's development key can be revoked without taking the app down.
 
 **The admin panel** (you, once): `https://<domain>/admin` turns sports and sources off and on, sets what
-each source may spend, and looks after accounts, on the running app. It opens with a password of its own;
-only its hash goes to the server, and without one the panel isn't there. Make it on the Mac (it asks for
-the password twice; keep the password itself in the password manager), then send it. No restart: the API
-reads the hash on each sign-in, and a new one signs every admin out.
+each source may spend, and looks after accounts, on the running app. It opens with a password of its own
+and a 6-digit code from an authenticator app (Google Authenticator, 1Password, Authy…). Only the
+password's hash goes to the server, with the app's key; without a password the panel isn't there, and
+without a key it asks for the password alone and says so on every page. Make both on the Mac, from a
+checkout at the latest main (keep the password in the password manager; `code` prints a key to add to
+the app, and keeps it once the app's code matches), then send them. No restart: the API reads them on
+each sign-in, and a new password or key signs every admin out.
 ```bash
 .venv/bin/python -m sports_follow.admin password     # writes ~/.config/sports-follow/admin-password
+.venv/bin/python -m sports_follow.admin code         # adds the authenticator app's key to it
 deploy/push-secrets.sh deploy@<server-ip>
 ```
+Every sign-in that works is emailed ("Someone signed in to the admin panel"), and so are 10 wrong ones in
+an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
+If a sign-in wasn't you, make a new password and key at once, and send them: that signs every admin out.
 The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
 --force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
 everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
@@ -465,6 +472,8 @@ first failures after a deploy count:
 | Pushes aren't going out | for 5 minutes, a moment found over 3 minutes ago hasn't been sent |
 | Pushes are failing | over 20% of the last 30 minutes' pushes failed (unsubscribed devices aside), at least 3 |
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
+| Someone signed in to the admin panel | a sign-in to `/admin` worked, in the last 10 minutes: if it wasn't you, see "The admin panel" |
+| Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
 
 **Setting it up** (you, once):
 1. **Sign up** at grafana.com (free) and create a stack.

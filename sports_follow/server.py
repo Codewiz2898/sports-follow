@@ -1069,16 +1069,23 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
 admin_log = logging.getLogger("sports_follow.admin")
 
 
-async def require_admin(request: Request) -> None:
-    """An admin signed in to the panel. With no admin password set the panel isn't there (404); without a
-    session, or with one opened under a password since changed, sign in (401)."""
-    stored = await asyncio.to_thread(admin.stored_hash)
-    if stored is None:
+async def _admin_keys() -> admin.Keys:
+    """The admin's password hash and authenticator key; with none set the panel isn't there (404)."""
+    keys = await asyncio.to_thread(admin.stored)
+    if keys is None:
         raise HTTPException(404, "Not Found")
+    return keys
+
+
+async def require_admin(request: Request) -> admin.Keys:
+    """An admin signed in to the panel. With no admin password set the panel isn't there (404); without a
+    session, or with one opened under a password or code since changed, sign in (401)."""
+    keys = await _admin_keys()
     token = request.cookies.get(admin.COOKIE) or ""
     held = await state["redis"].get(admin.session_key(token)) if token else None
-    if held is None or not hmac.compare_digest(held, admin.fingerprint(stored)):
+    if held is None or not hmac.compare_digest(held, admin.fingerprint(keys)):
         raise HTTPException(401, "Sign in to the admin panel.")
+    return keys
 
 
 AdminOnly = [Depends(require_admin)]
@@ -1091,30 +1098,43 @@ def _switch(body: dict, field: str) -> bool:
     return value
 
 
+@app.get("/api/admin/login")
+async def admin_login_asks() -> dict[str, Any]:
+    """What the sign-in asks for: the password, and a code from the authenticator app once one is set."""
+    return {"code": (await _admin_keys()).totp is not None}
+
+
 @app.post("/api/admin/login")
 async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
-    """Sign in to the admin panel with its password. Tries are limited from each client address, and
-    wrong passwords from everyone together, so it can't be guessed at speed."""
-    stored = await asyncio.to_thread(admin.stored_hash)
-    if stored is None:
-        raise HTTPException(404, "Not Found")
+    """Sign in to the admin panel with its password and, once one is set, a code from the authenticator
+    app; each code works once. Tries are limited from each client address, and wrong ones from everyone
+    together, so neither can be guessed at speed. Every sign-in is counted (metrics.admin_sign_in), and
+    one that works is emailed (app-rules.json)."""
+    keys = await _admin_keys()
     now = time.time()
     await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
     failed = f"admin-fails:{int(now // 3600)}"
     if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
-        raise HTTPException(429, "Too many wrong passwords this hour. Try again in an hour.")
+        raise HTTPException(429, "Too many wrong tries this hour. Try again in an hour.")
     # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
     await state["redis"].incr(failed)
     await state["redis"].expire(failed, 7200)
     password = body.get("password")
-    if not isinstance(password, str) or not 0 < len(password) <= 1000 or not await asyncio.to_thread(admin.try_password, password, stored):
-        admin_log.warning("admin panel: a wrong password")
-        raise HTTPException(401, "That isn't the admin password.")
+    right = isinstance(password, str) and 0 < len(password) <= 1000 and await asyncio.to_thread(admin.try_password, password, keys.password)
+    if right and keys.totp:
+        step = admin.code_step(keys.totp, body.get("code"), now)
+        # A code works once: one seen over someone's shoulder, or sent twice, is refused.
+        right = step is not None and bool(await state["redis"].set(f"admin-code-used:{step}", "1", nx=True, ex=(admin.CODE_DRIFT * 2 + 2) * admin.CODE_STEP))
+    if not right:
+        metrics.admin_sign_in("wrong")
+        admin_log.warning("admin panel: a wrong password or code")
+        raise HTTPException(401, "That password or code isn't right." if keys.totp else "That isn't the admin password.")
     await state["redis"].decr(failed)
     token = secrets.token_urlsafe(32)
-    await state["redis"].set(admin.session_key(token), admin.fingerprint(stored), ex=admin.SESSION_LIFE)
+    await state["redis"].set(admin.session_key(token), admin.fingerprint(keys), ex=admin.SESSION_LIFE)
     response.set_cookie(admin.COOKIE, token, max_age=admin.SESSION_LIFE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))
-    admin_log.info("admin panel: signed in")
+    metrics.admin_sign_in("ok")
+    admin_log.warning("admin panel: signed in%s", "" if keys.totp else " with the password alone (no authenticator code set)")
     return {"admin": True}
 
 
@@ -1127,9 +1147,10 @@ async def admin_logout(request: Request, response: Response) -> dict[str, Any]:
     return {"admin": False}
 
 
-@app.get("/api/admin/me", dependencies=AdminOnly)
-def admin_me() -> dict[str, Any]:
-    return {"admin": True}
+@app.get("/api/admin/me")
+async def admin_me(keys: admin.Keys = Depends(require_admin)) -> dict[str, Any]:
+    """Signed in; and whether sign-in asks for an authenticator code (the panel says so when it doesn't)."""
+    return {"admin": True, "code": keys.totp is not None}
 
 
 @app.get("/api/admin/sports", dependencies=AdminOnly)
@@ -1793,4 +1814,10 @@ async def spa(path: str, request: Request) -> Response:
     if isinstance(found, Path):
         cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
-    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+
+
+def _not_indexed(path: str) -> dict[str, str]:
+    """The admin panel's page tells search engines not to list it. Not robots.txt, which anyone can read
+    to find it."""
+    return {"X-Robots-Tag": "noindex, nofollow"} if path == "admin" or path.startswith("admin/") else {}
