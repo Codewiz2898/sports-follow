@@ -17,7 +17,7 @@ import { Wire } from '../components/Wire'
 import { useAccount } from '../account'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
-import { sportKey } from '../sports'
+import { sportDrawn } from '../sports'
 import { AHEAD_DAYS, comingUp, FEW, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, theirEvents } from '../today'
 import { welcomed } from './WelcomePage'
 
@@ -140,7 +140,7 @@ export function TodayPage() {
   }
 
   const games = liveGames(cards)
-  const done = results(cards, now, sportKey)
+  const done = results(cards, now, sportDrawn)
   const coming = comingUp(cards, now)
   // After the fan's own, the big games none of their players are in, outlined. Once the follow list has
   // answered: a rail of only big games that the fan's own then come in front of would stay on the big ones
