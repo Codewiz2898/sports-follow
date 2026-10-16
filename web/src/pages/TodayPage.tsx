@@ -125,6 +125,10 @@ export function TodayPage() {
         {header}
         <AlsoLive mine={[]} />
         <BigGames league={league} now={now} />
+        {/* Who's out and who's back among the best-known players. */}
+        <ErrorBoundary fallback={<BlockError />} resetKey={week}>
+          <Wire rows={week.wire} now={now} />
+        </ErrorBoundary>
         <section className="hero" data-sport="other" aria-label="Get started">
           <span className="dsp" style={{ fontSize: 48 }}>Pick your players</span>
           <p style={{ fontWeight: 600, maxWidth: '36ch' }}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</p>

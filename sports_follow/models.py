@@ -7,7 +7,7 @@ resolver and adapters that come next, so the schema does not have to change for 
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
@@ -299,6 +299,36 @@ class NewsPlayer(Base):
 
     news_id: Mapped[int] = mapped_column(ForeignKey("news_item.id", ondelete="CASCADE"), primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True)
+
+
+class Sidelined(Base):
+    """A spell a player is out of their team's games, injured or suspended, as a source listed it at its
+    reads (sidelined.py), whoever follows them: by the source's ids, for the spell and the player, never a
+    player row, so a fan's player is found by the identity they're bound by (PlayerIdentity). When a read
+    found it news that they're out, and that they're back, are the Wire's facts (week.py). A row no read has
+    listed for a fortnight goes (retention.py)."""
+
+    __tablename__ = "sidelined"
+    __table_args__ = (UniqueConstraint("system", "source_id"), Index("ix_sidelined_athlete", "system", "athlete_id"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system: Mapped[str] = mapped_column(String(60))  # the source: "sportmonks_football"
+    source_id: Mapped[str] = mapped_column(String(60))  # its id for the spell
+    athlete_id: Mapped[str] = mapped_column(String(60))  # its id for the player (PlayerIdentity.external_id)
+    team_id: Mapped[str] = mapped_column(String(60))  # and for their team, whose list it's on
+    sport: Mapped[str] = mapped_column(String(20))  # football
+    name: Mapped[str] = mapped_column(String(200))  # the player, as the source names them
+    team: Mapped[str] = mapped_column(String(200), default="")
+    kind: Mapped[str] = mapped_column(String(20))  # injury | suspension | other (Absence.kind)
+    what: Mapped[str] = mapped_column(String(200), default="")  # "Back Injury", as the source says it
+    since: Mapped[date | None] = mapped_column(Date)
+    until: Mapped[date | None] = mapped_column(Date)  # when they're expected back, if the source says
+    fame: Mapped[int] = mapped_column(Integer, default=0)  # the registry's Wikipedia editions for them, at the last read
+    out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # told they're out: a read found it new
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # found over: off the list, or past its end
+    back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # told they're back
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # the last read that listed it
+    created_at: Mapped[datetime] = _now()
 
 
 class Follow(Base):

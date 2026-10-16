@@ -133,6 +133,8 @@ export default function TodayScreen() {
         <Head now={now} />
         <AlsoLive mine={[]} />
         <BigGames league={league} now={now} />
+        {/* Who's out and who's back among the best-known players. */}
+        <Wire rows={week.wire} now={now} />
         <View style={s.hero}>
           <Text style={[dsp(48), { color: '#FFFFFF' }]}>Pick your players</Text>
           <Text style={s.heroText}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</Text>

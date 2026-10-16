@@ -93,6 +93,15 @@ class Notable:
     group: str = ""
 
 
+@dataclass
+class Fact:
+    """Something a source says about a player that the Wire tells (week.py, from sidelined.py): a tag ("Out",
+    "Back") and a line ("William Saliba · back injury · until 11 Dec"), in the player's sport's words."""
+
+    tag: str
+    line: str
+
+
 # How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
 # final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
 # those are read first.
@@ -341,6 +350,19 @@ class Sport:
         """How big a game its sources list league-wide is (Adapter.schedule), from what the source says of
         it: its tier and facts, its stage (detail) and, once it's over, its result. None leaves it out. A
         sport whose sources list no schedule has none."""
+        return None
+
+    # ---- who's out: injuries and bans its sources list league-wide, on Today's Wire (sidelined.py)
+
+    def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
+        """A player out of their team's games as the Wire tells it: of a kind its sources share ("injury",
+        "suspension", "other": Absence.kind), as the source says what ("Back Injury"), until when they're
+        expected back. None for a kind the sport doesn't tell, and for a sport whose sources list nobody out."""
+        return None
+
+    def back_fact(self, who: str, kind: str) -> Fact | None:
+        """A player of this sport back from a spell of this kind (out_fact), as the Wire tells it; None for a
+        kind it doesn't tell."""
         return None
 
     # ---- live games and cards (structured.py)

@@ -164,6 +164,7 @@ def test_player_keeps_current_teams_club_first():
     ref = sm.parse_player(player, today=date(2026, 9, 30))
     assert (ref.system, ref.athlete_id, ref.born) == ("sportmonks_football", str(STAR), "1992-06-15")
     assert ref.team_ids == [str(HOME), "18546"] and ref.team_names == ["Trabzonspor", "Egypt"]
+    assert sm.parse_player({"id": 1, "display_name": "Lautaro Martínez\u00a0"}).name == "Lautaro Martínez"  # padded, as Sportmonks sends some
 
 
 def test_season_stats_add_up_this_seasons_competitions_for_the_players_teams():
@@ -323,3 +324,52 @@ def test_the_schedule_is_every_league_match_between_two_days_counted_as_fixtures
     assert [(path, bucket, params["per_page"], params["page"]) for path, bucket, params in asked] == [
         ("/football/fixtures/between/2026-10-09/2026-10-30", "Fixture", 50, 1), ("/football/fixtures/between/2026-10-09/2026-10-30", "Fixture", 50, 2)]
     assert set(asked[0][2]["include"].split(";")) >= {"participants", "scores", "state", "league", "round"}
+
+
+def _spell(spell_id: int, player_id: int, name: str, kind: str, category: str, start: str, end: str | None, **extra) -> dict:
+    return {"id": spell_id, "player_id": player_id, "category": category, "start_date": start, "end_date": end, "completed": False,
+            "type": {"name": kind.replace("_", " ").title(), "developer_name": kind},
+            "player": {"id": player_id, "display_name": name, "date_of_birth": "2001-03-24"}, **extra}
+
+
+def test_who_is_out_is_each_teams_list_injuries_bans_and_the_rest():
+    teams = sm.parse_sidelined([
+        {"id": 19, "name": "Arsenal", "sidelined": [
+            _spell(1, 4125, "William Saliba ", "BACK_INJURY", "injury", "2026-07-19", "2026-12-11"),
+            _spell(2, 7001, "Kai Havertz", "THIGH_PROBLEMS", "injury", "2026-09-24", None),
+            _spell(3, 7002, "Declan Rice", "RED_CARD_SUSPENSION", "suspended", "2026-10-10", "2026-10-20"),
+            _spell(4, 7003, "Wataru Endo", "NO_ELIGIBILITY", "suspended", "2026-09-03", "2027-01-28"),
+            _spell(7, 7005, "Paul Pogba", "SUSPENSION_THROUGH_SPORTS_COURT", "suspended", "2026-03-01", None),  # a ban too
+            _spell(8, 7006, "Away With Country", "CALLED_UP_TO_NATIONAL_TEAM", "suspended", "2026-10-10", "2026-10-15"),
+            _spell(5, 7004, "Old Knock", "KNOCK", "injury", "2026-01-01", "2026-01-08", completed=True),  # over: not listed
+            {"id": 6, "category": "injury", "type": {}, "player": None},  # no player: nobody's
+        ]},
+        {"id": 20, "name": "Chelsea", "sidelined": []},  # nobody out, but read: a spell gone from it is over
+        {"id": 21, "name": "Spurs"},  # an answer without the list: as if not read, so nobody's spell ends
+    ])
+    assert set(teams) == {"19", "20"} and teams["20"] == []
+    saliba, havertz, rice, endo, pogba, away = teams["19"]
+    assert (saliba.source_id, saliba.ref.athlete_id, saliba.ref.name, saliba.ref.team_ids, saliba.ref.team_names, saliba.ref.born) == ("1", "4125", "William Saliba", ["19"], ["Arsenal"], "2001-03-24")
+    assert (saliba.kind, saliba.what, saliba.since, saliba.until) == ("injury", "Back Injury", date(2026, 7, 19), date(2026, 12, 11))
+    assert havertz.until is None
+    assert [(a.kind, a.what) for a in (rice, endo, pogba, away)] == [
+        ("suspension", "Red Card Suspension"), ("other", "No Eligibility"), ("suspension", "Suspension Through Sports Court"), ("other", "Called Up To National Team")]
+
+
+def test_who_is_out_is_read_a_season_at_a_time_counted_as_teams(monkeypatch):
+    asked = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, sportmonks._bucket(path), ttl, params))
+        if path == "/football/leagues":
+            return {"data": [{"id": 8, "currentseason": {"id": 28083}}, {"id": 82, "currentseason": {"id": 28321}}, {"id": 9, "currentseason": None}]}
+        season = path.rsplit("/", 1)[1]
+        return {"data": [{"id": int(season[-2:]), "name": f"Team {season}", "sidelined": [_spell(int(season), 1, "A Player", "KNOCK", "injury", "2026-10-01", None)]}]}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    teams = sm.SportmonksFootball().sidelined()
+    assert {team: [a.source_id for a in listed] for team, listed in teams.items()} == {"83": ["28083"], "21": ["28321"]}
+    # The leagues with their seasons on now, kept a day; then each season's teams with who's out, uncached.
+    assert [(path, bucket, ttl) for path, bucket, ttl, _ in asked] == [
+        ("/football/leagues", "League", 24 * 3600), ("/football/teams/seasons/28083", sportmonks.TEAMS, 0), ("/football/teams/seasons/28321", sportmonks.TEAMS, 0)]
+    assert asked[0][3]["include"] == sm.LEAGUES_INCLUDE and set(asked[1][3]["include"].split(";")) == {"sidelined.player", "sidelined.type"}
