@@ -71,16 +71,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
   the Commons API about the registry's photo file of each followed and starter athlete it hasn't got, 50 to
   a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY, CC BY-SA,
-  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 330-pixel
-  thumbnails, author, licence and file page go in the `photo` table, and the app gets them from our own
-  origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
-  file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
-  which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
+  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 960-pixel
+  thumbnails (about 290 KB; the face's square shows about pixel for pixel on a phone), author, licence and
+  file page go in the `photo` table, and the app gets them from our own origin (`/api/photos/<digest>.jpg`,
+  cached a year, never hot-linked) with the card and the previews. Each file is asked about again every 90
+  days (a new upload, licence or author, or a file Commons deleted, which then stops showing), one that
+  failed the next day, and one kept at another width at once (`photos.WIDTH` changed: they're fetched
+  again, 100 a run, and show at their old size meanwhile); a file fetched over 30 days ago that nobody
   follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
-  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app recolours each photo in its sport's colour (a duotone
-  from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
-  credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
-  linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
+  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app shows
+  each photo in its own colours, cropped around the face and fading into the band, and changes nothing
+  else; its credit says the crop, as CC BY and CC BY-SA ask: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia
+  Commons, cropped", under the photo, linking to the file's page. The Credits page lists them all and says
+  how they're cropped and faded. Players without a photo show none. Never a
   data provider's photos (their terms don't license them), and never generated likenesses.
   The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
   detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker
@@ -282,8 +285,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
   finish, or none, as for a cricket final whose sides are still "TBC"; and its group, an esports title,
   which takes its own turn within the sport's; for Today's big results and big games coming up), its form summary,
-  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link
-  previews are drawn in them). Shared code
+  how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a

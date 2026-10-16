@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
+import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
@@ -15,20 +15,20 @@ function usePhoto(photo?: Photo | null): [Photo | null, () => void] {
   return [photo && photo.url !== broken ? photo : null, () => setBroken(photo?.url ?? null)]
 }
 
-/** A player's photo from Wikimedia Commons, recoloured in their sport's colour (.duo in styles.css): on
- * their profile only, never on the home page. Their name is beside it, so it says nothing to a screen reader.
- * The square around their face, when the photos job found it, fills the picture (.duo.framed). */
+/** A player's photo from Wikimedia Commons, in its own colours (.photo in styles.css): on their profile
+ * only, never on the home page. Their name is beside it, so it says nothing to a screen reader. The square
+ * around their face, when the photos job found it, fills the picture (.photo.framed). */
 function PlayerPhoto({ photo, onError }: { photo: Photo; onError: () => void }) {
   const c = photo.crop
   const square = c && ({ '--cw': c.w, '--ch': c.h, '--cx': c.x + c.w / 2, '--cy': c.y + c.h / 2 } as CSSProperties)
   return (
-    <span className={`duo band-photo${c ? ' framed' : ''}`} title={photo.credit} aria-hidden="true">
+    <span className={`photo band-photo${c ? ' framed' : ''}`} title={photo.credit} aria-hidden="true">
       <img src={photo.url} alt="" loading="lazy" decoding="async" style={square} onError={onError} />
     </span>
   )
 }
 
-/** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons, recoloured",
+/** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons, cropped",
  * linking to the file's page on Commons. */
 function PhotoCredit({ photo }: { photo: Photo }) {
   const href = safeHref(photo.page)
@@ -450,11 +450,11 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
 }
 
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour, with their
- * photo and its credit when there is one. */
+ * photo and its credit when there is one (.with-photo keeps the words off it). */
 export function PlayerBand({ name, sport, meta, photo, back, actions, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   const [shown, drop] = usePhoto(photo)
   return (
-    <header className="player-band" data-sport={sportKey(sport)}>
+    <header className={`player-band${shown ? ' with-photo' : ''}`} data-sport={sportKey(sport)}>
       {shown && <PlayerPhoto photo={shown} onError={drop} />}
       <div className="bar">
         {back}
@@ -462,7 +462,7 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children }
       </div>
       <div className="stack" style={{ gap: 10 }}>
         {sport && <span className="tag soft">{sportName(sport)}</span>}
-        <h1 className="dsp player-name">{name}</h1>
+        <h1 className="dsp player-name" style={{ '--ems': longestWordEms(name) } as CSSProperties}>{name}</h1>
         {meta && <span className="player-meta">{meta}</span>}
       </div>
       {children}

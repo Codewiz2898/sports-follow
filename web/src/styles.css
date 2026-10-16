@@ -24,7 +24,7 @@
    and the sport's colour when it is text on an ink surface. Each sport's own come from the server
    (/api/sports.css, linked in index.html, before this file: so this default has no specificity); a sport without
    one wears ink. */
-:where([data-sport]) { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; --photo-dark: #0d0d0d; --photo-light: #f2f2ee; }
+:where([data-sport]) { --sport: #0d0d0d; --on-sport: #ffffff; --on-sport-soft: rgba(255, 255, 255, 0.78); --sport-on-ink: #ffffff; }
 .soft { color: var(--on-sport-soft); }
 
 * { box-sizing: border-box; }
@@ -149,19 +149,16 @@ p { margin: 0; }
 .avatar.sm { width: 32px; height: 32px; border-radius: 9px; font-size: 11px; }
 .avatar.lg { width: 64px; height: 64px; border-radius: 18px; font-size: 20px; }
 
-/* A player's photo on their profile (never on the home page), in the sport's colour: a duotone, its darks
-   in --photo-dark and its lights in the sport colour. The grey photo is multiplied by --photo-light and
-   --photo-dark is screened over it; the server works --photo-light out so that comes out exactly
-   (sports.photo_tones). Faces sit high in most photos. */
-.duo { position: relative; overflow: hidden; isolation: isolate; background: var(--photo-light); }
-.duo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; filter: grayscale(1) contrast(1.1); mix-blend-mode: multiply; }
-.duo::after { content: ""; position: absolute; inset: 0; background: var(--photo-dark); mix-blend-mode: screen; pointer-events: none; }
+/* A player's photo on their profile (never on the home page), in its own colours. Faces sit high in most
+   photos. */
+.photo { position: relative; overflow: hidden; }
+.photo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 18%; }
 /* Where the photos job found the face: the square around it (--cw and --ch its size, --cx and --cy its
    centre, as fractions of the photo) covers the picture, its centre at --at across and halfway down, but
    never so far that the picture runs past the photo's edges. */
 @supports (width: 1cqw) {  /* a browser without container units keeps the guess above */
-  .duo.framed { container-type: size; }
-  .duo.framed img { position: absolute; max-width: none; --side: max(100cqw, 100cqh); width: calc(var(--side) / var(--cw)); height: calc(var(--side) / var(--ch));
+  .photo.framed { container-type: size; }
+  .photo.framed img { position: absolute; max-width: none; --side: max(100cqw, 100cqh); width: calc(var(--side) / var(--cw)); height: calc(var(--side) / var(--ch));
     left: clamp(100cqw - var(--side) / var(--cw), var(--at, 50cqw) - var(--cx) * var(--side) / var(--cw), 0px);
     top: clamp(100cqh - var(--side) / var(--ch), 50cqh - var(--cy) * var(--side) / var(--ch), 0px); }
 }
@@ -464,7 +461,10 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .player-band > * { position: relative; }
 /* The player's photo, large, below the buttons on the right, fading into the band. */
 .player-band > .band-photo { position: absolute; right: 0; bottom: 0; top: calc(64px + env(safe-area-inset-top, 0px)); width: min(46%, 280px); -webkit-mask-image: linear-gradient(to right, transparent, #000 50%); mask-image: linear-gradient(to right, transparent, #000 50%); pointer-events: none; --at: 62cqw; }  /* a face right of the fade */
-.player-band > .photo-credit { max-width: 62%; margin-top: -6px; }
+.player-band > .photo-credit { margin-top: -6px; }
+/* Beside a photo the words stop a fifth of the way into its fade, where the band still shows through more
+   than half, so they're read on the band, never over the player (mobile/src/blocks.tsx: b.besidePhoto). */
+.player-band.with-photo > :is(.stack, p, .photo-credit) { max-width: calc(100% - 0.8 * min(46%, 280px)); }
 @media (min-width: 1024px) { .player-band { margin: 0; padding: 20px 24px 26px; border-radius: 28px; } }
 .player-band .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .player-band .btn { border-color: var(--on-sport); color: var(--on-sport); }
@@ -474,6 +474,14 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .player-band .btn.icon[aria-expanded='true'] { box-shadow: 0 0 0 3px var(--sport), 0 0 0 5px var(--on-sport); }
 .player-name { font-size: 56px; overflow-wrap: anywhere; }
 @media (min-width: 640px) { .player-name { font-size: 72px; } }
+/* As large as fits its longest word on a line (--ems, format.ts longestWordEms), so a long name breaks
+   between words, never inside one. A browser without container units keeps the sizes above (with var() in
+   it, the rule would unset them). */
+@supports (width: 1cqi) {
+  .player-band > .stack { container-type: inline-size; }
+  .player-name { font-size: min(56px, 100cqi / var(--ems, 5)); }
+  @media (min-width: 640px) { .player-name { font-size: min(72px, 100cqi / var(--ems, 5)); } }
+}
 .player-meta { font-weight: 700; color: var(--on-sport-soft); }
 /* An offline or new-version notice sits above the band, so the band can't reach the top edge. */
 .notice ~ .player-band { margin-top: 0; border-radius: 28px; }
