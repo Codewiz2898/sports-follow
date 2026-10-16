@@ -29,6 +29,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
+                                ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
@@ -176,7 +177,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Only what's read is kept.** Polls append a state and a player line per change; once a game has been
   final and quiet for 14 days, the worker's daily prune (`sports_follow/retention.py`, 02:15 UTC) keeps
   only its latest and final states and each player's latest line. Moments and the push log go after 90
-  days, and the hot copy of a card nobody follows expires a day later (the API rebuilds it from Postgres).
+  days, a spell a player was out (`sidelined`) once no read has listed it for 14, and the hot copy of a card
+  nobody follows expires a day later (the API rebuilds it from Postgres).
   `python -m sports_follow.retention --count` shows what a run would remove, without removing it.
 - **Chess swings from our own engine, on a fixed CPU budget.** Lichess broadcasts carry positions but
   no evaluations, so Stockfish evaluates live games of followed players (`sports_follow/engine.py`) and
@@ -208,6 +210,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sport's, or all its titles share one; read a few times a day at
   most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
+  `sidelined` for the Wire's facts (every player out of its competitions, injured or suspended, by team;
+  `sports_follow/sidelined.py` compares each read with the last, so a new spell is news that a player is
+  out and one that's over news that they're back, as their sport's `out_fact` and `back_fact` word it; read
+  twice a day by the worker: Sportmonks football's 5 Team requests a read, and a League one a day),
   `live_note` and `lag_note` for a player page's words on how its live scores come in and how late they
   can be, where the app's general sentences don't fit (Liquipedia's and PUBG's standings after each match),
   `spare` for background reads, `rekey` for a source that changes

@@ -6,6 +6,8 @@ ended has no moments: its sport words its poster off the line and result it left
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from sports_follow import moments, sports, week
@@ -246,3 +248,23 @@ def test_versus_names_the_other_side_only_when_the_title_says_which_is_theirs(ti
 ])
 def test_the_wire_never_says_breaking(headline, plain):
     assert week._plain(headline) == plain
+
+
+def test_football_tells_who_is_out_and_who_is_back_in_its_own_words():
+    football = sports.of("Football")
+    assert football.out_fact("William Saliba", "injury", "Back Injury", date(2026, 12, 11)) == sports.Fact("Out", "William Saliba · back injury · until 11 Dec")
+    assert football.out_fact("Kai Havertz", "injury", "Unknown Injury", None) == sports.Fact("Out", "Kai Havertz · injury")
+    assert football.out_fact("Phil Foden", "suspension", "Red Card Suspension", date(2026, 10, 17)).line == "Phil Foden · red card suspension · until 17 Oct"
+    assert football.back_fact("William Saliba", "injury") == sports.Fact("Back", "William Saliba is fit again")
+    assert football.back_fact("Phil Foden", "suspension") == sports.Fact("Back", "Phil Foden is back from suspension")
+    # The source's words, but for a few that don't read as what's wrong.
+    assert [football.out_fact("X", kind, what, None).line for kind, what in (("injury", "Fitness"), ("injury", "Ill"), ("suspension", "Indirect Card Suspension"))] == [
+        "X · lacking fitness", "X · illness", "X · yellow card suspension"]
+    # Not registered for the competition: not news.
+    assert football.out_fact("Wataru Endo", "other", "No Eligibility", None) is None and football.back_fact("Wataru Endo", "other") is None
+
+
+@pytest.mark.parametrize("sport", ["Cricket", "Chess", "Esports", "Basketball", "Tennis", "Golf"])
+def test_a_sport_whose_sources_list_nobody_out_tells_no_facts(sport):
+    assert sports.of(sport).out_fact("Someone", "injury", "Knee Injury", None) is None
+    assert sports.of(sport).back_fact("Someone", "injury") is None

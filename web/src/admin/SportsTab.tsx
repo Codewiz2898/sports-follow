@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { admin, type AdminSport } from './api'
-import { Note, useFailure } from './shared'
+import { Note, breakable, useFailure } from './shared'
 
 /** Every sport, in its colour while it runs, with a switch: off, it isn't searched, imported or polled, and isn't offered in the app. */
 export function SportsTab() {
@@ -34,14 +34,15 @@ export function SportsTab() {
         <div className="admin-grid">
           {sports.map((s) => (
             <article key={s.key} className="admin-sport" data-sport={s.key} data-off={s.running ? undefined : ''}>
-              <div className="row" style={{ alignItems: 'flex-start' }}>
-                <h2 className="dsp">{s.label}</h2>
+              {/* The name has the whole width: a long one (Basketball) can't push the switch out of the card. */}
+              <h2 className="dsp">{s.label}</h2>
+              <div className="row" style={{ alignItems: 'flex-end' }}>
+                <span className="small">{breakable(sportStatus(s))}</span>
                 <button
                   type="button" role="switch" className="switch" aria-checked={s.allowed && s.on} aria-label={`${s.label} on`}
                   disabled={!s.allowed || busy === s.key} onClick={() => void turn(s)}
                 />
               </div>
-              <span className="small">{sportStatus(s)}</span>
             </article>
           ))}
         </div>

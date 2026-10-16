@@ -1,21 +1,20 @@
 import { Link } from 'react-router-dom'
 import type { WireRow } from '../api'
-import { safeHref, shortName } from '../format'
+import { safeHref } from '../format'
 import { sportKey } from '../sports'
-import { wireWhen } from '../today'
+import { wireText, wireWhen } from '../today'
 import { SectionHead } from './Blocks'
 
-/** One row: its tag in the player's sport colour, the line (a story's headline, with the site that ran it,
- * and the player's name first when the headline doesn't say it), and when. A story opens at its site, a
- * line-up on the player's page. */
+/** One row: its tag in the player's sport colour (outlined for a player the fan doesn't follow), the line (a
+ * fact, a line-up, or a story's headline with the player's name first when it doesn't say it), where it's
+ * from, and when. A story opens at its site; a fact or a line-up on the player's page here, or the source's
+ * athlete page for a player nobody follows yet. */
 function Line({ row, now }: { row: WireRow; now: number }) {
-  const name = shortName(row.player)
-  const named = row.text.toLowerCase().includes(name.toLowerCase())
   const body = (
     <>
-      <span className="wire-tag" data-sport={sportKey(row.sport)}>{row.tag}</span>
+      <span className={`wire-tag${row.yours ? '' : ' theirs'}`} data-sport={sportKey(row.sport)}>{row.tag}</span>
       <span className="wire-what">
-        <span className="wire-text">{!named && <>{name}: </>}{row.text}</span>
+        <span className="wire-text">{wireText(row)}</span>
         {row.source && <span className="wire-source">{row.source}</span>}
       </span>
       <span className="wire-time">{wireWhen(row.at, now)}</span>
@@ -28,9 +27,9 @@ function Line({ row, now }: { row: WireRow; now: number }) {
 }
 
 /**
- * The Wire on Today: an ink card of the fan's players' line-ups and news, newest first, each a tag, one line
- * and a time. Its news is other sites' headlines, so each names its site; nothing here says "breaking".
- * Nothing at all when there's none.
+ * The Wire on Today: an ink card of who's out and who's back, line-ups and news, the fan's players' first, then
+ * a few of the best-known players they don't follow; each a tag, one line, where it's from and a time. Nothing
+ * here says "breaking". Nothing at all when there's none.
  */
 export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
   if (!rows.length) return null
