@@ -1,7 +1,7 @@
 """The web app takes the list of sports from the API rather than keeping its own, and names no source
 (CLAUDE.md, "Code organization"). tests/test_sports.py and tests/test_sources.py hold shared Python to
-none. In web/src only a sport's view (web/src/sports/<sport>.tsx: its live board and line art) names a sport,
-and only its own. Where a file still names something it should take from the API (a source, today), it
+none. In web/src only a sport's own modules (web/src/sports/<sport>.tsx, its live board, and
+web/src/sports/facts/<sport>.ts, its line art and wording) name a sport, and only their own. Where a file still names something it should take from the API (a source, today), it
 has a limit instead: how many times it names it now. A file over its limit has gained a name; a file
 under it should have its limit lowered here, so code moved toward the rule can't drift back.
 
@@ -26,19 +26,17 @@ TOKENS = re.compile(r"""//[^\n]*|/\*.*?\*/|(["'`])((?:\\.|(?!\1)[^\\\n])*)\1""",
 SPORT_LIMITS: dict[str, int] = {}
 VIEWS = "sports/"  # web/src/sports/<sport>.tsx: each sport's own view
 
-SOURCE_LIMITS = {
-    "pages/AthletePage.tsx": 2,
-}
+SOURCE_LIMITS: dict[str, int] = {}
 
 
-def named(wanted: set[str]) -> dict[str, list[tuple[int, str]]]:
-    """Each web/src file's quoted strings that are one of the wanted names, with their lines."""
+def named(wanted: set[str], root: Path = WEB) -> dict[str, list[tuple[int, str]]]:
+    """Each file's quoted strings under root (web/src) that are one of the wanted names, with their lines."""
     found = {}
-    for path in sorted(p for p in WEB.rglob("*") if p.suffix in (".ts", ".tsx")):
+    for path in sorted(p for p in root.rglob("*") if p.suffix in (".ts", ".tsx")):
         text = path.read_text()
         hits = [(text.count("\n", 0, m.start()) + 1, m[2]) for m in TOKENS.finditer(text) if m[1] and m[2].lower() in wanted]
         if hits:
-            found[path.relative_to(WEB).as_posix()] = hits
+            found[path.relative_to(root).as_posix()] = hits
     return found
 
 
@@ -81,3 +79,15 @@ def test_a_sports_view_names_only_its_own_sport():
 
 def test_the_web_app_names_no_more_sources_than_before():
     held(named(set(KNOWN)), SOURCE_LIMITS, "source")
+
+
+MOBILE = WEB.parent.parent / "mobile" / "src"
+
+
+def test_the_android_app_names_no_sport_and_no_source():
+    """The Android app (mobile/src) takes everything from the API and the shared facts, so it has no limits:
+    no file names a sport or a source, not even a sport's own board (mobile/src/sports/<sport>.tsx), which
+    gets its key from its facts."""
+    wanted = set().union(*(names_of(s) for s in sports.ALL)) | {k.lower() for k in KNOWN}
+    found = named(wanted, MOBILE)
+    assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)

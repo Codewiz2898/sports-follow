@@ -1,17 +1,9 @@
 import { Link } from 'react-router-dom'
 import type { WireRow } from '../api'
-import { daysAgo, day, parseDate, safeHref, shortName } from '../format'
+import { safeHref, shortName } from '../format'
 import { sportKey } from '../sports'
+import { wireWhen } from '../today'
 import { SectionHead } from './Blocks'
-
-/** When a row is from: the time today ("07:40"), the weekday within the week ("Wed"), else the date. */
-function when(at: string, now: number): string {
-  const d = parseDate(at)
-  const days = daysAgo(at, new Date(now))
-  if (!d || days == null) return ''
-  if (days <= 0) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  return days < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : day(at)
-}
 
 /** One row: its tag in the player's sport colour, the line (a story's headline, with the site that ran it,
  * and the player's name first when the headline doesn't say it), and when. A story opens at its site, a
@@ -26,7 +18,7 @@ function Line({ row, now }: { row: WireRow; now: number }) {
         <span className="wire-text">{!named && <>{name}: </>}{row.text}</span>
         {row.source && <span className="wire-source">{row.source}</span>}
       </span>
-      <span className="wire-time">{when(row.at, now)}</span>
+      <span className="wire-time">{wireWhen(row.at, now)}</span>
     </>
   )
   const away = safeHref(row.url)

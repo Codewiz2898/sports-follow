@@ -1,9 +1,6 @@
 import './tennis.css'
+import { tennis as facts, type TennisState } from './facts/tennis'
 import type { BoardProps, SportView } from './view'
-
-export interface TennisSet { games: number; tiebreak?: number | null; won?: boolean | null }
-export interface TennisPlayer { id: string; name: string; short: string; country?: string | null; seed?: number | null; serving: boolean; winner?: boolean | null; sets: TennisSet[] }
-export interface TennisState { kind: 'tennis'; players: TennisPlayer[]; set?: number | null; round?: string | null; tournament?: string | null }
 
 /** One row per player, one column per set; the serving player is marked. */
 function TennisBoard({ state, clock }: BoardProps<TennisState>) {
@@ -36,9 +33,4 @@ function TennisBoard({ state, clock }: BoardProps<TennisState>) {
   )
 }
 
-export const tennis: SportView = {
-  key: 'tennis',
-  kinds: ['tennis'],
-  Board: TennisBoard as SportView['Board'],
-  inHeadline: ['Sets'],
-}
+export const tennis: SportView = { ...facts, Board: TennisBoard as SportView['Board'] }

@@ -223,10 +223,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
-  before the first render and kept on the device. How a sport is drawn is its view,
-  `web/src/sports/<sport>.tsx` (its live board, its ground as line art behind Today's cards (`backdrop`),
-  how its line reads, its score in a few characters for a live player's pill (`short`)), plus one line in
-  `VIEWS`; a sport without one shows the plain score and no line art.
+  before the first render and kept on the device. How a sport is drawn is in three places, each with one
+  line in its list: its facts, `web/src/sports/facts/<sport>.ts` (in `FACTS`: the scoreboard kinds it
+  draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
+  `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
+  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`) and `mobile/src/sports/<sport>.tsx` (in
+  `BOARDS`). A sport without them shows the plain score and no line art. The Android app (`mobile/`)
+  takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
+  on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
   no restart: it turns sports and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
@@ -261,11 +265,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
-  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `android/generate.mjs` gives it to the
-  Android app. `tests/test_app_name.py` fails if any of them writes the name out itself.
+  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `mobile/app.config.ts` gives it to the
+  Android app, whose code reads it from Expo's config. `tests/test_app_name.py` fails if any of them
+  writes the name out itself.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
-  database and `alembic check`; and the web app's type-check and build. In `web/src`,
+  database and `alembic check`; the web app's type-check and build; and the Android app's type-check
+  (route names are checked only locally, where Expo has generated their types). In `web/src`,
   `tests/test_web_names.py` lets only a sport's view name a sport, and holds the files that still name a
   source to how many times they do now, so they can lose those names but not gain them.
 
@@ -299,6 +305,7 @@ The checks CI runs on every pull request, after `.venv/bin/pip install -r requir
 .venv/bin/ruff check .                                      # lint: rules that find bugs (pyproject.toml)
 .venv/bin/basedpyright --pythonpath .venv/bin/python       # types: fails on errors not in .basedpyright/baseline.json
 cd web && npm run build                                     # type-check and build the app
+cd mobile && npm run typecheck                              # type-check the Android app
 ```
 
 The type baseline holds the errors from before CI checked types. After fixing some, run basedpyright
@@ -378,27 +385,41 @@ One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 
 ## Android app
 
-`android/` holds the Android app: a Trusted Web Activity, Google's standard way to ship a web app on
-the Play Store. It opens the site full screen with Chrome's engine, so the app updates with the site
-and gets web push notifications as Android notifications. `android/twa-manifest.json` is the source
-(package `io.github.codewiz2898.sportsfollow`, colors, icons, version); `android/generate.mjs` builds
-the Gradle project from it with Bubblewrap's library, named from `sports_follow/app.json`. The generated project isn't committed.
+`mobile/` is the Android app (package `io.stann.app`): React Native with Expo, in TypeScript like the web
+app. It looks like the site on a phone, page for page: each of the web app's pages and blocks has its
+React Native twin in `mobile/src`, drawn from `web/src/styles.css`'s values (`mobile/src/theme.ts`), with
+the same fonts, icons and line art. It asks the same API (stann.in, or `EXPO_PUBLIC_API_URL` when Metro
+bundles it) and is the same fan, by the same cookie, or the same account once signed in.
 
-Needs JDK 17 and the Android SDK (platform 36, build tools 36.1.0):
+What the pages decide is shared with the web app, not copied: the API's calls and types
+(`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
+`lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
+`follow.ts`), and each sport's facts (`sports/facts/`: the scoreboard kinds it draws, its line art, how it
+words a player's line). Only the drawing is each app's own: a sport's live board is
+`web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,
+the app takes the sports, their names and their colours from `GET /api/sports`:
+`tests/test_web_names.py` holds `mobile/src` to naming no sport and no source. The name is
+`sports_follow/app.json`'s and the icons are the web's (`mobile/app.config.ts`).
+
+Every page is there: Today (with the welcome for a new fan), Search and an athlete's preview, a player's
+page with its tabs, Following, Alerts, Account (sign-in by email code), Credits and Privacy. Where the web
+listens to the fan stream, the app reads again every 30 s for now; push (FCM), the lock-screen live score
+and a widget follow (BHA-230, BHA-231, BHA-232). The native project (`mobile/android`) is generated by
+Expo and not committed.
+
+Needs JDK 17 and the Android SDK (platform 36, an emulator or a phone with USB debugging):
 
 ```bash
-cd android && npm install
-SITE=http://localhost:8421 node generate.mjs            # icons from the local build; omit once hosted
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
-./gradlew assembleDebug -PlaunchUrl=http://localhost:8421/
-adb reverse tcp:8421 tcp:8421                           # the phone reaches this Mac's server over USB
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+cd mobile && npm install
+export JAVA_HOME=~/.local/jdk-17/Contents/Home ANDROID_HOME=~/.local/android-sdk
+npm run android                                     # builds, installs and opens it on the emulator or phone
+EXPO_PUBLIC_API_URL=http://10.0.2.2:8421 npm start  # then Metro serves it the local stack (10.0.2.2 is this Mac)
+npm run typecheck                                   # what CI checks
 ```
 
-Until the site is hosted on HTTPS with `/.well-known/assetlinks.json`, Android can't verify the app
-owns the site, so it shows a thin address bar at the top; hosted and verified, it's full screen. The
-Play Store build (`./gradlew bundleRelease`, signed with an upload key kept outside the repo) waits
-for hosting and a Google Play developer account, and ships to closed testing first.
+`android/` still holds the earlier route, a Trusted Web Activity around the site; it goes once the
+native app is on Play (BHA-39). `/.well-known/assetlinks.json` stays: the native app will use it to open
+stann.in links (BHA-27).
 
 ## Design
 

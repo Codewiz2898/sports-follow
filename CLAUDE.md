@@ -13,7 +13,7 @@ Sports, players and data sources are things we add, remove and switch often, so 
 - **Add or remove a player.** A command or a row, never code. Removing a player takes everything that hangs off them with it, and a weekly import doesn't bring them back.
 - **Add or remove a data source for a sport.** One adapter module that describes itself (its sports, token, credit, id format), plus one entry in that sport's list of sources, in order of preference. Nothing else names the source.
 
-The web app takes the list of sports from the API rather than keeping its own. `tests/test_sources.py`, `tests/test_sports.py` and `tests/test_web_names.py` hold the code to these rules; the README's "Adding or removing" notes say where each change goes.
+The web app and the Android app (`mobile/`) take the list of sports from the API rather than keeping their own. `tests/test_sources.py`, `tests/test_sports.py` and `tests/test_web_names.py` hold the code to these rules; the README's "Adding or removing" notes say where each change goes.
 
 ## Before a pull request
 
