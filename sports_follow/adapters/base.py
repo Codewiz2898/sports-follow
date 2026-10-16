@@ -226,6 +226,11 @@ class Adapter:
     covers: str  # what it covers, on the Credits page: "Cricket (ESPNcricinfo)"
     id_pattern: re.Pattern[str] = DIGITS  # the shape of its athlete ids
     preview_fixtures = True  # False: a preview before following shows stats only (fixtures take many reads)
+    # How a player's page words this source's live scores, where the app's general sentences don't fit (a
+    # source whose standings come after each match): live_note under the live board, lag_note at the page's
+    # foot. Sent in the card's live block; None leaves the app's own.
+    live_note: str | None = None
+    lag_note: str | None = None
 
     @classmethod
     def available(cls) -> bool:

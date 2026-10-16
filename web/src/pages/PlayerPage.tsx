@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAccount } from '../account'
+import { APP_NAME } from '../app'
 import { useActivity } from '../activity'
 import { api, subscribe, type Card, type StreamEvent } from '../api'
 import { useNow } from '../clock'
@@ -8,6 +9,7 @@ import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboa
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
+import { ShareButton } from '../components/Share'
 import { day, outcome, playedOn, relative, shortName } from '../format'
 import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
 import { sportName } from '../sports'
@@ -124,6 +126,7 @@ export function PlayerPage() {
         back={<Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>}
         actions={
           <>
+            <ShareButton path={`/player/${playerId}`} title={`${p.name} on ${APP_NAME}`} label={`Share ${p.name}`} />
             {isFollowing && (
               <button type="button" className="btn icon" aria-label={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} aria-expanded={alertsOpen} onClick={() => setAlertsOpen((o) => !o)}>
                 <BellIcon width={20} height={20} />

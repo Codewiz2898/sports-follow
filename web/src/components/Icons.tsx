@@ -35,3 +35,6 @@ export const BellIcon = (p: SVGProps<SVGSVGElement>) => (
 export const CloseIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} strokeWidth={2.6} {...p}><path d="M6 6l12 12M18 6 6 18" /></svg>
 )
+export const ShareIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><circle cx="18" cy="5" r="2.6" /><circle cx="6" cy="12" r="2.6" /><circle cx="18" cy="19" r="2.6" /><path d="m8.4 13.3 7.2 4.3M15.6 6.4l-7.2 4.3" /></svg>
+)

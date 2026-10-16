@@ -910,6 +910,8 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "state": snap.state,
             "moments": snap.moments[:10],
             "source": adapter.credit(snap),
+            "live_note": adapter.live_note,
+            "lag_note": adapter.lag_note,
             "source_url": snap.source_url,
             "as_of": stamp,
         }

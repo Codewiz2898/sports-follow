@@ -38,6 +38,7 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "python-dotenv", "url": "https://github.com/theskumar/python-dotenv", "licence": "BSD-3-Clause", "package": "python-dotenv"},
     {"name": "OpenTelemetry", "url": "https://opentelemetry.io", "licence": "Apache-2.0", "package": "opentelemetry-sdk"},
     {"name": "OpenCV", "url": "https://opencv.org", "licence": "Apache 2.0", "package": "opencv-python-headless"},
+    {"name": "Pillow", "url": "https://python-pillow.github.io", "licence": "MIT-CMU", "package": "pillow"},
     {"name": "NumPy", "url": "https://numpy.org", "licence": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0", "package": "numpy"},
     {"name": "YuNet face detector by Shiqi Yu", "url": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet", "licence": "MIT"},
     {"name": "PostgreSQL", "url": "https://www.postgresql.org", "licence": "PostgreSQL"},
@@ -47,6 +48,7 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "Vite", "url": "https://vite.dev", "licence": "MIT"},
     {"name": "Anton font by Vernon Adams", "url": "https://fonts.google.com/specimen/Anton", "licence": "OFL-1.1"},
     {"name": "Manrope font by Mikhail Sharanda", "url": "https://fonts.google.com/specimen/Manrope", "licence": "OFL-1.1"},
+    {"name": "Fredoka font by Milena Brandão", "url": "https://fonts.google.com/specimen/Fredoka", "licence": "OFL-1.1"},
 ]
 
 NOTICES = [

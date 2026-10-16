@@ -6,7 +6,9 @@ has a limit instead: how many times it names it now. A file over its limit has g
 under it should have its limit lowered here, so code moved toward the rule can't drift back.
 
 A name is a quoted string equal, in any case, to a sport's key, label, alias or scoreboard kind, or to a
-source's system ("espn_cricket"). Strings inside comments don't count."""
+source's system ("espn_cricket") or the name a page credits it by ("ESPNcricinfo", "Liquipedia"): the app
+words a source's scores from what its adapter sends (live_note, lag_note), never by comparing
+card.live.source to a name. Strings inside comments don't count."""
 
 from __future__ import annotations
 
@@ -77,8 +79,19 @@ def test_a_sports_view_names_only_its_own_sport():
     assert not wrong, "\n".join(wrong)
 
 
+def source_names() -> set[str]:
+    """Every source's system, the name its adapter is credited by, and its provider's name."""
+    return {n.lower() for system, adapter in KNOWN.items() for n in (system, adapter.name, adapter.provider.name)}
+
+
 def test_the_web_app_names_no_more_sources_than_before():
-    held(named(set(KNOWN)), SOURCE_LIMITS, "source")
+    held(named(source_names()), SOURCE_LIMITS, "source")
+
+
+def test_wording_a_page_by_a_sources_name_is_caught(tmp_path):
+    # lines.ts before BHA-249: a player page's notes chosen by comparing the live block's source to a name.
+    (tmp_path / "lines.ts").write_text("""return card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia.'  // or 'PUBG'\n""")
+    assert named(source_names(), tmp_path) == {"lines.ts": [(1, "Liquipedia")]}
 
 
 MOBILE = WEB.parent.parent / "mobile" / "src"
@@ -88,6 +101,6 @@ def test_the_android_app_names_no_sport_and_no_source():
     """The Android app (mobile/src) takes everything from the API and the shared facts, so it has no limits:
     no file names a sport or a source, not even a sport's own board (mobile/src/sports/<sport>.tsx), which
     gets its key from its facts."""
-    wanted = set().union(*(names_of(s) for s in sports.ALL)) | {k.lower() for k in KNOWN}
+    wanted = set().union(*(names_of(s) for s in sports.ALL)) | source_names()
     found = named(wanted, MOBILE)
     assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)
