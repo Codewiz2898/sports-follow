@@ -37,7 +37,7 @@ MIGRATION = Path(__file__).parent.parent / "migrations/versions/d85acb8b68e0_esp
 def engine(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, starter, player, event, control RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, starter, player, event, control, campaign RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -89,6 +89,11 @@ def test_the_migration_moves_each_pro_and_whats_theirs_to_their_game_and_back(en
         c.execute(text("INSERT INTO event (id, key, sport, competition, title, status, participants) VALUES (1, 'x:1', 'Esports', '', 'A v B', 'final', '[]'), (2, 'x:2', 'Esports', '', 'C v D', 'final', '[]')"))
         c.execute(text("INSERT INTO event_player (event_id, player_id) VALUES (1, 1), (2, 3)"))
         c.execute(text("""INSERT INTO control (key, value) VALUES ('sports_off', '["esports", "tennis"]')"""))
+        campaign = ("INSERT INTO campaign (slug, sport, title, lines, players, teams, games) "
+                    "VALUES (:slug, 'esports', 'An event', '[]', CAST(:players AS jsonb), CAST(:teams AS jsonb), '[]')")
+        c.execute(text(campaign), [{"slug": "worlds", "players": json.dumps(["pandascore:3"]), "teams": json.dumps([{"name": "T1", "game": "King of Glory"}])},
+                                   {"slug": "ewc", "players": "[]", "teams": json.dumps([{"name": "T1", "game": "League of Legends"}, {"name": "SEN", "game": "Valorant"}])},
+                                   {"slug": "soon", "players": "[]", "teams": "[]"}])
 
     def rows(sql: str) -> list[tuple]:
         with engine.begin() as c:
@@ -107,12 +112,15 @@ def test_the_migration_moves_each_pro_and_whats_theirs_to_their_game_and_back(en
     assert rows("SELECT id, sport FROM event ORDER BY id") == [(1, "Honor of Kings"), (2, "Esports")]
     off = rows("SELECT value FROM control")[0][0]
     assert "esports" not in off and {"tennis", "valorant", "bgmi", "pubg"} <= set(off) and len(off) == 17
+    # A campaign of one game's teams and players is that game's; one of several games', or of none yet, the group's.
+    assert rows("SELECT slug, sport FROM campaign ORDER BY slug") == [("ewc", "esports"), ("soon", "esports"), ("worlds", "hok")]
 
     migrate(engine, "downgrade")
     assert rows("SELECT qid, sport FROM athlete WHERE sport <> 'cricket' ORDER BY qid") == [(q, "esports") for q in (
         "lp:ff:6", "lp:pubgm:4", "lp:pubgm:5", "op:7", "pandascore:1", "pandascore:2", "pandascore:3", "pubg:flc_tgltn")]
     assert {s for (s,) in rows("SELECT sport FROM athlete_override UNION SELECT sport FROM athlete_unmatch UNION SELECT sport FROM starter")} == {"esports"}
     assert rows("SELECT value FROM control")[0][0] == ["esports", "tennis"]
+    assert {s for (s,) in rows("SELECT sport FROM campaign")} == {"esports"}
 
 
 def test_a_pro_removed_as_esports_isnt_brought_back_in_any_game_and_one_kept_so_stays(engine):

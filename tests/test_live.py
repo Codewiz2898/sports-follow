@@ -189,7 +189,7 @@ def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, s
     sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"))]
     live.read("pitch", NOW)
     live.read("arena", NOW)
-    assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "games": [
+    assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "group": "", "games": [
         {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": [], "event_ids": []}]}], [])
     games, stale = live.offer(db, None, NOW + timedelta(seconds=90))
     assert stale == ["pitch", "arena"] and games  # a minute on: still served, and a read asked for

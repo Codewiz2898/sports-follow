@@ -73,8 +73,9 @@ export function campaignLive(c: Campaign, cards: Card[], sports: LiveSport[]): {
     seen.add(event)
     return true
   })
-  const others = sports.find((s) => s.key === c.sport)?.games.filter((g) =>
-    !(g.event_ids ?? []).some((id) => seen.has(id)) && g.players.some((p) => keys.has(p.key) || (p.player_id != null && ids.has(p.player_id)))) ?? []
+  // A campaign of a group (esports, an event of several games) takes the live games of each of its sports.
+  const others = sports.filter((s) => s.key === c.sport || (s.group && s.group === c.sport)).flatMap((s) => s.games).filter((g) =>
+    !(g.event_ids ?? []).some((id) => seen.has(id)) && g.players.some((p) => keys.has(p.key) || (p.player_id != null && ids.has(p.player_id))))
   return { mine, others }
 }
 

@@ -260,6 +260,7 @@ export interface LiveGame {
 export interface LiveSport {
   key: string
   label: string
+  group?: string // the group it's one of ("esports" for each game)
   games: LiveGame[]
 }
 

@@ -115,11 +115,12 @@ def db(monkeypatch):
 class Teams:
     """A running esports source that lists teams' rosters: `rosters` by team id, or an AdapterError."""
 
-    system, sport = "pandascore_esports", "esports"
+    system, sports = "pandascore_esports", ("lol", "valorant")  # two games, a team in each
     team_id_pattern = re.compile(r"[0-9]{1,12}")
 
     def __init__(self):
         self.rosters: dict[str, list[str] | Exception] = {}
+        self.games: dict[str, str] = {}  # a team's game, by team id: League of Legends unless said
 
     def team(self, team_id):
         got = self.rosters.get(team_id)
@@ -127,7 +128,7 @@ class Teams:
             raise got
         if got is None:
             return None
-        return SourceTeam(self.system, team_id, f"Team {team_id}", "League of Legends",
+        return SourceTeam(self.system, team_id, f"Team {team_id}", self.games.get(team_id, "League of Legends"),
                           [PlayerRef(self.system, f"{team_id}{i}", name, [team_id], [f"Team {team_id}"], league="league-of-legends") for i, name in enumerate(got)])
 
     def find_teams(self, name):
@@ -205,11 +206,12 @@ def test_its_players_are_offered_as_rows_and_a_player_an_operator_removes_leaves
 
 @needs_db
 def test_a_team_is_added_from_its_source_and_its_roster_kept_up_to_date(db, teams, monkeypatch):
-    teams.rosters = {"126061": ["Faker", "Zeus"], "2": ["Chovy"]}
-    campaigns.main(["set", "worlds", "--sport", "esports", "--title", "Worlds final"])
+    teams.rosters = {"126061": ["Faker", "Zeus"], "2": ["Chovy"], "3": ["TenZ"]}
+    teams.games = {"3": "Valorant"}
+    campaigns.main(["set", "worlds", "--sport", "lol", "--title", "Worlds final"])  # each esports game is a sport
     assert campaigns.page(db, "worlds", None)["teams"] == []  # the finalists come later: the page works without them
     assert campaigns.main(["team", "add", "worlds", "pandascore_esports:126061"]) == 0
-    for bad in ("pandascore_esports:404", "pandascore_esports:x1", "nosuch:1", "lichess_chess:1"):
+    for bad in ("pandascore_esports:404", "pandascore_esports:x1", "nosuch:1", "lichess_chess:1", "pandascore_esports:3"):  # 3: a Valorant team
         assert campaigns.main(["team", "add", "worlds", bad]) == 2, bad
     shown = campaigns.page(db, "worlds", "fan")
     assert [(t["team_id"], t["name"], [(r["key"], r["name"]) for r in t["players"]]) for t in shown["teams"]] == [
@@ -238,3 +240,13 @@ def test_a_campaign_of_a_sport_turned_off_has_no_page(db, monkeypatch):
     assert campaigns.page(db, "gukesh", None) is not None and campaigns.page(db, "nope", None) is None
     monkeypatch.setattr(sports, "on", lambda key: key != "chess")
     assert campaigns.page(db, "gukesh", None) is None
+
+
+@needs_db
+def test_an_esports_campaign_takes_any_games_teams(db, teams):
+    """An event of several games (the Esports World Cup) is the esports group's: a team of any game."""
+    teams.rosters = {"126061": ["Faker"], "3": ["TenZ"]}
+    teams.games = {"3": "Valorant"}
+    campaigns.main(["set", "ewc", "--sport", "esports", "--title", "Esports World Cup"])
+    assert campaigns.main(["team", "add", "ewc", "pandascore_esports:126061"]) == 0 and campaigns.main(["team", "add", "ewc", "pandascore_esports:3"]) == 0
+    assert [t["game"] for t in campaigns.page(db, "ewc", None)["teams"]] == ["League of Legends", "Valorant"]

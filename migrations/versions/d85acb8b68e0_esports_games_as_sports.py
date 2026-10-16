@@ -10,6 +10,8 @@ from "esports" to their game ("valorant", "cs2", "bgmi"), data only.
 - A player whose sport is "Esports" (followed before their game was known) takes their game from their
   source binding, as their next refresh would; their events follow them. Players already named by their
   game ("CS2") are that game's already.
+- A campaign page of "esports" whose teams and players are all of one game becomes that game's; one of
+  several games' (an event of many) stays "esports", which takes a team or player of any game.
 - The admin panel's sports turned off: "esports" becomes every game.
 
 The game keys and names are written out here, as they are today, so this runs the same whatever the code
@@ -17,7 +19,7 @@ says later. Downgrading moves them all back to "esports" (a pro in two games kee
 turned off back to "esports"; players keep their game's name, which the app before this read as esports.
 
 Revision ID: d85acb8b68e0
-Revises: 4d96acace757
+Revises: c3f81a5d0e27
 Create Date: 2026-10-16
 """
 
@@ -29,7 +31,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "d85acb8b68e0"
-down_revision = "4d96acace757"
+down_revision = "c3f81a5d0e27"
 branch_labels = None
 depends_on = None
 
@@ -83,6 +85,14 @@ def upgrade() -> None:
     db.execute(sa.text(f"""
         UPDATE event e SET sport = p.sport FROM event_player ep JOIN player p ON p.id = ep.player_id
         WHERE ep.event_id = e.id AND lower(e.sport) IN ({generic}) AND lower(p.sport) NOT IN ({generic})"""))
+    by_label = NAMES  # a team's game as its source named it, lower case -> the game's name
+    key_of = {label: key for key, label in GAMES.items()}
+    for cid, teams, qids in db.execute(sa.text(f"SELECT id, teams, players FROM campaign WHERE sport = '{GROUP}'")).all():
+        games = {key_of.get(by_label.get(str(t.get("game") or "").lower(), ""), "?") for t in teams or []}
+        if qids:
+            games |= set(db.execute(sa.text("SELECT DISTINCT sport FROM athlete WHERE qid = ANY(:qids)"), {"qids": list(qids)}).scalars())
+        if len(games) == 1 and (game := games.pop()) in GAMES:
+            db.execute(sa.text("UPDATE campaign SET sport = :game WHERE id = :id"), {"game": game, "id": cid})
     off = db.execute(sa.text("SELECT value FROM control WHERE key = 'sports_off'")).scalar()
     if isinstance(off, list) and GROUP in off:
         now = sorted({*(k for k in off if k != GROUP), *GAMES})
@@ -99,6 +109,7 @@ def downgrade() -> None:
             WHERE t.qid = o.qid AND t.sport IN ({games}) AND (o.sport = '{GROUP}' OR (o.sport IN ({games}) AND o.id < t.id))
             {"AND t.person IS NOT DISTINCT FROM o.person" if table == "athlete_unmatch" else ""}"""))
         db.execute(sa.text(f"UPDATE {table} SET sport = '{GROUP}' WHERE sport IN ({games})"))
+    db.execute(sa.text(f"UPDATE campaign SET sport = '{GROUP}' WHERE sport IN ({games})"))
     db.execute(sa.text("UPDATE player SET sport = 'King of Glory' WHERE sport = 'Honor of Kings'"))  # the name before
     off = db.execute(sa.text("SELECT value FROM control WHERE key = 'sports_off'")).scalar()
     if isinstance(off, list) and set(GAMES) <= set(off):

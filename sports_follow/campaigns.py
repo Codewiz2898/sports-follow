@@ -9,7 +9,7 @@ new event is a new row, set with this module's command:
     .venv/bin/python -m sports_follow.campaigns set gukesh --sport chess --title "Gukesh v Sindarov" --event "World Chess Championship" --line "…"
     .venv/bin/python -m sports_follow.campaigns player add gukesh Q1234       # a registry id, player id or system:id
     .venv/bin/python -m sports_follow.campaigns player remove gukesh Q1234
-    .venv/bin/python -m sports_follow.campaigns team find T1 --sport esports  # teams by name, with their ids
+    .venv/bin/python -m sports_follow.campaigns team find T1 --sport lol      # teams by name, with their ids (esports: any game's)
     .venv/bin/python -m sports_follow.campaigns team add worlds pandascore_esports:126061
     .venv/bin/python -m sports_follow.campaigns team remove worlds 126061
     .venv/bin/python -m sports_follow.campaigns game add gukesh "2026-11-24 15:00" "Game 1"   # India time (ZONE), or --utc
@@ -76,10 +76,16 @@ def get(db: Session, slug: str) -> Campaign | None:
 
 
 def _sport(key: str) -> sports.Sport:
+    """A campaign's sport: one the app lists, or a group of them ("esports", for an event of several games)."""
     sport = sports.BY_KEY.get(key)
     if sport is None:
-        raise Refused(f"unknown sport {key!r}; choose from {', '.join(s.key for s in sports.ALL)}")
+        raise Refused(f"unknown sport {key!r}; choose from {', '.join(s.key for s in (*sports.ALL, *sports.GROUPS))}")
     return sport
+
+
+def _within(key: str) -> list[str]:
+    """The sports a campaign's players and teams may be of: its sport, or for a group, any of the group's."""
+    return list(dict.fromkeys([key, *sports.expand([key])]))
 
 
 def _text(value: str, longest: int, what: str) -> str:
@@ -150,7 +156,7 @@ def player_athletes(db: Session, c: Campaign, ref: str) -> list[Athlete]:
 
 def add_player(db: Session, c: Campaign, athlete: Athlete) -> bool:
     """Put a registry athlete on the campaign, after its others. False if they were on it."""
-    if athlete.sport != c.sport:
+    if athlete.sport not in _within(c.sport):
         raise Refused(f"{athlete.name} is a {athlete.sport} athlete; /{c.slug} is {c.sport}")
     if athlete.qid in c.players:
         return False
@@ -179,8 +185,10 @@ def forget(db: Session, athletes: list[Athlete]) -> int:
     for a in athletes:
         gone.setdefault(a.sport, set()).add(a.qid)
     changed = 0
-    for c in db.scalars(select(Campaign).where(Campaign.sport.in_(list(gone)))) if gone else []:
-        kept = [q for q in c.players if q not in gone[c.sport]]
+    groups = {g for k in gone if (g := sports.of(k).group)}  # an event of several games is the group's
+    for c in db.scalars(select(Campaign).where(Campaign.sport.in_([*gone, *groups]))) if gone else []:
+        out = set().union(*(gone.get(k, set()) for k in _within(c.sport)))
+        kept = [q for q in c.players if q not in out]
         if kept != c.players:
             c.players = kept
             _changed(c, "players")
@@ -197,15 +205,21 @@ def team_source(system: str, sport: str) -> Any:
     if adapter is None:
         known = KNOWN.get(system)
         raise Refused(f"{system} isn't running in this build" if known else f"no source is called {system!r}")
-    if adapter.sport != sport:
-        raise Refused(f"{system} is a {adapter.sport} source")
+    if not set(_within(sport)) & set(adapter.sports):
+        raise Refused(f"{system} isn't a {sport} source")
     if not callable(getattr(adapter, "team", None)):
         raise Refused(f"{system} doesn't list teams' rosters")
     return adapter
 
 
 def sources_with_teams(sport: str) -> list[Any]:
-    return [a for a in ADAPTERS.values() if a.sport == sport and callable(getattr(a, "find_teams", None))]
+    return [a for a in ADAPTERS.values() if set(_within(sport)) & set(a.sports) and callable(getattr(a, "find_teams", None))]
+
+
+def of_sport(team: SourceTeam, sport: str) -> bool:
+    """Whether a team plays the campaign's sport: a source of several games names each team's (T1 plays League of
+    Legends and Valorant, a team each)."""
+    return not team.game or sports.family(team.game) in _within(sport)
 
 
 def read_team(system: str, team_id: str, sport: str) -> SourceTeam:
@@ -219,6 +233,8 @@ def read_team(system: str, team_id: str, sport: str) -> SourceTeam:
         raise Refused(f"couldn't reach {system} to read team {team_id}: {exc}") from exc
     if team is None:
         raise Refused(f"{system} has no team {team_id}")
+    if not of_sport(team, sport):
+        raise Refused(f"{team.name} ({team_id}) is a {team.game} team, not {sport}")
     return team
 
 
@@ -349,7 +365,7 @@ def page(db: Session, slug: str, fan: str | None) -> dict[str, Any] | None:
     if c is None or not SLUG.fullmatch(c.slug) or not sports.on(c.sport):
         return None
     sport = _sport(c.sport)
-    athletes = {a.qid: a for a in db.scalars(select(Athlete).where(Athlete.sport == c.sport, Athlete.qid.in_(c.players)))} if c.players else {}
+    athletes = {a.qid: a for a in db.scalars(select(Athlete).where(Athlete.sport.in_(_within(c.sport)), Athlete.qid.in_(c.players)))} if c.players else {}
     rows = search.offered(db, [athletes[q] for q in c.players if q in athletes], fan)
     blocked = registry.blocked(db) if c.teams else set()
     return {
@@ -379,7 +395,7 @@ def to_follow(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def describe(c: Campaign, db: Session) -> list[str]:
-    athletes = {a.qid: a for a in db.scalars(select(Athlete).where(Athlete.sport == c.sport, Athlete.qid.in_(c.players)))} if c.players else {}
+    athletes = {a.qid: a for a in db.scalars(select(Athlete).where(Athlete.sport.in_(_within(c.sport)), Athlete.qid.in_(c.players)))} if c.players else {}
     out = [f"/{c.slug}  {c.title}  ({c.sport}{f', {c.event}' if c.event else ''})"]
     out += [f"  line   {line}" for line in c.lines]
     out += [f"  player {q}  {athletes[q].name if q in athletes else '? (no longer in the registry)'}" for q in c.players]
@@ -472,7 +488,7 @@ def main(argv: list[str]) -> int:
                 print(f"Took {', '.join(remove_player(db, c, args.ref))} off /{c.slug}.")
         elif args.command == "team" and args.action == "find":
             _sport(args.sport)
-            found = [team for a in sources_with_teams(args.sport) for team in a.find_teams(args.name)]
+            found = [team for a in sources_with_teams(args.sport) for team in a.find_teams(args.name) if of_sport(team, args.sport)]
             for team in found:
                 print(f"{team.system}:{team.team_id:10}  {team.name}  ({team.game or args.sport}): {', '.join(p.name for p in team.players) or 'no players listed'}")
             if not found:

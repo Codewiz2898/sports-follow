@@ -460,7 +460,9 @@ class PandascoreEsports(Adapter):
 
     def find_teams(self, name: str) -> list[SourceTeam]:
         """Teams by name in the team titles, for an operator picking a campaign's team by its id."""
-        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        games = game_ids(self._on())
+        if not games:
+            return []
         rows = pandascore.get_json("/teams", ttl=3600, **{"search[name]": name, "filter[videogame_id]": games, "page[size]": 20})
         return [t for t in (parse_team(r) for r in rows if isinstance(r, dict)) if t] if isinstance(rows, list) else []
 

@@ -139,7 +139,8 @@ def _event_keys(system: str, game: dict[str, Any]) -> list[str]:
 
 
 def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
-    """The games on now, by running sport in the order the app lists sports ({"key", "label", "games"}),
+    """The games on now, by running sport in the order the app lists sports ({"key", "label", "group", "games"}: an
+    esports game's group is "esports"),
     each with the players this fan can follow from it and the ids of the events it is here (a followed
     player's live card names its game by one); and the sources whose last read is over FRESH old, for the
     caller to ask a read of."""
@@ -177,5 +178,5 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
                                  "event_ids": sorted({events[k] for k in _event_keys(system, game) if k in events})}))
         games.sort(key=lambda g: g[0])
         if games:
-            out.append({"key": sport.key, "label": sport.label, "games": [g for _, g in games[:GAMES]]})
+            out.append({"key": sport.key, "label": sport.label, "group": sport.group, "games": [g for _, g in games[:GAMES]]})
     return out, stale
