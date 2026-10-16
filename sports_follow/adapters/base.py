@@ -245,11 +245,18 @@ class Adapter:
     # foot. Sent in the card's live block; None leaves the app's own.
     live_note: str | None = None
     lag_note: str | None = None
+    # The Wikidata property that holds its athlete ids, where Wikidata keeps them (Liquipedia's pages,
+    # P10918): a pro from its roster is then matched to their Wikidata person by id (roster_wikidata.py).
+    wikidata_property: str | None = None
 
     @classmethod
     def available(cls) -> bool:
         """Whether this build can run it: a licensed source needs its token."""
         return True
+
+    def wikidata_id(self, athlete_id: str) -> str:
+        """One of its athlete ids as Wikidata writes it, under wikidata_property."""
+        return athlete_id
 
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py): its provider's, and any other source's it reads."""

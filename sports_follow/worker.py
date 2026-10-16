@@ -237,7 +237,7 @@ async def purge_sessions(ctx) -> None:
 
 async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
-    PandaScore; about two hours."""
+    their sources and each one's Wikidata person, for their photo (roster_wikidata.py); about two hours."""
     await in_lane('import', _import_registry)
 
 

@@ -373,6 +373,10 @@ class LiquipediaEsports(Adapter):
 
     game_names = (*WIKIS.values(), *GAME_NAMES.values(), "Battlegrounds Mobile India")  # a pro's sport is their game
     roster_prefix = "lp:"
+    wikidata_property = "P10918"  # Liquipedia ID: "pubgmobile/Jonathan"
+
+    def wikidata_id(self, athlete_id: str) -> str:
+        return athlete_id.replace(":", "/", 1)  # "pubgmobile:Jonathan"
 
     @classmethod
     def available(cls) -> bool:

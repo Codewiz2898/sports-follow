@@ -12,7 +12,7 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
     .venv/bin/python -m sports_follow.registry --new      # only people not imported yet
-    .venv/bin/python -m sports_follow.registry esports    # esports pros, from their sources
+    .venv/bin/python -m sports_follow.registry esports    # esports pros, from their sources, then their photos
 
 The query service allows a client about a minute of query time a minute, so batches run one at a
 time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour. A
@@ -23,7 +23,8 @@ Esports comes from its sources instead (import_rosters): Wikidata has a Liquiped
 people. Each esports source with a roster lists its pros (team titles from PandaScore, battle royale
 from Liquipedia and PUBG), keyed by the source ("pandascore:<id>", "lp:<wiki>:<page id>") where the
 others hold a Wikidata id. Each carries its source's id, so following one binds that source by id like
-any other.
+any other. After each import, roster_wikidata.py finds each pro's Wikidata person, where it can tell for
+sure, for their photo; a source's roster never overwrites the photo it found.
 """
 
 from __future__ import annotations
@@ -290,8 +291,10 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
 # ---------------------------------------------------------------- import
 
 
-def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
-    """Write athlete rows, new or refreshed. An athlete an operator removed (players.py) is never written again."""
+def upsert(db: Session, rows: list[dict[str, Any]], photos: bool = True) -> None:
+    """Write athlete rows, new or refreshed. An athlete an operator removed (players.py) is never written again.
+    photos=False: the rows don't say who has a photo (a source's roster), so a refreshed row keeps the one
+    it has (roster_wikidata.py found it)."""
     if not rows:
         return
     removed = set(db.execute(select(AthleteOverride.qid, AthleteOverride.sport).where(AthleteOverride.action == "remove", AthleteOverride.sport.in_({r["sport"] for r in rows}))).all())
@@ -307,7 +310,7 @@ def upsert(db: Session, rows: list[dict[str, Any]]) -> None:
             "country": ex.country, "teams": ex.teams, "league": ex.league, "title": ex.title,
             # Ids learned from the live sources (resolve) are kept; Wikidata's own overwrite theirs.
             "ids": Athlete.ids.op("||")(ex.ids),
-            "image": ex.image, "sitelinks": ex.sitelinks, "current": ex.current, "updated_at": func.now(),
+            "image": ex.image if photos else Athlete.image, "sitelinks": ex.sitelinks, "current": ex.current, "updated_at": func.now(),
         },
     ))
 
@@ -385,17 +388,31 @@ def import_all(keys: Iterable[str] | None = None, new_only: bool = False) -> dic
     that failed. A sport that fails keeps last week's rows, and the others still run."""
     done: dict[str, int | None] = {}
     for sport in importable() if keys is None else keys:
+        roster = sports.BY_KEY[sport].roster
         try:
-            done[sport] = import_rosters(sport) if sports.BY_KEY[sport].roster else import_sport(sport, new_only)
+            done[sport] = import_rosters(sport) if roster else import_sport(sport, new_only)
         except Exception:
             log.exception("registry %s: import failed; last week's rows kept", sport)
             done[sport] = None
+        if roster:
+            find_people(sport)  # last week's rows too, when a source failed
     failed = [s for s, n in done.items() if n is None]
     if failed:
         log.warning("registry import: %s; %s failed", done, ", ".join(failed))
     else:
         log.info("registry import: %s", done)
     return done
+
+
+def find_people(sport: str) -> None:
+    """Each of a roster sport's athletes' Wikidata person and photo, where it can tell for sure
+    (roster_wikidata.py). Wikidata not answering keeps last week's, and the import still counts."""
+    from . import roster_wikidata  # it reads Wikidata through this module
+
+    try:
+        roster_wikidata.run(sport)
+    except Exception:
+        log.exception("registry %s: matching athletes to Wikidata failed; last week's matches kept", sport)
 
 
 LOCK = "registry-import"
@@ -458,7 +475,7 @@ def import_roster(adapter: Adapter) -> int:
         nonlocal total
         rows = roster_rows(adapter.system, entries, adapter.sport)
         with session() as db:
-            upsert(db, rows)
+            upsert(db, rows, photos=False)
         total += len(rows)
         return total
 

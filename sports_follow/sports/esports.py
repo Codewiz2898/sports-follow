@@ -25,6 +25,16 @@ SERIES_RANK = {3: 60, 2: 40}
 LOBBY_RANK = {3: 55, 2: 35}
 STAGE_BONUS = {3: 30, 2: 15, 1: 5}  # a grand final of a world event is 90
 TIERS = {3: "Tier S", 2: "Tier A"}
+DISAMBIGUATED = re.compile(r"_?\(.*\)$")  # a Liquipedia page's "_(Korean_player)"
+# A game as one key, however a source, a Liquipedia wiki or Wikidata writes it: its name run together
+# ("Dota 2", "dota2"), or as here where the names differ.
+GAME_KEYS = {
+    "counterstrike": "cs2", "counterstrike2": "cs2", "counterstrikeglobaloffensive": "cs2", "csgo": "cs2",
+    "rainbowsix": "rainbowsixsiege", "tomclancysrainbowsixsiege": "rainbowsixsiege", "r6siege": "rainbowsixsiege",
+    "honorofkings": "kingofglory", "mobilelegendsbangbang": "mobilelegends", "leagueoflegendswildrift": "wildrift",
+    "overwatch2": "overwatch", "playerunknownsbattlegrounds": "pubg", "pubgbattlegrounds": "pubg",
+    "bgmi": "pubgmobile", "battlegroundsmobileindia": "pubgmobile", "freefiremax": "freefire",
+}
 
 
 def points(value: Any) -> str:
@@ -198,6 +208,31 @@ class Esports(Sport):
 
     def search_detail(self, athlete: Athlete) -> list[str]:
         return [*list(athlete.teams or [])[:1], athlete.country or ""]  # the game is the result's sport
+
+    # ---- the registry: a pro's Wikidata person, for their photo (roster_wikidata.py)
+
+    # Pros on Wikidata: anyone with a Liquipedia id (P10918, "valorant/TenZ"), an HLTV one (P8878) or an
+    # Esports Earnings one (P10803), or a professional gamer (Q4379701) by occupation.
+    people_ids = ("P10918", "P8878", "P10803")
+    people_occupations = ("Q4379701",)
+    team_filler = frozenset({"team", "club", "esports", "esport", "e", "sports", "gaming", "gg"})  # "Gen.G Esports" is Gen.G
+
+    def known_as(self, ids: dict[str, list[str]]) -> list[str]:
+        """The handles in a pro's ids: their Liquipedia page ("valorant/TenZ", "dota2/Collapse_(Russian_player)")
+        and their HLTV name ("11893/zywoo")."""
+        pages = [DISAMBIGUATED.sub("", v.split("/", 1)[-1]).replace("_", " ") for v in ids.get("P10918", [])]
+        return pages + [v.rsplit("/", 1)[-1] for v in ids.get("P8878", [])]
+
+    def plays(self, ids: dict[str, list[str]], disciplines: list[str]) -> set[str]:
+        """The games a pro on Wikidata plays: the wiki their Liquipedia page is on ("valorant/TenZ"),
+        Counter-Strike for an HLTV id, and the disciplines they compete in ("League of Legends")."""
+        games = [v.split("/", 1)[0] for v in ids.get("P10918", [])] + (["cs2"] if ids.get("P8878") else []) + list(disciplines)
+        return {key for key in map(self.game_key, games) if key}
+
+    def game_key(self, game: str | None) -> str:
+        """"Counter-Strike 2", "CS2" and the counterstrike wiki are "cs2"; "Dota 2" is "dota2"."""
+        key = re.sub(r"[^a-z0-9]", "", (game or "").lower())
+        return GAME_KEYS.get(key, key)
 
     def starts_unlisted(self, now: Seen) -> bool:
         # A series starts for the whole team (a Dota player OpenDota can't name has no line), and so
