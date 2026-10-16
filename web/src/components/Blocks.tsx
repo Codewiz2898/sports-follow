@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
+import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
@@ -462,7 +462,7 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children }
       </div>
       <div className="stack" style={{ gap: 10 }}>
         {sport && <span className="tag soft">{sportName(sport)}</span>}
-        <h1 className="dsp player-name">{name}</h1>
+        <h1 className="dsp player-name" style={{ '--ems': longestWordEms(name) } as CSSProperties}>{name}</h1>
         {meta && <span className="player-meta">{meta}</span>}
       </div>
       {children}

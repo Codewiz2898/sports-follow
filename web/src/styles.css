@@ -474,6 +474,14 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .player-band .btn.icon[aria-expanded='true'] { box-shadow: 0 0 0 3px var(--sport), 0 0 0 5px var(--on-sport); }
 .player-name { font-size: 56px; overflow-wrap: anywhere; }
 @media (min-width: 640px) { .player-name { font-size: 72px; } }
+/* As large as fits its longest word on a line (--ems, format.ts longestWordEms), so a long name breaks
+   between words, never inside one. A browser without container units keeps the sizes above (with var() in
+   it, the rule would unset them). */
+@supports (width: 1cqi) {
+  .player-band > .stack { container-type: inline-size; }
+  .player-name { font-size: min(56px, 100cqi / var(--ems, 5)); }
+  @media (min-width: 640px) { .player-name { font-size: min(72px, 100cqi / var(--ems, 5)); } }
+}
 .player-meta { font-weight: 700; color: var(--on-sport-soft); }
 /* An offline or new-version notice sits above the band, so the band can't reach the top edge. */
 .notice ~ .player-band { margin-top: 0; border-radius: 28px; }

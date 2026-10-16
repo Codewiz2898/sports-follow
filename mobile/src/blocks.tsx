@@ -7,7 +7,7 @@ import { useState, type ReactNode } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
+import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
@@ -440,12 +440,14 @@ function framed(crop: Photo['crop'], box: LayoutRectangle): ImageStyle {
 
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour edge to edge, with
  * their photo in its own colours fading in on the right and its credit when there is one. Beside the photo
- * the words stop short of it (b.besidePhoto, also for a note in `children`). */
+ * the words stop short of it (b.besidePhoto, also for a note in `children`). The name is as large as fits
+ * its longest word on a line in their room (longestWordEms), so it never breaks inside a word. */
 export function PlayerBand({ name, sport, meta, photo, back, actions, children, topInset }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode; topInset: number }) {
   const sports = useSports()
   const tone = toneOf(sports, sport)
   const [broken, setBroken] = useState<string | null>(null)
   const [box, setBox] = useState<LayoutRectangle | null>(null)
+  const [room, setRoom] = useState<number | null>(null)
   const shown = photo && photo.url !== broken ? photo : null
   const credit = shown ? safeHref(shown.page) : undefined
   return (
@@ -461,9 +463,9 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children, 
         {back}
         <View style={{ flexDirection: 'row', gap: 8 }}>{actions}</View>
       </View>
-      <View style={[{ gap: 10 }, shown ? b.besidePhoto : null]}>
+      <View style={[{ gap: 10 }, shown ? b.besidePhoto : null]} onLayout={(e) => setRoom(e.nativeEvent.layout.width)}>
         {sport ? <Text style={[t.tag, { color: tone.onSoft }]}>{sports.name(sport)}</Text> : null}
-        <Dsp size={56} color={tone.on}>{name}</Dsp>
+        <Dsp size={room ? Math.min(56, room / longestWordEms(name)) : 56} color={tone.on}>{breakable(name)}</Dsp>
         {meta ? <Text style={{ fontFamily: font[700], fontSize: 15, lineHeight: 21, color: tone.onSoft }}>{meta}</Text> : null}
       </View>
       {children}
