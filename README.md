@@ -77,10 +77,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
   which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
   follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
-  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app recolours each photo in its sport's colour (a duotone
-  from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
-  credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
-  linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
+  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app shows
+  each photo in its own colours, cropped around the face and fading into the band, and changes nothing
+  else, so its credit names no change: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons", under the
+  photo, linking to the file's page. The Credits page lists them all and says once that they're cropped and faded. Players without a photo show none. Never a
   data provider's photos (their terms don't license them), and never generated likenesses.
   The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
   detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker
@@ -283,8 +283,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
   finish, or none, as for a cricket final whose sides are still "TBC"; and its group, an esports title,
   which takes its own turn within the sport's; for Today's big results and big games coming up), its form summary,
-  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link
-  previews are drawn in them). Shared code
+  how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a

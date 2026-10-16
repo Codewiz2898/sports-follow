@@ -50,13 +50,14 @@ def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-
 # ---------------------------------------------------------------- which licences, and how credited
 
 
-def test_a_cc_by_sa_photo_is_kept_and_credited_to_its_author_as_recoloured():
+def test_a_cc_by_sa_photo_is_kept_and_credited_to_its_author():
     found = photos.judge(info(SAKA))
     assert (found.status, found.author, found.licence) == ("ok", "Bryan Berlin", "CC BY-SA 4.0")
     assert found.page == PAGE + SAKA.replace(" ", "_")
     assert found.thumb and found.thumb.endswith("330px-" + SAKA.replace(" ", "_")) and "?" not in found.thumb  # no tracking query
     photo = Photo(file=SAKA, status="ok", author=found.author, licence=found.licence, digest="0" * 32, media_type="image/jpeg", page=found.page)
-    assert photos.credit(photo) == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"
+    # Shown as it is, only framed (styles.css .photo): a credit names no change.
+    assert photos.credit(photo) == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons"
     assert photos.public(photo)["url"] == f"/api/photos/{'0' * 32}.jpg"
 
 
@@ -134,12 +135,13 @@ def test_a_photo_address_is_its_digest_and_kind():
         assert not photos.NAME.fullmatch(name)
 
 
-def test_the_credits_page_lists_each_photo_and_what_recolouring_means():
-    shown = [{"name": "Bukayo Saka", "url": "/api/photos/x.jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", "page": PAGE + "x", "author": "Bryan Berlin", "licence": "CC BY-SA 4.0", "licence_url": "https://creativecommons.org/licenses/by-sa/4.0"}]
+def test_the_credits_page_lists_each_photo_and_how_they_are_shown():
+    shown = [{"name": "Bukayo Saka", "url": "/api/photos/x.jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons", "page": PAGE + "x", "author": "Bryan Berlin", "licence": "CC BY-SA 4.0", "licence_url": "https://creativecommons.org/licenses/by-sa/4.0"}]
     page = credits.credits({}, stockfish=False, agent=False, photos=shown)
     assert page["photos"] == [{k: v for k, v in shown[0].items() if k != "url"}]
     assert "Wikimedia Commons" in [c["name"] for c in page["also"]]
-    assert any("recolour" in n and "keeps its licence" in n for n in page["notices"])
+    # The crop and the fade are said once, here, rather than in every credit.
+    assert any("cropped" in n and "faded" in n for n in page["notices"]) and not any("recolour" in n for n in page["notices"])
     bare = credits.credits({}, stockfish=False, agent=False)
     assert bare["photos"] == [] and "Wikimedia Commons" not in [c["name"] for c in bare["also"]] and bare["notices"] == credits.NOTICES
 
@@ -256,7 +258,7 @@ def test_followed_and_starter_athletes_photos_are_fetched_once_and_written_into_
     db.expire_all()
     card = db.get(PlayerCard, 1)
     assert card and card.version == 4 and card.card["version"] == 4
-    assert card.card["player"]["photo"] == photos.public(saka) and card.card["player"]["photo"]["credit"] == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"
+    assert card.card["player"]["photo"] == photos.public(saka) and card.card["player"]["photo"]["credit"] == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons"
     assert db.published[1]["player"]["photo"]["url"] == f"/api/photos/{saka.digest}.jpg"
     assert "photo" not in db.get(PlayerCard, 2).card["player"] and "photo" not in db.get(PlayerCard, 3).card["player"]
 
@@ -486,7 +488,7 @@ def test_the_api_serves_a_photo_for_a_year_and_nothing_else(api, monkeypatch):
 
 def test_the_preview_of_an_athlete_picked_in_search_brings_their_photo(api, monkeypatch):
     """Found by their id in the source: search results carry no photo, so the preview is where it comes from."""
-    shown = {"url": "/api/photos/" + "0" * 32 + ".jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"}
+    shown = {"url": "/api/photos/" + "0" * 32 + ".jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons"}
     monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: {"system": system, "athlete_id": athlete_id, "name": "Someone"})
     monkeypatch.setattr(photos, "of_source", lambda db, system, athlete_id: shown if (system, athlete_id) == ("espn_soccer", "231388") else None)
     assert api.call("GET", "/api/athletes/espn_soccer/231388").json()["photo"] == shown

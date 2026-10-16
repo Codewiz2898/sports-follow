@@ -17,10 +17,13 @@ Where the face is tells the app how to frame a photo (framing): the profile show
 head and shoulders, rather than the top of a photo that might be a full-length action shot. A photo with
 no face found is shown from near its top.
 
-The app recolours every photo in its sport's colour (a duotone, web/src/styles.css), so each credit says
-so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured". A recoloured CC BY-SA photo stays
-CC BY-SA. The Credits page lists every photo in use. A photo shows who a player is; it doesn't mean they
-endorse the app (credits.NOTICES).
+The app shows each photo in its own colours, cropped to the band around the face (as any picture fitted
+to a page is) and fading into the band at its left edge; nothing else in it changes. So a credit names no
+change: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons", linking to the whole file on Commons, and
+the Credits page says once that photos are cropped and faded (credits.PHOTO_NOTICES). Were the app to
+change a photo beyond that (recolour it, say), its credit would have to say so, as CC BY and CC BY-SA ask.
+The Credits page lists every photo in use. A photo shows who a player is; it doesn't mean they endorse
+the app.
 
 Never a data provider's photos (their terms don't license them), and never generated likenesses.
 
@@ -238,8 +241,8 @@ def _due(photo: Photo | None, now: datetime) -> bool:
 
 
 def credit(photo: Photo) -> str:
-    """ "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured": the app shows each one recoloured."""
-    return f"Photo: {photo.author or 'unknown author'}, {photo.licence}, Wikimedia Commons, recoloured"
+    """ "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons": the app shows each one as it is, framed."""
+    return f"Photo: {photo.author or 'unknown author'}, {photo.licence}, Wikimedia Commons"
 
 
 def framing(width: int | None, height: int | None, face: dict[str, float] | None) -> dict[str, Any]:

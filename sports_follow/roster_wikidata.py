@@ -5,7 +5,7 @@ photo file (P18). Esports pros come from their sources instead (registry.import_
 source's id ("pandascore:20401"), with neither. This step finds each pro's Wikidata person and records
 them in the pro's row: the Wikidata id in its ids ("wikidata": "Q113450352"), the photo file in its image.
 The photos job then fetches the photos of those followed or offered as starters, as for any other athlete
-(photos.py: on the profile only, recoloured, with a credit).
+(photos.py: on the profile only, with a credit).
 
 Who a pro could be: every living person the sport counts as one of its people on Wikidata
 (Sport.people_ids and people_occupations: anyone with a Liquipedia, HLTV or Esports Earnings id, or a
