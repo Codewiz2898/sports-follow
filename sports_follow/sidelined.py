@@ -10,7 +10,7 @@ source's own id for each spell (models.Sidelined):
   its end date put back), is news that the player is out (out_at), when it started in the last NEW_DAYS:
   one already under way when reads began, or when its team was first read, isn't;
 - a spell that's over, gone from its team's list or past the date the player was expected back, is news
-  that they're back (back_at), unless another spell still has them out.
+  that they're back (back_at), unless another spell their sport tells still has them out.
 
 A read that fails changes nothing, and a spell of a team the read didn't list (a team relegated out of the
 plan's leagues) is left as it was. The player's sport words each fact (Sport.out_fact, back_fact).
@@ -35,7 +35,7 @@ from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import logs, registry
+from . import logs, registry, sports
 from .adapters import ADAPTERS, Absence, Adapter
 from .db import session
 from .models import Athlete, Sidelined
@@ -122,7 +122,10 @@ def read(system: str, now: datetime | None = None) -> dict[str, int]:
             if row.ended_at is None and row.source_id not in on_list and row.team_id in teams:
                 row.ended_at = now  # off the list of a team the read has: over
                 ended.append(row)
-        still_out = {row.athlete_id for row in stored.values() if row.ended_at is None}
+        # Out for a spell the sport tells: one it doesn't (not registered for the competition) doesn't keep
+        # a player's return from injury untold.
+        told = sports.of(adapter.sport)
+        still_out = {row.athlete_id for row in stored.values() if row.ended_at is None and told.out_fact(row.name, row.kind, row.what, row.until) is not None}
         back = {row.athlete_id for row in ended if row.athlete_id not in still_out}
         for row in ended:
             if row.athlete_id in back:

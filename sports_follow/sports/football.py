@@ -28,6 +28,9 @@ ROUT, GOALS = 3, 6  # a win by this many goals, or this many in the game
 # Who's out, on the Wire (out_fact): an injury and a ban are news; being ineligible (not registered for the
 # competition) isn't. How each is over, said of the player.
 BACK = {"injury": "is fit again", "suspension": "is back from suspension"}
+# The few of the sources' words for what's wrong that don't read as one on the Wire, lower case.
+SAID = {"unknown injury": "injury", "fitness": "lacking fitness", "ill": "illness", "indirect card suspension": "yellow card suspension",
+        "suspension through sports court": "banned by a sports court"}
 
 
 def pens(a: int | None, b: int | None) -> str:
@@ -290,11 +293,12 @@ class Football(Sport):
         return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", why=why or said)
 
     def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
-        """ "Out", then who, what ("back injury", "red card suspension"; an "Unknown Injury" is an injury) and
-        until when, if the source says: "William Saliba · back injury · until 11 Dec"."""
+        """ "Out", then who, what ("back injury", "red card suspension"; SAID rewords a few) and until when, if
+        the source says: "William Saliba · back injury · until 11 Dec"."""
         if kind not in BACK:
             return None
-        what = re.sub(r"^unknown\s+", "", what.strip().lower()) or kind
+        what = what.strip().lower()
+        what = SAID.get(what, what) or kind
         return Fact("Out", joined(who, what, f"until {until.day} {until:%b}" if until else None))
 
     def back_fact(self, who: str, kind: str) -> Fact | None:

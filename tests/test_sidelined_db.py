@@ -105,6 +105,14 @@ def test_a_player_still_out_for_another_spell_isnt_back(source):
     assert rows()["1"].ended_at is not None and rows()["1"].back_at is None
 
 
+def test_a_spell_its_sport_doesnt_tell_doesnt_keep_a_return_untold(source):
+    # Not registered for the competition (football tells no "other" spell) and injured: the injury ends.
+    source.teams["19"] = [spell("1", "4125", "William Saliba", date(2026, 7, 19)), spell("6", "4125", "William Saliba", date(2026, 9, 3), kind="other")]
+    sidelined.read(SYSTEM, NOW)
+    source.teams["19"] = [spell("6", "4125", "William Saliba", date(2026, 9, 3), kind="other")]
+    assert sidelined.read(SYSTEM, NOW + timedelta(hours=10))["back"] == 1
+
+
 def test_a_read_that_fails_or_leaves_a_team_out_ends_nothing(source):
     source.teams["20"] = [spell("3", "7002", "Cole Palmer", TODAY - timedelta(days=20), team="20")]
     sidelined.read(SYSTEM, NOW)

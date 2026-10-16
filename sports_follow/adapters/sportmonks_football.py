@@ -347,23 +347,30 @@ def _day(text: Any) -> date | None:
         return None
 
 
+# Spells Sportmonks files as "suspended" that aren't bans: a player not registered for the competition, or away
+# with their country. Their types' developer names, which are their names in capitals ("No Eligibility").
+_NOT_BANS = {"NO_ELIGIBILITY", "CALLED_UP_TO_NATIONAL_TEAM"}
+
+
 def _out_for(spell: dict[str, Any]) -> str:
-    """A spell's kind, as football's sources share them: Sportmonks' "injury", a ban ("suspended", of a
-    type that's a suspension: a red card, five yellows), or "other" ("suspended" for anything else: No
-    Eligibility, a player not registered for the competition)."""
-    if spell.get("category") == "injury":
+    """A spell's kind, as football's sources share them: Sportmonks' "injury"; a ban, any "suspended" spell
+    but those that aren't one (_NOT_BANS: a red card, five yellows, a sports court's); or "other"."""
+    category = spell.get("category")
+    if category == "injury":
         return "injury"
-    kind = str((spell.get("type") or {}).get("developer_name") or "")
-    return "suspension" if kind.endswith("_SUSPENSION") else "other"
+    kind = spell.get("type") or {}
+    named = str(kind.get("developer_name") or re.sub(r"\W+", "_", str(kind.get("name") or "")).strip("_").upper())
+    return "suspension" if category == "suspended" and named not in _NOT_BANS else "other"
 
 
 def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_football") -> dict[str, list[Absence]]:
-    """A season's teams with sidelined (with player and type) -> each team, by id, with its players out.
-    Sportmonks lists a spell until it's over (completed), and its end date is when the player is expected back."""
+    """A season's teams with sidelined (with player and type) -> each team, by id, with its players out; a
+    team whose answer has no sidelined list is left out, not taken for one with nobody out. Sportmonks lists
+    a spell until it's over (completed), and its end date is when the player is expected back."""
     out: dict[str, list[Absence]] = {}
     for team in teams:
-        if not team.get("id"):
-            continue
+        if not team.get("id") or "sidelined" not in team:
+            continue  # an answer without the list says nothing of who's out: as if the team weren't read
         listed = out.setdefault(str(team["id"]), [])
         for spell in team.get("sidelined") or []:
             player = spell.get("player") or {}

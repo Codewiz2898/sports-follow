@@ -339,17 +339,21 @@ def test_who_is_out_is_each_teams_list_injuries_bans_and_the_rest():
             _spell(2, 7001, "Kai Havertz", "THIGH_PROBLEMS", "injury", "2026-09-24", None),
             _spell(3, 7002, "Declan Rice", "RED_CARD_SUSPENSION", "suspended", "2026-10-10", "2026-10-20"),
             _spell(4, 7003, "Wataru Endo", "NO_ELIGIBILITY", "suspended", "2026-09-03", "2027-01-28"),
+            _spell(7, 7005, "Paul Pogba", "SUSPENSION_THROUGH_SPORTS_COURT", "suspended", "2026-03-01", None),  # a ban too
+            _spell(8, 7006, "Away With Country", "CALLED_UP_TO_NATIONAL_TEAM", "suspended", "2026-10-10", "2026-10-15"),
             _spell(5, 7004, "Old Knock", "KNOCK", "injury", "2026-01-01", "2026-01-08", completed=True),  # over: not listed
             {"id": 6, "category": "injury", "type": {}, "player": None},  # no player: nobody's
         ]},
         {"id": 20, "name": "Chelsea", "sidelined": []},  # nobody out, but read: a spell gone from it is over
+        {"id": 21, "name": "Spurs"},  # an answer without the list: as if not read, so nobody's spell ends
     ])
     assert set(teams) == {"19", "20"} and teams["20"] == []
-    saliba, havertz, rice, endo = teams["19"]
+    saliba, havertz, rice, endo, pogba, away = teams["19"]
     assert (saliba.source_id, saliba.ref.athlete_id, saliba.ref.name, saliba.ref.team_ids, saliba.ref.team_names, saliba.ref.born) == ("1", "4125", "William Saliba", ["19"], ["Arsenal"], "2001-03-24")
     assert (saliba.kind, saliba.what, saliba.since, saliba.until) == ("injury", "Back Injury", date(2026, 7, 19), date(2026, 12, 11))
     assert havertz.until is None
-    assert [(a.kind, a.what) for a in (rice, endo)] == [("suspension", "Red Card Suspension"), ("other", "No Eligibility")]
+    assert [(a.kind, a.what) for a in (rice, endo, pogba, away)] == [
+        ("suspension", "Red Card Suspension"), ("other", "No Eligibility"), ("suspension", "Suspension Through Sports Court"), ("other", "Called Up To National Team")]
 
 
 def test_who_is_out_is_read_a_season_at_a_time_counted_as_teams(monkeypatch):

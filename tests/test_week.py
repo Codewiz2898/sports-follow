@@ -257,6 +257,9 @@ def test_football_tells_who_is_out_and_who_is_back_in_its_own_words():
     assert football.out_fact("Phil Foden", "suspension", "Red Card Suspension", date(2026, 10, 17)).line == "Phil Foden · red card suspension · until 17 Oct"
     assert football.back_fact("William Saliba", "injury") == sports.Fact("Back", "William Saliba is fit again")
     assert football.back_fact("Phil Foden", "suspension") == sports.Fact("Back", "Phil Foden is back from suspension")
+    # The source's words, but for a few that don't read as what's wrong.
+    assert [football.out_fact("X", kind, what, None).line for kind, what in (("injury", "Fitness"), ("injury", "Ill"), ("suspension", "Indirect Card Suspension"))] == [
+        "X · lacking fitness", "X · illness", "X · yellow card suspension"]
     # Not registered for the competition: not news.
     assert football.out_fact("Wataru Endo", "other", "No Eligibility", None) is None and football.back_fact("Wataru Endo", "other") is None
 
