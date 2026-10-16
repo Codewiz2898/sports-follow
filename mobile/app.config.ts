@@ -40,6 +40,8 @@ export default (): ExpoConfig => ({
   ios: { bundleIdentifier: 'io.stann.app' },
   plugins: [
     'expo-router',
+    // The badge on paper while the first screen waits for the sports (catalog.tsx).
+    ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
     // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue.
     ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE }],
     // The web app's typefaces (styles.css): Anton for display, Manrope for text, Fredoka for the name.
@@ -47,6 +49,7 @@ export default (): ExpoConfig => ({
       fonts: [
         `${FONTS}/anton/400Regular/Anton_400Regular.ttf`,
         `${FONTS}/manrope/500Medium/Manrope_500Medium.ttf`,
+        `${FONTS}/manrope/600SemiBold/Manrope_600SemiBold.ttf`,
         `${FONTS}/manrope/700Bold/Manrope_700Bold.ttf`,
         `${FONTS}/manrope/800ExtraBold/Manrope_800ExtraBold.ttf`,
         `${FONTS}/fredoka/600SemiBold/Fredoka_600SemiBold.ttf`,

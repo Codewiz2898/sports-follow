@@ -164,6 +164,7 @@ export interface SearchResponse {
 
 export interface AthletePreview {
   system: string | null  // null: no live source has them; following builds the page with AI
+  fixtures?: boolean  // false: the source's games are read once they're followed, so the preview shows stats only
   athlete_id: string | null
   league?: string | null
   name: string

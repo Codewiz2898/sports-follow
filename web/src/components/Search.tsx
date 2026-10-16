@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type Research, type SearchResponse, type SearchResult } from '../api'
 import { APP_NAME } from '../app'
 import { followTarget } from '../follow'
-import { relative } from '../format'
+import { allowance, exactName as namesakesName, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, type Section } from '../search'
 import { runningSports, sportInfo } from '../sports'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
@@ -43,23 +43,11 @@ export function useSearch(query: string, sport: string) {
   return { data, fresh: data != null && answer?.asked === asked, loading, error }
 }
 
-export interface Section { key: string; title: string; items: SearchResult[] }
+export type { Section }
 
-/** The order results are shown (and arrowed through) in. */
+/** The order results are shown (and arrowed through) in (search.ts). */
 export function sections(data: SearchResponse): Section[] {
-  const { results } = data
-  if (data.namesakes > 1) {
-    return [
-      { key: 'namesakes', title: '', items: results.filter((r) => r.exact) },
-      { key: 'similar', title: 'Similar names', items: results.filter((r) => !r.exact) },
-    ].filter((s) => s.items.length)
-  }
-  return [
-    { key: 'ours', title: `On ${APP_NAME}`, items: results.filter((r) => r.player_id) },
-    { key: 'athletes', title: 'Athletes', items: results.filter((r) => !r.player_id && r.live_scores) },
-    { key: 'other', title: 'Other sports · AI research only', items: results.filter((r) => !r.player_id && !r.live_scores) },
-    { key: 'suggestions', title: 'Did you mean', items: data.suggestions },
-  ].filter((s) => s.items.length)
+  return sectionsOf(data, APP_NAME)
 }
 
 /** Opening and following results, the same from the search page, the sidebar and a preview. */
@@ -107,31 +95,9 @@ export function useSearchActions(onDone?: () => void) {
   return { open, follow, research, pending, error, isFollowing: following.isFollowing }
 }
 
-// Accents and apostrophes dropped, as the server compares names: "aja" is the start of A'ja.
-const fold = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['’`]/g, '').toLowerCase()
-
-/** The name with the typed start of each word in bold: "Caitl" in Caitlin Clark. */
+/** The name with the typed start of each word in bold: "Caitl" in Caitlin Clark (search.ts). */
 export function Highlight({ name, query }: { name: string; query: string }) {
-  const typed = fold(query).split(/[\s.'-]+/).filter(Boolean)
-  return (
-    <>
-      {name.split(/(\s+)/).map((part, i) => {
-        const word = fold(part)
-        const hit = typed.filter((t) => word.startsWith(t)).sort((a, b) => b.length - a.length)[0]
-        if (!hit || !part.trim()) return part
-        let n = 0
-        while (n < part.length && fold(part.slice(0, n)).length < hit.length) n++
-        return <span key={i}><b className="hl">{part.slice(0, n)}</b>{part.slice(n)}</span>
-      })}
-    </>
-  )
-}
-
-function nextLine(r: SearchResult): { text: string; live: boolean } | null {
-  if (r.status === 'building') return { text: 'Page being set up…', live: false }
-  if (r.next?.live) return { text: `Live · ${r.next.live}`, live: true }
-  if (r.next?.title) return { text: `Next: ${r.next.title}${r.next.start_utc ? ` · ${relative(r.next.start_utc)}` : ''}`, live: false }
-  return null
+  return <>{highlightParts(name, query).map((p, i) => (p.bold ? <b key={i} className="hl">{p.text}</b> : <span key={i}>{p.text}</span>))}</>
 }
 
 export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; query: string; active?: boolean; actions: ReturnType<typeof useSearchActions>; id?: string }) {
@@ -171,25 +137,18 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
   )
 }
 
-function resetTime(research: Research): string {
-  return new Date(research.resets_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-}
-
 /** The research agent, offered last: any sport, 1 to 3 minutes, a few a day per fan. */
 export function ResearchOffer({ query, research, full, actions }: { query: string; research?: Research; full?: boolean; actions: ReturnType<typeof useSearchActions> }) {
   const q = query.trim()
-  const out = research && research.left <= 0
-  const allowance = research && (out
-    ? `You've used today's ${research.limit} AI researches. More from ${resetTime(research)}.`
-    : `${research.left} of ${research.limit} left today`)
+  const { out, text: left } = allowance(research)
   const busy = actions.pending === `research:${q}`
   if (!full) {
     return (
       <div className="research-link">
-        <button type="button" className="btn link" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
+        <button type="button" className="btn link" disabled={out || Boolean(actions.pending)} onClick={() => actions.research(q)}>
           {busy ? <span className="spinner" /> : <SparkIcon width={18} height={18} />}Not here? Research “{q}” with AI
         </button>
-        <span className="tiny muted">Any sport · 1 to 3 minutes{allowance ? ` · ${allowance}` : ''}</span>
+        <span className="tiny muted">Any sport · 1 to 3 minutes{left ? ` · ${left}` : ''}</span>
       </div>
     )
   }
@@ -201,16 +160,13 @@ export function ResearchOffer({ query, research, full, actions }: { query: strin
       </div>
       <p className="small muted" style={{ margin: 0 }}>Our research agent searches the web for “{q}”, works out who it is and builds the page. It takes 1 to 3 minutes and works for any sport.</p>
       <p className="small muted" style={{ margin: 0 }}>{liveNote()}</p>
-      <button type="button" className="btn primary" disabled={Boolean(out || actions.pending)} onClick={() => actions.research(q)}>
+      <button type="button" className="btn primary" disabled={out || Boolean(actions.pending)} onClick={() => actions.research(q)}>
         {busy && <span className="spinner" />}Research “{q}”
       </button>
-      {allowance && <span className="tiny muted" style={{ textAlign: 'center' }}>{allowance}</span>}
+      {left && <span className="tiny muted" style={{ textAlign: 'center' }}>{left}</span>}
     </div>
   )
 }
-
-// A letter of a script other than Latin (Devanagari, Tamil, Chinese, Cyrillic…), which search can't read yet.
-const OTHER_SCRIPT = /[^\P{L}\p{Script=Latin}]/u
 
 /** Everything under the search box: namesake picker, sections, did-you-mean and the AI offer. */
 export function SearchResults({ data, query, loading, actions, activeKey, idFor }: {
@@ -222,10 +178,7 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
   idFor?: (r: SearchResult) => string
 }) {
   const parts = sections(data)
-  // The name one of them goes by ("Ronaldo", not "Ronaldo da Silva Souza", whose alias it is); when
-  // only aliases have it ("Silva"), the name as typed.
-  const plain = (s: string) => fold(s).split(/[^a-z0-9]+/).filter(Boolean).sort().join(' ')
-  const exactName = data.results.find((r) => r.exact && plain(r.name) === plain(data.query))?.name ?? data.query.replace(/(^|\s)\S/g, (c) => c.toUpperCase())
+  const exactName = namesakesName(data)
   const nothing = !data.results.length
   return (
     <div className="search-results" aria-busy={loading || undefined}>
@@ -261,10 +214,7 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
 
 /** Which sports have live scores here (each from its sources; see Credits), and what the rest get. */
 function liveNote(): string {
-  const live = runningSports().filter((s) => s.live).map((s) => s.label.toLowerCase())
-  if (!live.length) return 'Every sport gets news and results from the agent.'
-  const listed = live.length > 1 ? `${live.slice(0, -1).join(', ')} and ${live.at(-1)}` : live[0]
-  return `Live scores come from sources for ${listed} (see Credits). Other sports get news and results from the agent.`
+  return sportsNote(runningSports())
 }
 
 export function SportChips({ sport, onChange }: { sport: string; onChange: (s: string) => void }) {

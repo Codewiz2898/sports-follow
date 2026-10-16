@@ -109,6 +109,29 @@ class Redis:
     async def ttl(self, key):
         return 42 if key in self.data else -2
 
+    def pipeline(self, transaction=True):
+        return Pipeline(self)
+
+
+class Pipeline:
+    """Commands queued, then run in order by execute."""
+
+    def __init__(self, redis: Redis):
+        self.redis, self.queued = redis, []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def set(self, *args, **kwargs):
+        self.queued.append(lambda: self.redis.set(*args, **kwargs))
+        return self
+
+    async def execute(self):
+        return [await command() for command in self.queued]
+
 
 class Queue:
     def __init__(self):

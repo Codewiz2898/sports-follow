@@ -1,28 +1,27 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useActivity } from '../activity'
-import type { ActivityItem, Card, League, UpcomingEvent } from '../api'
+import type { League } from '../api'
 import { APP_NAME } from '../app'
 import { useNow } from '../clock'
-import { ComingCard, highlight, LiveScoreboard, ResultCard, type GameResult, type LatestMoment } from '../components/Blocks'
+import { ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { AlsoLive } from '../components/LiveNow'
-import { LeagueComingCard, LeagueResultCard, notTheirs, resultsDay, stillToCome, TAIL, theirEvents, useLeague } from '../components/League'
+import { LeagueComingCard, LeagueResultCard, useLeague } from '../components/League'
 import { StartersSection } from '../components/Starters'
 import { ThisWeek, useWeek } from '../components/ThisWeek'
 import { Wire } from '../components/Wire'
-import { ahead, daysAgo, lineStats, parseDate, playedOn } from '../format'
 import { useAccount } from '../account'
 import { useFollowing } from '../following'
 import { InstallButton } from '../pwa'
+import { sportKey } from '../sports'
+import { AHEAD_DAYS, comingUp, FEW, latestIn, liveGames, notTheirs, results, resultsDay, stillToCome, TAIL, theirEvents } from '../today'
 import { welcomed } from './WelcomePage'
 
 const NUDGE = 'sf-save-nudge'
-const FEW = 3  // until a fan follows this many, Today keeps offering starters
-const AHEAD_DAYS = 14  // how far Coming up looks
 
 /** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
 function SaveNudge() {
@@ -49,31 +48,6 @@ function SaveNudge() {
     </div>
   )
 }
-
-/** Group live cards by the game they're in, so two followed players in one match show as one game. Keyed by
- * the game, which also turns its line art its own way. */
-function liveGames(cards: Card[]): [string, Card[]][] {
-  const games = new Map<string, Card[]>()
-  for (const c of cards.filter((c) => c.status === 'ready' && c.live.is_live)) {
-    // A structured source names the event; the agent's text only matches when it's written the same way.
-    const key = c.live.event_id != null ? `event:${c.live.event_id}` : (c.live.event || c.live.score || String(c.player_id)).toLowerCase()
-    games.set(key, [...(games.get(key) ?? []), c])
-  }
-  return [...games.entries()]
-}
-
-/** The newest moment of the fan's players in a live game (the alerts list is newest first), and whether the
- * fan missed it: it came after they last looked at their alerts, from a game they haven't muted. Only a
- * structured score names its game. */
-function latestIn(items: ActivityItem[], group: Card[], seen: number): LatestMoment | null {
-  const game = group[0].live.event_id
-  if (game == null) return null
-  const ids = new Set(group.map((c) => c.player_id))
-  const m = items.find((i) => i.event_id === game && ids.has(i.player_id))
-  return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen && !m.muted } : null
-}
-
-interface Coming { key: string; event: UpcomingEvent; players: Card[] }
 
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions
@@ -102,60 +76,6 @@ function BigGames({ league, now }: { league: League | null; now: number }) {
       </ErrorBoundary>
     </>
   )
-}
-
-/** Every game of the fan's players in the next two weeks, soonest first, each once with everyone of theirs
- * who plays in it. One that has started has left: it's live, or it's a result. */
-function comingUp(cards: Card[], now: number): Coming[] {
-  const merged = new Map<string, Coming>()
-  for (const c of cards) {
-    for (const u of c.upcoming ?? []) {
-      const start = parseDate(u.start_utc)
-      if (!start || !ahead(u.start_utc, now) || start.getTime() - now > AHEAD_DAYS * 864e5) continue
-      const key = u.event_id != null ? `event:${u.event_id}` : `${u.title.toLowerCase()}|${start.toDateString()}`
-      const found = merged.get(key)
-      if (!found) merged.set(key, { key, event: u, players: [c] })
-      else if (!found.players.includes(c)) found.players.push(c)
-    }
-  }
-  return [...merged.values()].sort((a, b) => parseDate(a.event.start_utc)!.getTime() - parseDate(b.event.start_utc)!.getTime())
-}
-
-/** How big a player's line is: the sport has a word for it (a triple-double, a hundred), it's numbers, or neither. */
-function weight(p: GameResult['players'][number]): number {
-  const line = p.result.player_contribution
-  return highlight(p.sport, line) ? 2 : lineStats(line) ? 1 : 0
-}
-
-/**
- * The fan's results for the rail: every game of their players since yesterday where the fan is, else the
- * latest day that had any (`day`, its date; null since yesterday). A game two of their players were in is one card. The biggest
- * lines go first (a triple-double or a hundred, then any game with the player's numbers), then the newest.
- * Each card carries all its results (the follow list sends them), and the stream updates it as a game ends.
- */
-function results(cards: Card[], now: number): { games: GameResult[]; day: string | null } | null {
-  const today = new Date(now)
-  const all = cards.flatMap((c) => (c.recent_results ?? []).flatMap((r) => {
-    // A game dated after today (an agent's slip) isn't a result yet.
-    const days = daysAgo(playedOn(r), today)
-    return days != null && days >= 0 ? [{ days, player: { result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport, teams: c.player.teams } }] : []
-  }))
-  if (!all.length) return null
-  const latest = Math.min(...all.map((x) => x.days))
-  const shown = latest <= 1 ? all.filter((x) => x.days <= 1) : all.filter((x) => x.days === latest)
-  const games = new Map<string, GameResult>()
-  for (const { player } of shown) {
-    const r = player.result
-    const key = r.event_id != null ? `event:${r.event_id}` : `${r.title.toLowerCase()}|${parseDate(playedOn(r))!.toDateString()}`
-    const game = games.get(key)
-    if (!game) games.set(key, { key, players: [player] })
-    else if (!game.players.some((p) => p.result.player_id === r.player_id)) game.players.push(player)
-  }
-  const time = (g: GameResult) => Math.max(...g.players.map((p) => parseDate(playedOn(p.result))?.getTime() ?? 0))
-  for (const g of games.values()) g.players.sort((a, b) => weight(b) - weight(a))
-  const ranked = [...games.values()].sort((a, b) => weight(b.players[0]) - weight(a.players[0]) || time(b) - time(a))
-  const day = latest <= 1 ? null : parseDate(playedOn(shown[0].player.result))!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
-  return { games: ranked, day }
 }
 
 /** The follow list didn't load: say so, rather than "Pick your players" to a fan who has some (Today, and
@@ -216,7 +136,7 @@ export function TodayPage() {
   }
 
   const games = liveGames(cards)
-  const done = results(cards, now)
+  const done = results(cards, now, sportKey)
   const coming = comingUp(cards, now)
   // After the fan's own, the big games none of their players are in, outlined.
   const theirs = theirEvents(cards)

@@ -1,12 +1,14 @@
 // What the app knows about sports: the catalog from the server (names, colours, alerts) and how each sport
-// is drawn here (its view: live board, line art, line wording). Adding a sport's look is its view module plus
-// one line in VIEWS; a sport without one still shows, with the plain score and no line art.
+// is drawn here (its view: its facts, shared with the Android app, and its live board). Adding a sport's look
+// is its facts module (facts/), its view module, and one line in VIEWS; a sport without one still shows, with
+// the plain score and no line art.
 
 import type { CSSProperties } from 'react'
 import { basketball } from './basketball'
 import { chess } from './chess'
 import { cricket } from './cricket'
 import { esports } from './esports'
+import { artPlace } from './facts'
 import { football } from './football'
 import { tennis } from './tennis'
 import type { SportView } from './view'
@@ -26,33 +28,18 @@ export function viewOfKind(kind?: string | null): SportView | undefined {
   return kind ? VIEWS.find((v) => v.kinds.includes(kind)) : undefined
 }
 
-/** A string's FNV-1a hash: the same game always gets the same turn of its art. */
-function hash(text: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193)
-  return h >>> 0
-}
-
-const TURNS = [-14, -6, 8, 16, 78, 90, 102, 180]
-
 /**
  * The sport's ground as faint line art behind a card, in the card's ink (currentColor); nothing for a sport
- * that draws none. Each game (its `seed`: an event id or key) turns, places and sizes it its own way, so a
- * row of cards from one sport doesn't repeat. The card is `position: relative; overflow: hidden`.
+ * that draws none. Each game (its `seed`: an event id or key) turns, places and sizes it its own way
+ * (facts.artPlace), so a row of cards from one sport doesn't repeat. The card is `position: relative;
+ * overflow: hidden`. The art is the sport's own constant markup (facts/), never anything a source sent.
  */
 export function Backdrop({ sport, seed }: { sport: string; seed: string }) {
-  const art = viewOf(sport)?.backdrop
+  const art = viewOf(sport)?.art
   if (!art) return null
-  const h = hash(seed)
-  const place = {
-    '--bd-turn': `${TURNS[h % TURNS.length]}deg`,
-    '--bd-x': `${20 + ((h >>> 3) % 61)}%`, // the art's centre, somewhere in the card
-    '--bd-y': `${15 + ((h >>> 9) % 71)}%`,
-    '--bd-size': (120 + ((h >>> 15) % 61)) / 100, // times the card's width (up to 320px): always cropped
-  } as CSSProperties
+  const at = artPlace(seed)
+  const place = { '--bd-turn': `${at.turn}deg`, '--bd-x': `${at.x}%`, '--bd-y': `${at.y}%`, '--bd-size': at.size } as CSSProperties
   return (
-    <svg className="backdrop" viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" style={place}>
-      {art}
-    </svg>
+    <svg className="backdrop" viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" style={place} dangerouslySetInnerHTML={{ __html: art }} />
   )
 }

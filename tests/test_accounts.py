@@ -17,7 +17,9 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from sports_follow import accounts, google_signin, mail, server
+from sports_follow import accounts, admin, google_signin, mail, server
+from tests.test_admin import admin_cookie, password  # noqa: F401  (password: the fixture)
+from tests.test_admin import sign_in as admin_sign_in
 from tests.test_api import PUBLIC, Api, api  # noqa: F401  (api: the fixture)
 
 EMAIL = "Fan@Example.com"
@@ -367,6 +369,39 @@ def test_signing_out_ends_the_session_and_leaves_a_new_empty_fan(api, store, out
     assert api.call("GET", "/api/me/account", headers=cookies(session=other)).json()["signed_in"] is not everywhere
 
 
+ENDINGS = {  # each way a session ends that another device or the admin panel sets off
+    "signed out everywhere": lambda api, other, panel: api.call("POST", "/api/auth/signout", body={"everywhere": True}, headers=cookies(session=other)),
+    "account deleted": lambda api, other, panel: api.call("DELETE", "/api/me/account", body={"confirm": True}, headers=cookies(session=other)),
+    "deleted by an admin": lambda api, other, panel: api.call("DELETE", "/api/admin/users/1", body={"confirm": True}, headers=panel),
+    "signed out by an admin": lambda api, other, panel: api.call("POST", "/api/admin/users/1/signout", headers=panel),
+    "blocked by an admin": lambda api, other, panel: api.call("PUT", "/api/admin/users/1/block", body={"blocked": True}, headers=panel),
+}
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_a_request_under_way_when_the_session_ends_doesnt_sign_the_device_back_in(api, store, outbox, password, monkeypatch, ending):
+    """A request looks its session up, then caches it. If the session ends in between, that late copy
+    mustn't keep the device signed in for SESSION_CACHE."""
+    token = set_cookies(sign_in(api, outbox))["sf_session"][0]
+    other = set_cookies(sign_in(api, outbox, address="81.2.69.143"))["sf_session"][0]  # another device
+    panel = admin_cookie(admin_sign_in(api))
+    monkeypatch.setattr(admin, "sign_out", store.end_sessions)
+    monkeypatch.setattr(admin, "block", lambda db, account_id, blocked: (store.blocked_ids.add(account_id), store.end_sessions(db, account_id))[1])
+    looked_up, pending = accounts.session_for, [ENDINGS[ending]]
+
+    def under_way(db, token_hash):
+        found = looked_up(db, token_hash)
+        if token_hash == accounts.token_hash(token) and pending:  # read it; before it's cached, the session ends
+            assert pending.pop()(api, other, panel).status_code == 200
+        return found
+
+    monkeypatch.setattr(accounts, "session_for", under_way)
+    during = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    assert not pending and "sf_fan" not in set_cookies(during)  # the request under way was still signed in
+    after = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    assert "sf_fan" in set_cookies(after)  # the next one isn't: a new anonymous fan
+
+
 # ---------------------------------------------------------------- deleting the account
 
 
@@ -383,7 +418,8 @@ def test_deleting_the_account_ends_every_session_and_forgets_its_keys(api, store
     answer = api.call("DELETE", "/api/me/account", body={"confirm": True}, headers=cookies(session=token))
     assert answer.json() == {"deleted": True}
     assert store.emails == {} and store.sessions == {}
-    assert not [k for k in api.redis.data if k.startswith(("session:", "research:acct-1", "auth-code:", "auth-tries:"))]
+    assert not [k for k in api.redis.data if k.startswith(("research:acct-1", "auth-code:", "auth-tries:"))]
+    assert {v for k, v in api.redis.data.items() if k.startswith("session:")} == {""}  # cached as signed out
     jar = set_cookies(answer)
     assert jar["sf_session"][1] and server._signed(jar["sf_fan"][0])
 
