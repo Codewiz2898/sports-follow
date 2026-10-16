@@ -31,7 +31,7 @@ x-app: &app
     SPORTS_FOLLOW_COOKIE_SECRET_FILE: /run/secrets/cookie-secret   # signs fan cookies; the API won't start without it
     SPORTS_FOLLOW_RESEND_KEY_FILE: /run/secrets/resend-key   # optional: sign-in codes by email
     SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google-client-secret   # optional: Continue with Google
-    SPORTS_FOLLOW_ADMIN_PASSWORD_FILE: /run/secrets/admin-password   # optional: the admin panel (/admin), its password's hash
+    SPORTS_FOLLOW_ADMIN_PASSWORD_FILE: /run/secrets/admin-password   # optional: the admin panel (/admin), its password's hash and authenticator key
   volumes:
     - ${SECRETS_DIR:-/etc/sports-follow}/files:/run/secrets:ro
   depends_on:

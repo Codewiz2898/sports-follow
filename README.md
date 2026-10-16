@@ -278,10 +278,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out,
   or a source `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
-  with a password of its own, not a fan's account: `python -m sports_follow.admin password` saves its
-  scrypt hash (in `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE`); without one the panel isn't there (404). An admin
-  stays signed in 12 hours, a new password signs every admin out, and tries are limited per address and,
-  for wrong ones, across everyone. The panel is its own chunk of the web build, so fans don't download it.
+  with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,
+  RFC 6238; each code works once): `python -m sports_follow.admin password` saves the password's scrypt
+  hash and `python -m sports_follow.admin code` the app's key, checked against a code from the app before
+  it's kept, both in `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE`. Without a password the panel isn't there (404);
+  without a key it asks for the password alone and says so on every page. An admin stays signed in 12
+  hours, a new password or key signs every admin out, and tries are limited per address and, for wrong
+  ones, across everyone. Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
+  how many in the last 5 minutes), and when many don't. The page tells search engines not to list it (`X-Robots-Tag`), and it's its
+  own chunk of the web build, so fans don't download it.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
   for whoever runs the app. `add` puts an athlete no source lists in the registry (`--sport`, `--name`,
   and any `--id system=id`, `--alias`, `--team`, `--country`, `--league`, `--born`), or pins a registry
@@ -389,7 +394,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one network gets at most 20 a day |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
-| `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash, written by `python -m sports_follow.admin password`; without it there's no panel |
+| `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
@@ -428,8 +433,11 @@ One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 `mobile/` is the Android app (package `io.stann.app`): React Native with Expo, in TypeScript like the web
 app. It looks like the site on a phone, page for page: each of the web app's pages and blocks has its
 React Native twin in `mobile/src`, drawn from `web/src/styles.css`'s values (`mobile/src/theme.ts`), with
-the same fonts, icons and line art. It asks the same API (stann.in, or `EXPO_PUBLIC_API_URL` when Metro
-bundles it) and is the same fan, by the same cookie, or the same account once signed in.
+the same fonts, icons and line art. The display type leans as the site's does, but Android won't skew text,
+so the lean is in the letters: `mobile/assets/fonts/AntonSlanted.ttf`, a copy of Anton that
+`mobile/scripts/slant_font.py` makes (run it again only if Anton changes). It asks the same API (stann.in,
+or `EXPO_PUBLIC_API_URL` when Metro bundles it) and is the same fan, by the same cookie, or the same account
+once signed in.
 
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,

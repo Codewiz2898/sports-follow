@@ -119,5 +119,25 @@
     "op": "gt",
     "threshold": 0.5,
     "summary": "Over half of player refreshes failed in the last hour ({{ humanizePercentage $values.A.Value }}): fixtures and stats go stale. A source is likely down; see the Sources dashboard."
+  },
+  {
+    "uid": "sf-admin-sign-in",
+    "title": "Someone signed in to the admin panel",
+    "for": "0s",
+    "expr": "sum(increase(sports_follow_admin_sign_ins_total{job=\"sports-follow-api\", result=\"ok\"}[5m]))",
+    "op": "gt",
+    "threshold": 0,
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} sign-in(s) to the admin panel in the last 5 minutes (another within these 5 minutes sends no email of its own). If it wasn't you, set a new password and code at once (deploy/README.md, \"The admin panel\"): that signs every admin out.",
+    "no_data": "OK"
+  },
+  {
+    "uid": "sf-admin-guessing",
+    "title": "Someone is guessing at the admin sign-in",
+    "for": "0s",
+    "expr": "sum(increase(sports_follow_admin_sign_ins_total{job=\"sports-follow-api\", result=\"wrong\"}[1h]))",
+    "op": "gt",
+    "threshold": 9.5,
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} wrong admin passwords or codes in the last hour. At 30 the sign-in stops taking tries for the rest of the hour; deploy/README.md (\"The admin panel\") says how to clear that.",
+    "no_data": "OK"
   }
 ]

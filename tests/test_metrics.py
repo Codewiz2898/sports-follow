@@ -220,6 +220,7 @@ def test_a_process_starts_the_counts_alerts_take_increase_of_at_zero(measured):
     assert sorted((p.attributes["step"], p.attributes["result"], p.value) for p in got["sports_follow.cards.updates"]) == [
         ("build", "failed", 0), ("build", "ok", 0), ("refresh", "failed", 0), ("refresh", "ok", 0)]
     assert {p.attributes["push_service"] for p in got["sports_follow.pushes"]} == set(metrics.PUSH_SERVICES)
+    assert sorted((p.attributes["result"], p.value) for p in got["sports_follow.admin.sign_ins"]) == [("ok", 0), ("wrong", 0)]
     metrics.request("GET", "/api/follows", 502, 0.1)
     assert [p.value for p in points(measured)["sports_follow.api.errors"]] == [1]
 
@@ -239,7 +240,8 @@ def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_righ
     # Each name as Grafana Cloud stores it: dots to underscores, _seconds for a unit of s, _total for a
     # counter, _bucket, _count and _sum for a histogram.
     gauges = {name.replace(".", "_") + ("_seconds" if unit == "s" else "") for name, unit, *_ in metrics.READINGS}
-    counters = {"sports_follow_api_errors_total", "sports_follow_pushes_total", "sports_follow_cards_updates_total", "sports_follow_moments_total"}
+    counters = {"sports_follow_api_errors_total", "sports_follow_pushes_total", "sports_follow_cards_updates_total", "sports_follow_moments_total",
+                "sports_follow_admin_sign_ins_total"}
     histograms = {f"{h}_{part}" for h in ("http_server_request_duration_seconds", "http_client_request_duration_seconds",
                                           "sports_follow_job_duration_seconds", "sports_follow_job_wait_seconds", "sports_follow_push_wait_seconds")
                   for part in ("bucket", "count", "sum")}
