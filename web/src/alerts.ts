@@ -28,3 +28,22 @@ export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | '
   if (level === 'off') return false
   return moment.level === 'key'
 }
+
+/** What Alerts' Settings says about notifications on this device: the web's (notifications.tsx,
+ * NotificationsPage.tsx) and the Android app's (mobile/src/push.ts, app/notifications.tsx). */
+export const DEVICE = {
+  on: 'One alert per game, updated as it goes. Only the big moments make a sound.',
+  off: 'Turn on to hear about your players even with the app closed.',
+  quiet: 'Alerts still arrive, without sound.',
+  noServer: "Notifications aren't set up on this server yet.",
+}
+
+/** What saving a device's quiet hours says. */
+export function quietSaid(start: string | null, end: string | null): string {
+  return start && end ? `Quiet from ${start} to ${end}: notifications arrive without sound.` : 'Quiet hours off.'
+}
+
+/** What a test alert says, by how many of the fan's devices took it. */
+export function testSaid(sent: number): string {
+  return sent ? 'Sent. It should arrive in a few seconds.' : 'No device took it. Turn notifications off and on again here.'
+}

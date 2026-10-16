@@ -422,9 +422,10 @@ npm run typecheck                                   # what CI checks
 game, replaced as its moments come; sound only for a key moment outside quiet hours). The server sends
 them itself with FCM's HTTP v1 API (`sports_follow/fcm.py`), with no Expo push service in between. The
 app (`mobile/src/push.ts`) makes two channels, "Key moments" with sound and "Other moments" without. It
-asks to notify once the fan follows someone (Android 13 and later), registers its FCM token with the API
-at every start and whenever FCM replaces it (`POST /api/push/fcm`, with its timezone and quiet hours), and
-a tap opens the player's page. Without the Firebase project's files there are no notifications and
+asks to notify the first time the fan follows someone (Android 13 and later); then Alerts' Settings turns
+them on and off for the phone, with its quiet hours and a test alert, as on the web. While they're on, it
+registers its FCM token with the API (`POST /api/push/fcm`, with its timezone and quiet hours) at every
+start, after a sign-in or out, and whenever FCM replaces the token; a tap opens the player's page. Without the Firebase project's files there are no notifications and
 nothing else changes. To turn them on, once:
 
 1. In the [Firebase console](https://console.firebase.google.com), make a project and add an Android app

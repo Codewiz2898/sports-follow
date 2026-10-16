@@ -2,8 +2,8 @@
 // live badge, cards and lists, section heads, and the page itself.
 
 import { router } from 'expo-router'
-import type { ReactNode } from 'react'
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
+import { useEffect, useState, type ReactNode } from 'react'
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
 import { BackIcon } from './icons'
 import { colour, dsp, font, RADIUS_CARD, t } from './theme'
 
@@ -110,6 +110,51 @@ export function Btn({ label, icon, onPress, kind = 'outline', small, busy, disab
   )
 }
 
+/** An on/off switch (.switch): a raised track with a grey knob, ink with a paper knob when on. */
+export function Switch({ on, onChange, disabled, label }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string }) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: on, disabled }}
+      disabled={disabled}
+      hitSlop={6}
+      onPress={() => onChange(!on)}
+      style={[s.switch, { backgroundColor: on ? colour.text : colour.raised }, disabled && { opacity: 0.5 }]}
+    >
+      <View style={[s.knob, { left: on ? 24 : 4, backgroundColor: on ? colour.bg : colour.muted }]} />
+    </Pressable>
+  )
+}
+
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** A time of day, "22:00" (.time, the web's <input type="time">): told when a whole new time is typed, and
+ * back to the last good one otherwise. */
+export function TimeField({ value, onChange, label }: { value: string; onChange: (time: string) => void; label: string }) {
+  const [text, setText] = useState(value)
+  useEffect(() => setText(value), [value])
+  const done = () => {
+    const time = text.trim().replace(/^(\d):/, '0$1:')
+    if (HH_MM.test(time)) {
+      setText(time)
+      if (time !== value) onChange(time)
+    } else setText(value)
+  }
+  return (
+    <TextInput
+      accessibilityLabel={label}
+      value={text}
+      onChangeText={setText}
+      onEndEditing={done}
+      maxLength={5}
+      keyboardType="numbers-and-punctuation"
+      selectTextOnFocus
+      style={s.time}
+    />
+  )
+}
+
 // ---------------------------------------------------------------- surfaces
 
 export function Card({ children, pad, style }: { children: ReactNode; pad?: boolean; style?: StyleProp<ViewStyle> }) {
@@ -195,6 +240,9 @@ export function BackHead({ title }: { title: string }) {
 
 
 export const s = StyleSheet.create({
+  switch: { width: 52, height: 32, borderRadius: 999 },
+  knob: { position: 'absolute', top: 4, width: 24, height: 24, borderRadius: 12 },
+  time: { height: 36, minWidth: 72, paddingHorizontal: 10, paddingVertical: 0, borderRadius: 10, borderWidth: 2, borderColor: colour.text, backgroundColor: colour.surface, color: colour.text, fontFamily: font[700], fontSize: 14 },
   badgeLive: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 24, paddingHorizontal: 10, borderRadius: 999, backgroundColor: colour.live, flexShrink: 0, alignSelf: 'flex-start' },
   badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFFFFF' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colour.live, flexShrink: 0 },

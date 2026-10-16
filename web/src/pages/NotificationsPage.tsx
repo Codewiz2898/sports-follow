@@ -8,6 +8,7 @@ import { Avatar } from '../components/Blocks'
 import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
+import { DEVICE } from '../alerts'
 import { AlertLevels, levelText, usePush } from '../notifications'
 
 /** Alerts: what's happened to your players (Latest), and what reaches this device (Settings). */
@@ -139,7 +140,7 @@ function Settings() {
           <span className="stack">
             <span className="title">On this device</span>
             <span className="small muted">
-              {push.unavailable ?? (push.on ? 'One alert per game, updated as it goes. Only the big moments make a sound.' : 'Turn on to hear about your players even with the app closed.')}
+              {push.unavailable ?? (push.on ? DEVICE.on : DEVICE.off)}
             </span>
           </span>
           {!push.unavailable && (
@@ -151,7 +152,7 @@ function Settings() {
             <div className="row" style={{ padding: '14px 0', borderBottom: '1px solid var(--line)', flexWrap: 'wrap' }}>
               <span className="stack">
                 <span className="title">Quiet hours</span>
-                <span className="small muted">Alerts still arrive, without sound.</span>
+                <span className="small muted">{DEVICE.quiet}</span>
               </span>
               <button type="button" role="switch" className="switch" aria-checked={quietOn} aria-label="Quiet hours" onClick={() => push.saveQuiet(quietOn ? { start: null, end: null } : { start, end })} />
               <span className="row" style={{ gap: 8, justifyContent: 'flex-start', width: '100%' }}>
