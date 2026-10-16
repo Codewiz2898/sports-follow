@@ -138,7 +138,9 @@ def test_birth_dates_that_differ_rule_a_person_out():
 @pytest.mark.parametrize("a, b", [
     ("Jeong Ji-hoon", "Jung Ji-hun"), ("Lee Seong-hyuk", "Lee Seong-hyeok"), ("Cho Geon-hee", "Jo Geon-hee"), ("Gwon Sang-yun", "Kwon Sang-yun"),
     ("Byeong-jun Yu", "Yu Byeong-jun"), ("Ilya Mulyarchuk", "Illya Mulyarchuk"), ("Erick Santos", "Erick Andrade Santos"),
-    ("Aleksandr Kostyliev", "Oleksandr Kostyliev"), ("Ilya Zalutskiy", "Ilya Zalutsky"), ("Eduard Abgaryan", "Edward Abgaryan"),
+    ("Aleksandr Kostyliev", "Oleksandr Kostyliev"), ("Alexandr Kostylev", "Oleksandr Kostyliev"), ("Ilya Zalutskiy", "Ilya Zalutsky"),
+    ("Eduard Abgaryan", "Edward Abgaryan"), ("Andrei Petrov", "Andrey Petrov"), ("Chung Junho", "Jeong Junho"),
+    ("Miroslaw Kolpakov", "Miroslav Kolpakow"), ("Vladimir Nikogosyan", "Vladimir Nikogosian"),
 ])
 def test_one_persons_names_agree(a, b):
     assert any(rw.names_agree(x, y) for x in rw.plain(a) for y in rw.plain(b))
@@ -148,6 +150,8 @@ def test_one_persons_names_agree(a, b):
     ("Kim Junho", "Kim Jinho"), ("Park Jihoon", "Park Jaehoon"), ("Lee Sanghyeok", "Lee Seunghyuk"), ("Kim Minsu", "Kim Minseo"),
     ("Choi Hyunwoo", "Choi Hyunwook"), ("Martin Hansen", "Morten Hansen"), ("Ivan Petrov", "Ivana Petrov"), ("Kim Min-ho", "Kim Min-su"),
     ("Ahmed Salah", "Mohamed Salah"), ("Salah", "Mohamed Salah"), ("Byeong-jun Yu", "Byeong-chun Yu"),
+    ("Chung Junho", "Chung Jinho"), ("Junho Chung", "Jinho Chung"), ("Bang Junho", "Bang Jinho"), ("Jiang Zihao", "Jiang Zihan"),
+    ("Feng Yuhan", "Feng Yuhao"), ("Cheung Kaiho", "Cheung Kaiyo"), ("Christian Jensen", "Christina Jensen"),
 ])
 def test_other_peoples_names_dont(a, b):
     assert not any(rw.names_agree(x, y) for x in rw.plain(a) for y in rw.plain(b))
@@ -178,6 +182,7 @@ def test_a_handle_with_a_teams_tag_is_no_real_name():
     tgltn = person("Q1", "TGLTN", aliases=("FaZe TGLTN",), ids={"P10918": ["pubg/TGLTN"]})
     assert matched([row("pubg:tgltn", "TGLTN", real="FaZe_TGLTN", game="PUBG")], [tgltn]) == {}
     assert all(rw.tagged(name, {"tenz"}) for name in ("SEN TenZ", "C9 TenZ", "Cloud9 Tenz", "TenZ LEV"))
+    assert rw.tagged("Liquid TenZ", {"tenz"}, ["Team Liquid"]) and not rw.tagged("Liquid TenZ", {"tenz"}, ["Sentinels"])
     # A real name may hold the handle.
     yawar = person("Q128403794", "YawaR", aliases=("Yawar Hassan",), disciplines=("Dota 2",))
     assert matched([row("pandascore:9492", "YawaR", real="Yawar Hassan", game="Dota 2")], [yawar]) == {"pandascore:9492": ("Q128403794", "handle")}
