@@ -89,10 +89,11 @@ def read(system: str, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     today = now.date()
     fixtures = cast(Any, adapter).schedule(today - timedelta(days=BACK), today + timedelta(days=AHEAD))
+    one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     games = []
     for f in fixtures:
-        key = f.sport or adapter.sports[0]
-        if f.status in ("final", "scheduled") and f.start_utc and (n := sports.of(key).notable(f)) is not None:
+        key = f.sport or one
+        if key and f.status in ("final", "scheduled") and f.start_utc and (n := sports.of(key).notable(f)) is not None:
             games.append(_dump(system, key, f, n))
     bus.sync_redis().set(_key(system), json.dumps({"as_of": now.isoformat(), "games": games}, default=str), ex=KEEP)
     return len(games)

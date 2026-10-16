@@ -108,9 +108,10 @@ def read(system: str, now: datetime | None = None) -> int:
     if adapter is None:
         return 0
     games = cast(Any, adapter).live_now()
+    one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     with session() as db:
         blocked = registry.blocked(db)
-        dumped = [_dump(g, sport, *_ranked(db, sport, system, g, blocked)) for g in games if (sport := g.sport or adapter.sports[0])]
+        dumped = [_dump(g, sport, *_ranked(db, sport, system, g, blocked)) for g in games if (sport := g.sport or one)]
     dumped.sort(key=lambda g: (-g["tier"], -g["fame"]))
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)
