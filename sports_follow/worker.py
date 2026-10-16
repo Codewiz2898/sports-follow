@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, league, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -219,6 +219,14 @@ async def read_league(ctx, system: str) -> None:
     await in_lane('refresh', league.read, system)
 
 
+async def refresh_campaigns(ctx) -> None:
+    """Each campaign page's teams' rosters, read again from their sources (campaigns.refresh): once a day, so
+    a change of line-up reaches the page's whole-team follow. A few requests a campaign, in the refresh lane."""
+    if await _missed(ctx, "refresh_campaigns"):
+        return
+    await in_lane('refresh', campaigns.refresh)
+
+
 async def read_sidelined(ctx) -> None:
     """Who's out of the running sources' competitions, injured or suspended, for the Wire's facts
     (sidelined.read_all): twice a day, whoever is looking, as each read is told against the last. In the
@@ -340,6 +348,7 @@ class WorkerSettings:
         cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
         # Before Europe's matchdays get going, and after most of the day's news is in.
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
+        cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

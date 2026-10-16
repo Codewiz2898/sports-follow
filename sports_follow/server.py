@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, bus, credits as credits_page, fcm, google_signin, league, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, FanSource, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -562,6 +562,93 @@ async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Who a new fan is offered to follow, by sport (starters.py): the welcome's picker, an empty Today's,
     and search's "Try" names. Rows are search results, so following one is the same call."""
     return {"sports": await in_db(starters.offer, fan)}
+
+
+# ---------------------------------------------------------------- campaign pages (campaigns.py)
+
+
+def _campaign_slug(slug: str) -> str:
+    if not campaigns.SLUG.fullmatch(slug):
+        raise HTTPException(404, "No such page.")
+    return slug
+
+
+@app.get("/api/campaigns/{slug}")
+async def campaign(slug: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """A campaign page (/<slug>): its words, its players and its teams' players as result rows (whether this
+    fan follows each), and its games."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    return shown
+
+
+async def _follow_row(row: dict[str, Any], fan: str, address: str | None) -> int | None:
+    """Follow one of a campaign's rows as the app would (key alerts, the default); None if it couldn't be."""
+    target = campaigns.to_follow(row)
+    if target is None:
+        return None
+    try:
+        if "player_id" in target:
+            # On Sports Follow with a working card (search._ours fills in no other): one row, no build.
+            await in_db(lambda db: db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing()))
+            return target["player_id"]
+        return await _follow_athlete(target, fan, address)
+    except HTTPException as exc:
+        log.info("campaign follow of %s: %s", row.get("key"), exc.detail)
+        return None
+
+
+@app.post("/api/campaigns/{slug}/follow")
+async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
+    own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
+    has, so none is an AI research. Returns the players now followed and how many couldn't be."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    if isinstance(body.get("team"), str):
+        rows = next((t["players"] for t in shown["teams"] if t["team_id"] == body["team"]), None)
+        if rows is None:
+            raise HTTPException(404, "That team isn't on this page.")
+    elif body.get("players") is True:
+        rows = shown["players"]
+    else:
+        raise HTTPException(400, "Say which: a team, or the players.")
+    address = client_address(request)
+    already = [r["player_id"] for r in rows if r.get("following") and r.get("player_id")]
+    done = await asyncio.gather(*(_follow_row(r, fan, address) for r in rows if not (r.get("following") and r.get("player_id"))))
+    followed = already + [pid for pid in done if pid is not None]
+    return {"player_ids": list(dict.fromkeys(followed)), "failed": sum(pid is None for pid in done)}
+
+
+@app.get("/api/campaigns/{slug}/share.png")
+async def campaign_picture(slug: str) -> Response:
+    """The picture a link to a campaign page shows: its title on its sport's colour, its next game."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), None)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    return await _picture(share.of_campaign(shown).picture)
+
+
+# ---------------------------------------------------------------- where fans come from
+
+TAG = re.compile(r"[A-Za-z0-9._~-]{1,60}")  # s=share, utm_source=whatsapp: a link's tags, as a post writes them
+
+
+@app.post("/api/me/source")
+def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
+    utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
+    left out, and a visit with none isn't kept."""
+    tags = {key: value for key in ("s", "utm_source", "utm_medium", "utm_campaign") if isinstance(value := body.get(key), str) and TAG.fullmatch(value)}
+    landing = body.get("path")
+    if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
+        return {"ok": True}
+    row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
+    db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
+    db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- AI research allowance
@@ -1774,7 +1861,14 @@ def _site(request: Request) -> str:
 
 
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
-    """The link preview of the page at `path`: a player's, a game of theirs, or None for the app's own."""
+    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, or None for the app's own."""
+    if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
+        try:
+            shown = await in_db(campaigns.page, path.rstrip("/"), None)
+        except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+            log.warning("link preview of /%s", path, exc_info=True)
+            return None
+        return share.of_campaign(shown) if shown else None
     m = PLAYER_PAGE.fullmatch(path)
     if not m or int(m[1]) > MAX_ID:
         return None

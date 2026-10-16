@@ -263,6 +263,34 @@ export interface LiveSport {
   games: LiveGame[]
 }
 
+/** A campaign page, /<slug> (GET /api/campaigns/<slug>, campaigns.py): a big event's players and whole teams
+ * to follow with a tap, as result rows (following one is the same call as from search), its games and a few
+ * lines of copy. Its games' times are said in its zone (India's: "IST"). */
+export interface Campaign {
+  slug: string
+  sport: string
+  title: string
+  event: string | null
+  lines: string[]
+  players: SearchResult[]
+  teams: CampaignTeam[]
+  games: CampaignGame[]
+  zone: { name: string; label: string }
+}
+
+/** A whole team on a campaign page: following it follows every player on its roster, as its source lists them. */
+export interface CampaignTeam {
+  team_id: string
+  name: string
+  game: string | null
+  players: SearchResult[]
+}
+
+export interface CampaignGame {
+  start_utc: string
+  label: string  // "Game 1", "Final": the campaign's own words
+}
+
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.
  * Its sport says how big it is (rank, why) and, once it's over, its big word and the line under it. */
 export interface LeagueGame {

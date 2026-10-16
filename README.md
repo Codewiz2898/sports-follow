@@ -30,6 +30,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
                                 ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
+                                ├─ refresh_campaigns, daily: each campaign page's teams' rosters from their sources (campaigns.py)
                                 └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
@@ -148,9 +149,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   server writes each page's Open Graph and Twitter card tags into it (`sports_follow/share.py`), since the
   crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
   now, live, last or next; a game of theirs (`/player/<id>?g=<event id>`, the link a This week poster
-  shares) says its big moment in the sport's own words, as This week does (`week.game`); every other
-  page says what the app is. Each has a 1200 × 630 picture drawn by the server with Pillow
-  (`/api/players/<id>/share.png`, `?g=` for a game; `/api/share.png` for the app): a block of the sport's
+  shares) says its big moment in the sport's own words, as This week does (`week.game`); a campaign page
+  (`/<slug>`, below) says its event, its next game and who to follow; every other page says what the app is.
+  Each has a 1200 × 630 picture drawn by the server with Pillow (`/api/players/<id>/share.png`, `?g=` for a
+  game; `/api/campaigns/<slug>/share.png`; `/api/share.png` for the app): a block of the sport's
   colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
@@ -159,7 +161,32 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and each This week poster have a Share button, on the web and in the Android app: the phone's share
   sheet (on the web where the browser has one, else the link copied). It shares a link on the site, never
   the app's own, so it previews for anyone; `web/src/share.ts` says which link and title, for both. Every
-  link carries `s=share`, for when the app counts visits.
+  link carries `s=share`. Where a fan came from is kept with them (`fan_source`): the tags on the first link
+  they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the app before its other
+  calls (`web/src/visit.ts`, `POST /api/me/source`), moved to their account when they sign in and deleted
+  with it. Nothing reads it yet: the launch numbers (BHA-239) will.
+- **Campaign pages: a big event as a row, never code.** `stann.in/gukesh` (`sports_follow/campaigns.py`,
+  `web/src/pages/CampaignPage.tsx`) is the page a launch post links to: the event in a block of its sport's
+  colour, the games on now (the fan's live cards of its players, else Live now's games they're in), its
+  players side by side to follow with a tap or all at once, or whole teams, its games in India time (and
+  the fan's own beside it when they're elsewhere), then turning alerts on and, on a phone, how (Chrome's
+  Install on Android; Add to Home Screen on an iPhone, where Web Push needs it). Following is the ordinary
+  follow with key alerts, which the sport words. **A whole team** ("Follow T1") follows every player on its
+  roster at once (`POST /api/campaigns/<slug>/follow`): one action over the roster's players, not a new kind
+  of follow. A roster is its source's (an adapter's `team()`; PandaScore's for esports), read when the team is
+  added and again each morning by the worker, so a change of line-up reaches the page within a day; a source
+  that doesn't answer keeps the roster last read. Its players are registry athletes a running source has
+  (checked as a starter is), so following never needs AI research. A campaign is a row in `campaign`, set
+  with a command; a later one (the WPL, the IPL) is a new row. Its address is any one word the app doesn't
+  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes). A campaign of a sport
+  that's turned off has no page, and a player removed with `players remove` leaves every campaign.
+
+      python -m sports_follow.campaigns set gukesh --sport chess --title "Gukesh v Sindarov" --event "World Chess Championship" --line "…"
+      python -m sports_follow.campaigns player add gukesh Q56026072          # a registry id, player id or system:id
+      python -m sports_follow.campaigns game add gukesh "2026-11-24 15:00" "Game 1"   # India time, or --utc
+      python -m sports_follow.campaigns team find T1 --sport esports          # teams by name, with their ids
+      python -m sports_follow.campaigns team add worlds pandascore_esports:126061
+      python -m sports_follow.campaigns show gukesh                           # also list, remove, refresh; player/team/game remove
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
   points, a set, the start and the result; news from a rebuild adds injuries, transfers and
@@ -227,6 +254,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   twice a day by the worker: Sportmonks football's 5 Team requests a read, and a League one a day),
   `live_note` and `lag_note` for a player page's words on how its live scores come in and how late they
   can be, where the app's general sentences don't fit (Liquipedia's and PUBG's standings after each match),
+  `team` and `find_teams` for a source that lists teams' rosters (a campaign page's whole-team follow, with
+  `team_id_pattern` the shape of its team ids; PandaScore's `/teams`),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
@@ -312,7 +341,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
   them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
   `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
-  player takes their pin with them.
+  player takes their pin with them, and takes them off every campaign page.
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and

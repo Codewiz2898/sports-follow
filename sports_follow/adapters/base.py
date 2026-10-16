@@ -120,6 +120,18 @@ class LiveGame:
 
 
 @dataclass
+class SourceTeam:
+    """A team as a source knows it, with its roster today (an adapter's team() and find_teams()): a campaign
+    page follows every player on it in one tap (campaigns.py)."""
+
+    system: str  # the source's system, as PlayerRef.system
+    team_id: str  # the source's id for the team
+    name: str  # "T1"
+    game: str | None = None  # where a sport's sources cover several games (esports), its game as fans name it ("League of Legends")
+    players: list[PlayerRef] = field(default_factory=list)  # who plays for it now, followable by the source's own ids
+
+
+@dataclass
 class Absence:
     """A player out of their team's games, injured or suspended, as a source lists them (an adapter's
     sidelined()): one spell, by the source's own id for it, whoever follows the player."""
@@ -230,7 +242,9 @@ class Adapter:
     list is read more often than the weekly import; and for a source that has changed how it names its
     athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
-    the old ids, and the registry drops its rows holding one."""
+    the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
+    team(team_id) -> SourceTeam | None and find_teams(name) -> [SourceTeam], with team_id_pattern the shape
+    of its team ids: a campaign page follows a whole team through them (campaigns.py)."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     sport: str  # the sport it serves (sports.Sport.key): "cricket"

@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, notify
-from sports_follow.models import Account, AccountSession, Event, Follow, Notification, NotificationMute, Player, PushSubscription
+from sports_follow.models import Account, AccountSession, Event, FanSource, Follow, Notification, NotificationMute, Player, PushSubscription
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -32,7 +32,7 @@ NOW = datetime.now(timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE account, account_session, follow, notification_mute, notification, push_subscription, player, event RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE account, account_session, follow, notification_mute, notification, push_subscription, player, event, fan_source RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -94,9 +94,13 @@ def test_signing_in_brings_follows_mutes_the_push_log_and_devices(db):
     device(db, "anon", "phone")
     db.commit()
 
+    db.add(FanSource(fan_id="anon", utm_source="whatsapp", landing="/gukesh"))
+    db.commit()
+
     done = accounts.sign_in(db, account_id, "anon")
     db.commit()
     assert done.players == 2 and done.fan_id == fan
+    assert [(s.fan_id, s.utm_source, s.landing) for s in db.scalars(select(FanSource))] == [(fan, "whatsapp", "/gukesh")]  # where they came from
     mine = follows(db, fan)
     assert set(mine) == {1, 2}
     assert mine[1][0] == "off"  # the account's level stays
@@ -203,12 +207,13 @@ def test_deleting_an_account_leaves_nothing_under_its_fan_id(db):
         db.add(NotificationMute(fan_id=who, event_id=1))
         db.add(Notification(fan_id=who, player_id=1, kind="final", loud=False))
         device(db, who, f"{who}-phone", done.session_id if who == fan else None)
+        db.add(FanSource(fan_id=who, tag="share", landing="/"))
     db.commit()
 
     gone = accounts.delete_account(db, account_id)
     db.commit()
     assert gone.fan_id == fan and gone.email == "fan@example.com" and gone.token_hashes == [accounts.token_hash(done.token)]
-    for model in (Follow, NotificationMute, Notification, PushSubscription):
+    for model in (Follow, NotificationMute, Notification, PushSubscription, FanSource):
         assert db.scalars(select(model.fan_id)).all() == [other]  # only the other fan's
     assert db.scalars(select(Account.id)).all() == [other_id]
     assert db.scalars(select(AccountSession.id)).all() == []

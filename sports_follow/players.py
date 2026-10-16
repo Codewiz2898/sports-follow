@@ -32,7 +32,7 @@ back. Rematching takes it back; the next weekly run (or roster_wikidata by hand)
 Starters are the athletes a new fan is offered in each sport (starters.py): who's playing now, the most
 followed, and the best known, found by themselves; pinned starters come first, in the order they were
 added. Pinning one keeps them in the registry too, so no import drops them; removing the athlete takes their
-starter row with them.
+starter row with them, and takes them off every campaign page (campaigns.py).
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, logs, photos, registry, roster_wikidata, search, sports, starters
+from . import bus, campaigns, logs, photos, registry, roster_wikidata, search, sports, starters
 from .adapters import KNOWN, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
@@ -138,6 +138,7 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
         _decide(db, a.qid, a.sport, "remove", a.name, ids, note)
         db.execute(delete(Athlete).where(Athlete.id == a.id))
     starters.remove(db, found.athletes)
+    campaigns.forget(db, found.athletes)
     for p in found.players:
         if p.id not in covered:
             # A page no registry row stands for (an agent-built one): its source ids are still blocked.

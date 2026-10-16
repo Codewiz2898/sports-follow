@@ -19,6 +19,7 @@ export function PrivacyPage() {
         <p>Without an account: a random id in a cookie on this device, the players you follow, how much you want to hear about each, and games you muted.</p>
         <p>With an account: your email address (and your Google account's id if you sign in with Google), when you last signed in, and the same things as above, so they're on every device you sign in on.</p>
         <p>If you turn alerts on: the address your browser gives us to deliver them, your time zone and quiet hours, and a log of the alerts we sent (to keep sound for the big moments, and to count how many are opened).</p>
+        <p>If the first link you opened here says where it was posted (a tag on it, like whatsapp or share): that tag and the page it opened, once, to count which posts bring fans.</p>
         <p>If something goes wrong in the app: a report of it (the page, the error and where in the app's code it happened), kept with our server's logs, which name you only by a code made from your random id.</p>
         <p>Your network address is counted for a day or two to limit sign-in codes and AI research, and for an hour to limit error reports, so one person can't use them up for everyone.</p>
       </Part>
