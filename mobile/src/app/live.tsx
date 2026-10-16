@@ -1,7 +1,7 @@
-// Live now, the web's LivePage.tsx: every game on now, whoever follows it (GET /api/live). Today's link to the
-// games none of the fan's players are in opens it. The fan's own come first, under "Your players", then each
-// sport's in the order the server ranks them, as Today's outlined cards with players to follow from each.
-// Looked at again once a minute while the app is in front, as Today does (useLiveAnswer).
+// Live now, the web's LivePage.tsx: the games on now (GET /api/live) that none of the fan's players are in.
+// Today, which shows the fan's own, links here. By sport, in the order the server ranks them, as Today's
+// outlined cards with players to follow from each. Looked at again once a minute while the app is in front, as
+// Today does (useLiveAnswer).
 
 import { router } from 'expo-router'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
@@ -28,10 +28,9 @@ export default function LiveScreen() {
   const { sports, loaded, failed } = useLiveAnswer()
   const following = useFollowing()
   const follow = useFollowToggle()
-  // Once the follow list has answered too, so none of the fan's games shows under its sport first.
+  // Once the follow list has answered too, so a game of the fan's never shows here first.
   const ready = loaded && (following.loaded || following.failed)
   const { theirs, others } = gamesOn(sports, liveGames(following.cards).flatMap(([, group]) => group))
-  const count = theirs.length + others.length
   return (
     <Page>
       <View style={{ gap: 6 }}>
@@ -40,13 +39,12 @@ export default function LiveScreen() {
           <Eyebrow>Today</Eyebrow>
         </Pressable>
         <Text style={dsp(54)}>Live now</Text>
-        {ready && count > 0 ? <Eyebrow>{count} on{theirs.length ? ` · ${theirs.length} yours` : ''}</Eyebrow> : null}
+        {ready && others.length > 0 ? <Eyebrow>{others.length} on</Eyebrow> : null}
       </View>
       {!ready ? (failed ? (
         <Notice><Text style={s.notice}>Couldn't load the games on now. Trying again in a minute.</Text></Notice>
       ) : <Empty><Spinner /> Loading…</Empty>) : null}
-      {ready && count === 0 ? <Text style={[t.body, t.muted]}>Nothing's on right now.</Text> : null}
-      {ready && theirs.length > 0 ? <Games title="Your players" games={theirs} follow={follow} /> : null}
+      {ready && others.length === 0 ? <Text style={[t.body, t.muted]}>{theirs.length ? 'Nothing else is on right now.' : "Nothing's on right now."}</Text> : null}
       {ready ? bySport(others).map((g) => <Games key={g.sport} title={g.label} games={g.games} follow={follow} />) : null}
       {follow.error ? <ErrorBox>{follow.error}</ErrorBox> : null}
     </Page>

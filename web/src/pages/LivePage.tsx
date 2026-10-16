@@ -20,33 +20,31 @@ function Games({ title, games, follow }: { title: string; games: GameOn[]; follo
 }
 
 /**
- * Every game on now, whoever follows it (GET /api/live): Today's link to the games none of the fan's players
- * are in opens it, and so does the desktop sidebar. The fan's own come first, under "Your players", then each
- * sport's in the order the server ranks them, as Today's outlined cards with players to follow from each.
- * Looked at again once a minute while the tab is in view, as Today does (useLiveAnswer).
+ * The games on now (GET /api/live) that none of the fan's players are in: Today, which shows the fan's own,
+ * links here, and so does the desktop sidebar. By sport, in the order the server ranks them, as Today's
+ * outlined cards with players to follow from each. Looked at again once a minute while the tab is in view,
+ * as Today does (useLiveAnswer).
  */
 export function LivePage() {
   const { sports, loaded, failed } = useLiveAnswer()
   const following = useFollowing()
   const follow = useFollowToggle()
-  // Once the follow list has answered too, so none of the fan's games shows under its sport first.
+  // Once the follow list has answered too, so a game of the fan's never shows here first.
   const ready = loaded && (following.loaded || following.failed)
   const { theirs, others } = gamesOn(sports, liveGames(following.cards).flatMap(([, group]) => group))
-  const count = theirs.length + others.length
   return (
     <>
       <header className="stack" style={{ gap: 6 }}>
         <Link to="/" className="eyebrow back-link"><BackIcon width={14} height={14} strokeWidth={2.6} />Today</Link>
         <h1 className="dsp page-title">Live now</h1>
-        {ready && count > 0 && <span className="eyebrow">{count} on{theirs.length ? ` · ${theirs.length} yours` : ''}</span>}
+        {ready && others.length > 0 && <span className="eyebrow">{others.length} on</span>}
       </header>
       {!ready && (failed
         ? <div className="notice" role="alert">Couldn't load the games on now. Trying again in a minute.</div>
         : <div className="card empty small"><span className="spinner" /> Loading…</div>)}
-      {ready && count === 0 && <p className="muted">Nothing's on right now.</p>}
+      {ready && others.length === 0 && <p className="muted">{theirs.length ? 'Nothing else is on right now.' : "Nothing's on right now."}</p>}
       {ready && (
         <ErrorBoundary fallback={<BlockError />} resetKey={sports}>
-          {theirs.length > 0 && <Games title="Your players" games={theirs} follow={follow} />}
           {bySport(others).map((g) => <Games key={g.sport} title={g.label} games={g.games} follow={follow} />)}
         </ErrorBoundary>
       )}

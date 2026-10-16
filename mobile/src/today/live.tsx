@@ -116,8 +116,8 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   )
 }
 
-/** One game on now that none of the fan's players are in (the web's OtherGame): outlined, with players to
- * follow from it. The Live page shows every game on as these, the fan's own under a heading of their own. */
+/** One game on now that none of the fan's players are in, on Today or the Live page (the web's OtherGame):
+ * outlined, so it doesn't pass for theirs, with players to follow from it. */
 export function OtherGame({ game, label, follow, fill }: GameOn & { follow: Follow } & RailCard) {
   return (
     <OtherGameCard live={game.live} sport={game.sport} seed={game.key} tag={game.competition || label} fill={fill}>

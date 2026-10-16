@@ -111,8 +111,8 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   )
 }
 
-/** One game on Today that none of the fan's players are in: outlined, so it doesn't pass for theirs. The Live
- * page (LivePage.tsx) shows every game on as these, the fan's own under a heading of their own. */
+/** One game on now that none of the fan's players are in, on Today or the Live page (LivePage.tsx):
+ * outlined, so it doesn't pass for theirs. */
 export function OtherGame({ game, label, follow }: { game: LiveGame & { sport: string }; label: string; follow: Follow }) {
   return (
     <article className="live-other" data-sport={game.sport} aria-label={`${label}: ${game.title}, live`}>
