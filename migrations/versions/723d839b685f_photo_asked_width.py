@@ -1,7 +1,7 @@
 """The width each kept photo's thumbnail was asked at (photos.WIDTH), so a photo kept at another is fetched again.
 
 Revision ID: 723d839b685f
-Revises: 4d96acace757
+Revises: c3f81a5d0e27
 Create Date: 2026-10-16
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "723d839b685f"
-down_revision = "4d96acace757"
+down_revision = "c3f81a5d0e27"
 branch_labels = None
 depends_on = None
 
