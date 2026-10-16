@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -212,6 +212,13 @@ async def read_live(ctx, system: str) -> None:
     await in_lane('refresh', live.read, system)
 
 
+async def read_match(ctx, system: str, game: str) -> None:
+    """One game from its source, for its match page (match.read): queued by the API while a fan has the page
+    open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
+    the allowance kept for followed players' live games."""
+    await in_lane('refresh', match.read, system, game)
+
+
 async def read_league(ctx, system: str) -> None:
     """A source's competitions' games, three days back and a fortnight on, for Today's big results and big games
     coming up (league.read): queued by the API when a fan looks and the last read is a few hours old. In the
@@ -336,7 +343,7 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_league)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
