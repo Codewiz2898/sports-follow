@@ -30,7 +30,7 @@ export const LOUD_CHANNEL = 'key'
 export const QUIET_CHANNEL = 'quiet'
 
 const TOKEN = 'stann.push-token' // the token last registered, so a new one can replace it on the server
-const ASKED = 'stann.push-asked' // asked when the fan first followed someone; never again unasked
+const ASKED = 'stann.push-asked' // the app asked Android's prompt on a follow: not again unless Alerts asks
 const OFF = 'stann.push-off' // turned off on Alerts' Settings: not registered again until turned on there
 const QUIET = 'stann.quiet-hours' // { start: "22:00", end: "07:00" } in the phone's time, or none
 
