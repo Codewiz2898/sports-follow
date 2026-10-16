@@ -10,6 +10,8 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
 - **Routes are files** in `src/app/` (Expo Router); everything else lives beside them in `src/`.
 - **It looks like the site.** Each page and block here is the twin of one in `web/src` (its comment names
   it); a change to the site's look is made in both. Values come from `web/src/styles.css` (`theme.ts`).
+  Android draws a skewed Text upright, so the site's leaning display type (`.dsp`) is a font here
+  (`font.slanted`, made by `scripts/slant_font.py`): use `dsp()` or `Dsp`, never a skew transform on text.
 - **Share, don't copy.** What the pages decide comes from the web app: `web/src/endpoints.ts`, `types.ts`,
   `today.ts`, `lines.ts`, `search.ts`, `alerts.ts`, `format.ts`, `follow.ts`, `share.ts`, `sports/naming.ts`
   and `sports/facts/` (Metro watches `web/src`). Keep those files free of the browser, and add to them rather

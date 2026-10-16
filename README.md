@@ -419,8 +419,11 @@ One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 `mobile/` is the Android app (package `io.stann.app`): React Native with Expo, in TypeScript like the web
 app. It looks like the site on a phone, page for page: each of the web app's pages and blocks has its
 React Native twin in `mobile/src`, drawn from `web/src/styles.css`'s values (`mobile/src/theme.ts`), with
-the same fonts, icons and line art. It asks the same API (stann.in, or `EXPO_PUBLIC_API_URL` when Metro
-bundles it) and is the same fan, by the same cookie, or the same account once signed in.
+the same fonts, icons and line art. The display type leans as the site's does, but Android won't skew text,
+so the lean is in the letters: `mobile/assets/fonts/AntonSlanted.ttf`, a copy of Anton that
+`mobile/scripts/slant_font.py` makes (run it again only if Anton changes). It asks the same API (stann.in,
+or `EXPO_PUBLIC_API_URL` when Metro bundles it) and is the same fan, by the same cookie, or the same account
+once signed in.
 
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,

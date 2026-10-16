@@ -23,6 +23,7 @@ export const colour = {
 // The names the expo-font plugin gives the files in app.config.ts, by weight.
 export const font = {
   display: 'Anton_400Regular',
+  slanted: 'AntonSlanted', // Anton leaning 7 degrees (scripts/slant_font.py): Android draws a skewed Text upright
   logo: 'Fredoka_600SemiBold',
   500: 'Manrope_500Medium',
   600: 'Manrope_600SemiBold',
@@ -34,9 +35,10 @@ export const GUTTER = 16
 export const RADIUS_CARD = 22
 export const RADIUS_TILE = 20
 
-/** Anton, upper case and leaning forward (.dsp): names, scores, headings. Its line is 0.92 of its size. */
+/** Anton, upper case and leaning forward (.dsp): names, scores, headings. Its line is 0.92 of its size. The
+ * lean is in the letters (font.slanted), not a skew, which Android doesn't draw on text. */
 export function dsp(size: number): TextStyle {
-  return { fontFamily: font.display, fontSize: size, lineHeight: Math.round(size * 0.95), textTransform: 'uppercase', letterSpacing: size * 0.005, transform: [{ skewX: '-7deg' }], color: colour.text }
+  return { fontFamily: font.slanted, fontSize: size, lineHeight: Math.round(size * 0.95), textTransform: 'uppercase', letterSpacing: size * 0.005, color: colour.text }
 }
 
 /** Anton numbers, upright (.num). */

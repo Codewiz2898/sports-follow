@@ -44,10 +44,12 @@ export default (): ExpoConfig => ({
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
     // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue.
     ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE }],
-    // The web app's typefaces (styles.css): Anton for display, Manrope for text, Fredoka for the name.
+    // The web app's typefaces (styles.css): Anton for display, Manrope for text, Fredoka for the name. Anton
+    // comes twice: upright for numbers (.num), and leaning as .dsp does, made by scripts/slant_font.py.
     ['expo-font', {
       fonts: [
         `${FONTS}/anton/400Regular/Anton_400Regular.ttf`,
+        './assets/fonts/AntonSlanted.ttf',
         `${FONTS}/manrope/500Medium/Manrope_500Medium.ttf`,
         `${FONTS}/manrope/600SemiBold/Manrope_600SemiBold.ttf`,
         `${FONTS}/manrope/700Bold/Manrope_700Bold.ttf`,
