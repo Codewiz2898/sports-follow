@@ -70,8 +70,8 @@ FAMILIES = (
 # or more): "Oleksandr", "Aleksandr" and "Alexandr"; "Andrei" and "Andrey"; "Zalutskiy" and "Zalutsky";
 # "Kostyliev" and "Kostylev"; "Miroslaw" and "Miroslav"; "Nikogosian" and "Nikogosyan"; "Eduard" and
 # "Edward". Nothing else spelled nearly the same is the same name: "Christian" isn't "Christina", nor
-# "Jinho" "Junho".
-SWAPS = ((re.compile(r"^ole(?=k|x)"), "ale"), (re.compile(r"ks"), "x"), (re.compile(r"e?[iy][iyj]?$"), "y"), (re.compile(r"[iy]ev(a?)$"), r"ev\1"),
+# "Jinho" "Junho", nor "Junlei" "Junli".
+SWAPS = ((re.compile(r"^ole(?=k|x)"), "ale"), (re.compile(r"ks"), "x"), (re.compile(r"e[iy]$"), "ey"), (re.compile(r"[iy][iyj]?$"), "y"), (re.compile(r"[iy]ev(a?)$"), r"ev\1"),
          (re.compile(r"w$"), "v"), (re.compile(r"[iy]an$"), "yan"), (re.compile(r"uard$"), "ward"))
 
 

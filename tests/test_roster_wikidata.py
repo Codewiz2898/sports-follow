@@ -139,7 +139,8 @@ def test_birth_dates_that_differ_rule_a_person_out():
     ("Jeong Ji-hoon", "Jung Ji-hun"), ("Lee Seong-hyuk", "Lee Seong-hyeok"), ("Cho Geon-hee", "Jo Geon-hee"), ("Gwon Sang-yun", "Kwon Sang-yun"),
     ("Byeong-jun Yu", "Yu Byeong-jun"), ("Ilya Mulyarchuk", "Illya Mulyarchuk"), ("Erick Santos", "Erick Andrade Santos"),
     ("Aleksandr Kostyliev", "Oleksandr Kostyliev"), ("Alexandr Kostylev", "Oleksandr Kostyliev"), ("Ilya Zalutskiy", "Ilya Zalutsky"),
-    ("Eduard Abgaryan", "Edward Abgaryan"), ("Andrei Petrov", "Andrey Petrov"), ("Chung Junho", "Jeong Junho"),
+    ("Eduard Abgaryan", "Edward Abgaryan"), ("Andrei Petrov", "Andrey Petrov"), ("Aleksei Petrov", "Alexey Petrov"),
+    ("Dmitri Petrov", "Dmitriy Petrov"), ("Chung Junho", "Jeong Junho"),
     ("Miroslaw Kolpakov", "Miroslav Kolpakow"), ("Vladimir Nikogosyan", "Vladimir Nikogosian"),
 ])
 def test_one_persons_names_agree(a, b):
@@ -152,6 +153,7 @@ def test_one_persons_names_agree(a, b):
     ("Ahmed Salah", "Mohamed Salah"), ("Salah", "Mohamed Salah"), ("Byeong-jun Yu", "Byeong-chun Yu"),
     ("Chung Junho", "Chung Jinho"), ("Junho Chung", "Jinho Chung"), ("Bang Junho", "Bang Jinho"), ("Jiang Zihao", "Jiang Zihan"),
     ("Feng Yuhan", "Feng Yuhao"), ("Cheung Kaiho", "Cheung Kaiyo"), ("Christian Jensen", "Christina Jensen"),
+    ("Wang Junlei", "Wang Junli"), ("Zhang Hao-lei", "Zhang Hao-li"), ("Chen Zhilei", "Chen Zhili"), ("Li Xiaomei", "Li Xiaomi"),
 ])
 def test_other_peoples_names_dont(a, b):
     assert not any(rw.names_agree(x, y) for x in rw.plain(a) for y in rw.plain(b))
