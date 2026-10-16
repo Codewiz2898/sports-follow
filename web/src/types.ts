@@ -52,6 +52,10 @@ export interface LiveStatus {
   state?: LiveState
   moments?: Moment[]
   source?: string
+  // The source's own wording for how its scores come in and how late they can be (its adapter's live_note
+  // and lag_note), where the app's general sentences don't fit.
+  live_note?: string | null
+  lag_note?: string | null
 }
 
 export interface Provenance { source: string; url?: string | null; at: string }

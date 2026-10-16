@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
 from sports_follow import alerts, bus, db as db_module, league, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
-from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
 PUBLIC = "81.2.69.142"
@@ -943,6 +943,22 @@ def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tm
         assert not (tmp_path / "cookie-secret").exists()
     finally:
         server.cookie_key.cache_clear()
+
+
+# ---------------------------------------------------------------- a source's own notes (BHA-249)
+
+
+def test_the_card_sends_the_live_sources_own_notes(api):
+    # The player page words how a source's scores come in from these, not from the source's name.
+    adapter = KNOWN["liquipedia_esports"]
+    card = {"player_id": 1, "version": 3, "status": "ready", "live": {"is_live": False, "player_stats": []}, "upcoming": [], "recent_results": [], "freshness": {}}
+    event = Event(id=5, title="BGIS 2026 · Grand Finals", notes=None, competition="BGIS", start_utc=datetime(2026, 10, 16, 12, tzinfo=timezone.utc), status="live")
+    snap = Snapshot(status="live", score_label="Lobby 3 of 6", clock_label="", state={"kind": "battle_royale"})
+    structured._apply_snapshot(card, event, snap, None, adapter, datetime(2026, 10, 16, 13, tzinfo=timezone.utc))
+    api.redis.data[bus.card_key(1)] = json.dumps(card)
+    live = api.call("GET", "/api/players/1/card", fan="fan").json()["live"]
+    assert (live["source"], live["live_note"], live["lag_note"]) == ("Liquipedia", adapter.live_note, adapter.lag_note)
+    assert live["live_note"] and live["lag_note"]
 
 
 # ---------------------------------------------------------------- the card is the fan's own (BUG-038)

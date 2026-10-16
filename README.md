@@ -189,6 +189,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
   most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
+  `live_note` and `lag_note` for a player page's words on how its live scores come in and how late they
+  can be, where the app's general sentences don't fit (Liquipedia's and PUBG's standings after each match),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
@@ -273,7 +275,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   database and `alembic check`; the web app's type-check and build; and the Android app's type-check
   (route names are checked only locally, where Expo has generated their types). In `web/src`,
   `tests/test_web_names.py` lets only a sport's view name a sport, and holds the files that still name a
-  source to how many times they do now, so they can lose those names but not gain them.
+  source (its system, or the name a page credits it by) to how many times they do now, so they can lose
+  those names but not gain them.
 
 ## Run it
 
