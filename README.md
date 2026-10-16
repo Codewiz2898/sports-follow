@@ -71,11 +71,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
   the Commons API about the registry's photo file of each followed and starter athlete it hasn't got, 50 to
   a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY, CC BY-SA,
-  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 330-pixel
-  thumbnails, author, licence and file page go in the `photo` table, and the app gets them from our own
-  origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
-  file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
-  which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
+  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 960-pixel
+  thumbnails (about 290 KB; the face's square shows about pixel for pixel on a phone), author, licence and
+  file page go in the `photo` table, and the app gets them from our own origin (`/api/photos/<digest>.jpg`,
+  cached a year, never hot-linked) with the card and the previews. Each file is asked about again every 90
+  days (a new upload, licence or author, or a file Commons deleted, which then stops showing), one that
+  failed the next day, and one kept at another width at once (`photos.WIDTH` changed: they're fetched
+  again, 100 a run, and show at their old size meanwhile); a file fetched over 30 days ago that nobody
   follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
   that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app shows
   each photo in its own colours, cropped around the face and fading into the band, and changes nothing

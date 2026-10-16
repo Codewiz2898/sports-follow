@@ -1,6 +1,6 @@
 """Where the face is in a player's photo (faces.py) and how the app is told to frame the photo around it
 (photos.framing). Two public-domain photos from Wikimedia Commons stand in for players' (tests/fixtures/photos),
-as the 330-pixel thumbnails the photos job keeps:
+as 330-pixel thumbnails (the job keeps photos.WIDTH-pixel ones; the detector finds the same faces in either):
 - babe-ruth.jpg, https://commons.wikimedia.org/wiki/File:Babe_Ruth2.jpg: full length, his face small near
   the top as in an action shot. 1920, from the Library of Congress; public domain (PD-US-expired).
 - michael-jordan.jpg, https://commons.wikimedia.org/wiki/File:Michael_Jordan_in_2014.jpg: a close-up.
@@ -96,29 +96,29 @@ def _inside(face: dict, crop: dict) -> bool:
 
 
 def test_a_face_in_an_action_shot_gets_a_square_around_it_head_and_shoulders():
-    face = {"x": 0.44, "y": 0.25, "w": 0.15, "h": 0.15}  # 49.5 by 65.25 pixels, its centre at (169.95, 141.375)
-    crop = photos.framing(330, 435, face)["crop"]
-    side = 65.25 / photos.FILL
-    assert abs(crop["w"] * 330 - side) < 0.1 and abs(crop["h"] * 435 - side) < 0.1  # square, the face FILL of it
-    assert abs((crop["x"] + crop["w"] / 2) * 330 - 169.95) < 0.1  # centred across it
-    assert abs((crop["y"] + crop["h"] / 2) * 435 - (141.375 - photos.RAISE * 65.25)) < 0.1  # a little above, for the hair
+    face = {"x": 0.44, "y": 0.25, "w": 0.15, "h": 0.15}  # 144 by 192 pixels, its centre at (494.4, 416)
+    crop = photos.framing(960, 1280, face)["crop"]
+    side = 192 / photos.FILL
+    assert abs(crop["w"] * 960 - side) < 0.1 and abs(crop["h"] * 1280 - side) < 0.1  # square, the face FILL of it
+    assert abs((crop["x"] + crop["w"] / 2) * 960 - 494.4) < 0.1  # centred across it
+    assert abs((crop["y"] + crop["h"] / 2) * 1280 - (416 - photos.RAISE * 192)) < 0.1  # a little above, for the hair
     assert _inside(face, crop)
 
 
 def test_a_close_up_shows_the_widest_square_the_photo_has():
-    framed = photos.framing(330, 471, {"x": 0.18, "y": 0.3, "w": 0.54, "h": 0.52})
+    framed = photos.framing(960, 1370, {"x": 0.18, "y": 0.3, "w": 0.54, "h": 0.52})
     assert framed["crop"]["x"] == 0 and framed["crop"]["w"] == 1  # the full width, never past it
     assert 0 < framed["crop"]["y"] < 0.3  # some of the top cut, the hair above the face kept
 
 
 def test_a_tiny_face_is_not_blown_up_past_the_closest_crop():
-    framed = photos.framing(330, 495, {"x": 0.5, "y": 0.3, "w": 0.02, "h": 0.02})
-    assert round(framed["crop"]["w"] * 330) == photos.CLOSEST
+    framed = photos.framing(960, 1440, {"x": 0.5, "y": 0.3, "w": 0.02, "h": 0.02})
+    assert round(framed["crop"]["w"] * 960) == photos.CLOSEST
 
 
 def test_a_face_at_a_corner_keeps_the_square_inside_the_photo():
     face = {"x": 0.9, "y": 0.0, "w": 0.1, "h": 0.07}
-    crop = photos.framing(330, 495, face)["crop"]
+    crop = photos.framing(960, 1440, face)["crop"]
     assert crop["x"] + crop["w"] == 1 and crop["y"] == 0
     assert _inside(face, crop)
 

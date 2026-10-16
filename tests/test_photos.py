@@ -42,7 +42,7 @@ def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-
     ext |= {k: {"value": v} for k, v in meta.items()}
     slug = file.replace(" ", "_")
     return {
-        "thumburl": f"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/{slug}/330px-{slug}?utm_source=commons.wikimedia.org&utm_content=thumbnail",
+        "thumburl": f"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/{slug}/{photos.WIDTH}px-{slug}?utm_source=commons.wikimedia.org&utm_content=thumbnail",
         "descriptionurl": PAGE + slug, "sha1": sha1, "mime": "image/jpeg", "extmetadata": ext,
     }
 
@@ -54,7 +54,7 @@ def test_a_cc_by_sa_photo_is_kept_and_credited_to_its_author():
     found = photos.judge(info(SAKA))
     assert (found.status, found.author, found.licence) == ("ok", "Bryan Berlin", "CC BY-SA 4.0")
     assert found.page == PAGE + SAKA.replace(" ", "_")
-    assert found.thumb and found.thumb.endswith("330px-" + SAKA.replace(" ", "_")) and "?" not in found.thumb  # no tracking query
+    assert found.thumb and found.thumb.endswith(f"{photos.WIDTH}px-" + SAKA.replace(" ", "_")) and "?" not in found.thumb  # no tracking query
     photo = Photo(file=SAKA, status="ok", author=found.author, licence=found.licence, digest="0" * 32, media_type="image/jpeg", page=found.page)
     # Shown as it is, only framed (styles.css .photo): a credit names no change.
     assert photos.credit(photo) == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons"
@@ -289,6 +289,24 @@ def test_the_face_in_each_new_photo_is_found_once_and_framed_in_its_card(squad, 
     assert saka and (saka.width, saka.height) == (330, 471) and saka.face and saka.face["w"] > 0.4
     db.expire_all()
     assert db.get(PlayerCard, 1).card["player"]["photo"]["crop"] == photos.framing(330, 471, saka.face)["crop"]
+
+
+@needs_db
+def test_photos_kept_at_another_width_are_fetched_again_at_once(squad, commons):
+    """WIDTH changed (330 to 960, 16 Oct 2026): each photo kept at the old width is due on the next run,
+    whenever it was last asked about, and downloaded again at WIDTH; then it's as any other."""
+    db = squad
+    photos.refresh()
+    assert _photo(db, SAKA).asked_width == photos.WIDTH and _photo(db, "Haaland.jpg").asked_width is None
+    db.execute(text("UPDATE photo SET asked_width = 330 WHERE status = 'ok'"))  # as kept before
+    db.commit()
+    asked, downloads = len(commons.asked), len(commons.downloads)
+    done = photos.refresh()
+    assert (done["asked"], done["shown"], done["framed"]) == (2, 2, 2)  # Saka's and Bumrah's; Haaland's isn't kept
+    assert len(commons.asked) == asked + 1 and len(commons.downloads) == downloads + 2
+    assert {u.rsplit("/", 1)[1] for u in commons.downloads[-2:]} == {f"{photos.WIDTH}px-" + f.replace(" ", "_") for f in (SAKA, BUMRAH)}
+    assert _photo(db, SAKA).asked_width == _photo(db, BUMRAH).asked_width == photos.WIDTH
+    assert photos.refresh()["asked"] == 0  # once
 
 
 @needs_db

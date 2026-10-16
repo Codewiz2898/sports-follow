@@ -9,7 +9,8 @@ see it (public domain, CC0, CC BY, CC BY-SA, GODL-India: the user's choice; not 
 "Attribution" or "copyrighted free use") is downloaded once and kept in Postgres, so every API process
 serves the same bytes at /api/photos/<digest>.jpg, cached for a year. Nothing is hot-linked. Each file is
 asked about again every REFETCH_DAYS (a new licence, author or upload, or a file Commons deleted), one
-that failed the next day. The job then looks for the face in each new thumbnail (faces.py), writes each
+that failed the next day, and one kept at another width than WIDTH at once (WIDTH changed: each is fetched
+again, PER_RUN a run). The job then looks for the face in each new thumbnail (faces.py), writes each
 followed player's photo into their card, and forgets files fetched over FORGET_DAYS ago that nobody
 follows or is offered now.
 
@@ -56,7 +57,10 @@ from .models import Athlete, Follow, Photo, Player, PlayerCard, PlayerIdentity, 
 log = logging.getLogger("sports_follow.photos")
 
 API = "https://commons.wikimedia.org/w/api.php"
-WIDTH = 330  # a size Wikimedia keeps: the profile's picture at 2x
+# A size Wikimedia keeps (330, 500, 960, 1280…). The profile shows the square around the face about 300
+# pixels across, 600 on a 2x phone, and that square is most of a photo's width (60% to all of it), so 960
+# shows it about pixel for pixel (a thumbnail about 290 KB; 1280 doubles that for little more).
+WIDTH = 960
 BATCH = 50  # files a Commons API request asks about (its limit)
 PER_RUN = 100  # files a run asks about at most; the rest wait for the next
 PAUSE = 0.5  # seconds between thumbnail downloads
@@ -66,7 +70,9 @@ FORGET_DAYS = 30
 MAX_BYTES = 2_000_000
 FILL = 0.4  # how much of the profile's square the face takes: head and shoulders
 RAISE = 0.1  # how far the square's centre sits above the face's, in face sizes, so the hair isn't cut off
-CLOSEST = 120  # the fewest thumbnail pixels the square spans, so a far-off face isn't blown up to a blur
+# The fewest thumbnail pixels the square spans, so a far-off face isn't blown up to a blur: 120 of a
+# 330-pixel thumbnail, the same share of a WIDTH one.
+CLOSEST = 120 * WIDTH // 330
 LOCK = "photos"
 TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 # The licences kept, by Commons' code: "cc-by-sa-4.0", "cc-by-2.0", "cc-by-sa-3.0-de", "cc0", "pd". A
@@ -232,7 +238,7 @@ def wanted(db: Session) -> dict[str, str]:
 
 
 def _due(photo: Photo | None, now: datetime) -> bool:
-    if photo is None:
+    if photo is None or (photo.status == "ok" and photo.asked_width != WIDTH):
         return True
     return photo.fetched_at < now - (RETRY if photo.status == "failed" else timedelta(days=REFETCH_DAYS))
 
@@ -328,25 +334,25 @@ def serve(db: Session, name: str) -> tuple[bytes, str] | None:
 
 
 def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: Photo | None) -> Photo:
-    """Write what Commons said, downloading the thumbnail when it's new (look() then finds its face); a photo
-    no longer free to show loses its bytes."""
+    """Write what Commons said, downloading the thumbnail when it's new, or was kept at another width (look()
+    then finds its face); a photo no longer free to show loses its bytes."""
     photo = known or Photo(file=file)
     if known is None:
         db.add(photo)
     photo.name = name
-    same = info.status == "ok" and photo.status == "ok" and photo.digest and photo.source_sha1 == info.sha1
+    same = info.status == "ok" and photo.status == "ok" and photo.digest and photo.source_sha1 == info.sha1 and photo.asked_width == WIDTH
     photo.status, photo.reason, photo.fetched_at = info.status, info.reason, now
     photo.licence, photo.licence_url, photo.author, photo.page, photo.source_sha1 = info.licence, info.licence_url, info.author, info.page, info.sha1
     if info.status != "ok":
-        photo.data = photo.digest = photo.media_type = photo.width = photo.height = photo.face = None
+        photo.data = photo.digest = photo.media_type = photo.asked_width = photo.width = photo.height = photo.face = None
     elif not same:
         photo.width = photo.height = photo.face = None
         try:
             data, media = download(info.thumb or "")
         except ValueError as exc:
-            photo.status, photo.reason, photo.data, photo.digest, photo.media_type = "failed", str(exc), None, None, None
+            photo.status, photo.reason, photo.data, photo.digest, photo.media_type, photo.asked_width = "failed", str(exc), None, None, None, None
             return photo
-        photo.data, photo.media_type, photo.digest = data, media, hashlib.sha256(data).hexdigest()[:32]
+        photo.data, photo.media_type, photo.digest, photo.asked_width = data, media, hashlib.sha256(data).hexdigest()[:32], WIDTH
         time.sleep(PAUSE)
     return photo
 

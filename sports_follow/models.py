@@ -227,6 +227,7 @@ class Photo(Base):
     digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the thumbnail: its address
     media_type: Mapped[str | None] = mapped_column(String(30))
     data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # the WIDTH-pixel thumbnail
+    asked_width: Mapped[int | None] = mapped_column(Integer)  # the WIDTH it was asked at: another is fetched again
     # Its size in pixels once the job has looked for the face in it (faces.py; 0 if it didn't decode), and
     # the face's box, {x, y, w, h} as fractions of the width and height; None when it found none.
     width: Mapped[int | None] = mapped_column(Integer)
