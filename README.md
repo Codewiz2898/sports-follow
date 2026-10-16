@@ -53,9 +53,17 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pros come from their sources instead (Wikidata knows only a few thousand): the active players of
   `SPORTS_FOLLOW_ESPORTS_GAMES` from PandaScore and of `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` from
   Liquipedia, by handle and real name, with each source's key
-  (`python -m sports_follow.registry esports`, part of the weekly run). A run by hand takes the weekly
-  run's lock, so it refuses to start while that one is going; a sport (or esports source) that fails
-  keeps last week's rows and the rest still run.
+  (`python -m sports_follow.registry esports`, part of the weekly run). After each import,
+  `sports_follow/roster_wikidata.py` finds each pro's Wikidata person among the few thousand Wikidata
+  counts as esports people (a Liquipedia, HLTV or Esports Earnings id, or professional gamer), for their
+  photo: by the source's id where Wikidata keeps it (Liquipedia's pages), by handle together with the
+  real name or birth date and the game or a team, or by real name and birth date; never by a handle alone,
+  and never where two people fit one pro or one person two pros. It records the Wikidata id in the pro's
+  `ids` and the photo file in `image`, which the weekly roster leaves alone. On 16 Oct 2026, 542 of
+  41,870 pros matched, 238 of them with a photo (TenZ, ZywOo, Faker, s1mple…).
+  `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match. A run by hand
+  takes the weekly run's lock, so it refuses to start while that one is going; a sport (or esports
+  source) that fails keeps last week's rows and the rest still run.
 - **Player photos from Wikimedia Commons, on the profile only.** A player's page, and the preview of an
   athlete before following, show their Commons photo; the home page, lists and search don't (the home page
   is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
@@ -195,7 +203,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `system`, the `sport` it serves, its `name` on a page, its `provider` (the Credits entry, shared with
   the provider's other adapters), what it `covers`, its athlete `id_pattern`, and `available()` (a
   licensed source needs its token). Optional capabilities are opt-in, so nothing else changes: a name
-  `search` for the registry, a `roster` of pros for the registry (esports), a provider's live search and
+  `search` for the registry, a `roster` of pros for the registry (esports) and the Wikidata property
+  that keeps its athlete ids (`wikidata_property`, Liquipedia's P10918), a provider's live search and
   `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
   `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
@@ -496,7 +505,9 @@ stann.in links (BHA-27).
   is what fixtures use. Chess ratings aren't in it (the FIDE list needs FIDE's permission for commercial
   use), so chess rows show title and country.
 - Photos are fetched only for followed and starter players, so the preview of another athlete shows one
-  only once someone follows them. Each is the one file Wikidata names (its preferred one, when it names
+  only once someone follows them. Most esports pros have none: only about one in eighty is matched to a
+  Wikidata person, and fewer than half of those have a photo there; a pro whose source has no real name
+  or birth date (PUBG's) is never matched. Each is the one file Wikidata names (its preferred one, when it names
   several), however old. When a photo has several faces, the profile shows the largest, which is usually
   the player's but can be someone standing nearer the camera.
 - When the registry is thin, search still asks ESPN and Lichess live: ESPN's search has no typo tolerance

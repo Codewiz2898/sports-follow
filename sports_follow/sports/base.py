@@ -262,6 +262,26 @@ class Sport:
         current = teams and ((latest_start is not None and latest_start.year >= today.year - 10) or (age is not None and age <= 38))
         return current or (age is not None and age <= 30)
 
+    # ---- the registry, for a sport whose athletes come from its sources' lists (roster): who on Wikidata
+    # is one of its people, so each athlete's Wikidata person, and their photo, can be found (roster_wikidata.py)
+
+    people_ids: tuple[str, ...] = ()  # anyone with any of these ids
+    people_occupations: tuple[str, ...] = ()  # or any of these occupations
+    team_filler: frozenset[str] = frozenset({"team", "club"})  # words of its team names that don't tell teams apart
+
+    def known_as(self, ids: dict[str, list[str]]) -> list[str]:
+        """Names a person on Wikidata goes by, from their ids (by property), beside their labels and aliases."""
+        return []
+
+    def plays(self, ids: dict[str, list[str]], disciplines: list[str]) -> set[str]:
+        """What a person on Wikidata plays, as game_key writes it, from their ids (by property) and the
+        disciplines they compete in."""
+        return set()
+
+    def game_key(self, game: str | None) -> str:
+        """A game however it's written, as one key; "" for none."""
+        return ""
+
     # ---- search: a registry athlete as a result
 
     # A search result's line comes from its source rather than the page's (chess, tennis: an agent may
