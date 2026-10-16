@@ -54,7 +54,7 @@ SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
 # build's files at the root (sw.js, manifest.webmanifest) never clash. tests/test_campaigns.py holds the
 # web app's routes (web/src/main.tsx) to this list.
 TAKEN = frozenset({
-    "api", "admin", "assets", "icons", "welcome", "following", "search", "player", "athlete", "notifications", "credits", "account",
+    "api", "admin", "assets", "icons", "welcome", "following", "live", "search", "player", "athlete", "notifications", "credits", "account",
     "privacy", "go",  # BHA-239's short links
 })
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in

@@ -245,6 +245,12 @@ a.photo-credit:hover { text-decoration: underline; }
 .live-other .game { margin-block: auto; }
 .live-other .who { display: flex; flex-wrap: wrap; gap: 6px; }
 .also-live .rail.open { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+/* Today's quiet way to every other game on now (MoreLive), and the Live page they're on, as a grid. */
+.more-live { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 36px; margin: -6px -10px; padding: 0 10px; border-radius: 10px; }
+.more-live:hover { color: var(--text); background: var(--surface); }
+.live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.live-grid > .live-other { width: auto; }
+@media (min-width: 1024px) { .live-grid { gap: 12px; } }
 
 /* A league game on Today, finished or to come, that none of the fan's players are in: outlined as Also live's,
    so it doesn't pass for theirs, sized as the fan's own cards it follows in a rail. */

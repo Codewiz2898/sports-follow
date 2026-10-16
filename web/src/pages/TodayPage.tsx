@@ -9,7 +9,7 @@ import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
-import { AlsoLive } from '../components/LiveNow'
+import { AlsoLive, MoreLive } from '../components/LiveNow'
 import { LeagueComingCard, LeagueResultCard, useLeague } from '../components/League'
 import { StartersSection } from '../components/Starters'
 import { ThisWeek, useWeek } from '../components/ThisWeek'
@@ -174,9 +174,9 @@ export function TodayPage() {
           {group.length > 1 && <span className="tiny muted" style={{ fontWeight: 700 }}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</span>}
         </Link>
       ))}
-      {/* Then every other game on now, outlined: the section is gone when nothing is on anywhere. Once the follow
-          list has answered, so a game of the fan's never shows here first. */}
-      {(loaded || failed) && <AlsoLive mine={games.flatMap(([, group]) => group)} />}
+      {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. Once the
+          follow list has answered, so a game of the fan's is never counted as another. */}
+      {(loaded || failed) && <MoreLive mine={games.flatMap(([, group]) => group)} />}
 
       <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
         {resultCount > 0 && (

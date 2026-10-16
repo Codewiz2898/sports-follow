@@ -1,5 +1,5 @@
 // The phone's tab bar, the web's (.tabbar): a floating ink pill with three places, over every page. The
-// Following page is part of Today (its strip opens it): Today stays lit there.
+// Following and Live pages are part of Today (Today opens them): Today stays lit there.
 
 import { router, usePathname } from 'expo-router'
 import { useEffect, useState } from 'react'
@@ -10,7 +10,7 @@ import { BellIcon, HomeIcon, SearchIcon } from './icons'
 import { colour, font } from './theme'
 
 const PLACES = [
-  { path: '/', label: 'Today', Icon: HomeIcon, lit: (p: string) => p === '/' || p === '/following' },
+  { path: '/', label: 'Today', Icon: HomeIcon, lit: (p: string) => p === '/' || p === '/following' || p === '/live' },
   { path: '/search', label: 'Search', Icon: SearchIcon, lit: (p: string) => p === '/search' },
   { path: '/notifications', label: 'Alerts', Icon: BellIcon, lit: (p: string) => p === '/notifications' },
 ] as const

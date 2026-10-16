@@ -1,14 +1,16 @@
-// Every game the sources have on, whoever follows it (GET /api/live), as the web's LiveNow.tsx: Today's "Also
-// live" (or "Live now" when none of the fan's are on) and the welcome's "Live now", each game with a few of
-// its players to follow with a tap.
+// Every game the sources have on, whoever follows it (GET /api/live), as the web's LiveNow.tsx: the welcome's
+// "Live now" and an empty Today's, each game with a few of its players to follow with a tap, and Today's link
+// to the Live page (app/live.tsx) for a fan with players.
 
+import { router } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { shortName } from '../../../web/src/format'
+import { gamesOn, moreOn, type GameOn } from '../../../web/src/today'
 import { api, type Card, type LiveGame, type LiveSport } from '../api'
 import { OtherGameCard } from '../blocks'
 import { toneOf, useSports } from '../catalog'
-import { CheckIcon, PlusIcon } from '../icons'
+import { CheckIcon, ChevronIcon, PlusIcon } from '../icons'
 import { Rail, type RailCard } from '../rail'
 import { colour, dsp, font, RADIUS_TILE } from '../theme'
 import { ErrorBox, Eyebrow, LiveBadge, Spinner } from '../ui'
@@ -17,11 +19,15 @@ import { useFollowToggle } from './starters'
 const EVERY = 60_000 // the server reads a source again at most this often
 const SOON = 5_000 // when it says a read is under way, the next look
 const SHOWN = 6 // Also live's row: the most games before its "All N" card
+const NONE: LiveSport[] = []
+
+/** What the server last said is on: `loaded` once it has answered, `failed` while its last look failed. */
+export interface LiveAnswer { sports: LiveSport[]; loaded: boolean; failed: boolean }
 
 /** What the sources have on, looked at again once a minute while the app is in front (a look only reads
  * what the server last read: more fans looking costs no more of a source's allowance). */
-export function useLive(): LiveSport[] {
-  const [sports, setSports] = useState<LiveSport[]>([])
+export function useLiveAnswer(): LiveAnswer {
+  const [answer, setAnswer] = useState<LiveAnswer>({ sports: NONE, loaded: false, failed: false })
   useEffect(() => {
     let current = true
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -33,17 +39,26 @@ export function useLive(): LiveSport[] {
       api.live()
         .then((r) => {
           if (!current || mine !== latest) return
-          setSports(r.sports)
+          setAnswer({ sports: r.sports, loaded: true, failed: false })
           // A read was just asked for: look again in a moment, a few times, for the new scores.
           timer = setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
         })
-        .catch(() => { if (current && mine === latest) timer = setTimeout(() => look(tries), EVERY) })
+        .catch(() => {
+          if (!current || mine !== latest) return
+          setAnswer((a) => (a.failed ? a : { ...a, failed: true }))
+          timer = setTimeout(() => look(tries), EVERY)
+        })
     }
     const sub = AppState.addEventListener('change', (state) => { if (state === 'active') look(0) })
     look(0)
     return () => { current = false; clearTimeout(timer); sub.remove() }
   }, [])
-  return sports
+  return answer
+}
+
+/** The games on now (useLiveAnswer), none until the server answers. */
+export function useLive(): LiveSport[] {
+  return useLiveAnswer().sports
 }
 
 type Follow = ReturnType<typeof useFollowToggle>
@@ -101,31 +116,50 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   )
 }
 
+/** One game on now that none of the fan's players are in, on Today or the Live page (the web's OtherGame):
+ * outlined, so it doesn't pass for theirs, with players to follow from it. */
+export function OtherGame({ game, label, follow, fill }: GameOn & { follow: Follow } & RailCard) {
+  return (
+    <OtherGameCard live={game.live} sport={game.sport} seed={game.key} tag={game.competition || label} fill={fill}>
+      <FollowPills game={game} sport={game.sport} follow={follow} />
+    </OtherGameCard>
+  )
+}
+
 /**
- * Today's tail of the live section, for every fan (the web's AlsoLive): the games on anywhere that none of the
- * fan's players are in, after the fan's own live boards (`mine`, their live cards). A game is the fan's when
- * one of their live cards names one of its events, or a player it offers is one of theirs who's live; never
- * by a name. Titled "Also live" under the fan's own; with none of theirs on, it's the whole of "Live now".
+ * The games on anywhere that none of the fan's players are in (gamesOn), after the fan's own live boards
+ * (`mine`, their live cards; the web's AlsoLive): titled "Also live" under the fan's own; with none of theirs
+ * on, it's the whole of "Live now". Today shows it to a fan who follows nobody yet, to pick players from; a
+ * fan with players gets MoreLive's link instead.
  */
 export function AlsoLive({ mine }: { mine: Card[] }) {
   const sports = useLive()
   const follow = useFollowToggle()
-  const events = new Set(mine.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
-  const players = new Set(mine.map((c) => c.player_id))
-  const theirs = (g: LiveGame) => (g.event_ids ?? []).some((id) => events.has(id)) || g.players.some((p) => p.player_id != null && players.has(p.player_id))
-  const games = sports.flatMap((x) => x.games.filter((g) => !theirs(g)).map((g) => ({ game: { ...g, sport: x.key }, label: x.label })))
+  const games = gamesOn(sports, mine).others
   if (!games.length) return null
   return (
     <>
       <Rail title={mine.length ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN}>
-        {games.map(({ game, label }) => (
-          <OtherGameCard key={game.key} live={game.live} sport={game.sport} seed={game.key} tag={game.competition || label}>
-            <FollowPills game={game} sport={game.sport} follow={follow} />
-          </OtherGameCard>
-        ))}
+        {games.map(({ game, label }) => <OtherGame key={game.key} game={game} label={label} follow={follow} />)}
       </Rail>
       {follow.error ? <ErrorBox>{follow.error}</ErrorBox> : null}
     </>
+  )
+}
+
+/**
+ * Today's way to every other game on now, under the fan's own live boards (`mine`, their live cards; the
+ * web's MoreLive): a quiet link to the Live page, "12 other games on now", or with none of theirs on, "12
+ * games on now". A game of theirs isn't counted (gamesOn). Nothing when nothing else is on.
+ */
+export function MoreLive({ mine }: { mine: Card[] }) {
+  const others = gamesOn(useLive(), mine).others.length
+  if (!others) return null
+  return (
+    <Pressable onPress={() => router.push('/live')} accessibilityRole="link" hitSlop={8} style={s.more}>
+      <Eyebrow>{moreOn(others, mine.length > 0)}</Eyebrow>
+      <ChevronIcon size={16} strokeWidth={2.6} color={colour.muted} />
+    </Pressable>
   )
 }
 
@@ -133,5 +167,6 @@ const s = StyleSheet.create({
   who: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 30, paddingHorizontal: 10, borderRadius: 999, backgroundColor: colour.bg },
   pillText: { fontFamily: font[700], fontSize: 12, color: colour.text },
+  more: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', minHeight: 36, marginVertical: -6 },
   liveGame: { gap: 8, width: 236, minHeight: 172, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE, backgroundColor: colour.surface, borderWidth: 3 },
 })
