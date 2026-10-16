@@ -143,9 +143,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
   address gets a new one once the score moves. Each API process keeps the 256 it drew last and draws new
-  ones one at a time, so asking for many can't take the threads the database calls use. The player page and each This week poster have a Share
-  button: the phone's share sheet where the browser has one, else the link copied; every link it gives
-  carries `s=share`, for when the app counts visits.
+  ones one at a time, so asking for many can't take the threads the database calls use. The player page
+  and each This week poster have a Share button, on the web and in the Android app: the phone's share
+  sheet (on the web where the browser has one, else the link copied). It shares a link on the site, never
+  the app's own, so it previews for anyone; `web/src/share.ts` says which link and title, for both. Every
+  link carries `s=share`, for when the app counts visits.
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
   points, a set, the start and the result; news from a rebuild adds injuries, transfers and
@@ -412,7 +414,7 @@ bundles it) and is the same fan, by the same cookie, or the same account once si
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
 `lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
-`follow.ts`), and each sport's facts (`sports/facts/`: the scoreboard kinds it draws, its line art, how it
+`follow.ts`), what a Share button shares (`share.ts`), and each sport's facts (`sports/facts/`: the scoreboard kinds it draws, its line art, how it
 words a player's line). Only the drawing is each app's own: a sport's live board is
 `web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,
 the app takes the sports, their names and their colours from `GET /api/sports`:

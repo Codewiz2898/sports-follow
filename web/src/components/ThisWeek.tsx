@@ -6,6 +6,7 @@ import { useFollowing } from '../following'
 import { sportKey } from '../sports'
 import { longestWord, posterWhen } from '../today'
 import { Rail } from './Rail'
+import { sharePoster } from '../share'
 import { ShareButton } from './Share'
 
 const SETTLE_MS = 1500  // one poll can bring several moments: fetch once they've all arrived
@@ -41,7 +42,6 @@ export function useWeek(): Week {
  * Share button shares the game (/player/<id>?g=<event id>), whose link previews this moment.
  */
 function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
-  const game = poster.event_id != null ? `?g=${poster.event_id}` : ''
   return (
     <div className="poster-wrap">
       <Link to={`/player/${poster.player_id}`} className="poster" data-sport={sportKey(poster.sport)}>
@@ -52,7 +52,7 @@ function Poster({ poster, now }: { poster: WeekPoster; now: number }) {
           <span className="line">{[poster.line, posterWhen(poster.at, now)].filter(Boolean).join(' · ')}</span>
         </span>
       </Link>
-      <ShareButton path={`/player/${poster.player_id}${game}`} title={`${poster.word}: ${poster.player}`} label={`Share ${shortName(poster.player)}'s ${poster.word.toLowerCase()}`} className="poster-share" />
+      <ShareButton {...sharePoster(poster)} className="poster-share" />
     </div>
   )
 }

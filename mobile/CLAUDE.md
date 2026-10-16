@@ -11,8 +11,8 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
 - **It looks like the site.** Each page and block here is the twin of one in `web/src` (its comment names
   it); a change to the site's look is made in both. Values come from `web/src/styles.css` (`theme.ts`).
 - **Share, don't copy.** What the pages decide comes from the web app: `web/src/endpoints.ts`, `types.ts`,
-  `today.ts`, `lines.ts`, `search.ts`, `alerts.ts`, `format.ts`, `follow.ts`, `sports/naming.ts` and
-  `sports/facts/` (Metro watches `web/src`). Keep those files free of the browser, and add to them rather
+  `today.ts`, `lines.ts`, `search.ts`, `alerts.ts`, `format.ts`, `follow.ts`, `share.ts`, `sports/naming.ts`
+  and `sports/facts/` (Metro watches `web/src`). Keep those files free of the browser, and add to them rather
   than writing a second copy here; only the drawing lives here.
 - **Sports and sources come from the API**, as in the web app (the root CLAUDE.md):
   `tests/test_web_names.py` fails if `mobile/src` names one.
