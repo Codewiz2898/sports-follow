@@ -59,8 +59,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   photo: by the source's id where Wikidata keeps it (Liquipedia's pages), by handle together with the
   real name or birth date and the game or a team, or by real name and birth date; never by a handle alone,
   and never where two people fit one pro or one person two pros. It records the Wikidata id in the pro's
-  `ids` and the photo file in `image`, which the weekly roster leaves alone. On 16 Oct 2026, 537 of
-  41,870 pros matched, 238 of them with a photo (TenZ, ZywOo, Faker, s1mple…).
+  `ids` and the photo file in `image`, which the weekly roster leaves alone. On 16 Oct 2026, 540 of
+  41,870 pros matched, 239 of them with a photo (TenZ, ZywOo, Faker, s1mple…).
   `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match. A run by hand
   takes the weekly run's lock, so it refuses to start while that one is going; a sport (or esports
   source) that fails keeps last week's rows and the rest still run.

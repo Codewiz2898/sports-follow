@@ -137,10 +137,15 @@ def test_birth_dates_that_differ_rule_a_person_out():
 
 def test_romanised_korean_names_agree_but_other_names_dont():
     assert rw.names_agree(["jeong", "jihoon"], ["jung", "jihoon"]) and rw.names_agree(["jeong", "jihoon"], ["jeong", "jihun"])
-    assert rw.names_agree(["erick", "santos"], ["erick", "andrade", "santos"])
+    assert rw.names_agree(["erick", "santos"], ["erick", "andrade", "santos"]) and rw.names_agree(["ilya", "mulyarchuk"], ["illya", "mulyarchuk"])
     assert not rw.names_agree(["kim", "minho"], ["kim", "minsu"])
     assert not rw.names_agree(["ahmed", "salah"], ["mohamed", "salah"])
     assert not rw.names_agree(["salah"], ["mohamed", "salah"])  # one word is no name
+
+
+def test_a_digit_for_a_letter_is_the_same_handle():
+    suma1l = person("Q21033312", "Suma1L", aliases=("Syed Sumail Hassan",), disciplines=("Dota 2",))
+    assert matched([row("pandascore:9368", "SumaiL", real="Syed Sumail Hassan", game="Dota 2")], [suma1l]) == {"pandascore:9368": ("Q21033312", "handle")}
 
 
 def test_teams_are_one_by_their_telling_words():

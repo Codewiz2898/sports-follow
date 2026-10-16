@@ -54,6 +54,7 @@ KEY = "wikidata"  # an athlete's Wikidata id among their ids
 QUOTED = re.compile(r"""["“”„«»]([^"“”„«»]+)["“”„«»]""")  # Tyson "TenZ" Ngo
 CLOSE = 0.85  # how alike two spellings of a name's word must be: "Aleksandr", "Oleksandr"
 VOWELS = re.compile(r"[aeiouwy]")
+LEET = str.maketrans("013", "oie")  # a handle's digits for letters: "Suma1L" is SumaiL
 
 
 @dataclass
@@ -103,7 +104,8 @@ def plain(text: str) -> list[list[str]]:
 
 
 def handle(text: str) -> str:
-    return " ".join(naming.words(text))
+    """A handle as compared: plain words, a digit for a letter read as the letter ("s1mple", "simple")."""
+    return " ".join(naming.words(text)).translate(LEET)
 
 
 def _within(short: list[str], long: list[str]) -> bool:
@@ -111,10 +113,10 @@ def _within(short: list[str], long: list[str]) -> bool:
 
 
 def alike(a: str, b: str) -> bool:
-    """Two spellings of a name's word: five letters or more and nearly the same ("Aleksandr", "Oleksandr"),
-    or four or more with the same first letter and consonants, as romanisations of one Korean name differ
+    """Two spellings of a name's word, four letters or more: nearly the same ("Aleksandr", "Oleksandr";
+    "Ilya", "Illya"), or the same first letter and consonants, as romanisations of one Korean name differ
     ("Jeong", "Jung"; "Jihoon", "Jihun")."""
-    if min(len(a), len(b)) >= 5 and SequenceMatcher(None, a, b).ratio() >= CLOSE:
+    if min(len(a), len(b)) >= 4 and SequenceMatcher(None, a, b).ratio() >= CLOSE:
         return True
     bones = VOWELS.sub("", a[1:]), VOWELS.sub("", b[1:])
     return min(len(a), len(b)) >= 4 and a[0] == b[0] and bones[0] == bones[1] and len(bones[0]) >= 2
