@@ -88,6 +88,9 @@ class Notable:
     word: str = ""  # a finished game's big word: its score ("4–1"), its margin ("By 6 wickets"), its winner
     line: str = ""  # under it, who played and how it went: "Arsenal beat Chelsea"; the game's title if ""
     why: str = ""  # what makes it big, in a word or two: "Final", "1st v 2nd", "Last ball"
+    # The part of its sport the game is in, which takes its own turn among the sport's games (league.py), so
+    # one part never fills the sport's turns: an esports title ("Valorant"); "" for a sport of one part.
+    group: str = ""
 
 
 # How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
@@ -112,6 +115,16 @@ def stage(*texts: str | None) -> tuple[int, str]:
             if text and pattern.search(text):
                 return level, word
     return 0, ""
+
+
+# What a source names a side it hasn't decided yet (a final's, before the semi-finals): "TBC", "TBA", "TBD", "".
+_UNDECIDED = re.compile(r"\s*(?:tb[acd]|to be (?:confirmed|announced|decided|determined))?\s*", re.I)
+
+
+def undecided(sides: list[str]) -> bool:
+    """Whether a source lists a game's sides and names none of them yet ("TBC v TBC"): a sport may leave such
+    a game out of the big games until it has them. False when the source lists no sides."""
+    return bool(sides) and all(_UNDECIDED.fullmatch(s or "") for s in sides)
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:

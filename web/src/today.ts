@@ -176,6 +176,17 @@ export function stillToCome(games: LeagueGame[], now: number): LeagueGame[] {
   return games.filter((g) => ahead(g.start_utc, now))
 }
 
+/** Coming up's big games, after the fan's own (all of it for a fan who follows nobody): none their players
+ * are in, none that has started. The server lists them biggest first, the sports taking turns (league.py),
+ * so the first TAIL, the ones the rail shows, are the biggest of every sport: they go soonest first, and
+ * the rest after them, soonest first. */
+export function leagueComingUp(games: LeagueGame[], theirs: Set<number>, now: number): LeagueGame[] {
+  const left = stillToCome(notTheirs(games, theirs), now)
+  const at = (g: LeagueGame) => parseDate(g.start_utc)?.getTime() ?? Infinity
+  const soonest = (list: LeagueGame[]) => [...list].sort((a, b) => at(a) - at(b))
+  return [...soonest(left.slice(0, TAIL)), ...soonest(left.slice(TAIL))]
+}
+
 /** "Since yesterday", or the day the latest results are from ("Tue 13 Oct"). */
 export function resultsDay(day: string | null): string {
   return day ? parseDate(day)!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) : 'Since yesterday'

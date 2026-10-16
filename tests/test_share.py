@@ -215,6 +215,12 @@ def test_the_builds_own_files_are_served_as_they_are(built):
     assert "og:title" in built.call("GET", "/index.html").text  # the page itself is the app's, with its tags
 
 
+@pytest.mark.parametrize("path", ["/api", "/api/", "/api/admin", "/api/me/nothing", "/api/players/1/nothing"])
+def test_an_api_path_that_isnt_one_is_a_json_404_not_the_app(built, path):
+    got = built.call("GET", path)
+    assert got.status_code == 404 and got.headers["content-type"] == "application/json" and got.json() == {"detail": "Not Found"}
+
+
 def test_without_a_build_there_is_no_page(api, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(server, "WEB_DIST", tmp_path / "dist")
     assert api.call("GET", "/player/1").status_code == 404

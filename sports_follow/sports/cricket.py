@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stat, stage
+from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stage, stat, undecided
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -222,12 +222,13 @@ class Cricket(Sport):
         """Every match its sources list is one, as big as its stage (a final 95, a semi-final 85, a playoff
         70, by the round's name: "Final", "Qualifier 1") or who plays it (an international 55, any other 40). Once it's over, 15 more for a close finish: a tie or a super over, CLOSE_RUNS runs or fewer,
         CLOSE_WICKETS wickets or fewer, or CLOSE_BALLS balls to spare. Its word is the margin ("By 6
-        wickets"), under it who beat whom."""
+        wickets"), under it who beat whom. A match to come whose sides are both still to be decided ("TBC v
+        TBC", a final before its semi-finals) isn't one until they are: there's nobody to watch yet."""
         level, why = stage(fixture.detail)  # not the competition's: a "… Finals Series" is every round of it
         rank = STAGE_RANK.get(level) or (NATIONS if fixture.facts.get("national") else LEAGUE)
         r = fixture.result
         if fixture.status != "final" or not r:
-            return Notable(rank, why=why)
+            return None if undecided(fixture.team_names) else Notable(rank, why=why)
         summary = str(r.get("summary") or "")
         teams = r.get("teams") or []
         winner = next((t for t in teams if t.get("winner")), None)

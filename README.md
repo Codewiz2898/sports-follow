@@ -6,7 +6,8 @@ Today screen puts all of your players together: on a phone a row of them along t
 score, or when they next play), then their live games, a row of the other games on anywhere ("Also
 live", outlined, with players to follow from each), a row of every result since yesterday and a row of
 every game in the next two weeks, each scrolling sideways and ending in the big games of the
-competitions the sources cover that none of your players are in, outlined too (a fan who follows nobody
+competitions the sources cover that none of your players are in, outlined too, the sports taking turns so
+one sport's busy week doesn't fill the row, and the big games coming up soonest first (a fan who follows nobody
 sees only those: "Big results", "Big games coming up"). The Following page has a tile for each player in
 their sport's colour.
 
@@ -202,7 +203,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   esports does by PandaScore's tournament tiers),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
-  sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
+  sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
+  by in `Fixture.facts`: an esports source names each game's title in `facts["game"]`, its turn among the
+  sport's, or all its titles share one; read a few times a day at
   most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
   `live_note` and `lag_note` for a player page's words on how its live scores come in and how late they
@@ -232,7 +235,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
-  finish; for Today's big results and big games coming up), its form summary,
+  finish, or none, as for a cricket final whose sides are still "TBC"; and its group, an esports title,
+  which takes its own turn within the sport's; for Today's big results and big games coming up), its form summary,
   how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link
   previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the

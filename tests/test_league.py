@@ -95,9 +95,9 @@ def keep(redis: dict, system: str, games: list[dict], as_of: datetime = NOW) -> 
     redis[f"league:games:{system}"] = json.dumps({"as_of": as_of.isoformat(), "games": games})
 
 
-def game(key: str, status: str, start: datetime, rank: int, sport: str = "football") -> dict:
+def game(key: str, status: str, start: datetime, rank: int, sport: str = "football", group: str = "") -> dict:
     return {"key": key, "sport": sport, "title": key, "competition": "League", "detail": None, "start_utc": start.isoformat(), "status": status,
-            "rank": rank, "word": "", "line": "", "why": ""}
+            "rank": rank, "word": "", "line": "", "why": "", "group": group}
 
 
 def test_results_since_yesterday_biggest_first_then_newest_of_every_sport(sources, redis):
@@ -108,7 +108,20 @@ def test_results_since_yesterday_biggest_first_then_newest_of_every_sport(source
     assert stale == ["lobby"]  # never read
     assert served["results"]["day"] is None
     assert [(g["key"], g["event_ids"]) for g in served["results"]["games"]] == [("pitch:c", []), ("arena:d", []), ("pitch:b", [7]), ("pitch:a", [])]
-    assert "status" not in served["results"]["games"][0]
+    assert "status" not in served["results"]["games"][0] and "group" not in served["results"]["games"][0]
+
+
+def test_the_sports_take_turns_and_an_esports_title_takes_its_own_within_its_sports(sources, redis):
+    """A busy esports week doesn't fill the results: each sport's biggest, the biggest of those first, then
+    each one's next biggest; esports' turns go round its titles, so one title's season doesn't take them all.
+    A read from before games had a group (no "group") is one group."""
+    hours = lambda n: NOW - timedelta(hours=n)  # noqa: E731
+    keep(redis, "arena", [game("lol:1", "final", hours(1), 90, "esports", "League of Legends"), game("lol:2", "final", hours(2), 85, "esports", "League of Legends"),
+                          game("lol:3", "final", hours(3), 80, "esports", "League of Legends"), game("val:1", "final", hours(4), 60, "esports", "Valorant")])
+    keep(redis, "lobby", [{k: v for k, v in game("pubg:1", "final", hours(5), 55, "esports").items() if k != "group"}])
+    keep(redis, "pitch", [game("pitch:1", "final", hours(6), 50), game("pitch:2", "final", hours(7), 40)])
+    served, _ = league.offer(Db(), NOW)
+    assert [g["key"] for g in served["results"]["games"]] == ["lol:1", "pitch:1", "val:1", "pitch:2", "pubg:1", "lol:2", "lol:3"]
 
 
 def test_with_none_since_yesterday_the_latest_day_that_had_results(sources, redis):
@@ -146,6 +159,14 @@ def test_each_list_is_cut_at_its_most(sources, redis, monkeypatch):
     served, _ = league.offer(Db(), NOW)
     assert [g["key"] for g in served["results"]["games"]] == ["pitch:r3", "pitch:r2"]
     assert [g["key"] for g in served["coming"]["games"]] == ["pitch:c0"]
+
+
+def test_a_list_is_cut_after_the_sports_take_turns_so_a_smaller_sport_keeps_its_share(sources, redis, monkeypatch):
+    monkeypatch.setattr(league, "COMING", 4)
+    keep(redis, "arena", [game(f"arena:{i}", "scheduled", NOW + timedelta(hours=i + 1), 90 - i, "esports") for i in range(6)])
+    keep(redis, "pitch", [game("pitch:1", "scheduled", NOW + timedelta(days=3), 40)])
+    served, _ = league.offer(Db(), NOW)
+    assert [g["key"] for g in served["coming"]["games"]] == ["arena:0", "pitch:1", "arena:1", "arena:2"]
 
 
 def test_a_read_hours_old_is_served_and_read_again_a_days_old_one_isnt_served(sources, redis):
@@ -226,6 +247,24 @@ def test_cricket_ranks_internationals_and_finals_and_a_close_finish_says_so():
     assert rank(fixture("9", "scheduled", NOW, competition="Indian Premier League", detail="Qualifier 1")) == Notable(70, why="Playoffs")
 
 
+def test_a_cricket_match_to_come_whose_sides_are_both_still_to_be_decided_isnt_big_until_they_are():
+    rank = sports.BY_KEY["cricket"].notable
+    final = fixture("9", "scheduled", NOW + timedelta(days=7), competition="Triangular Series Final (UAE)", detail="Final", team_names=["TBC", "TBC"])
+    assert rank(final) is None
+    final.team_names = ["India", "TBC"]  # one semi-final is over
+    assert rank(final) == Notable(95, why="Final")
+    final.team_names = ["India", "Sri Lanka"]
+    assert rank(final) == Notable(95, why="Final")
+
+
+@pytest.mark.parametrize(("sides", "said"), [
+    (["TBC", "TBC"], True), (["TBA", "tbd"], True), (["", " "], True), (["To be confirmed", "TBC"], True),
+    (["India", "TBC"], False), (["TBC Warriors", "TBC"], False), ([], False),
+])
+def test_a_side_still_to_be_decided_is_read_from_its_name(sides, said):
+    assert sports.base.undecided(sides) is said
+
+
 def series(tier: int, detail: str, score: tuple[int, int] | None = None, forfeit: bool = False) -> Fixture:
     result = {"teams": [{"id": "1", "name": "Vitality", "score": score[0], "winner": score[0] > score[1]}, {"id": "2", "name": "FaZe", "score": score[1], "winner": score[1] > score[0]}],
               "forfeit": forfeit, "draw": False} if score else None
@@ -240,6 +279,14 @@ def test_esports_ranks_the_big_events_series_by_their_stage_and_a_series_that_we
     assert rank(series(2, "Bo3", (1, 2))) == Notable(48, word="2–1", line="FaZe beat Vitality", why="Decider")  # the winner's score first
     assert rank(series(1, "Grand final · Bo5")) is None  # a smaller event's
     assert rank(series(3, "Bo3", (2, 0), forfeit=True)) is None
+
+
+def test_an_esports_games_group_is_its_title_as_its_source_names_it():
+    rank = sports.BY_KEY["esports"].notable
+    valorant = series(3, "Grand final · Bo5")
+    valorant.facts = {"game": "Valorant"}
+    assert rank(valorant) == Notable(90, why="Grand final", group="Valorant")
+    assert rank(series(3, "Grand final · Bo5")) == Notable(90, why="Grand final")  # a source that doesn't say
 
 
 def test_esports_ranks_a_big_events_lobby_by_its_tier_and_names_its_winner():

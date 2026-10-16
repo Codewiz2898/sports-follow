@@ -69,6 +69,8 @@ def test_fixtures_read_both_teams_the_stage_and_the_result():
     assert (finished.status, finished.team_ids, finished.locator) == ("final", [str(SEN), str(NRG)], {"match": "777"})
     assert finished.start_utc == datetime(2026, 10, 11, 19, 12, tzinfo=timezone.utc)  # when it began
     assert finished.result["teams"][0] == {"id": str(SEN), "name": "Sentinels", "score": 2, "winner": True}
+    assert finished.facts == {"game": "Valorant"}  # its group among the big esports games (Sport.notable)
+    assert ps.parse_fixtures([{**FINAL, "videogame": {"id": 99, "slug": "unknown"}}])[0].facts == {}
     # A bracket slot still to be decided, and no prefix in the name: the tournament is the stage.
     assert (scheduled.title, scheduled.detail, scheduled.result) == ("Sentinels vs TBD", "Playoffs · Bo3", None)
     assert scheduled.start_utc == datetime(2026, 10, 11, 19, 0, tzinfo=timezone.utc)
