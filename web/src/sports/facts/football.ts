@@ -2,6 +2,10 @@ import type { SportFacts } from '.'
 
 export interface FootballSide { id: string; name: string; abbr?: string | null; score: string; scorers: string[] }
 export interface FootballState { kind: 'football'; home: FootballSide; away: FootballSide; detail?: string | null }
+// A match page's timeline (the server's Football.match_page): each goal and card, newest first, on the side it
+// counts for (0 home, 1 away). kind: GOAL, DISALLOWED (a goal VAR ruled out), YELLOW, RED.
+export interface TimelineEntry { clock: string; kind: string; text: string; side: 0 | 1 | null }
+export interface FootballPage { timeline?: TimelineEntry[] }
 
 export const football: SportFacts = {
   key: 'football',
