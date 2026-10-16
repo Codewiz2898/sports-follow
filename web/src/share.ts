@@ -11,7 +11,8 @@ export interface Shared { path: string; title: string; label: string }
 
 /**
  * The link a fan shares: `path` on the site at `site`, tagged as shared (s=share), so the app can count shares
- * once it counts visits. `path` may carry its own query: a game's is /player/<id>?g=<event id>.
+ * once it counts visits. `path` is a page's path with at most its own query (a game's is
+ * /player/<id>?g=<event id>): no `s` of its own and no fragment, since the tag is added to its end.
  */
 export function shareLink(site: string, path: string): string {
   return `${site.replace(/\/$/, '')}${path}${path.includes('?') ? '&' : '?'}s=share`
