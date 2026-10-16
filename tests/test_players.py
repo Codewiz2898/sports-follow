@@ -21,10 +21,10 @@ from sqlalchemy.orm import sessionmaker
 
 from types import SimpleNamespace
 
-from sports_follow import adapters, players, registry, sports, starters
+from sports_follow import adapters, bus, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Athlete, AthleteOverride, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -36,7 +36,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -178,6 +178,76 @@ def test_restoring_lets_the_import_bring_them_back(db, capsys):
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q213854"]
     assert players.main(["list"]) == 0 and "Nothing added or removed yet." in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- unmatching
+
+PHOTO = {"url": "/api/photos/abc.jpg", "credit": "Someone, CC BY 2.0"}
+
+
+def tenz(db) -> None:
+    """TenZ matched to a Wikidata person, with their photo, followed, his card showing it."""
+    db.add(Player(id=3, slug="tenz", name="TenZ", sport="Valorant"))
+    db.flush()
+    db.add_all([PlayerIdentity(player_id=3, system="wikidata", external_id="pandascore:20401", confidence=1.0), Follow(fan_id="a", player_id=3, alert_rules={}),
+                PlayerCard(player_id=3, status="ready", card={"player": {"name": "TenZ", "photo": PHOTO}}, version=1)])
+    registry.upsert(db, [athlete("pandascore:20401", "esports", "TenZ", {"pandascore_esports": "20401", "wikidata": "Q113450352"}, image="SEN TENZ 2023.jpg")])
+    db.commit()
+
+
+def test_unmatching_a_pro_takes_their_photo_off_at_once_and_rematching_takes_it_back(db, capsys, monkeypatch):
+    tenz(db)
+    published: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", published.__setitem__)
+    assert players.main(["unmatch", "3", "--note", "someone else's face"]) == 0
+    out = capsys.readouterr().out
+    assert "Took back TenZ (esports, pandascore:20401); no run matches them to anyone again." in out and "Took the photo off 1 followed card(s)." in out
+    db.expire_all()
+    [a] = db.scalars(select(Athlete)).all()
+    assert a.ids == {"pandascore_esports": "20401"} and a.image is None
+    card = db.get(PlayerCard, 3)
+    assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}  # off the fans' screens too
+    [u] = db.scalars(select(AthleteUnmatch)).all()
+    assert (u.qid, u.sport, u.person, u.note) == ("pandascore:20401", "esports", None, "someone else's face")
+    assert players.main(["list"]) == 0 and "pandascore:20401      TenZ  not anyone  (someone else's face)" in capsys.readouterr().out
+
+    assert players.main(["unmatch", "pandascore_esports:20401", "Q113450352"]) == 0  # by source id, and only that person
+    assert "Nothing to take back now for TenZ (esports, pandascore:20401) (not matched to Q113450352)" in capsys.readouterr().out
+    assert sorted((u.person or "") for u in db.scalars(select(AthleteUnmatch))) == ["", "Q113450352"]
+    assert players.main(["rematch", "pandascore:20401", "Q113450352"]) == 0 and "No longer unmatched from Q113450352: TenZ" in capsys.readouterr().out
+    assert players.main(["rematch", "pandascore:20401"]) == 0 and "No longer unmatched from anyone: TenZ" in capsys.readouterr().out
+    assert not db.scalars(select(AthleteUnmatch)).all()
+    assert players.main(["rematch", "pandascore:20401"]) == 2 and "no match of pandascore:20401 was taken back" in capsys.readouterr().err
+
+
+def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):
+    tenz(db)
+    assert players.main(["unmatch", "pandascore:20401", "Q1"]) == 0  # he's matched to Q113450352
+    db.expire_all()
+    assert db.scalars(select(Athlete)).one().image == "SEN TENZ 2023.jpg" and db.scalars(select(AthleteUnmatch.person)).all() == ["Q1"]
+
+
+def test_unmatching_refuses_what_isnt_a_matched_registry_athlete(db, capsys):
+    kohli(db)
+    assert players.main(["unmatch", "Q213854"]) == 2 and "came from Wikidata itself" in capsys.readouterr().err
+    assert players.main(["unmatch", "pandascore:404"]) == 2 and "no registry athlete has that id" in capsys.readouterr().err
+    tenz(db)
+    assert players.main(["unmatch", "3", "TenZ"]) == 2 and "isn't a Wikidata id" in capsys.readouterr().err
+    assert not db.scalars(select(AthleteUnmatch)).all()
+
+
+def test_an_unmatch_stands_apart_from_keeping_and_removing(db, capsys, monkeypatch):
+    tenz(db)
+    monkeypatch.setattr(bus, "store_card", lambda *_: None)
+    assert players.main(["add", "pandascore:20401"]) == 0 and players.main(["unmatch", "pandascore:20401"]) == 0
+    db.expire_all()
+    assert [o.action for o in db.scalars(select(AthleteOverride))] == ["keep"] and len(db.scalars(select(AthleteUnmatch)).all()) == 1
+    # Removed and restored, he comes back unmatched: the wrong face doesn't.
+    assert players.main(["remove", "pandascore:20401", "--yes"]) == 0 and players.main(["restore", "pandascore:20401"]) == 0
+    db.expire_all()
+    assert not db.scalars(select(AthleteOverride)).all() and db.scalars(select(AthleteUnmatch.qid)).all() == ["pandascore:20401"]
+    # Rematching works by the registry id though the row is gone.
+    assert players.main(["rematch", "pandascore:20401"]) == 0
 
 
 # ---------------------------------------------------------------- starters

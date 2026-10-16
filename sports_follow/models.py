@@ -136,6 +136,25 @@ class AthleteOverride(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class AthleteUnmatch(Base):
+    """An operator's word that a registry athlete isn't the Wikidata person roster_wikidata.py matched them
+    to for their photo (players unmatch): no run matches them to that person again, or to anyone (person
+    None). Apart from athlete_override, whose one decision per athlete is keep or remove: a kept athlete can
+    be unmatched too, and removing an athlete leaves this, so restoring them doesn't bring the face back.
+    """
+
+    __tablename__ = "athlete_unmatch"
+    __table_args__ = (UniqueConstraint("qid", "sport", "person", postgresql_nulls_not_distinct=True),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id: "pandascore:20401"
+    sport: Mapped[str] = mapped_column(String(20))
+    person: Mapped[str | None] = mapped_column(String(20))  # the Wikidata person they aren't: "Q113450352"; None: anyone
+    name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+
+
 class Starter(Base):
     """A registry athlete offered to a new fan, who follows nobody yet, in their sport's starter picker
     (starters.py; the operator sets them with `players starter`). Removing the athlete takes the row too."""

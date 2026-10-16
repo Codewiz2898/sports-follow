@@ -641,7 +641,7 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
 | Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
-| Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`: see the README) |
+| Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |
 | Restore a backup | `c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists < /var/backups/sports-follow/<file>.dump && c run --rm migrate && c start api worker` (off-site ones: [Off-site backups](#off-site-backups)) |
 | Off-site backups | `deploy/offsite-backup.sh list`; run now: `sudo systemctl start sports-follow-offsite`; log: `sudo journalctl -u sports-follow-offsite` |

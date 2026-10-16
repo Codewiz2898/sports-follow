@@ -61,7 +61,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and never where two people fit one pro or one person two pros. It records the Wikidata id in the pro's
   `ids` and the photo file in `image`, which the weekly roster leaves alone. On 16 Oct 2026, 542 of
   41,870 pros matched, 238 of them with a photo (TenZ, ZywOo, Faker, s1mple…).
-  `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match. A run by hand
+  `python -m sports_follow.roster_wikidata --dry-run --show 20` shows what it would match, and
+  `players unmatch` takes a wrong one back (below). A run by hand
   takes the weekly run's lock, so it refuses to start while that one is going; a sport (or esports
   source) that fails keeps last week's rows and the rest still run.
 - **Player photos from Wikimedia Commons, on the profile only.** A player's page, and the preview of an
@@ -295,7 +296,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
-  for following.
+  for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
+  shown with someone else's face: it takes the match and photo back at once (off followed cards too) and
+  no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
+  `rematch <ref> [Q…]` takes that back, and the next weekly run may match them again. Unmatches are rows
+  in `athlete_unmatch`, apart from the keep and remove decisions: a kept pro can be unmatched, and a
+  removed one stays unmatched, so restoring them doesn't bring the face back.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
