@@ -169,6 +169,45 @@ class Starter(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class Campaign(Base):
+    """A campaign page at /<slug> (stann.in/gukesh): a big event's players, or whole teams, to follow in one tap,
+    its games and a few lines of copy (campaigns.py; the operator sets them with `python -m
+    sports_follow.campaigns`). A campaign is a row, never code: a new event is a new row."""
+
+    __tablename__ = "campaign"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(40), unique=True)  # its address: "gukesh" is stann.in/gukesh
+    sport: Mapped[str] = mapped_column(String(20))  # the registry's sport key: its players', and its colour
+    title: Mapped[str] = mapped_column(String(80))  # "Gukesh v Sindarov", in big type
+    event: Mapped[str | None] = mapped_column(String(120))  # "World Chess Championship", above it
+    lines: Mapped[list] = mapped_column(JSONB, default=list)  # a few lines of copy, in order
+    players: Mapped[list] = mapped_column(JSONB, default=list)  # registry ids (Athlete.qid) of its sport, in order
+    # Whole teams, each as its source lists it and its roster as last read: {"system", "team_id", "name",
+    # "game", "players": [{"athlete_id", "name", "league"}], "read_at"}.
+    teams: Mapped[list] = mapped_column(JSONB, default=list)
+    games: Mapped[list] = mapped_column(JSONB, default=list)  # its schedule: {"start_utc", "label"}, in order
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class FanSource(Base):
+    """Where a fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
+    utm_campaign) and the page it led to, kept with their fan id (server.visit_source), and moved to their
+    account when they sign in. What BHA-239's launch numbers count by."""
+
+    __tablename__ = "fan_source"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), unique=True)
+    tag: Mapped[str | None] = mapped_column(String(60))  # s=: "share", or a post's own
+    utm_source: Mapped[str | None] = mapped_column(String(60))
+    utm_medium: Mapped[str | None] = mapped_column(String(60))
+    utm_campaign: Mapped[str | None] = mapped_column(String(60))
+    landing: Mapped[str] = mapped_column(String(200))  # the page's path: "/gukesh"
+    created_at: Mapped[datetime] = _now()
+
+
 class Photo(Base):
     """A player's photo from Wikimedia Commons, by the registry's file name (Athlete.image): what Commons
     says about it, and its thumbnail once its licence lets fans see it (photos.py)."""

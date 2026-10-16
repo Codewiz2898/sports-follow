@@ -397,6 +397,61 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .back-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 32px; }
 .back-link:hover { color: var(--text); }
 
+/* ---------------------------------------------------------------- campaign page (CampaignPage.tsx) */
+/* The event in a block of its sport's colour, edge to edge on a phone, as a player's page has; then who to
+   follow, its alerts, its games and how to get alerts on a phone. */
+.campaign { display: flex; flex-direction: column; gap: 18px; }
+.campaign-band { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; margin: calc(-20px - env(safe-area-inset-top, 0px)) calc(-1 * var(--gutter)) 0; padding: calc(14px + env(safe-area-inset-top, 0px)) var(--gutter) 22px; background: var(--sport); color: var(--on-sport); border-radius: 0 0 28px 28px; --focus: var(--on-sport); }
+.campaign-band > :not(.backdrop) { position: relative; }
+.campaign-band .backdrop { color: var(--on-sport); opacity: 0.16; --bd-size: 1.6; }
+.campaign-band .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; }
+.campaign-brand { font-family: var(--logo); font-weight: 600; font-size: 26px; line-height: 1; letter-spacing: -0.01em; }
+.pill.on-sport { background: var(--on-sport); color: var(--sport); }
+.campaign-title { font-size: clamp(54px, 16vw, 84px); overflow-wrap: anywhere; padding-right: 0.08em; }
+.campaign-lines { display: flex; flex-direction: column; gap: 6px; max-width: 42ch; font-size: 16px; font-weight: 700; line-height: 1.4; }
+.campaign-next { padding-top: 12px; border-top: 2px solid color-mix(in srgb, currentColor 22%, transparent); font-weight: 700; }
+.notice ~ .campaign > .campaign-band { margin-top: 0; border-radius: 28px; }
+@media (min-width: 1024px) {
+  .campaign-band { margin: 0; padding: 22px 28px 28px; border-radius: 28px; }
+  .campaign-brand { visibility: hidden; }  /* the sidebar has the logo */
+  .campaign-title { font-size: 104px; }
+}
+/* The players, side by side for a versus. */
+.campaign-players { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.campaign-players.versus { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tile.pick.campaign-player { min-height: 148px; }
+.tile.pick.campaign-player .name { font-size: 30px; overflow-wrap: anywhere; }
+@media (min-width: 640px) { .tile.pick.campaign-player .name { font-size: 40px; } }
+.btn.campaign-all { width: 100%; height: 52px; font-size: 15px; }
+.btn.campaign-all[aria-pressed='true'] { background: transparent; color: var(--text); }
+.btn.campaign-all .spinner { border-color: color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; }
+/* A whole team: its name, its roster's players to follow one by one, and all of them in one tap. */
+.campaign-teams { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+@media (min-width: 720px) { .campaign-teams { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.campaign-team { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px 18px; border-radius: var(--radius-card); background: var(--sport); color: var(--on-sport); --focus: var(--on-sport); }
+.campaign-team .team-name { font-size: 44px; overflow-wrap: anywhere; }
+.campaign-team .tag { flex-shrink: 0; }
+.campaign-team .who { display: flex; flex-wrap: wrap; gap: 6px; }
+.campaign-team .follow-pill { height: 34px; padding: 0 12px; background: transparent; color: var(--on-sport); box-shadow: inset 0 0 0 2px var(--on-sport); font-size: 13px; }
+.campaign-team .follow-pill[aria-pressed='true'] { background: var(--on-sport); color: var(--sport); }
+.campaign-team .follow-pill .spinner { border-color: color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; }
+.btn.campaign-all.on-sport { border-color: var(--on-sport); background: var(--on-sport); color: var(--sport); }
+.btn.campaign-all.on-sport[aria-pressed='true'] { background: transparent; color: var(--on-sport); }
+/* After a follow: turn alerts on. Ink, so it stands apart from the sport's blocks. */
+.campaign-alerts { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border-radius: var(--radius-card); background: var(--text); color: var(--bg); --focus: var(--bg); }
+.campaign-alerts .btn.primary { border-color: var(--bg); background: var(--bg); color: var(--text); }
+.campaign-alerts .spinner { border-color: rgba(13, 13, 13, 0.18); border-top-color: currentColor; }
+.campaign-alerts.on { flex-direction: row; align-items: center; background: var(--surface); color: var(--text); font-weight: 700; }
+/* Its games, in the home audience's time; the next one marked in the sport's colour, past days muted. */
+.campaign-games { list-style: none; margin: 0; padding: 4px 16px; display: flex; flex-direction: column; border-radius: var(--radius-card); background: var(--surface); }
+.campaign-games li { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.campaign-games li:last-child { border-bottom: 0; }
+.campaign-games .label { font-size: 24px; }
+.campaign-games .when { font-weight: 700; }
+.campaign-games li.next::before { content: ""; position: absolute; left: -16px; top: 10px; bottom: 10px; width: 5px; border-radius: 0 3px 3px 0; background: var(--sport); }
+.campaign-games li.past { color: var(--muted); }
+.campaign-how > li { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+
 /* ---------------------------------------------------------------- player page */
 /* The header is a block of the sport's colour, edge to edge on a phone. */
 .player-band { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 16px; margin: calc(-20px - env(safe-area-inset-top, 0px)) calc(-1 * var(--gutter)) 0; padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter) 22px; background: var(--sport); color: var(--on-sport); border-radius: 0 0 28px 28px; }

@@ -1266,3 +1266,77 @@ def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_agai
     assert answer.json()["refreshing"] is False and answer.headers["cache-control"] == "public, max-age=60"
     assert zones == [330, 0, 0]  # the fan's UTC offset in minutes, for their days; none is UTC's
     assert api.call("GET", "/api/league?tz=9999").status_code == 422
+
+
+# ---------------------------------------------------------------- campaign pages (campaigns.py)
+
+
+def _row(key: str, name: str, player_id: int | None = None, following: bool = False) -> dict:
+    system, _, athlete_id = key.partition(":")
+    return {"key": key, "name": name, "sport": "Esports", "detail": "", "system": system, "athlete_id": athlete_id, "league": "league-of-legends",
+            "player_id": player_id, "following": following, "qid": None}
+
+
+WORLDS = {"slug": "worlds", "sport": "esports", "title": "Worlds final", "event": None, "lines": [], "games": [], "zone": {"name": "Asia/Kolkata", "label": "IST"},
+          "players": [], "teams": [{"team_id": "126061", "name": "T1", "game": "League of Legends", "players": [
+              _row("pandascore_esports:585", "Faker", 3, True), _row("pandascore_esports:9", "Zeus", 4), _row("pandascore_esports:10", "Oner"),
+              _row("pandascore_esports:11", "Gone"), _row("pandascore_esports:12", "Broken")]}]}
+
+
+def test_a_campaign_page_is_its_rows_for_this_fan_and_none_at_an_address_that_isnt_one(api, monkeypatch):
+    from sports_follow import campaigns
+
+    asked = []
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: asked.append((slug, fan)) or (WORLDS if slug == "worlds" else None))
+    got = api.call("GET", "/api/campaigns/worlds", fan="fan")
+    assert got.status_code == 200 and got.json() == WORLDS
+    assert api.call("GET", "/api/campaigns/nope", fan="fan").status_code == 404
+    assert api.call("GET", "/api/campaigns/NOT..ONE", fan="fan").status_code == 404
+    assert asked == [("worlds", "fan"), ("nope", "fan")]
+
+
+def test_following_a_whole_team_follows_each_player_on_its_roster_with_key_alerts(api, monkeypatch):
+    from sports_follow import campaigns
+
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: WORLDS if slug == "worlds" else None)
+    picked = []
+
+    async def follow_athlete(body, fan, address):
+        picked.append((body, fan))
+        if body["athlete_id"] == "11":
+            raise server.HTTPException(404, "That athlete isn't in the source any more.")
+        if body["athlete_id"] == "12":
+            raise TimeoutError("no pooled connection")  # not the API's own refusal: still one player's failure only
+        return 20 + len(picked)
+
+    monkeypatch.setattr(server, "_follow_athlete", follow_athlete)
+    # Zeus's card is still building: following him asks for the build again, as /api/follows does.
+    real = Db.scalar
+    monkeypatch.setattr(Db, "scalar", lambda self, stmt: "building" if stmt.column_descriptions[0]["expr"] is PlayerCard.status else real(self, stmt))
+    got = api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "126061"})
+    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 21], "failed": 2}
+    # Faker was followed already; Zeus is on Sports Follow, so one follow row with the default (key) alerts;
+    # the rest through their source, by its ids, never by name.
+    inserts = [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow"]
+    assert [(_param(s, "fan_id"), _param(s, "player_id"), _param(s, "alert_rules")) for s in inserts] == [("fan", 4, {})]
+    assert ("build_card", 4) in api.queue.jobs
+    assert [b["athlete_id"] for b, _ in picked] == ["10", "11", "12"]
+    assert picked[0][0] == {"system": "pandascore_esports", "athlete_id": "10", "league": "league-of-legends", "qid": None}
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "999"}).status_code == 404
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": 126061}).status_code == 400
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={}).status_code == 400
+    assert api.call("POST", "/api/campaigns/nope/follow", fan="fan", body={"players": True}).status_code == 404
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"players": True}).json() == {"player_ids": [], "failed": 0}  # no players of its own
+
+
+def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
+    def kept() -> list[dict]:
+        return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
+
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "<b>", "path": "/gukesh"}).json() == {"ok": True}
+    assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
+    insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
+    assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
+    for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
+        assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
+    assert len(kept()) == 1

@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Card, Credits, FollowTarget, Form, GameDetail, League, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowTarget, Form, GameDetail, League, LiveSport, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -61,5 +61,11 @@ export function endpoints(request: Request) {
     signOut: (everywhere = false) => request<{ signed_in: false }>('/api/auth/signout', json('POST', { everywhere })),
     deleteAccount: () => request<{ deleted: boolean }>('/api/me/account', json('DELETE', { confirm: true })),
     credits: () => request<Credits>('/api/credits'),
+    campaign: (slug: string) => request<Campaign>(`/api/campaigns/${encodeURIComponent(slug)}`),
+    /** Follow a whole team on a campaign page (its roster's players), or all of its own players, in one call. */
+    campaignFollow: (slug: string, which: { team: string } | { players: true }) =>
+      request<{ player_ids: number[]; failed: number }>(`/api/campaigns/${encodeURIComponent(slug)}/follow`, json('POST', which)),
+    /** Where this fan came from: the first link's tags (s=, utm_…) and its page; the server keeps the first. */
+    visitSource: (tags: Record<string, string>, path: string) => request<{ ok: boolean }>('/api/me/source', json('POST', { ...tags, path })),
   }
 }

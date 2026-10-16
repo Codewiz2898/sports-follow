@@ -4,7 +4,8 @@ The app is one page that draws itself in the browser, but a link preview is read
 no JavaScript. So the server writes each page's Open Graph and Twitter card tags into the page itself
 (server.spa): a player's page (/player/<id>) says who they are and what they're doing now, live, last or
 next; a game of theirs (/player/<id>?g=<event id>, the link a This week poster shares) says its big moment,
-as This week words it (week.game, Sport.poster); every other page says what the app is.
+as This week words it (week.game, Sport.poster); a campaign page (/<slug>, campaigns.py) says its event, its
+next game and who to follow; every other page says what the app is.
 
 Each has a 1200 × 630 picture, drawn here: a block of the sport's colour (Sport.colour) with the words in
 the app's own type (Anton, slanted, for the name and the moment's word; Manrope for the lines) and a paper
@@ -28,7 +29,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import sports
+from . import campaigns, sports
 from .config import APP_NAME
 
 FONTS = Path(__file__).resolve().parent / "data" / "fonts"
@@ -142,6 +143,31 @@ def of_game(card: dict[str, Any], poster: dict[str, Any]) -> Preview | None:
         path=f"/player/{poster['player_id']}?g={poster['event_id']}",
         picture=Picture(ground, ink, label, poster["word"], name, tuple(line for line in (poster["line"], game) if line)),
         image=f"/api/players/{poster['player_id']}/share.png?g={poster['event_id']}",
+    )
+
+
+def _and(names: list[str]) -> str:
+    """ "A", "A and B", "A, B and C"."""
+    return " and ".join(names) if len(names) < 3 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def of_campaign(shown: dict[str, Any]) -> Preview:
+    """A campaign page (campaigns.page): its title in big type on its sport's colour, the event on the tag,
+    then its next game in the home audience's time and who to follow."""
+    ground, ink = _colours(sports.of(shown["sport"]))
+    nxt = campaigns.next_game(shown)
+    game = f"{nxt['label']}: {campaigns.said(nxt['start_utc'])}" if nxt else ""
+    names = [r["name"] for r in shown["players"]] or [t["name"] for t in shown["teams"]]
+    follow = f"Follow {_and(names)}" if names else ""
+    event = shown.get("event") or ""
+    said = " ".join(x for x in (_sentence(event) if event else "", _sentence(game) if game else "", *(shown["lines"][:1]),
+                                f"{follow} on {APP_NAME}: live boards and alerts." if follow else f"Live boards and alerts on {APP_NAME}.") if x)
+    return Preview(
+        title=f"{shown['title']} · {event}" if event else shown["title"],
+        description=said,
+        path=f"/{shown['slug']}",
+        picture=Picture(ground, ink, event or sports.label(shown["sport"]), shown["title"], "", tuple(x for x in (game, follow) if x)),
+        image=f"/api/campaigns/{shown['slug']}/share.png",
     )
 
 
