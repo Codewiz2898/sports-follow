@@ -100,7 +100,8 @@ queued (an `adopt_stragglers` after sign-in) are lost for good.
 
 `research:<fan_id>:<day>` (3 AI researches a day), `research-address:*`, `research-hour:*`,
 `sourcesearch:*`, `weberrors:*`, `auth-*` (sign-in codes and their limits, keyed by a hash of the
-email), `session:<hash>` (a signed-in session, cached 10 min).
+email), `session:<hash>` (a signed-in session, cached 10 min; `""` means not signed in, which includes
+a session that ended in the last 10 min).
 
 Deleting these gives away spend (model, email, source) or voids a sign-in code. **Never edit
 `session:*`**: it could sign a device in as someone else.
