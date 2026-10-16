@@ -5,7 +5,7 @@
 export interface Stat { label: string; value: string }
 
 /** A player's photo from Wikimedia Commons, served from our own copy (sports_follow/photos.py), and the
- * credit its licence asks for, shown with it: "Photo: <author>, <licence>, Wikimedia Commons". */
+ * credit its licence asks for, shown with it: "Photo: <author>, <licence>, Wikimedia Commons, cropped". */
 export interface Photo {
   url: string
   credit: string

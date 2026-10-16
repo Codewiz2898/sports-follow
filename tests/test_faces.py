@@ -112,8 +112,12 @@ def test_a_close_up_shows_the_widest_square_the_photo_has():
 
 
 def test_a_tiny_face_is_not_blown_up_past_the_closest_crop():
-    framed = photos.framing(960, 1440, {"x": 0.5, "y": 0.3, "w": 0.02, "h": 0.02})
-    assert round(framed["crop"]["w"] * 960) == photos.CLOSEST
+    tiny = {"x": 0.5, "y": 0.3, "w": 0.02, "h": 0.02}
+    framed = photos.framing(960, 1440, tiny)["crop"]
+    assert abs(framed["w"] - photos.CLOSEST) < 1e-4
+    # A share of the width: a thumbnail kept at 330 pixels (before WIDTH changed) is framed alike.
+    small = photos.framing(330, 495, tiny)["crop"]
+    assert all(abs(small[k] - framed[k]) < 1e-3 for k in "xywh")
 
 
 def test_a_face_at_a_corner_keeps_the_square_inside_the_photo():

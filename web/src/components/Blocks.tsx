@@ -28,8 +28,8 @@ function PlayerPhoto({ photo, onError }: { photo: Photo; onError: () => void }) 
   )
 }
 
-/** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons", linking to
- * the file's page on Commons. */
+/** A shown photo's credit, as its licence asks: "Photo: <author>, <licence>, Wikimedia Commons, cropped",
+ * linking to the file's page on Commons. */
 function PhotoCredit({ photo }: { photo: Photo }) {
   const href = safeHref(photo.page)
   return href

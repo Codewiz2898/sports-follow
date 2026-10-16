@@ -18,13 +18,13 @@ Where the face is tells the app how to frame a photo (framing): the profile show
 head and shoulders, rather than the top of a photo that might be a full-length action shot. A photo with
 no face found is shown from near its top.
 
-The app shows each photo in its own colours, cropped to the band around the face (as any picture fitted
-to a page is) and fading into the band at its left edge; nothing else in it changes. So a credit names no
-change: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons", linking to the whole file on Commons, and
-the Credits page says once that photos are cropped and faded (credits.PHOTO_NOTICES). Were the app to
-change a photo beyond that (recolour it, say), its credit would have to say so, as CC BY and CC BY-SA ask.
-The Credits page lists every photo in use. A photo shows who a player is; it doesn't mean they endorse
-the app.
+The app shows each photo in its own colours, cropped to the band around the face and fading into the band
+at its left edge; nothing else in it changes. CC BY and CC BY-SA ask that a change be said, so each credit
+says the crop, under the photo wherever it shows: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons,
+cropped", linking to the whole file on Commons. The Credits page lists every photo in use and says how
+they're cropped and faded (credits.PHOTO_NOTICES). Were the app to change a photo beyond that (recolour
+it, say), its credit would have to say that too. A photo shows who a player is; it doesn't mean they
+endorse the app.
 
 Never a data provider's photos (their terms don't license them), and never generated likenesses.
 
@@ -61,18 +61,20 @@ API = "https://commons.wikimedia.org/w/api.php"
 # pixels across, 600 on a 2x phone, and that square is most of a photo's width (60% to all of it), so 960
 # shows it about pixel for pixel (a thumbnail about 290 KB; 1280 doubles that for little more).
 WIDTH = 960
+SMALLER = (500, 330)  # the sizes Wikimedia keeps a thumbnail over MAX_BYTES (a PNG photo) is fetched at instead
 BATCH = 50  # files a Commons API request asks about (its limit)
 PER_RUN = 100  # files a run asks about at most; the rest wait for the next
 PAUSE = 0.5  # seconds between thumbnail downloads
 REFETCH_DAYS = 90
 RETRY = timedelta(days=1)
 FORGET_DAYS = 30
-MAX_BYTES = 2_000_000
+MAX_BYTES = 2_000_000  # a thumbnail's most, as fans' phones download it
 FILL = 0.4  # how much of the profile's square the face takes: head and shoulders
 RAISE = 0.1  # how far the square's centre sits above the face's, in face sizes, so the hair isn't cut off
-# The fewest thumbnail pixels the square spans, so a far-off face isn't blown up to a blur: 120 of a
-# 330-pixel thumbnail, the same share of a WIDTH one.
-CLOSEST = 120 * WIDTH // 330
+# The least of a photo's width the square spans, so a far-off face isn't blown up to a blur: 120 pixels of a
+# 330-pixel thumbnail. A share, so a thumbnail of any width (one kept before WIDTH changed, or a file Commons
+# has only smaller) is framed alike.
+CLOSEST = 120 / 330
 LOCK = "photos"
 TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 # The licences kept, by Commons' code: "cc-by-sa-4.0", "cc-by-2.0", "cc-by-sa-3.0-de", "cc0", "pd". A
@@ -85,6 +87,10 @@ _client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=30, follow_re
 
 class Unavailable(Exception):
     """Commons didn't answer, or asked us to wait: the rest of this run waits for the next."""
+
+
+class TooBig(ValueError):
+    """A thumbnail over MAX_BYTES."""
 
 
 @dataclass
@@ -195,9 +201,23 @@ def download(url: str) -> tuple[bytes, str]:
     media = res.headers.get("content-type", "").split(";")[0].strip()
     if media not in TYPES:
         raise ValueError(f"thumbnail is {media or 'of no type'}")
-    if not res.content or len(res.content) > MAX_BYTES:
-        raise ValueError(f"thumbnail is {len(res.content)} bytes")
+    if not res.content:
+        raise ValueError("thumbnail is 0 bytes")
+    if len(res.content) > MAX_BYTES:
+        raise TooBig(f"thumbnail is {len(res.content)} bytes")
     return res.content, media
+
+
+def thumbnail(url: str) -> tuple[bytes, str]:
+    """A thumbnail's bytes and media type at WIDTH, or at the first size of SMALLER that's under MAX_BYTES
+    when that one isn't (a PNG photo: Commons keeps its thumbnails PNG)."""
+    sizes = (WIDTH, *SMALLER) if f"/{WIDTH}px-" in url else (WIDTH,)  # not a thumbnail: Commons' own file
+    for width in sizes[:-1]:
+        try:
+            return download(url.replace(f"/{WIDTH}px-", f"/{width}px-"))
+        except TooBig:
+            pass
+    return download(url.replace(f"/{WIDTH}px-", f"/{sizes[-1]}px-"))
 
 
 # ---------------------------------------------------------------- whose photos
@@ -238,8 +258,12 @@ def wanted(db: Session) -> dict[str, str]:
 
 
 def _due(photo: Photo | None, now: datetime) -> bool:
-    if photo is None or (photo.status == "ok" and photo.asked_width != WIDTH):
+    """A file not asked about yet; one kept at another width than WIDTH at once, or a day after fetching it
+    again failed (its reason says why); one that failed a day ago; any other every REFETCH_DAYS."""
+    if photo is None:
         return True
+    if photo.status == "ok" and photo.asked_width != WIDTH:
+        return photo.reason is None or photo.fetched_at < now - RETRY
     return photo.fetched_at < now - (RETRY if photo.status == "failed" else timedelta(days=REFETCH_DAYS))
 
 
@@ -247,13 +271,14 @@ def _due(photo: Photo | None, now: datetime) -> bool:
 
 
 def credit(photo: Photo) -> str:
-    """ "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons": the app shows each one as it is, framed."""
-    return f"Photo: {photo.author or 'unknown author'}, {photo.licence}, Wikimedia Commons"
+    """ "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, cropped": the app shows each one cropped to the
+    band, and changed in no other way."""
+    return f"Photo: {photo.author or 'unknown author'}, {photo.licence}, Wikimedia Commons, cropped"
 
 
 def framing(width: int | None, height: int | None, face: dict[str, float] | None) -> dict[str, Any]:
     """{"crop": the square around the player's face the profile shows, head and shoulders}: FILL of it
-    face, a little above the middle, never closer than CLOSEST pixels across and never past the photo's
+    face, a little above the middle, never closer than CLOSEST of its width across and never past the photo's
     edges, as {x, y, w, h}, fractions of the photo's width and height. A full-length action shot then
     shows the player's face as a headshot does. {} when no face was found: the profile shows the photo
     from near its top."""
@@ -261,7 +286,7 @@ def framing(width: int | None, height: int | None, face: dict[str, float] | None
         return {}
     x, y = (face["x"] + face["w"] / 2) * width, (face["y"] + face["h"] / 2) * height
     size = max(face["w"] * width, face["h"] * height)
-    side = min(max(size / FILL, CLOSEST), width, height)
+    side = min(max(size / FILL, CLOSEST * width), width, height)
     left, top = min(max(x - side / 2, 0), width - side), min(max(y - RAISE * size - side / 2, 0), height - side)
     return {"crop": {"x": round(left / width, 4), "y": round(top / height, 4), "w": round(side / width, 4), "h": round(side / height, 4)}}
 
@@ -335,24 +360,30 @@ def serve(db: Session, name: str) -> tuple[bytes, str] | None:
 
 def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: Photo | None) -> Photo:
     """Write what Commons said, downloading the thumbnail when it's new, or was kept at another width (look()
-    then finds its face); a photo no longer free to show loses its bytes."""
+    then finds its face); a photo no longer free to show loses its bytes. One kept at another width that
+    can't be fetched again keeps showing as it was, and is tried again in a day."""
     photo = known or Photo(file=file)
     if known is None:
         db.add(photo)
     photo.name = name
-    same = info.status == "ok" and photo.status == "ok" and photo.digest and photo.source_sha1 == info.sha1 and photo.asked_width == WIDTH
+    kept = info.status == "ok" and photo.status == "ok" and bool(photo.digest) and photo.source_sha1 == info.sha1  # this upload's
     photo.status, photo.reason, photo.fetched_at = info.status, info.reason, now
     photo.licence, photo.licence_url, photo.author, photo.page, photo.source_sha1 = info.licence, info.licence_url, info.author, info.page, info.sha1
     if info.status != "ok":
         photo.data = photo.digest = photo.media_type = photo.asked_width = photo.width = photo.height = photo.face = None
-    elif not same:
-        photo.width = photo.height = photo.face = None
+    elif not (kept and photo.asked_width == WIDTH):
         try:
-            data, media = download(info.thumb or "")
+            data, media = thumbnail(info.thumb or "")
         except ValueError as exc:
-            photo.status, photo.reason, photo.data, photo.digest, photo.media_type, photo.asked_width = "failed", str(exc), None, None, None, None
+            if kept:
+                photo.reason = f"not fetched again at {WIDTH} pixels: {exc}"
+                log.warning("photos: %s kept at its old width: %s", file, exc)
+            else:
+                photo.status, photo.reason, photo.data, photo.digest, photo.media_type, photo.asked_width = "failed", str(exc), None, None, None, None
+                photo.width = photo.height = photo.face = None
             return photo
         photo.data, photo.media_type, photo.digest, photo.asked_width = data, media, hashlib.sha256(data).hexdigest()[:32], WIDTH
+        photo.width = photo.height = photo.face = None
         time.sleep(PAUSE)
     return photo
 

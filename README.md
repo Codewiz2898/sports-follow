@@ -81,8 +81,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
   that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app shows
   each photo in its own colours, cropped around the face and fading into the band, and changes nothing
-  else, so its credit names no change: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons", under the
-  photo, linking to the file's page. The Credits page lists them all and says once that they're cropped and faded. Players without a photo show none. Never a
+  else; its credit says the crop, as CC BY and CC BY-SA ask: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia
+  Commons, cropped", under the photo, linking to the file's page. The Credits page lists them all and says
+  how they're cropped and faded. Players without a photo show none. Never a
   data provider's photos (their terms don't license them), and never generated likenesses.
   The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
   detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker

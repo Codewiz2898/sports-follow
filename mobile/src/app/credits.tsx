@@ -57,7 +57,7 @@ function PhotoList({ items }: { items: PhotoCredit[] }) {
               <Text onPress={open(p.page)} style={open(p.page) && t.link}>Photo</Text>
               {` by ${p.author}, `}
               <Text onPress={open(p.licence_url)} style={open(p.licence_url) && t.link}>{p.licence}</Text>
-              {', from Wikimedia Commons'}
+              {', from Wikimedia Commons, cropped'}
             </Text>
           </View>
         ))}
