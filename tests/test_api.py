@@ -257,6 +257,14 @@ def api(monkeypatch):
     return fake
 
 
+def test_health_says_which_commit_the_image_was_built_from(api, monkeypatch):
+    """The deploy workflow checks that the site runs the commit it approved, and its summary reads what's live."""
+    monkeypatch.setattr(server, "COMMIT", "e511e300f75e19bde25601d9a5cbcc1b69859943")
+    assert api.call("GET", "/api/health").json()["commit"] == "e511e300f75e19bde25601d9a5cbcc1b69859943"
+    monkeypatch.setattr(server, "COMMIT", "")  # running from a checkout
+    assert api.call("GET", "/api/health").json()["commit"] is None
+
+
 # ---------------------------------------------------------------- AI research (BUG-011)
 
 

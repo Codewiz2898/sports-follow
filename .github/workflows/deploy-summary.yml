@@ -1,0 +1,34 @@
+# Every morning, while a deploy waits for your approval: what it brings, the issues it closes, whether CI
+# passed, and the link to approve it (deploy/deploy-summary.sh). By email through Resend (RESEND_KEY and
+# DEPLOY_SUMMARY_TO), as a push to an ntfy topic (DEPLOY_SUMMARY_URL), or both: repository secrets, not
+# the production environment's, which would make this wait for approval too. Nothing when none waits.
+# Run it by hand to send one now (Actions → Deploy summary → Run workflow).
+name: Deploy summary
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # 09:00 in India
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read          # the waiting Deploy run, and CI's
+  deployments: read      # the last deploy
+  pull-requests: read    # what each pull request brings
+
+jobs:
+  summary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0       # the commits since the live one
+          filter: blob:none    # their messages, not their files
+      - name: Send it, if a deploy is waiting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          DEPLOY_SUMMARY_TO: ${{ secrets.DEPLOY_SUMMARY_TO }}
+          DEPLOY_SUMMARY_URL: ${{ secrets.DEPLOY_SUMMARY_URL }}
+        run: deploy/deploy-summary.sh --send
