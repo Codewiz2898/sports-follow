@@ -4,10 +4,10 @@
 
 import { router } from 'expo-router'
 import { useState, type ReactNode } from 'react'
-import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native'
-import { Image } from 'expo-image'
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
+import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
+import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
@@ -16,10 +16,13 @@ import { toneOf, useSports, useTone, type Tone } from './catalog'
 import { useNow } from './clock'
 import type { RailCard } from './rail'
 import { boardFor, onInk, onPaper, type Palette } from './sports'
-import { colour, font, num, RADIUS_CARD, RADIUS_TILE, t } from './theme'
+import { colour, font, GUTTER, num, RADIUS_CARD, RADIUS_TILE, t } from './theme'
 import { alpha, breakable, Card as Surface, Dsp, Eyebrow, LiveBadge, Pill, Spinner, WL } from './ui'
 
 const go = (path: string) => () => router.push(path as never)
+// The share of the player band the words take beside a photo: they stop where its fade starts to show, so
+// they're read on the band (.player-band.with-photo on the web).
+const BESIDE_PHOTO = 0.64
 
 // ---------------------------------------------------------------- small pieces
 
@@ -424,22 +427,41 @@ export function BuildProgress({ card, messages, research = true, onRetry }: { ca
   )
 }
 
+/** Where the photos job found the face (.photo.framed on the web): the square around it covers the box, its
+ * centre 62% across and halfway down, but never so far that the picture runs past the photo's edges. */
+function framed(crop: Photo['crop'], box: LayoutRectangle): ImageStyle {
+  if (!crop) return { width: '100%', height: '100%' }
+  const side = Math.max(box.width, box.height)
+  const width = side / crop.w
+  const height = side / crop.h
+  return {
+    position: 'absolute', width, height,
+    left: Math.min(0, Math.max(box.width - width, 0.62 * box.width - (crop.x + crop.w / 2) * width)),
+    top: Math.min(0, Math.max(box.height - height, box.height / 2 - (crop.y + crop.h / 2) * height)),
+  }
+}
+
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour edge to edge, with
- * their photo fading in on the right and its credit when there is one. */
+ * their photo in its own colours fading in on the right and its credit when there is one. Beside the photo
+ * the words stop short of it (b.besidePhoto, also for a note in `children`). The name is as large as fits
+ * its longest word on a line in their room (longestWordEms), so it never breaks inside a word: the room
+ * the screen leaves them until the words are laid out, then the room they have. */
 export function PlayerBand({ name, sport, meta, photo, back, actions, children, topInset }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode; topInset: number }) {
   const sports = useSports()
   const tone = toneOf(sports, sport)
   const [broken, setBroken] = useState<string | null>(null)
+  const [box, setBox] = useState<LayoutRectangle | null>(null)
+  const [laidOut, setLaidOut] = useState<number | null>(null)
+  const screen = useWindowDimensions().width
   const shown = photo && photo.url !== broken ? photo : null
+  const room = laidOut ?? (screen - 2 * GUTTER) * (shown ? BESIDE_PHOTO : 1)
   const credit = shown ? safeHref(shown.page) : undefined
   return (
     <View style={[b.band, { backgroundColor: tone.sport, paddingTop: topInset + 16 }]}>
       {shown ? (
-        <View pointerEvents="none" style={[b.bandPhoto, { top: topInset + 64 }]}>
-          <Image source={{ uri: absolute(shown.url) }} style={{ width: '100%', height: '100%' }} contentFit="cover" contentPosition={{ top: '18%', left: '50%' }} onError={() => setBroken(shown.url)} />
-          {/* The web's photo is a duotone in the sport's colours, fading into the band on its left: here a wash
-              of the sport's colour over it, and the same fade. */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: tone.sport, opacity: 0.35 }]} />
+        <View pointerEvents="none" style={[b.bandPhoto, { top: topInset + 64 }]} onLayout={(e) => setBox(e.nativeEvent.layout)}>
+          {box ? <Image source={{ uri: absolute(shown.url) }} style={framed(shown.crop, box)} contentFit="cover" contentPosition={{ top: '18%', left: '50%' }} onError={() => setBroken(shown.url)} /> : null}
+          {/* Fading into the band on its left, as the web's mask does. */}
           <LinearGradient colors={[tone.sport, alpha(tone.sport, 0)]} start={{ x: 0, y: 0.5 }} end={{ x: 0.5, y: 0.5 }} style={StyleSheet.absoluteFill} />
         </View>
       ) : null}
@@ -447,13 +469,13 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children, 
         {back}
         <View style={{ flexDirection: 'row', gap: 8 }}>{actions}</View>
       </View>
-      <View style={{ gap: 10, maxWidth: shown ? '64%' : undefined }}>
+      <View style={[{ gap: 10 }, shown ? b.besidePhoto : null]} onLayout={(e) => setLaidOut(e.nativeEvent.layout.width)}>
         {sport ? <Text style={[t.tag, { color: tone.onSoft }]}>{sports.name(sport)}</Text> : null}
-        <Dsp size={56} color={tone.on}>{name}</Dsp>
+        <Dsp size={Math.min(56, room / longestWordEms(name))} color={tone.on}>{breakable(name)}</Dsp>
         {meta ? <Text style={{ fontFamily: font[700], fontSize: 15, lineHeight: 21, color: tone.onSoft }}>{meta}</Text> : null}
       </View>
       {children}
-      {shown ? <Text onPress={credit ? () => Linking.openURL(credit) : undefined} style={{ fontFamily: font[700], fontSize: 10, lineHeight: 13, color: tone.onSoft, maxWidth: '62%', marginTop: -6 }}>{shown.credit}</Text> : null}
+      {shown ? <Text onPress={credit ? () => Linking.openURL(credit) : undefined} style={[{ fontFamily: font[700], fontSize: 10, lineHeight: 13, color: tone.onSoft, marginTop: -6 }, b.besidePhoto]}>{shown.credit}</Text> : null}
     </View>
   )
 }
@@ -493,5 +515,6 @@ export const b = StyleSheet.create({
   primary: { alignSelf: 'flex-start', height: 44, paddingHorizontal: 18, borderRadius: 999, backgroundColor: colour.text, justifyContent: 'center' },
   primaryText: { fontFamily: font[800], fontSize: 14, color: colour.bg },
   band: { overflow: 'hidden', gap: 16, marginHorizontal: -16, paddingHorizontal: 16, paddingBottom: 22, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
-  bandPhoto: { position: 'absolute', right: 0, bottom: 0, width: '46%' },
+  bandPhoto: { position: 'absolute', right: 0, bottom: 0, width: '46%', overflow: 'hidden' },
+  besidePhoto: { maxWidth: `${BESIDE_PHOTO * 100}%` },
 })

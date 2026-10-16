@@ -42,7 +42,7 @@ def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-
     ext |= {k: {"value": v} for k, v in meta.items()}
     slug = file.replace(" ", "_")
     return {
-        "thumburl": f"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/{slug}/330px-{slug}?utm_source=commons.wikimedia.org&utm_content=thumbnail",
+        "thumburl": f"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/{slug}/{photos.WIDTH}px-{slug}?utm_source=commons.wikimedia.org&utm_content=thumbnail",
         "descriptionurl": PAGE + slug, "sha1": sha1, "mime": "image/jpeg", "extmetadata": ext,
     }
 
@@ -50,13 +50,14 @@ def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-
 # ---------------------------------------------------------------- which licences, and how credited
 
 
-def test_a_cc_by_sa_photo_is_kept_and_credited_to_its_author_as_recoloured():
+def test_a_cc_by_sa_photo_is_kept_and_credited_to_its_author():
     found = photos.judge(info(SAKA))
     assert (found.status, found.author, found.licence) == ("ok", "Bryan Berlin", "CC BY-SA 4.0")
     assert found.page == PAGE + SAKA.replace(" ", "_")
-    assert found.thumb and found.thumb.endswith("330px-" + SAKA.replace(" ", "_")) and "?" not in found.thumb  # no tracking query
+    assert found.thumb and found.thumb.endswith(f"{photos.WIDTH}px-" + SAKA.replace(" ", "_")) and "?" not in found.thumb  # no tracking query
     photo = Photo(file=SAKA, status="ok", author=found.author, licence=found.licence, digest="0" * 32, media_type="image/jpeg", page=found.page)
-    assert photos.credit(photo) == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"
+    # Shown cropped to the band (styles.css .photo), and changed in no other way: the credit says the crop.
+    assert photos.credit(photo) == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, cropped"
     assert photos.public(photo)["url"] == f"/api/photos/{'0' * 32}.jpg"
 
 
@@ -128,18 +129,44 @@ def test_an_empty_thumbnail_is_not_kept(monkeypatch):
         photos.download("https://upload.wikimedia.org/x.jpg")
 
 
+def test_a_thumbnail_over_the_most_bytes_comes_at_a_smaller_size_wikimedia_keeps(monkeypatch):
+    """A PNG photo's thumbnails are PNG: at WIDTH one can be over MAX_BYTES, so the next size down is fetched."""
+    base = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/X.png/"
+    sizes = {f"{base}{photos.WIDTH}px-X.png": 3_000_000, f"{base}500px-X.png": 1_200_000}
+    fetched = []
+
+    def download(url):
+        fetched.append(url)
+        if sizes.get(url, 0) > photos.MAX_BYTES:
+            raise photos.TooBig(f"thumbnail is {sizes[url]} bytes")
+        return b"png", "image/png"
+
+    monkeypatch.setattr(photos, "download", download)
+    assert photos.thumbnail(f"{base}{photos.WIDTH}px-X.png") == (b"png", "image/png")
+    assert fetched == [f"{base}{photos.WIDTH}px-X.png", f"{base}500px-X.png"]
+    sizes[f"{base}500px-X.png"] = sizes[f"{base}330px-X.png"] = 3_000_000
+    with pytest.raises(photos.TooBig):  # none small enough
+        photos.thumbnail(f"{base}{photos.WIDTH}px-X.png")
+    fetched.clear()
+    with pytest.raises(photos.TooBig):  # Commons' own file, narrower than WIDTH: no smaller one to ask for
+        sizes["https://upload.wikimedia.org/wikipedia/commons/a/ab/Y.png"] = 3_000_000
+        photos.thumbnail("https://upload.wikimedia.org/wikipedia/commons/a/ab/Y.png")
+    assert fetched == ["https://upload.wikimedia.org/wikipedia/commons/a/ab/Y.png"]
+
+
 def test_a_photo_address_is_its_digest_and_kind():
     assert photos.NAME.fullmatch("0123456789abcdef0123456789abcdef.jpg")
     for name in ("../photo.jpg", "0123.jpg", "0123456789abcdef0123456789abcdef.svg", "0123456789ABCDEF0123456789ABCDEF.jpg"):
         assert not photos.NAME.fullmatch(name)
 
 
-def test_the_credits_page_lists_each_photo_and_what_recolouring_means():
-    shown = [{"name": "Bukayo Saka", "url": "/api/photos/x.jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", "page": PAGE + "x", "author": "Bryan Berlin", "licence": "CC BY-SA 4.0", "licence_url": "https://creativecommons.org/licenses/by-sa/4.0"}]
+def test_the_credits_page_lists_each_photo_and_how_they_are_shown():
+    shown = [{"name": "Bukayo Saka", "url": "/api/photos/x.jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, cropped", "page": PAGE + "x", "author": "Bryan Berlin", "licence": "CC BY-SA 4.0", "licence_url": "https://creativecommons.org/licenses/by-sa/4.0"}]
     page = credits.credits({}, stockfish=False, agent=False, photos=shown)
     assert page["photos"] == [{k: v for k, v in shown[0].items() if k != "url"}]
     assert "Wikimedia Commons" in [c["name"] for c in page["also"]]
-    assert any("recolour" in n and "keeps its licence" in n for n in page["notices"])
+    # Each credit says the crop; here the fade too.
+    assert any("cropped" in n and "faded" in n for n in page["notices"]) and not any("recolour" in n for n in page["notices"])
     bare = credits.credits({}, stockfish=False, agent=False)
     assert bare["photos"] == [] and "Wikimedia Commons" not in [c["name"] for c in bare["also"]] and bare["notices"] == credits.NOTICES
 
@@ -256,7 +283,7 @@ def test_followed_and_starter_athletes_photos_are_fetched_once_and_written_into_
     db.expire_all()
     card = db.get(PlayerCard, 1)
     assert card and card.version == 4 and card.card["version"] == 4
-    assert card.card["player"]["photo"] == photos.public(saka) and card.card["player"]["photo"]["credit"] == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"
+    assert card.card["player"]["photo"] == photos.public(saka) and card.card["player"]["photo"]["credit"] == "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, cropped"
     assert db.published[1]["player"]["photo"]["url"] == f"/api/photos/{saka.digest}.jpg"
     assert "photo" not in db.get(PlayerCard, 2).card["player"] and "photo" not in db.get(PlayerCard, 3).card["player"]
 
@@ -287,6 +314,56 @@ def test_the_face_in_each_new_photo_is_found_once_and_framed_in_its_card(squad, 
     assert saka and (saka.width, saka.height) == (330, 471) and saka.face and saka.face["w"] > 0.4
     db.expire_all()
     assert db.get(PlayerCard, 1).card["player"]["photo"]["crop"] == photos.framing(330, 471, saka.face)["crop"]
+
+
+@needs_db
+def test_photos_kept_at_another_width_are_fetched_again_at_once(squad, commons):
+    """WIDTH changed (330 to 960, 16 Oct 2026): each photo kept at the old width is due on the next run,
+    whenever it was last asked about, and downloaded again at WIDTH; then it's as any other."""
+    db = squad
+    photos.refresh()
+    assert _photo(db, SAKA).asked_width == photos.WIDTH and _photo(db, "Haaland.jpg").asked_width is None
+    db.execute(text("UPDATE photo SET asked_width = 330 WHERE status = 'ok'"))  # as kept before
+    db.commit()
+    asked, downloads = len(commons.asked), len(commons.downloads)
+    done = photos.refresh()
+    assert (done["asked"], done["shown"], done["framed"]) == (2, 2, 2)  # Saka's and Bumrah's; Haaland's isn't kept
+    assert len(commons.asked) == asked + 1 and len(commons.downloads) == downloads + 2
+    assert {u.rsplit("/", 1)[1] for u in commons.downloads[-2:]} == {f"{photos.WIDTH}px-" + f.replace(" ", "_") for f in (SAKA, BUMRAH)}
+    assert _photo(db, SAKA).asked_width == _photo(db, BUMRAH).asked_width == photos.WIDTH
+    assert photos.refresh()["asked"] == 0  # once
+
+
+@needs_db
+def test_a_photo_that_cant_be_fetched_again_at_the_new_width_keeps_showing_as_it_was(squad, commons, monkeypatch):
+    """A Wikimedia error, or a thumbnail too big at the new width: the old one stays in the card, and the job
+    tries again a day later rather than every run."""
+    db = squad
+    now = datetime.now(timezone.utc)
+    photos.refresh(now=now)
+    db.execute(text("UPDATE photo SET asked_width = 330 WHERE status = 'ok'"))  # as kept before
+    db.commit()
+    saka = _photo(db, SAKA)
+    assert saka
+    before, card = (saka.digest, saka.data, saka.width, saka.face), db.get(PlayerCard, 1).card["player"]["photo"]
+
+    def failing(url):
+        raise ValueError("thumbnail: 502")
+
+    monkeypatch.setattr(photos, "download", failing)
+    done = photos.refresh(now=now + timedelta(minutes=15))
+    assert (done["asked"], done["shown"], done["left_out"], done["cards"]) == (2, 2, 0, 0)
+    saka = _photo(db, SAKA)
+    assert saka and saka.status == "ok" and (saka.digest, saka.data, saka.width, saka.face) == before and saka.asked_width == 330
+    assert saka.reason == f"not fetched again at {photos.WIDTH} pixels: thumbnail: 502"
+    db.expire_all()
+    assert db.get(PlayerCard, 1).card["player"]["photo"] == card  # still showing
+    assert photos.refresh(now=now + timedelta(minutes=30))["asked"] == 0  # not every run
+
+    monkeypatch.setattr(photos, "download", commons.download)
+    assert photos.refresh(now=now + timedelta(days=1, minutes=30))["asked"] == 2  # a day later, and this time it works
+    saka = _photo(db, SAKA)
+    assert saka and (saka.asked_width, saka.reason) == (photos.WIDTH, None)
 
 
 @needs_db
@@ -486,7 +563,7 @@ def test_the_api_serves_a_photo_for_a_year_and_nothing_else(api, monkeypatch):
 
 def test_the_preview_of_an_athlete_picked_in_search_brings_their_photo(api, monkeypatch):
     """Found by their id in the source: search results carry no photo, so the preview is where it comes from."""
-    shown = {"url": "/api/photos/" + "0" * 32 + ".jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured"}
+    shown = {"url": "/api/photos/" + "0" * 32 + ".jpg", "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, cropped"}
     monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: {"system": system, "athlete_id": athlete_id, "name": "Someone"})
     monkeypatch.setattr(photos, "of_source", lambda db, system, athlete_id: shown if (system, athlete_id) == ("espn_soccer", "231388") else None)
     assert api.call("GET", "/api/athletes/espn_soccer/231388").json()["photo"] == shown
