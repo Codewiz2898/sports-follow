@@ -231,8 +231,13 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
       </ErrorBoundary>
       <div className="row tiny muted">
         <span>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</span>
-        {/* Compact boards sit inside a link to the player's page; a link can't hold another link. */}
-        {!compact && safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" className="link" style={{ color: 'var(--text)' }}>Open source</a>}
+        {/* Compact boards sit inside a link to their game's match page; a link can't hold another link. */}
+        {!compact && (live.match || safeHref(live.source_url)) && (
+          <span className="row" style={{ gap: 12 }}>
+            {live.match && <Link to={`/match/${live.match}`} className="link" style={{ color: 'var(--text)' }}>The match</Link>}
+            {safeHref(live.source_url) && <a href={safeHref(live.source_url)} target="_blank" rel="noreferrer" className="link" style={{ color: 'var(--text)' }}>Open source</a>}
+          </span>
+        )}
       </div>
     </section>
   )

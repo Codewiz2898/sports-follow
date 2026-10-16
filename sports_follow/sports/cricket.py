@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stage, stat, undecided
+from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stage, stat, undecided, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -151,6 +151,31 @@ class Cricket(Sport):
 
     def lineup_title(self, who: str, starting: bool) -> str:
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,
+        strike rate, how they were out) and who bowled at it, in the order the source lists them. From each
+        player's line, whose stats are their latest innings (a Test's earlier ones are only in its headline)."""
+        sides = [t.get("name") or "" for t in state.get("teams") or []]
+        if len(sides) != 2 or not all(sides):
+            return {}
+        batting: dict[str, list[dict[str, str]]] = {s: [] for s in sides}
+        bowling: dict[str, list[dict[str, str]]] = {s: [] for s in sides}
+        for athlete_id, line in lines.items():
+            name, team = names.get(athlete_id, ("", ""))
+            if not name or team not in batting:
+                continue
+            v = values(line)
+            if "Runs" in v:
+                batting[team].append({"name": name, "runs": v["Runs"], "balls": v.get("Balls", ""), "fours": v.get("4s", ""), "sixes": v.get("6s", ""),
+                                      "strike_rate": v.get("Strike rate", ""), "out": v.get("Out", "")})
+            if "Wickets" in v:
+                bowling[sides[1 - sides.index(team)]].append({"name": name, "overs": v.get("Overs", ""), "runs": v.get("Runs conceded", ""), "wickets": v["Wickets"],
+                                                              "economy": v.get("Economy", "")})
+        scores = {t.get("name"): t.get("score") or "" for t in state.get("teams") or []}
+        batted = [s for s in dict.fromkeys([*(i.get("team") for i in state.get("innings") or []), *sides]) if s in batting]
+        card = [{"team": s, "score": scores.get(s, ""), "batting": batting[s], "bowling": bowling[s]} for s in batted if batting[s] or bowling[s]]
+        return {"scorecard": card} if card else {}
 
     def result_text(self, score: str, clock: str) -> str:
         return clock  # "India won by 57 runs"

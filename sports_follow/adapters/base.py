@@ -117,6 +117,9 @@ class LiveGame:
     # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
     # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
     tier: int = 0
+    # The rest of its line-ups (substitutes, an impact player), by the source's ids, where a source's match()
+    # names them: whose lines its match page names (a scorecard's), though only `players` are offered to follow.
+    bench: list[PlayerRef] = field(default_factory=list)
 
 
 @dataclass
@@ -253,6 +256,7 @@ class Adapter:
     provider: Provider
     covers: str  # what it covers, on the Credits page: "Cricket (ESPNcricinfo)"
     id_pattern: re.Pattern[str] = DIGITS  # the shape of its athlete ids
+    fixture_pattern: re.Pattern[str] = DIGITS  # and of its games' (Fixture.source_id), for match(): refused before anything is sent
     preview_fixtures = True  # False: a preview before following shows stats only (fixtures take many reads)
     # How a player's page words this source's live scores, where the app's general sentences don't fit (a
     # source whose standings come after each match): live_note under the live board, lag_note at the page's
@@ -311,6 +315,14 @@ class Adapter:
     # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
     # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
     # out the small ones and set each game's tier, so the biggest come first.
+    #
+    # Optional, for a source that can read one game by its id in a request or two:
+    #   def match(self, source_id: str) -> LiveGame | None
+    # the game a fixture of it names (Fixture.source_id, of the shape fixture_pattern says), whoever follows
+    # it, live, to come or over, as live_now() gives one: its snapshot with every player's line the source
+    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py). None:
+    # the source has no such game. Asked at most once a minute a game, only while someone has its page open,
+    # and only for a game a source named first (on Live now, or a followed player's).
     #
     # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
     # requests:

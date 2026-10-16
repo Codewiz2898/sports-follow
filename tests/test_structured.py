@@ -63,6 +63,14 @@ def test_the_live_block_carries_the_sources_own_notes(system, live_note, lag_not
     assert (c["live"]["live_note"], c["live"]["lag_note"]) == (live_note, lag_note)
 
 
+def test_a_live_card_names_its_games_match_page():
+    snap = Snapshot(status="live", score_label="Arsenal 1 – 0 Chelsea", clock_label="12'", state={"kind": "football"})
+    event = Event(id=5, key="sportmonks_football:555", title="Arsenal vs Chelsea", notes=None, competition="Premier League", start_utc=NOW, status="live")
+    c = card()
+    structured._apply_snapshot(c, event, snap, None, KNOWN["sportmonks_football"], NOW)
+    assert c["live"]["match"] == "sportmonks_football/555"  # /match/<source>/<its fixture id> (match.py)
+
+
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():
     snap = espn_cricket.parse_summary(load("cricket-summary-final"))
     event = Event(id=9, title="India v West Indies", notes="1st ODI (D/N)", competition="West Indies tour of India", start_utc=datetime(2026, 9, 27, 8, 30, tzinfo=timezone.utc))

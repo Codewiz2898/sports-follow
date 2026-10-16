@@ -47,6 +47,7 @@ export interface LiveStatus {
   available?: boolean  // false: no source covers this sport yet, so there are no live scores
   // Set when the score comes from a structured source rather than the research agent.
   event_id?: number
+  match?: string | null  // its match page's address after /match/: "<source>/<game id>" (sports_follow/match.py)
   competition?: string | null
   headline?: string | null
   state?: LiveState
@@ -249,6 +250,7 @@ export interface StarterSport {
  * card names its game by one: Today shows it once, as theirs). */
 export interface LiveGame {
   key: string
+  match?: string  // its match page's address after /match/ (MatchPage)
   title: string
   competition: string
   start_utc?: string | null
@@ -289,6 +291,35 @@ export interface CampaignTeam {
 export interface CampaignGame {
   start_utc: string
   label: string  // "Game 1", "Final": the campaign's own words
+}
+
+/** Something found for a player followed in a game (moments.py): a goal, a fifty, a map won. */
+export interface MatchMoment { id: number; at: string; kind: string; level: 'key' | 'minor'; title: string; body: string; player_id: number }
+
+/** One side of a game and its players to follow, in the line-up's order; a game whose line-ups aren't in yet
+ * offers the players on the app in it, as one side with no name. */
+export interface MatchSide { name: string; players: SearchResult[] }
+
+/** One game's match page (GET /api/match/<source>/<game id>, sports_follow/match.py), whoever follows anyone
+ * in it: live, to come or over. Its board is a live block like a card's (null before a game has one), `page`
+ * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps), drawn by the sport's
+ * view, `moments` what was found for the players followed in it. */
+export interface Match {
+  key: string
+  match: string  // its address after /match/
+  sport: string  // a sport's key
+  title: string | null
+  competition: string | null
+  detail?: string | null
+  start_utc?: string | null
+  status: 'scheduled' | 'armed' | 'live' | 'final' | 'postponed'
+  live: LiveStatus | null
+  page: Record<string, unknown>
+  moments: MatchMoment[]
+  sides: MatchSide[]
+  event_ids: number[]
+  fixtures: string[]
+  refreshing: boolean  // a newer read is on its way: look again in a moment
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.

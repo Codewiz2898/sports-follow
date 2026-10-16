@@ -241,6 +241,10 @@ a.photo-credit:hover { text-decoration: underline; }
 .live-other .live-note { font-size: 13px; font-weight: 700; }
 .live-other .game { margin-block: auto; }
 .live-other .who { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A live game's card is a link to its match page under its follow buttons: a link can't hold buttons. */
+.live-game { position: relative; }
+.live-game > .card-link, .live-other > .card-link { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.live-game .who, .live-other .who { position: relative; z-index: 2; }
 .also-live .rail.open { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
 /* Today's quiet way to every other game on now (MoreLive), and the Live page they're on, as a grid. */
 .more-live { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 36px; margin: -6px -10px; padding: 0 10px; border-radius: 10px; }
@@ -485,6 +489,28 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .player-meta { font-weight: 700; color: var(--on-sport-soft); }
 /* An offline or new-version notice sits above the band, so the band can't reach the top edge. */
 .notice ~ .player-band { margin-top: 0; border-radius: 28px; }
+
+/* A match page's head: the player band's block, with the game's board drawn large in its ink. */
+.match-band { --text: var(--on-sport); --muted: var(--on-sport-soft); --raised: color-mix(in srgb, var(--on-sport) 14%, transparent); --line: color-mix(in srgb, var(--on-sport) 24%, transparent); }
+.match-band .pill.outline { color: var(--on-sport); }
+.match-title { font-size: 44px; overflow-wrap: anywhere; }
+.match-board .title { font-size: 18px; }
+.match-board .score { font-size: 64px; white-space: nowrap; }
+.match-board .clock { font-size: 24px; color: var(--on-sport); }
+.match-board .live-note { color: var(--on-sport); font-size: 13px; font-weight: 800; }
+.match-board .linescore.lobby tr.ours td { color: var(--on-sport); }
+@media (min-width: 640px) { .match-board .score { font-size: 80px; } }
+.match-sides { gap: 16px; }
+.match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A football timeline: the home side's on the left, the away side's on the right. */
+.timeline > li { display: flex; align-items: baseline; gap: 10px; }
+.timeline > li .num { font-size: 17px; min-width: 44px; }
+.timeline > li.away { flex-direction: row-reverse; text-align: right; }
+.moment-kind.disallowed { text-decoration: line-through; }
+/* A cricket scorecard: the name and how they were out, then the numbers. */
+.scorecard td.who { display: flex; flex-direction: column; text-align: left; color: var(--text); }
+.scorecard td, .scorecard th { text-align: right; }
+.scorecard td:first-child, .scorecard th:first-child { text-align: left; width: 100%; }
 
 .alert-row { display: flex; align-items: flex-start; gap: 12px; }
 .alert-row.minor .title { font-weight: 600; }

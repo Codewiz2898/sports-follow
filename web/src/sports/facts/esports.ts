@@ -19,6 +19,12 @@ export interface BattleRoyaleState {
   total?: number
 }
 
+// A match page's part (the server's Esports.match_page): a series map by map (who took each, and in a Dota 2
+// map its best player's numbers), or a lobby's whole standings and who won each of its matches.
+export interface SeriesMap { n: number; status: string; winner?: string | null; best?: string | null }
+export interface StandingRow { place: number; name: string; points: number; kills: number; wins: number }
+export interface EsportsPage { maps?: SeriesMap[]; standings?: StandingRow[]; games?: { n: number; map?: string | null; winner?: string | null }[] }
+
 /** A lobby's standings, not a two-team series. */
 export function isLobby(state: EsportsState | BattleRoyaleState): state is BattleRoyaleState {
   return state.kind === 'battle_royale'
