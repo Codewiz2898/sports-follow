@@ -1271,7 +1271,7 @@ def test_a_match_page_is_served_and_its_game_read_at_most_once_a_minute(api, mon
         assert api.call("GET", path, fan="fan").status_code == 404, path
     monkeypatch.setattr(match, "view", lambda db, fan, system, game: (None, False))
     answer = api.call("GET", "/api/match/lichess_chess/abcd1234-9", fan="fan")
-    assert answer.status_code == 404 and answer.json() == {"detail": "No such game."}
+    assert answer.status_code == 404 and answer.json() == {"detail": "This game isn't here: it may have ended before anyone opened it."}
 
 
 def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_again(api, monkeypatch):

@@ -140,6 +140,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   requests an hour, not 240 per match, and one worker thread, not one per match.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
+- **A page for every game.** Every live game on Today opens its match page, `/match/<source>/<game id>`
+  (`sports_follow/match.py`, `GET /api/match/...`): its board large in a block of its sport's colour, what
+  its sport shows under it (a football timeline, a cricket scorecard, an esports series by map or a lobby's
+  standings), the moments found for the players followed in it, and both sides' players to follow with a
+  tap. A game's address is its source and the id a fixture of it has there, as its event's key holds them,
+  so it's the same whether or not anyone follows a player in it, and once it's over. Where a fan follows
+  someone in it, its board is their live card's, as fresh as the polls; any other is read from its source
+  (an adapter's `match`) by the worker, at most once a minute a game and only while someone has its page
+  open, for a game a source has named (on Live now, or a followed player's), and at most six a minute of a
+  source; the page shows Live now's copy until the first read comes, and looks again while it's in view.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -244,6 +254,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
+  `match` for a game's match page (one game by a fixture's id, whoever follows it, with its line-ups and
+  every player's line, in a request; ids of another shape than its `fixture_pattern` are refused;
+  `sports_follow/match.py`),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
@@ -285,7 +298,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
   finish, or none, as for a cricket final whose sides are still "TBC"; and its group, an esports title,
-  which takes its own turn within the sport's; for Today's big results and big games coming up), its form summary,
+  which takes its own turn within the sport's; for Today's big results and big games coming up), what its
+  match page shows under the board (`match_page`: a football timeline, a cricket scorecard, an esports
+  series by map; by default the source's key events), its form summary,
   how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
@@ -298,8 +313,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   line in its list: its facts, `web/src/sports/facts/<sport>.ts` (in `FACTS`: the scoreboard kinds it
   draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
   `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
-  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`) and `mobile/src/sports/<sport>.tsx` (in
-  `BOARDS`). A sport without them shows the plain score and no line art. The Android app (`mobile/`)
+  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`, with its match page's part, `Match`, drawn
+  from what its `match_page` sends) and `mobile/src/sports/<sport>.tsx` (in `BOARDS`). A sport without them
+  shows the plain score and no line art. The Android app (`mobile/`)
   takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
   on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with

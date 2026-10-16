@@ -557,7 +557,7 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
         except Exception:
             log.warning("match: couldn't ask for %s:%s", system, game, exc_info=True)
     if page is None:
-        raise HTTPException(404, "No such game.")
+        raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
