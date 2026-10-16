@@ -347,6 +347,8 @@ class LiquipediaEsports(Adapter):
     sport = "esports"
     games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
+    live_note = "Standings update from Liquipedia every few minutes as results are recorded."
+    lag_note = "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."
     WINDOW_BACK, WINDOW_AHEAD = 45, 30  # days of lobbies a refresh reads
     HISTORY_DAYS = 180  # how far before that window history.py reads, once: two 90-day pages per team
     MULTI_MAX = 50

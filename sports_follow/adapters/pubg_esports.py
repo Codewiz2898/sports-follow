@@ -327,6 +327,8 @@ class PubgEsports(Adapter):
     sport = "esports"
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
+    live_note = "Standings update from PUBG after each match."
+    lag_note = "PUBG lobbies update after each match ends."
     INDEX_AGE = 3600  # how old a tournament's match list may be when finding a player's lobbies
     LIVE_AGE = 90  # …and when polling a live lobby
 

@@ -147,19 +147,16 @@ export function lastChecked(card: Card): string | null {
   return stamps.sort((a, b) => parseDate(b)!.getTime() - parseDate(a)!.getTime())[0] ?? null
 }
 
-/** Under a live player's board: how its scores come in. */
+/** Under a live player's board: how its scores come in, in the source's words where it has its own. */
 export function liveUpdates(card: Card): string {
-  return card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia every few minutes as results are recorded.'
-    : card.live.source === 'PUBG' ? 'Standings update from PUBG after each match.'
-      : card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.`
-        : 'Live games refresh on their own about every minute.'
+  return card.live.live_note
+    || (card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.`
+      : 'Live games refresh on their own about every minute.')
 }
 
-/** At the foot of a player's page: how late its live data can be. */
+/** At the foot of a player's page: how late its live data can be, in the source's words where it has its own. */
 export function liveLag(card: Card): string {
-  return card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."
-    : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.'
-      : 'Live data can lag the game by a minute or two.'
+  return card.live.lag_note || 'Live data can lag the game by a minute or two.'
 }
 
 /** A result's score once a badge says won, drew or lost ("Won 133–128" is 133–128); null for a sentence
