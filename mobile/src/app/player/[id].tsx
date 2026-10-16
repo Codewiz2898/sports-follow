@@ -1,7 +1,8 @@
-// One player's page, the web's PlayerPage.tsx: a band of their sport's colour edge to edge with follow and alerts,
-// then Overview (the live board or next game, the last game, form, numbers, news, about), Matches, Stats and
-// News. Always from the full card, read again every 30 s while the page is open (every 3 s while it's built).
+// One player's page, the web's PlayerPage.tsx: a band of their sport's colour edge to edge with share, alerts and
+// follow, then Overview (the live board or next game, the last game, form, numbers, news, about), Matches, Stats
+// and News. Always from the full card, read again every 30 s while the page is open (every 3 s while it's built).
 
+import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
@@ -9,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, levelText } from '../../../../web/src/alerts'
 import { day, outcome, playedOn, relative, shortName } from '../../../../web/src/format'
 import { bareScore, highlight, lastChecked, liveLag, liveUpdates, nextGame } from '../../../../web/src/lines'
+import { sharePlayer } from '../../../../web/src/share'
 import { useAccount } from '../../account'
 import { useActivity } from '../../activity'
 import { api, type Card } from '../../api'
@@ -18,6 +20,7 @@ import { useNow } from '../../clock'
 import { useFollowing } from '../../following'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../../icons'
 import { ResultsHistory, Segmented, StatsWithForm } from '../../results'
+import { ShareButton } from '../../share'
 import { colour, font, num, t } from '../../theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner, WL } from '../../ui'
 import { Page } from '../../page'
@@ -25,6 +28,7 @@ import { Page } from '../../page'
 type Tab = 'overview' | 'matches' | 'stats' | 'news'
 type MatchesView = 'upcoming' | 'results'
 
+const APP = Constants.expoConfig?.name ?? ''
 const EVERY_MS = 30_000
 const BUILDING_MS = 3_000
 
@@ -102,6 +106,7 @@ export default function PlayerScreen() {
         back={<Btn kind="icon" accessibilityLabel="Back" colours={{ bg: tone.on }} icon={<BackIcon size={20} color={tone.sport} />} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
         actions={
           <>
+            <ShareButton {...sharePlayer(playerId, p.name, APP)} colours={{ bg: tone.on, fg: tone.sport }} />
             {isFollowing ? (
               <Btn kind="icon" accessibilityLabel={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} colours={{ bg: tone.on }} icon={<BellIcon size={20} color={tone.sport} />} onPress={() => setAlertsOpen((o) => !o)} style={alertsOpen ? { borderWidth: 3, borderColor: tone.sport } : undefined} />
             ) : null}

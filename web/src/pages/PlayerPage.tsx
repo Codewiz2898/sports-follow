@@ -12,6 +12,7 @@ import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ShareButton } from '../components/Share'
 import { day, outcome, playedOn, relative, shortName } from '../format'
 import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
+import { sharePlayer } from '../share'
 import { sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
@@ -126,7 +127,7 @@ export function PlayerPage() {
         back={<Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>}
         actions={
           <>
-            <ShareButton path={`/player/${playerId}`} title={`${p.name} on ${APP_NAME}`} label={`Share ${p.name}`} />
+            <ShareButton {...sharePlayer(playerId, p.name, APP_NAME)} />
             {isFollowing && (
               <button type="button" className="btn icon" aria-label={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} aria-expanded={alertsOpen} onClick={() => setAlertsOpen((o) => !o)}>
                 <BellIcon width={20} height={20} />

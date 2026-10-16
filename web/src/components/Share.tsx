@@ -1,28 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
+import { shareLink, type Shared } from '../share'
 import { CheckIcon, ShareIcon } from './Icons'
 
 /**
- * The link a fan shares: the page on this site, tagged as shared (s=share), so the app can count shares
- * once it counts visits. `path` may carry its own query: a game's is /player/<id>?g=<event id>.
+ * Share a page (../share.ts says which link, and its title): the phone's share sheet where the browser has
+ * one (Web Share), else the link copied. The link is on this site, which gives it its preview.
  */
-export function shareLink(path: string): string {
-  const url = new URL(path, window.location.origin)
-  url.searchParams.set('s', 'share')
-  return url.toString()
-}
-
-/**
- * Share a page: the phone's share sheet where the browser has one (Web Share), else the link copied. The
- * server gives the link its preview in WhatsApp, X and the rest (sports_follow/share.py): the player, the
- * moment and the score, as a picture in the sport's colour. So all that's shared is the title and the link.
- */
-export function ShareButton({ path, title, label = 'Share', className = 'btn icon' }: { path: string; title: string; label?: string; className?: string }) {
+export function ShareButton({ path, title, label, className = 'btn icon' }: Shared & { className?: string }) {
   const [copied, setCopied] = useState(false)
   const timer = useRef(0)
   useEffect(() => () => window.clearTimeout(timer.current), [])
 
   const share = async () => {
-    const url = shareLink(path)
+    const url = shareLink(window.location.origin, path)
     if (navigator.share && (!navigator.canShare || navigator.canShare({ title, url }))) {
       try {
         await navigator.share({ title, url })

@@ -5,11 +5,13 @@ import { router } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { safeHref, shortName } from '../../../web/src/format'
+import { sharePoster } from '../../../web/src/share'
 import { longestWord, posterWhen, wireWhen } from '../../../web/src/today'
 import { api, type WeekPoster, type WireRow } from '../api'
 import { toneOf, useSports } from '../catalog'
 import { useFollowing } from '../following'
 import { Rail, type RailCard } from '../rail'
+import { ShareButton } from '../share'
 import { colour, dsp, font, RADIUS_TILE } from '../theme'
 import { breakable, Pill } from '../ui'
 
@@ -34,7 +36,11 @@ export function useWeek(): Week {
 const POSTER = 172
 const POSTER_PAD = 14
 
-/** One big moment (.poster): a block of the player's sport colour, its word big, then their name and the line. */
+/**
+ * One big moment (.poster): a block of the player's sport colour, its word big, then their name and the line.
+ * Its Share button sits on it, outside the press that opens the player (.poster-wrap), and shares the game
+ * (/player/<id>?g=<event id>), whose link previews this moment.
+ */
 function Poster({ poster, now, fill }: { poster: WeekPoster; now: number } & RailCard) {
   const tone = toneOf(useSports(), poster.sport)
   const [width, setWidth] = useState(POSTER)
@@ -42,14 +48,17 @@ function Poster({ poster, now, fill }: { poster: WeekPoster; now: number } & Rai
   // to half an em wide, and the lean adds a little.
   const word = Math.min(52, (width - POSTER_PAD * 2) / (longestWord(poster.word) * 0.52))
   return (
-    <Pressable onPress={() => router.push(`/player/${poster.player_id}`)} onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={[s.poster, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
-      <Pill small label="Yours" bg={colour.text} color={colour.bg} />
-      <Text style={[dsp(word), { color: tone.on }]}>{breakable(poster.word)}</Text>
-      <View style={{ gap: 2 }}>
-        <Text style={[dsp(22), { color: tone.on }]}>{shortName(poster.player)}</Text>
-        <Text style={[s.line, { color: tone.on }]} numberOfLines={2}>{[poster.line, posterWhen(poster.at, now)].filter(Boolean).join(' · ')}</Text>
-      </View>
-    </Pressable>
+    <View style={[s.posterWrap, fill && { width: undefined }]}>
+      <Pressable onPress={() => router.push(`/player/${poster.player_id}`)} onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={[s.poster, { backgroundColor: tone.sport }]}>
+        <Pill small label="Yours" bg={colour.text} color={colour.bg} />
+        <Text style={[dsp(word), { color: tone.on }]}>{breakable(poster.word)}</Text>
+        <View style={{ gap: 2 }}>
+          <Text style={[dsp(22), { color: tone.on }]}>{shortName(poster.player)}</Text>
+          <Text style={[s.line, { color: tone.on }]} numberOfLines={2}>{[poster.line, posterWhen(poster.at, now)].filter(Boolean).join(' · ')}</Text>
+        </View>
+      </Pressable>
+      <ShareButton {...sharePoster(poster)} poster style={s.posterShare} />
+    </View>
   )
 }
 
@@ -95,7 +104,9 @@ export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
 }
 
 const s = StyleSheet.create({
-  poster: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, width: POSTER, height: 236, padding: POSTER_PAD, borderRadius: RADIUS_TILE },
+  posterWrap: { width: POSTER },
+  poster: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, height: 236, padding: POSTER_PAD, borderRadius: RADIUS_TILE },
+  posterShare: { position: 'absolute', top: 10, right: 10 },
   line: { fontFamily: font[700], fontSize: 12, lineHeight: 15.6 },
   wire: { paddingVertical: 4, paddingHorizontal: 16, borderRadius: 18, backgroundColor: colour.text },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 8 },
