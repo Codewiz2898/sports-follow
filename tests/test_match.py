@@ -196,17 +196,24 @@ def test_a_game_no_source_has_named_isnt_one(db, redis, source):
     assert source.read == ["404"]
 
 
-@needs_db
-def test_a_followed_players_game_is_their_live_cards_with_the_moments_found_in_it(db, redis, source):
+def followed(db, events: list[dict] | None = None) -> None:
+    """Arsenal v Chelsea stored (event 40, "pitch:100"), polled for Saka, whom "fan" follows, and Kane, on
+    Sports Follow: Saka's live card has its board at 71' and the source's newest events, as a card keeps them."""
     db.add_all([Player(id=5, slug="saka", name="Bukayo Saka", sport="Football"), Player(id=6, slug="kane", name="Harry Kane", sport="Football"),
                 Event(id=40, key="pitch:100", sport="Football", title="Arsenal vs Chelsea", competition="Premier League", notes="Matchday 8", status="live", start_utc=NOW)])
     db.flush()
     block = {"is_live": True, "event_id": 40, "event": "Arsenal vs Chelsea · Matchday 8", "competition": "Premier League", "score": "Arsenal 2 – 1 Chelsea",
-             "clock": "71'", "state": FOOTBALL, "moments": [GOAL], "source": "Pitch", "as_of": (NOW + timedelta(seconds=30)).isoformat(), "headline": "1 goal"}
+             "clock": "71'", "state": FOOTBALL, "moments": [GOAL] if events is None else events, "source": "Pitch", "as_of": (NOW + timedelta(seconds=30)).isoformat(), "headline": "1 goal"}
     db.add_all([PlayerCard(player_id=5, status="ready", card={"live": block}, is_live=True), PlayerCard(player_id=6, status="ready", card={"live": {"is_live": False}}),
                 PlayerIdentity(player_id=5, system="pitch", external_id="7", confidence=1.0), PlayerIdentity(player_id=6, system="pitch", external_id="9", confidence=1.0),
                 EventPlayer(event_id=40, player_id=5), EventPlayer(event_id=40, player_id=6), Follow(fan_id="fan", player_id=5, alert_rules={}),
                 EventState(event_id=40, as_of=NOW, status="live", score_label="Arsenal 1 – 1 Chelsea", clock_label="60'", state=FOOTBALL)])
+    db.commit()
+
+
+@needs_db
+def test_a_followed_players_game_is_their_live_cards_with_the_moments_found_in_it(db, redis, source):
+    followed(db)
     for i, (pid, kind, title) in enumerate([(5, "start", "Bukayo Saka's game has started"), (6, "lineup", "Harry Kane starts"), (5, "goal", "Goal: Bukayo Saka"), (6, "assist", "Assist: Harry Kane")]):
         db.add(Moment(key=f"m{i}", player_id=pid, event_id=40, kind=kind, level="key", title=title, body="2–1 · 64'", created_at=NOW + timedelta(seconds=i)))
     db.commit()
@@ -227,6 +234,64 @@ def test_a_followed_players_game_is_their_live_cards_with_the_moments_found_in_i
     source.game.fixtures = ["100", "101"]
     match.read("pitch", "101", NOW)
     assert match.view(db, "fan", "pitch", "101", NOW + timedelta(seconds=40))[0]["event_ids"] == [40]
+
+
+def card(minute: int) -> dict:
+    return {"clock": f"{minute}'", "kind": "YELLOW", "text": f"Booked at {minute}", "team_id": HOME}
+
+
+def test_a_cards_newest_events_come_first_and_a_reads_before_them():
+    newest = [card(m) for m in (80, 70, 60)]
+    assert match._merged(newest, [card(m) for m in (70, 60, 50, 40)]) == [card(m) for m in (80, 70, 60, 50, 40)]
+    assert match._merged([card(80), card(60)], [card(70), card(60), card(50)]) == [card(80), card(60), card(50)]  # 70' taken back since
+    assert match._merged(newest, [card(10)]) == newest  # where the read's go can't be told
+    assert match._merged([], [card(10)]) == [card(10)]
+
+
+@needs_db
+def test_a_followed_players_card_keeps_the_newest_events_and_a_read_those_before(db, redis, source):
+    # Eleven bookings and a goal: the card keeps the newest ten, an older read has all but the newest.
+    events = [{**GOAL, "clock": "90'"}, *(card(m) for m in range(85, 30, -5))]
+    followed(db, events[:10])
+    source.game = game(players=ELEVENS, moments=events[1:])
+    match.read("pitch", "100", NOW)  # before the card's poll
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    assert page["live"]["clock"] == "71'"  # the card's board
+    assert [e["clock"] for e in page["page"]["timeline"]] == [e["clock"] for e in events] and len(events) == 12
+
+
+@needs_db
+def test_a_sport_turned_off_has_no_match_pages(db, redis, source, monkeypatch):
+    followed(db)
+    source.live = [game(players=ELEVENS)]
+    live.read("pitch", NOW)
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "football"))
+    assert match.view(db, "fan", "pitch", "100", NOW) == (None, False)
+
+
+@needs_db
+def test_a_read_that_found_nothing_isnt_asked_again_every_minute(db, redis, source):
+    followed(db)
+    source.game = None  # the source hasn't got it (it filters the series out, say)
+    match.read("pitch", "100", NOW)
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
+    assert page["event_ids"] == [40] and not ask  # what's stored still shows
+
+
+@needs_db
+def test_a_scorecard_names_a_substitute_who_bowled_but_only_the_elevens_are_offered(db, redis, source):
+    state = {"kind": "cricket", "teams": [{"id": "1", "name": "India", "score": "180/4"}, {"id": "2", "name": "Australia", "score": "60/3"}],
+             "innings": [{"team": "India", "period": 1}, {"team": "Australia", "period": 2}]}
+    bowled = Line(headline="2/20 (4 ov)", stats=[{"label": "Wickets", "value": "2"}, {"label": "Overs", "value": "4"}, {"label": "Runs conceded", "value": "20"}, {"label": "Economy", "value": "5.00"}])
+    batted = Line(headline="80* (50)", stats=[{"label": "Runs", "value": "80*"}, {"label": "Balls", "value": "50"}])
+    source.game = LiveGame(source_id="100", title="India v Australia", competition="T20I", start_utc=NOW, teams=["India", "Australia"],
+                           snapshot=Snapshot(status="live", score_label="IND 180/4 · AUS 60/3", clock_label="", state=state, lines={"1": batted, "30": bowled}),
+                           players=[ref("1", "Virat Kohli", "India")], bench=[ref("30", "Impact Bowler", "Australia")])
+    match.read("pitch", "100", NOW)
+    page, _ = match.view(db, "fan", "pitch", "100", NOW)
+    [india] = page["page"]["scorecard"]
+    assert ([b["name"] for b in india["batting"]], [w["name"] for w in india["bowling"]]) == (["Virat Kohli"], ["Impact Bowler"])
+    assert [p["name"] for s in page["sides"] for p in s["players"]] == ["Virat Kohli"]
 
 
 @needs_db

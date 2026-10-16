@@ -27,11 +27,12 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
     setMatch(null)
     setFailed(null)
     let current = true
+    let gone = false  // the server doesn't know the game: nothing to look at again, shown again or not
     let timer: number | undefined
     let latest = 0  // the newest look: an older one's answer starts no second loop
     const look = (tries: number) => {
       window.clearTimeout(timer)
-      if (document.hidden) return
+      if (document.hidden || gone) return
       const mine = ++latest
       api.match(source, game)
         .then((m) => {
@@ -43,7 +44,8 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
         .catch((e: Error) => {
           if (!current || mine !== latest) return
           setFailed(e.message)
-          if (!(e instanceof ApiError && e.status === 404)) timer = window.setTimeout(() => look(tries), EVERY)
+          gone = e instanceof ApiError && e.status === 404
+          if (!gone) timer = window.setTimeout(() => look(tries), EVERY)
         })
     }
     const shown = () => { if (!document.hidden) look(0) }

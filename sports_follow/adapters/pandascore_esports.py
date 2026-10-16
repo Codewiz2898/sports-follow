@@ -569,7 +569,9 @@ class PandascoreEsports(Adapter):
 
     def match(self, source_id: str) -> LiveGame | None:
         """One series by its id, whoever follows it, for its match page: map by map, and inside a Dota 2 map what
-        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request."""
+        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request; a
+        Dota 2 series on now or just over costs what a live poll's does besides (_dota): its two teams' rosters
+        (kept a day) and OpenDota's live games, pro matches and each finished map, most of them kept a while."""
         try:
             m = pandascore.get_json(f"/matches/{source_id}", ttl=30)
         except pandascore.NotFound:

@@ -1266,6 +1266,11 @@ def test_a_match_page_is_served_and_its_game_read_at_most_once_a_minute(api, mon
     for game in ("abcd1234-6", "abcd1234-7"):
         api.call("GET", f"/api/match/lichess_chess/{game}", fan="fan")
     assert [j[2] for j in api.queue.jobs if j[0] == "read_match"] == ["abcd1234-5", "abcd1234-6"]
+    # Counted by the source's allowance: Sportmonks' football and cricket share one.
+    monkeypatch.setattr(match, "READS", 1)
+    for system in ("sportmonks_football", "sportmonks_cricket"):
+        api.call("GET", f"/api/match/{system}/123", fan="fan")
+    assert [j[1] for j in api.queue.jobs if j[0] == "read_match"][-1] == "sportmonks_football" and ("read_match", "sportmonks_cricket", "123") not in api.queue.jobs
 
     for path in ("/api/match/nowhere/1", "/api/match/lichess_chess/..", "/api/match/lichess_chess/a%2Fb", f"/api/match/lichess_chess/{'1' * 65}"):
         assert api.call("GET", path, fan="fan").status_code == 404, path

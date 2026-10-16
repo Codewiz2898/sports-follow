@@ -15,7 +15,8 @@ scorecard). The worker reads it (worker.read_match) at most once every FRESH sec
 someone has the page open: the API serves the last read from Redis and asks for the next, so a page never
 waits on a source, and more fans looking cost a source nothing more. A read is asked only for a game a source
 has named (on Live now, read before, or a followed player's), so a made-up address spends nothing; at most
-READS a minute of one source, whichever games; and a read that finds the game over is its last.
+READS a minute of one source's allowance, whichever games; and a read that finds the game over, or not
+there, is its last for hours.
 
 What the page shows under the board is its sport's (Sport.match_page): a football timeline, a cricket
 scorecard, an esports series by map or a lobby's standings. A chess board says it all.
@@ -74,7 +75,9 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
     game: LiveGame | None = cast(Any, adapter).match(fixture)
     with session() as db:
         players = _roster(db, adapter.sport, system, game) if game else []
-    payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "game": _dump(adapter, game, players) if game else None}
+        blocked = registry.blocked(db) if game and game.bench else set()
+    bench = [{"athlete_id": r.athlete_id, "name": r.name, "team": (r.team_names or [""])[0]} for r in (game.bench if game else []) if (system, r.athlete_id) not in blocked]
+    payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "game": _dump(adapter, game, players, bench) if game else None}
     bus.sync_redis().set(_key(system, fixture), json.dumps(payload, default=str), ex=KEEP)
     return game is not None
 
@@ -89,7 +92,7 @@ def _roster(db: Session, sport: str, system: str, game: LiveGame) -> list[dict[s
             for r in game.players if (system, r.athlete_id) not in blocked]
 
 
-def _dump(adapter: Adapter, game: LiveGame, players: list[dict[str, Any]]) -> dict[str, Any]:
+def _dump(adapter: Adapter, game: LiveGame, players: list[dict[str, Any]], bench: list[dict[str, Any]]) -> dict[str, Any]:
     snap = game.snapshot
     return {
         "source_id": game.source_id,
@@ -106,7 +109,16 @@ def _dump(adapter: Adapter, game: LiveGame, players: list[dict[str, Any]]) -> di
         "events": snap.moments,
         "lines": {athlete_id: {"headline": line.headline, "stats": line.stats} for athlete_id, line in snap.lines.items()},
         "players": players,
+        "bench": bench,  # named for the lines they have, not offered to follow
     }
+
+
+def allowance(system: str) -> str:
+    """The allowance a source's reads spend (adapters/budget.py: its first budget's name; Sportmonks' football
+    and cricket share one), which match pages' reads are counted against together."""
+    adapter = KNOWN.get(system)
+    budgets = adapter.budgets() if adapter else ()
+    return budgets[0].name if budgets else system
 
 
 def last_read(system: str, fixture: str) -> dict[str, Any] | None:
@@ -131,6 +143,22 @@ def _listed(system: str, fixture: str) -> dict[str, Any] | None:
 
 def _age(as_of: str | None, now: datetime) -> float:
     return (now - datetime.fromisoformat(as_of)).total_seconds() if as_of else float("inf")
+
+
+def _merged(newer: list[dict[str, Any]], older: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A game's key events, newest first, from the newest board's and an older read's: a followed player's
+    card keeps only the newest few, and a read has those before them. The read's go after the newest board's
+    oldest, where the read has that one too (else none: where they'd go can't be told), so one the newer
+    board took back among its own (a card VAR rescinded) isn't brought back."""
+    if not newer:
+        return older
+
+    def same(e: dict[str, Any]) -> tuple[Any, Any]:
+        return e.get("clock"), e.get("text")
+
+    oldest = same(newer[-1])
+    at = next((i for i, e in enumerate(older) if same(e) == oldest), None)
+    return newer if at is None else newer + older[at + 1:]
 
 
 def _boards(db: Session, system: str, events: list[Event], game: dict[str, Any] | None, listed: dict[str, Any] | None, as_of: str | None) -> list[tuple[str, str, dict[str, Any], list[dict[str, Any]]]]:
@@ -164,21 +192,26 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     listed = _listed(system, fixture)
     fixtures = list(dict.fromkeys([fixture, *((game or {}).get("fixtures") or []), *((listed or {}).get("fixtures") or [])]))
     events = list(db.scalars(select(Event).where(Event.key.in_([f"{system}:{f}" for f in fixtures])).order_by(Event.id)))
-    if not (events or game or listed):
-        return None, False
+    source = KNOWN.get(system)
+    if not (events or game or listed) or (source and not sports.on(source.sport)):
+        return None, False  # a sport turned off has no pages, as it isn't searched or offered
 
     boards = _boards(db, system, events, game, listed, (read_ or {}).get("as_of"))
     as_of, status, board, game_events = max(boards, key=lambda b: datetime.fromisoformat(b[0])) if boards else (None, events[0].status, None, [])
-    # Where a followed player's card trims the source's events, a read has them all.
-    game_events = game_events or (game or {}).get("events") or []
-    source = KNOWN.get(system)
+    game_events = _merged(game_events, (game or {}).get("events") or [])
     rules = sports.of(((board or {}).get("state") or {}).get("kind") or (source.sport if source else events[0].sport))
+    if not sports.on(rules.key):
+        return None, False
     event = events[0] if events else None
 
     roster = (game or {}).get("players") or (listed or {}).get("players") or []
-    page = rules.match_page((board or {}).get("state") or {}, game_events, (game or {}).get("lines") or {}, {p["athlete_id"]: (p["name"], p.get("team") or "") for p in roster})
+    names = {p["athlete_id"]: (p["name"], p.get("team") or "") for p in [*roster, *((game or {}).get("bench") or [])]}
+    page = rules.match_page((board or {}).get("state") or {}, game_events, (game or {}).get("lines") or {}, names)
     adapter = reader(system)
-    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and _age((read_ or {}).get("as_of"), now) > FRESH and (game or {}).get("status") != "final")
+    # A read that found the game over, or found nothing (a source that hasn't got it), is settled: the next
+    # comes when Redis has dropped it.
+    settled = read_ is not None and (game is None or game.get("status") == "final")
+    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and not settled and _age((read_ or {}).get("as_of"), now) > FRESH)
     return {
         "key": f"{system}:{fixture}",
         "match": path(f"{system}:{fixture}"),

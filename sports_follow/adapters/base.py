@@ -117,6 +117,9 @@ class LiveGame:
     # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
     # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
     tier: int = 0
+    # The rest of its line-ups (substitutes, an impact player), by the source's ids, where a source's match()
+    # names them: whose lines its match page names (a scorecard's), though only `players` are offered to follow.
+    bench: list[PlayerRef] = field(default_factory=list)
 
 
 @dataclass

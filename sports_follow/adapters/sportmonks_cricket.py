@@ -271,13 +271,13 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
-def _elevens(x: dict[str, Any], f: Fixture, system: str) -> list[list[PlayerRef]]:
+def _elevens(x: dict[str, Any], f: Fixture, system: str, substitutes: bool = False) -> list[list[PlayerRef]]:
     """Each side's playing eleven, in the line-up's order, named as it names them (an impact player waiting to
-    come in isn't one of them)."""
+    come in isn't one of them); or, with substitutes, those named apart from the eleven."""
     teams = dict(zip(f.team_ids, f.team_names))
-    playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
+    named = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and bool((p.get("lineup") or {}).get("substitution")) == substitutes]
     return [[PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
-             for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+             for p in named if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
 
 
 def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
@@ -297,10 +297,12 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
 
 def parse_game(x: dict[str, Any], system: str) -> LiveGame:
     """A match with its scorecard (MATCH_INCLUDE) -> the game for its match page: its snapshot, with every
-    player's line, and the home side's eleven, then the visitors'."""
+    player's line, and the home side's eleven, then the visitors', to follow; and its substitutes, by name, for
+    the scorecard (an impact player who bats or bowls)."""
     f = parse_fixture(x)
     players = [p for side in _elevens(x, f, system) for p in side]
-    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
+    bench = [p for side in _elevens(x, f, system, substitutes=True) for p in side]
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names, bench=bench)
 
 
 def _season_year(name: str) -> int:

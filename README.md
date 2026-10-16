@@ -146,10 +146,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   standings), the moments found for the players followed in it, and both sides' players to follow with a
   tap. A game's address is its source and the id a fixture of it has there, as its event's key holds them,
   so it's the same whether or not anyone follows a player in it, and once it's over. Where a fan follows
-  someone in it, its board is their live card's, as fresh as the polls; any other is read from its source
-  (an adapter's `match`) by the worker, at most once a minute a game and only while someone has its page
-  open, for a game a source has named (on Live now, or a followed player's), and at most six a minute of a
-  source; the page shows Live now's copy until the first read comes, and looks again while it's in view.
+  someone in it, its board is their live card's, as fresh as the polls. Any other game's board, and every
+  game's line-ups and players' lines, come from a read of its source (an adapter's `match`) by the worker: at
+  most once a minute a game and only while someone has its page open, for a game a source has named (on
+  Live now, or a followed player's), at most six a minute of a source's allowance, and none more for hours
+  once one finds it over or not there. The page shows Live now's copy until the first read comes, and looks
+  again while it's in view. A sport turned off has no match pages.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

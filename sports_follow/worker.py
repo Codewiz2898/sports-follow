@@ -41,7 +41,7 @@ LATE = 50
 logs.setup()
 tracing.setup("sports-follow-worker")
 # A job's arguments its log lines are tagged with.
-FIELDS = ("player_id", "event_id", "system")
+FIELDS = ("player_id", "event_id", "system", "game")
 # A quiet job's closing line (the tick's, every minute) is logged only past this many seconds, or on failure.
 QUIET_UNDER = 10
 # How long a stopping worker gives its jobs to end and free their own locks before it frees the rest

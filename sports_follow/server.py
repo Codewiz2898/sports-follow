@@ -541,16 +541,18 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     """One game's match page (match.py): its board, key moments and both sides' players this fan can follow,
     by its source and the id a fixture of it has there. Served from what's stored and last read; a read
     over a minute old queues another for the worker, so "refreshing" says a newer one may come in a moment.
-    A game no source has named here is a 404: an address made up asks nothing of a source."""
+    A game no source has named here, or of a sport turned off, is a 404: an address made up asks nothing of a
+    source."""
     if system not in KNOWN or not match.ID.fullmatch(game):
         raise HTTPException(404, "No such game.")
     page, ask = await in_db(match.view, fan, system, game)
     if ask:
         try:
             # One read a minute of a game, whether the last one came or failed, and at most match.READS a
-            # minute of a source, whichever games fans have open.
+            # minute of a source's allowance (Sportmonks' football and cricket share one), whichever games
+            # fans have open.
             if await state["redis"].set(f"match:asked:{system}:{game}", "1", nx=True, ex=match.FRESH):
-                spent = f"match:reads:{system}:{int(time.time() // 60)}"
+                spent = f"match:reads:{match.allowance(system)}:{int(time.time() // 60)}"
                 if await state["redis"].incr(spent) <= match.READS:
                     await enqueue("read_match", system, game, _job_id=f"read_match:{system}:{game}")
                 await state["redis"].expire(spent, 120, nx=True)

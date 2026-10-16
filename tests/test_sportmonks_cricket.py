@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date
 
-from sports_follow import moments
+from sports_follow import moments, sports
 from sports_follow.adapters import sportmonks, sportmonks_cricket as sc
 from sports_follow.adapters import budget
 
@@ -242,3 +242,18 @@ def test_a_match_page_reads_one_match_with_its_scorecard_and_both_elevens(monkey
     assert game is not None and (game.source_id, game.teams) == ("71215", ["India", "Afghanistan"])
     assert [(p.name, p.team_names) for p in game.players] == [("Abhishek Sharma", ["India"]), ("Rashid Khan", ["Afghanistan"])]  # home side first, no substitute
     assert game.snapshot.lines[str(OPENER)].headline == "108 (34)"
+
+
+def test_a_match_pages_scorecard_names_an_impact_substitute_who_bowls_without_offering_them():
+    def player(pid: int, name: str, team: int, sub: bool = False) -> dict:
+        return {"id": pid, "fullname": name, "lineup": {"team_id": team, "substitution": sub}}
+
+    bowling = [{"player_id": SEAMER, "scoreboard": "S1", "sort": 1, "overs": 4, "runs": 30, "wickets": 2, "rate": 7.5}]
+    x = _match("2nd Innings", [FIRST, {**CHASE, "score": 60, "wickets": 3, "overs": 8}], batting=[_bat(OPENER, 108, 34, "Catch Out")], bowling=bowling,
+               lineup=[player(OPENER, "Abhishek Sharma", IND), player(SPINNER, "Rashid Khan", AFG), player(SEAMER, "Impact Seamer", AFG, sub=True)])
+    game = sc.parse_game(x, "sportmonks_cricket")
+    assert [p.name for p in game.players] == ["Abhishek Sharma", "Rashid Khan"] and [(p.name, p.team_names) for p in game.bench] == [("Impact Seamer", ["Afghanistan"])]
+    names = {p.athlete_id: (p.name, p.team_names[0]) for p in [*game.players, *game.bench]}
+    lines = {aid: {"headline": line.headline, "stats": line.stats} for aid, line in game.snapshot.lines.items()}
+    india = sports.get("cricket").match_page(game.snapshot.state, [], lines, names)["scorecard"][0]
+    assert india["team"] == "India" and [w["name"] for w in india["bowling"]] == ["Impact Seamer"]
