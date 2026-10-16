@@ -203,7 +203,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   esports does by PandaScore's tournament tiers),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
-  sport's `notable`, and a source that rates its events sets `Fixture.tier`; read a few times a day at
+  sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
+  by in `Fixture.facts`: an esports source names each game's title in `facts["game"]`, its turn among the
+  sport's, or all its titles share one; read a few times a day at
   most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
   `live_note` and `lag_note` for a player page's words on how its live scores come in and how late they
