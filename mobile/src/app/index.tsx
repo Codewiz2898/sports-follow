@@ -1,6 +1,7 @@
 // Today, the web's TodayPage.tsx: the day and the app's name, the fan's players as a strip, their live games as
-// scoreboards, everything else on now, their results and their games coming up with the league's big ones after
-// them, this week's big moments and the Wire, and players to follow while they follow few. A fan with no players gets the welcome first, once.
+// scoreboards and a link to everything else on now (the Live page), their results and their games coming up
+// with the league's big ones after them, this week's big moments and the Wire, and players to follow while
+// they follow few. A fan with no players gets the welcome first, once.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
@@ -20,7 +21,7 @@ import { CloseIcon, SearchIcon, UserIcon } from '../icons'
 import { Rail } from '../rail'
 import { colour, dsp, font, GUTTER } from '../theme'
 import { LeagueComingCard, LeagueResultCard, useLeague } from '../today/league'
-import { AlsoLive } from '../today/live'
+import { AlsoLive, MoreLive } from '../today/live'
 import { StartersSection } from '../today/starters'
 import { PlayersStrip } from '../today/strip'
 import { ThisWeek, useWeek, Wire } from '../today/week'
@@ -173,8 +174,9 @@ export default function TodayScreen() {
           {group.length > 1 ? <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</Text> : null}
         </Pressable>
       ))}
-      {/* Then every other game on now: once the follow list has answered, so a game of the fan's never shows here first. */}
-      {loaded || failed ? <AlsoLive mine={games.flatMap(([, group]) => group)} /> : null}
+      {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. Once the
+          follow list has answered, so a game of the fan's is never counted as another. */}
+      {loaded || failed ? <MoreLive mine={games.flatMap(([, group]) => group)} /> : null}
 
       {resultCount > 0 ? (
         <Rail title={done ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
