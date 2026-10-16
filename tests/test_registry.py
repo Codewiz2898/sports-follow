@@ -197,10 +197,32 @@ def test_one_failed_sport_doesnt_stop_the_others(monkeypatch, caplog):
 
     monkeypatch.setattr(registry, "import_sport", import_sport)
     monkeypatch.setattr(registry, "import_rosters", lambda sport: asked.append(sport) or 3)
+    monkeypatch.setattr(registry, "find_people", lambda sport: None)
     done = registry.import_all()
     assert asked == ["basketball", "tennis", "cricket", "chess", "football", "esports"]  # smallest first, football last of Wikidata's
     assert done == {"basketball": None, "tennis": 10, "cricket": 10, "chess": 10, "football": 10, "esports": 3}
     assert "basketball failed" in caplog.text
+
+
+def test_a_roster_sports_people_are_found_after_its_import_even_a_failed_one(monkeypatch, caplog):
+    from sports_follow import roster_wikidata
+
+    found = []
+
+    def import_rosters(sport):
+        raise RuntimeError("PandaScore failed")
+
+    def run(sport):
+        found.append(sport)
+        raise RuntimeError("wikidata query service kept failing")
+
+    monkeypatch.setattr(registry, "import_rosters", import_rosters)
+    monkeypatch.setattr(roster_wikidata, "run", run)
+    done = registry.import_all(["esports"])
+    assert found == ["esports"] and done == {"esports": None}  # last week's rows are matched again; matching failing changes nothing
+    assert "matching athletes to Wikidata failed" in caplog.text
+    monkeypatch.setattr(registry, "import_rosters", lambda sport: 3)
+    assert registry.import_all(["esports"]) == {"esports": 3} and found == ["esports", "esports"]
 
 
 def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):

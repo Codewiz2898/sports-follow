@@ -11,10 +11,17 @@ Who a pro could be: every living person the sport counts as one of its people on
 (Sport.people_ids and people_occupations: anyone with a Liquipedia, HLTV or Esports Earnings id, or a
 professional gamer), a few thousand, read in a few queries one at a time. A pro is matched to one of them:
 
-- by id, where Wikidata keeps the ids of the pro's source (Adapter.wikidata_property: Liquipedia's pages);
+- by id, where Wikidata keeps the ids of the pro's source (Adapter.wikidata_property: Liquipedia's pages),
+  unless their birth dates differ;
 - by handle: the handle is theirs (a label, an alias, or a name their ids give, Sport.known_as: their
   Liquipedia page), and so is the real name or the birth date, and so is the game or a team;
 - by real name and birth date to the day, both theirs.
+
+A real name is never a handle with a team's tag ("SEN TenZ" on Wikidata, "FaZe_TGLTN" in PUBG's list):
+on Wikidata it's a birth name, a given and family name, or another label or alias. Two real names
+agree when spelled the same, as romanisations of a Korean name may differ ("Jeong Ji-hoon", "Jung Ji-hun"),
+or nearly the same in one word beside a distinctive word the same ("Aleksandr Kostyliev", "Oleksandr
+Kostyliev"); never "Kim Junho" and "Kim Jinho".
 
 Never by a handle alone: handles collide ("Faker" is also a band; "Zeus" a god, a rapper and two pros). A
 pro two people could be, or a person two pros could be, is matched to no one; birth dates known to the day
@@ -52,9 +59,22 @@ log = logging.getLogger("sports_follow.roster_wikidata")
 BATCH = 2000  # people a query reads
 KEY = "wikidata"  # an athlete's Wikidata id among their ids
 QUOTED = re.compile(r"""["“”„«»]([^"“”„«»]+)["“”„«»]""")  # Tyson "TenZ" Ngo
-CLOSE = 0.85  # how alike two spellings of a name's word must be: "Aleksandr", "Oleksandr"
-VOWELS = re.compile(r"[aeiouwy]")
+CLOSE = 0.8  # how alike two spellings of a name's word must be: "Aleksandr", "Oleksandr"; "Eduard", "Edward"
 LEET = str.maketrans("013", "oie")  # a handle's digits for letters: "Suma1L" is SumaiL
+# Romanisations of one Korean family name ("Cho", "Jo"): a source and Wikidata often spell a pro's differently.
+FAMILIES = (
+    ("lee", "yi", "rhee"), ("kim", "gim"), ("park", "bak", "pak"), ("choi", "choe"), ("kang", "gang"), ("cho", "jo"), ("jang", "chang"),
+    ("lim", "im"), ("oh", "o"), ("seo", "suh"), ("shin", "sin"), ("kwon", "gwon"), ("ahn", "an"), ("yoo", "yu"), ("jeon", "chun"),
+    ("go", "ko", "koh"), ("son", "sohn"), ("bae", "pae"), ("baek", "paik", "baik"), ("heo", "huh", "hur"), ("noh", "roh"),
+    ("kwak", "gwak"), ("koo", "gu", "ku"), ("eom", "um", "uhm"), ("chae", "che"),
+)
+# Family names too common to tell two people apart by (Korean, Chinese, Vietnamese): a name spelled alike
+# needs another word the same that isn't one ("Choi Hyunwoo" is never "Choi Hyunwook").
+COMMON = {
+    "kim", "lee", "park", "choi", "jung", "kang", "cho", "yoon", "jang", "lim", "han", "shin", "seo", "kwon", "hwang", "ahn", "song",
+    "yoo", "hong", "jeon", "ko", "moon", "son", "yang", "baek", "heo", "nam", "sung", "kwak", "chae", "koo", "wang", "zhang", "liu",
+    "chen", "zhao", "huang", "zhou", "guo", "xu", "lin", "luo", "nguyen", "tran", "pham", "hoang", "dang", "duong",
+}
 
 
 @dataclass
@@ -108,39 +128,61 @@ def handle(text: str) -> str:
     return " ".join(naming.words(text)).translate(LEET)
 
 
+def tagged(text: str, handles: set[str]) -> bool:
+    """Whether a name is a handle with a team's tag, no real name: two words, one a handle and the other
+    written as a tag is, in capitals, with a digit or with a capital inside ("SEN TenZ", "C9 TenZ",
+    "FaZe_TGLTN"); "Yawar Hassan" is YawaR's real name."""
+    words = [w for w in re.split(r"[\s_]+", text.strip()) if w]
+    for i, word in enumerate(words if len(words) == 2 else []):
+        if handle(word) in handles:
+            tag = words[1 - i]
+            return tag.isupper() or any(c.isdigit() for c in tag) or bool(re.search(r"[a-z][A-Z]", tag))
+    return False
+
+
 def _within(short: list[str], long: list[str]) -> bool:
     return bool(short) and any(long[i : i + len(short)] == short for i in range(len(long) - len(short) + 1))
 
 
-def alike(a: str, b: str) -> bool:
-    """Two spellings of a name's word, four letters or more: nearly the same ("Aleksandr", "Oleksandr";
-    "Ilya", "Illya"), or the same first letter and consonants, as romanisations of one Korean name differ
-    ("Jeong", "Jung"; "Jihoon", "Jihun")."""
-    if min(len(a), len(b)) >= 4 and SequenceMatcher(None, a, b).ratio() >= CLOSE:
-        return True
-    bones = VOWELS.sub("", a[1:]), VOWELS.sub("", b[1:])
-    return min(len(a), len(b)) >= 4 and a[0] == b[0] and bones[0] == bones[1] and len(bones[0]) >= 2
+def spell(word: str) -> str:
+    """A name's word as compared, as romanisations of one Korean syllable differ ("Jihoon", "Jihun";
+    "Jeong", "Jung"; "Hyeok", "Hyuk"), and a doubled letter once ("Illya", "Ilya")."""
+    return re.sub(r"(.)\1+", r"\1", word.replace("oo", "u").replace("eong", "ung").replace("eok", "uk"))
+
+
+FAMILY = {spell(name): spell(names[0]) for names in FAMILIES for name in names}
+
+
+def spelt(name: list[str]) -> list[str]:
+    """A name's words as compared (spell), the first and last read as a Korean family name in any
+    romanisation ("Jo Geon-hee", "Geon-hee Cho"); never a word inside a given name ("Byeong-jun")."""
+    out = [spell(w) for w in name]
+    for i in {0, len(out) - 1} if out else ():
+        out[i] = FAMILY.get(out[i], out[i])
+    return out
 
 
 def names_agree(a: list[str], b: list[str]) -> bool:
-    """Two real names are one person's: every word of the shorter is a different word of the longer, the
-    same or spelled alike (alike), and at least one word of three letters or more the same. "Aleksandr
-    Kostyliev" is "Oleksandr Kostyliev", "Erick Santos" is "Erick Andrade Santos", "Jeong Jihoon" is "Jung
-    Jihoon"."""
-    short, long = sorted((a, b), key=len)
+    """Two real names are one person's: every word of the shorter, of two or more, is a different word of the
+    longer, the same as spelt (spelt), or, for one word only, five letters or more and nearly the same
+    beside a word of four or more that's the same and no common family name. "Erick Santos" is "Erick
+    Andrade Santos" and "Aleksandr Kostyliev" "Oleksandr Kostyliev"; "Kim Junho" is never "Kim Jinho"."""
+    short, long = sorted((spelt(a), spelt(b)), key=len)
     if len(short) < 2:
         return False
-    left, same = list(long), False
+    left, alike, anchor = list(long), None, False
     for word in short:
         if word in left:
             left.remove(word)
-            same = same or len(word) >= 3
+            anchor = anchor or (len(word) >= 4 and word not in COMMON)
             continue
-        spelt = next((w for w in left if alike(word, w)), None)
-        if spelt is None:
+        if alike is not None:
             return False
-        left.remove(spelt)
-    return same
+        alike = next((w for w in left if min(len(w), len(word)) >= 5 and SequenceMatcher(None, word, w).ratio() >= CLOSE), None)
+        if alike is None:
+            return False
+        left.remove(alike)
+    return alike is None or anchor
 
 
 def same_team(ours: list[str], theirs: list[str], filler: Iterable[str] = ()) -> bool:
@@ -210,7 +252,8 @@ def people(kind: sports.Sport, core: list[dict], facts: list[dict], names: list[
         p.sitelinks = max(p.sitelinks, int(r.get("sitelinks") or 0))
         if r.get("image"):
             images[p.qid].add(unquote(r["image"].rsplit("/", 1)[-1]))  # a Special:FilePath URL: the file name
-    forms: dict[str, list[str]] = defaultdict(list)  # labels, aliases, birth names
+    forms: dict[str, list[str]] = defaultdict(list)  # labels and aliases
+    born_as: dict[str, list[str]] = defaultdict(list)  # birth names
     given: dict[str, list[str]] = defaultdict(list)
     family: dict[str, list[str]] = defaultdict(list)
     disciplines: dict[str, list[str]] = defaultdict(list)
@@ -230,7 +273,7 @@ def people(kind: sports.Sport, core: list[dict], facts: list[dict], names: list[
         elif what == "family":
             family[p.qid].append(value)
         elif what == "birth_name":
-            forms[p.qid].append(value)
+            born_as[p.qid].append(value)
     labels: dict[str, dict[str, str]] = defaultdict(dict)
     for r in names:
         p = found.get(_qid(r["p"]))
@@ -245,18 +288,20 @@ def people(kind: sports.Sport, core: list[dict], facts: list[dict], names: list[
         p.label = next((labels[qid][lang] for lang in registry.LABEL_LANGS if lang in labels[qid]), "")
         p.born = next(iter(births[qid])) if len(births[qid]) == 1 else None  # two days: neither
         p.image = min(images[qid])[:300] if images[qid] else None  # the same one every week
+        rests = []
         for form in forms[qid]:
-            nicknames = QUOTED.findall(form)
-            p.handles.update(handle(n) for n in nicknames)
-            rest = QUOTED.sub(" ", form)
-            p.handles.add(handle(rest))
-            p.names += plain(rest)
-        for g in given[qid]:
-            for f in family[qid]:
-                p.names += [*plain(f"{g} {f}"), *plain(f"{f} {g}")]
+            p.handles.update(handle(n) for n in QUOTED.findall(form))
+            rests.append(QUOTED.sub(" ", form))
+            p.handles.add(handle(rests[-1]))
         ids = {k: sorted(v) for k, v in p.ids.items()}
         p.handles.update(handle(name) for name in kind.known_as(ids))
         p.handles.discard("")
+        # A real name: a birth name, a given and family name, or a label or alias that isn't a handle with a
+        # team's tag ("SEN TenZ").
+        nicks = {h for h in p.handles if " " not in h}
+        p.names = [n for name in born_as[qid] for n in plain(name)]
+        p.names += [n for g in given[qid] for f in family[qid] for n in (*plain(f"{g} {f}"), *plain(f"{f} {g}"))]
+        p.names += [n for rest in rests if not tagged(rest, nicks) for n in plain(rest)]
         p.names = [list(n) for n in dict.fromkeys(tuple(n) for n in p.names if len(n) >= 2)]
         p.plays = kind.plays(ids, disciplines[qid])
         out.append(p)
@@ -311,19 +356,22 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
         for h in p.handles:
             by_handle[h].append(p)
         for name in p.names:
-            by_name[tuple(sorted(name))].append(p)
+            by_name[tuple(sorted(spelt(name)))].append(p)
 
-    found: list[Match] = []
+    def other_day(row: Row, p: Person) -> bool:
+        return row.born is not None and p.born is not None and row.born != p.born
+
+    each: list[dict[str, Match]] = []  # who each row could be
     for row in rows:
-        exact = {p.qid: p for key in row.ids for p in by_id.get((key[0], _id(key[1])), [])}
-        if exact:
-            if len(exact) == 1:
-                found.append(Match(row, next(iter(exact.values())), "id"))
-            continue  # two people with the same id: neither
-        names = [n for alias in row.aliases for n in plain(alias) if len(n) >= 2]
         could: dict[str, Match] = {}
+        for key in row.ids:
+            could |= {p.qid: Match(row, p, "id") for p in by_id.get((key[0], _id(key[1])), []) if not other_day(row, p)}
+        if could:
+            each.append(could)
+            continue
+        names = [n for alias in row.aliases if not tagged(alias, {handle(row.handle)}) for n in plain(alias) if len(n) >= 2]
         for p in by_handle.get(handle(row.handle), []):
-            if row.born and p.born and row.born != p.born:
+            if other_day(row, p):
                 continue
             who = (row.born is not None and row.born == p.born) or any(names_agree(n, m) for n in names for m in p.names)
             where = (row.plays and row.plays in p.plays) or same_team(row.teams, p.teams, filler)
@@ -331,22 +379,23 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = ()) -
                 could[p.qid] = Match(row, p, "handle")
         if not could and row.born:
             for n in names:
-                for p in by_name.get(tuple(sorted(n)), []):
+                for p in by_name.get(tuple(sorted(spelt(n))), []):
                     if p.born == row.born:
                         could[p.qid] = Match(row, p, "name and birth date")
-        if len(could) == 1:
-            found += could.values()
-    # A person two rows could be is neither's, unless one row is theirs by id.
-    by_person: dict[str, list[Match]] = defaultdict(list)
-    for m in found:
-        by_person[m.person.qid].append(m)
+        each.append(could)
+    # A row two people could be is no one's; so is a person two rows could be, unless one row is theirs by id.
+    rivals: dict[str, list[Match]] = defaultdict(list)
+    for could in each:
+        for m in could.values():
+            rivals[m.person.qid].append(m)
     out = []
-    for ms in by_person.values():
-        by_id_too = [m for m in ms if m.how == "id"]
-        if len(by_id_too) == 1:
-            out.append(by_id_too[0])
-        elif not by_id_too and len(ms) == 1:
-            out.append(ms[0])
+    for could in each:
+        if len(could) != 1:
+            continue
+        [m] = could.values()
+        by_id_too = [r for r in rivals[m.person.qid] if r.how == "id"]
+        if len(rivals[m.person.qid]) == 1 or (m.how == "id" and len(by_id_too) == 1):
+            out.append(m)
     return out
 
 

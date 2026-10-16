@@ -135,16 +135,26 @@ def test_birth_dates_that_differ_rule_a_person_out():
     assert matched([row("pandascore:1", "TenZ", real="Tyson Ngo", born=date(2003, 1, 1), game="Valorant")], [tenz]) == {}
 
 
-def test_romanised_korean_names_agree_but_other_names_dont():
-    assert rw.names_agree(["jeong", "jihoon"], ["jung", "jihoon"]) and rw.names_agree(["jeong", "jihoon"], ["jeong", "jihun"])
-    assert rw.names_agree(["erick", "santos"], ["erick", "andrade", "santos"]) and rw.names_agree(["ilya", "mulyarchuk"], ["illya", "mulyarchuk"])
-    assert not rw.names_agree(["kim", "minho"], ["kim", "minsu"])
-    assert not rw.names_agree(["ahmed", "salah"], ["mohamed", "salah"])
-    assert not rw.names_agree(["salah"], ["mohamed", "salah"])  # one word is no name
+@pytest.mark.parametrize("a, b", [
+    ("Jeong Ji-hoon", "Jung Ji-hun"), ("Lee Seong-hyuk", "Lee Seong-hyeok"), ("Cho Geon-hee", "Jo Geon-hee"), ("Gwon Sang-yun", "Kwon Sang-yun"),
+    ("Byeong-jun Yu", "Yu Byeong-jun"), ("Ilya Mulyarchuk", "Illya Mulyarchuk"), ("Erick Santos", "Erick Andrade Santos"),
+    ("Aleksandr Kostyliev", "Oleksandr Kostyliev"), ("Ilya Zalutskiy", "Ilya Zalutsky"), ("Eduard Abgaryan", "Edward Abgaryan"),
+])
+def test_one_persons_names_agree(a, b):
+    assert any(rw.names_agree(x, y) for x in rw.plain(a) for y in rw.plain(b))
+
+
+@pytest.mark.parametrize("a, b", [
+    ("Kim Junho", "Kim Jinho"), ("Park Jihoon", "Park Jaehoon"), ("Lee Sanghyeok", "Lee Seunghyuk"), ("Kim Minsu", "Kim Minseo"),
+    ("Choi Hyunwoo", "Choi Hyunwook"), ("Martin Hansen", "Morten Hansen"), ("Ivan Petrov", "Ivana Petrov"), ("Kim Min-ho", "Kim Min-su"),
+    ("Ahmed Salah", "Mohamed Salah"), ("Salah", "Mohamed Salah"), ("Byeong-jun Yu", "Byeong-chun Yu"),
+])
+def test_other_peoples_names_dont(a, b):
+    assert not any(rw.names_agree(x, y) for x in rw.plain(a) for y in rw.plain(b))
 
 
 def test_a_digit_for_a_letter_is_the_same_handle():
-    suma1l = person("Q21033312", "Suma1L", aliases=("Syed Sumail Hassan",), disciplines=("Dota 2",))
+    suma1l = person("Q21033312", "Suma1L", aliases=("Syed Sumail Hassan",), given=("Syed",), family=("Hassan",), disciplines=("Dota 2",))
     assert matched([row("pandascore:9368", "SumaiL", real="Syed Sumail Hassan", game="Dota 2")], [suma1l]) == {"pandascore:9368": ("Q21033312", "handle")}
 
 
@@ -156,9 +166,21 @@ def test_teams_are_one_by_their_telling_words():
 
 
 def test_a_pro_whose_source_id_wikidata_keeps_is_matched_by_it():
-    jonathan = person("Q116030750", "Jonathan Gaming", ids={"P10918": ["pubgmobile/Jonathan"]}, image="Jonathan Gaming in 2023 (cropped).jpg")
+    jonathan = person("Q116030750", "Jonathan Gaming", born="2002-09-21", ids={"P10918": ["pubgmobile/Jonathan"]}, image="Jonathan Gaming in 2023 (cropped).jpg")
     lp = row("lp:pubgm:4567", "Jonathan", ids=(("P10918", "pubgmobile/Jonathan"),))
     assert matched([lp], [jonathan]) == {"lp:pubgm:4567": ("Q116030750", "id")}
+    # Unless their birth dates differ: the page has passed to a namesake since Wikidata noted it.
+    lp.born = date(2004, 2, 2)
+    assert matched([lp], [jonathan]) == {}
+
+
+def test_a_handle_with_a_teams_tag_is_no_real_name():
+    tgltn = person("Q1", "TGLTN", aliases=("FaZe TGLTN",), ids={"P10918": ["pubg/TGLTN"]})
+    assert matched([row("pubg:tgltn", "TGLTN", real="FaZe_TGLTN", game="PUBG")], [tgltn]) == {}
+    assert all(rw.tagged(name, {"tenz"}) for name in ("SEN TenZ", "C9 TenZ", "Cloud9 Tenz", "TenZ LEV"))
+    # A real name may hold the handle.
+    yawar = person("Q128403794", "YawaR", aliases=("Yawar Hassan",), disciplines=("Dota 2",))
+    assert matched([row("pandascore:9492", "YawaR", real="Yawar Hassan", game="Dota 2")], [yawar]) == {"pandascore:9492": ("Q128403794", "handle")}
 
 
 def test_a_real_name_and_birth_date_match_without_the_handle():
@@ -177,6 +199,10 @@ def test_a_pro_two_people_could_be_or_a_person_two_pros_could_be_is_matched_to_n
     # Unless one is theirs by id.
     by_id = row("lp:val:1", "TenZ", ids=(("P10918", "valorant/TenZ"),))
     assert matched([*twice, by_id], [tenz]) == {"lp:val:1": ("Q113450352", "id")}
+    # A pro two people fit is no one's, and still keeps either from going to another pro.
+    one = row("pandascore:1", "TenZ", real="Tyson Ngo", game="Valorant")
+    other = row("pandascore:3", "TenZ", real="Tyson Ngo", teams=("Sentinels",))
+    assert matched([one, other], [tenz, double]) == {}
 
 
 # ---------------------------------------------------------------- the registry
