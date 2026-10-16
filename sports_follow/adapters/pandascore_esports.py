@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from .. import bus, naming, sports
 from . import budget, dota, opendota, pandascore
-from .base import Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot
+from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -261,6 +261,22 @@ def parse_player(p: dict[str, Any]) -> PlayerRef:
     )
 
 
+def parse_team(t: dict[str, Any]) -> SourceTeam | None:
+    """A team and the players on it today (pure): a team title's, with its game as each player's league. None
+    for a team with no id or name, or of a title this source's pros aren't from (GAMES)."""
+    slug = (t.get("current_videogame") or {}).get("slug")
+    if not t.get("id") or not (t.get("name") or "").strip() or slug not in GAMES:
+        return None
+    team_id, name = str(t["id"]), t["name"].strip()
+    players = [
+        PlayerRef(system="pandascore_esports", athlete_id=str(p["id"]), name=p["name"].strip(), team_ids=[team_id], team_names=[name], league=slug,
+                  born=p.get("birthday"), game=game_name(slug))
+        for p in t.get("players") or []
+        if p.get("id") and naming.words(p.get("name") or "") and p.get("active") is not False
+    ]
+    return SourceTeam(system="pandascore_esports", team_id=team_id, name=name, game=game_name(slug), players=players)
+
+
 def full_name(p: dict[str, Any]) -> str:
     """ "Tyson Ngo" from first and last name, or ""."""
     return " ".join(x.strip() for x in (p.get("first_name"), p.get("last_name")) if x and x.strip())
@@ -431,6 +447,22 @@ class PandascoreEsports(Adapter):
         except pandascore.NotFound:
             return None
         return parse_player(data) if isinstance(data, dict) and data.get("id") else None
+
+    team_id_pattern = DIGITS
+
+    def team(self, team_id: str) -> SourceTeam | None:
+        """A team and who's on it now (a campaign's whole-team follow), read at most every 6 hours."""
+        try:
+            data = pandascore.get_json(f"/teams/{team_id}", ttl=6 * 3600)
+        except pandascore.NotFound:
+            return None
+        return parse_team(data) if isinstance(data, dict) else None
+
+    def find_teams(self, name: str) -> list[SourceTeam]:
+        """Teams by name in the team titles, for an operator picking a campaign's team by its id."""
+        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        rows = pandascore.get_json("/teams", ttl=3600, **{"search[name]": name, "filter[videogame_id]": games, "page[size]": 20})
+        return [t for t in (parse_team(r) for r in rows if isinstance(r, dict)) if t] if isinstance(rows, list) else []
 
     def _between(self, team_id: str, start: date, end: date, ttl: float) -> list[Fixture]:
         span = f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z"

@@ -215,7 +215,8 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
       {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
       <ErrorBoundary fallback={<PlainScore live={live} />} resetKey={live}>
         <GameBoard live={live} compact={compact} teams={teams} />
-        {compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />}
+        {/* No player named (a campaign's game on now that the fan follows nobody in): the board alone. */}
+        {playerName && (compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />)}
         {!compact && live.moments && live.moments.length > 0 && (
           <ul className="moments">
             {live.moments.slice(0, 5).map((m, i) => (

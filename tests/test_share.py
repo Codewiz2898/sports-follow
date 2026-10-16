@@ -14,7 +14,7 @@ from html import unescape
 import pytest
 from PIL import Image
 
-from sports_follow import bus, server, share, sports, week
+from sports_follow import bus, campaigns, server, share, sports, week
 from sports_follow.config import APP_NAME
 
 from .test_api import api  # noqa: F401  (the fixture)
@@ -236,3 +236,22 @@ def test_the_picture_routes_draw_the_preview(built, monkeypatch):
     assert built.call("GET", "/api/share.png").content == share.png(share.APP)
     assert built.call("GET", "/api/players/2/share.png").status_code == 404  # no such player
     assert built.call("GET", "/api/players/1/share.png?g=0").status_code == 422
+
+
+GUKESH = {"slug": "gukesh", "sport": "chess", "title": "Gukesh v Sindarov", "event": "World Chess Championship", "lines": ["Fourteen games."],
+          "players": [{"name": "Gukesh D"}, {"name": "Javokhir Sindarov"}], "teams": [], "games": [{"start_utc": "2099-11-24T09:30:00+00:00", "label": "Game 1"}]}
+
+
+def test_a_crawler_gets_a_campaign_page_with_its_preview_and_picture(built, monkeypatch):
+    asked = []
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: asked.append((slug, fan)) or (GUKESH if slug == "gukesh" else None))
+    tags = meta(built.call("GET", "/gukesh?utm_source=whatsapp").text)
+    assert tags["og:title"] == "Gukesh v Sindarov · World Chess Championship" and tags["og:url"] == "http://test/gukesh"
+    assert tags["og:image"].startswith("http://test/api/campaigns/gukesh/share.png?v=") and "Game 1: Tue 24 Nov" in tags["og:description"]
+    got = built.call("GET", "/api/campaigns/gukesh/share.png")
+    assert got.status_code == 200 and picture(got.content).size == (1200, 630) and got.content == share.png(share.of_campaign(GUKESH).picture)
+    # No such campaign, or an address that isn't one: the app's own preview, and no picture.
+    assert meta(built.call("GET", "/nothing-here").text)["og:title"] == APP_NAME
+    assert built.call("GET", "/api/campaigns/nothing-here/share.png").status_code == 404
+    assert built.call("GET", "/api/campaigns/Not%20One/share.png").status_code == 404
+    assert asked == [("gukesh", None), ("gukesh", None), ("nothing-here", None), ("nothing-here", None)]  # never a fan's rows in a preview

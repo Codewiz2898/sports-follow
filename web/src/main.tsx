@@ -6,15 +6,17 @@ import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { BellIcon, ChevronIcon, HomeIcon, SearchIcon, UserIcon } from './components/Icons'
+import { BellIcon, ChevronIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
 import { FollowingProvider, useFollowing } from './following'
 import { AccountPage } from './pages/AccountPage'
 import { AthletePage } from './pages/AthletePage'
+import { CampaignPage } from './pages/CampaignPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
 import { FollowingPage } from './pages/FollowingPage'
+import { LivePage } from './pages/LivePage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
@@ -23,6 +25,7 @@ import { SearchPage } from './pages/SearchPage'
 import { loadSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
 import { WelcomePage } from './pages/WelcomePage'
+import { noteVisit } from './visit'
 import './styles.css'
 
 // The admin panel: its own chunk, so fans never download it.
@@ -117,6 +120,7 @@ function Sidebar() {
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
+        <NavLink to="/live"><LiveIcon width={18} height={18} />Live now</NavLink>
         <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts<Unread /></NavLink>
         <NavLink to="/account"><UserIcon width={18} height={18} />{me?.signed_in ? 'Account' : 'Sign in'}</NavLink>
       </nav>
@@ -190,6 +194,7 @@ function App() {
             <Route path="/" element={<TodayPage />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/following" element={<FollowingPage />} />
+            <Route path="/live" element={<LivePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
@@ -197,13 +202,15 @@ function App() {
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
+            {/* A campaign page (stann.in/gukesh): any other one-word address; the server says if it's one. */}
+            <Route path="/:slug" element={<CampaignPage notFound={<NotFound />} />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </ErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
-        {/* The Following page is part of Today here (its strip opens it): Today stays lit there. */}
-        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
+        {/* The Following and Live pages are part of Today here (Today opens them): Today stays lit there. */}
+        <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' || pathname === '/live' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
         <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>
@@ -220,9 +227,10 @@ function failedRender(error: unknown, info: { componentStack?: string }) {
 }
 
 // The sports this app knows come from the server; the first render waits for them (from this device's
-// copy when there is one, so only a first visit waits on the network).
+// copy when there is one, so only a first visit waits on the network), and for a tagged link's source to be
+// told (visit.ts), which a first visit's fan cookie comes back with.
 // The admin panel (/admin) is apart from the fans' app: none of its providers, so no following or live stream.
-void loadSports().then(() => createRoot(document.getElementById('root')!, { onCaughtError: failedRender, onUncaughtError: failedRender }).render(
+void Promise.all([loadSports(), noteVisit()]).then(() => createRoot(document.getElementById('root')!, { onCaughtError: failedRender, onUncaughtError: failedRender }).render(
   <StrictMode>
     <BrowserRouter>
       {window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/') ? (
