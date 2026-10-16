@@ -39,7 +39,8 @@ export function endpoints(request: Request) {
     research: () => request<Research>('/api/me/research'),
     setAlerts: (playerId: number, level: AlertLevel) =>
       request<{ player_id: number; alerts: AlertLevel }>(`/api/follows/${playerId}/alerts`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ level }) }),
-    pushInfo: () => request<{ enabled: boolean; public_key: string | null }>('/api/push'),
+    // enabled: Web Push (its public key); fcm: the Android app's notifications.
+    pushInfo: () => request<{ enabled: boolean; public_key: string | null; fcm: boolean }>('/api/push'),
     pushSubscribe: (subscription: PushSubscriptionJSON, quiet: { start: string | null; end: string | null }) =>
       request<PushSettings>('/api/push/subscriptions', {
         method: 'POST',

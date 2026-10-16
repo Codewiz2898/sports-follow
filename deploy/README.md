@@ -256,6 +256,13 @@ every six hours, the first time within ten minutes of starting. PandaScore's com
 `c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
 `/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
 
+**Android notifications** (you, once): the Android app's pushes go through Firebase Cloud Messaging with
+a service-account key of the app's Firebase project (README.md, "Android app", says how to make it). Save
+it on the Mac as `~/.config/sports-follow/fcm-service-account.json` (`chmod 600`), then send it and
+restart the API and the worker, as for the esports tokens above. `https://<domain>/api/push` then answers
+`"fcm": true`. Without it the app's notifications are off and nothing else changes. To rotate it, make a
+new key in the Firebase console, send it, restart, then delete the old key there.
+
 **Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
 the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
 AI research, and pages the agent built before (sports with no source here) stay as they were, no longer

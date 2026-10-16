@@ -1,6 +1,10 @@
 // The Android app's config (Expo). Its name is stann's, from sports_follow/app.json, the one place it's
 // written; its icons are the web app's (web/scripts/make_icons.py draws them). The API it talks to is
 // src/api.ts's.
+//
+// Notifications come through the app's Firebase project (src/push.ts): its google-services.json is never
+// committed. It's GOOGLE_SERVICES_JSON's file when that's set, else mobile/google-services.json (gitignored);
+// a build without either runs, without notifications.
 
 /// <reference types="node" />
 import fs from 'node:fs'
@@ -12,7 +16,10 @@ if (!name) throw new Error('sports_follow/app.json has no name')
 
 const ICONS = '../web/public/icons'
 const PAPER = '#F3F3EF' // web/src/styles.css --bg
+const BLUE = '#1F5BEF' // stann's own blue, the badge's (web/scripts/make_icons.py)
 const FONTS = 'node_modules/@expo-google-fonts'
+const GOOGLE_SERVICES = process.env.GOOGLE_SERVICES_JSON || './google-services.json'
+const FIREBASE = fs.existsSync(path.resolve(__dirname, GOOGLE_SERVICES))
 
 export default (): ExpoConfig => ({
   name,
@@ -28,12 +35,15 @@ export default (): ExpoConfig => ({
     package: 'io.stann.app',
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
+    ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
   },
   ios: { bundleIdentifier: 'io.stann.app' },
   plugins: [
     'expo-router',
     // The badge on paper while the first screen waits for the sports (catalog.tsx).
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
+    // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue.
+    ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE }],
     // The web app's typefaces (styles.css): Anton for display, Manrope for text, Fredoka for the name.
     ['expo-font', {
       fonts: [
@@ -47,4 +57,5 @@ export default (): ExpoConfig => ({
     }],
   ],
   experiments: { typedRoutes: true },
+  extra: { firebase: FIREBASE }, // whether this build can have an FCM token (src/push.ts)
 })

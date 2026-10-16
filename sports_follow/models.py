@@ -389,15 +389,18 @@ class NotificationMute(Base):
 
 
 class PushSubscription(Base):
-    """One device a fan turned notifications on for (Web Push), with its quiet hours."""
+    """One device a fan turned notifications on for, with its quiet hours: a browser or installed web app
+    (Web Push), or the Android app (FCM, fcm.py)."""
 
     __tablename__ = "push_subscription"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     fan_id: Mapped[str] = mapped_column(String(64), index=True)
+    transport: Mapped[str] = mapped_column(String(16), default="webpush", server_default="webpush")  # "webpush" or "fcm"
+    # Where its pushes go: a Web Push endpoint (a push service's URL), or the Android app's FCM token.
     endpoint: Mapped[str] = mapped_column(Text, unique=True)
-    p256dh: Mapped[str] = mapped_column(String(200))
-    auth: Mapped[str] = mapped_column(String(100))
+    p256dh: Mapped[str | None] = mapped_column(String(200))  # Web Push's keys; an FCM token has none
+    auth: Mapped[str | None] = mapped_column(String(100))
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     quiet_start: Mapped[str | None] = mapped_column(String(5))  # "22:00", in the device's timezone
     quiet_end: Mapped[str | None] = mapped_column(String(5))  # "07:00"

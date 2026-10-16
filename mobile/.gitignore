@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# The app's Firebase config (app.config.ts): the Firebase project's, never in the repo
+google-services.json

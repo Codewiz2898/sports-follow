@@ -6,8 +6,8 @@ are sent once, planned per fan (one push per game, sound rationed), logged as no
 delivered to each device at once. A batch no sender claimed (the worker restarted between finding a
 moment and sending it) is swept up by the tick; a live moment that has gone stale by then is dropped.
 
-Delivery is Web Push today (browsers, the installed app, the Android app, iPhone home-screen apps);
-it is one function, push(), so native push (FCM, APNs) can sit beside it later. A fan's quiet hours
+Each device gets its push by its own transport (deliver()): Web Push for browsers, the installed web app
+and iPhone home-screen apps (push(), below), and FCM for the Android app (fcm.py). A fan's quiet hours
 don't drop a moment: it arrives silently. Devices the push service says are gone are removed.
 
     .venv/bin/python -m sports_follow.notify keys        # make this server's VAPID keys, once
@@ -33,7 +33,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import alerts, bus, logs, metrics
+from . import alerts, bus, fcm, logs, metrics
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
@@ -190,7 +190,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
     if not jobs:
         return 0
-    futures = [(notification_id, device, _wire.submit(logs.carried(push), device[1], device[2], device[3], payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
+    futures = [(notification_id, device, _wire.submit(logs.carried(deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
     results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
     _settle(results)
     sent = sum(1 for _, _, error in results if error is None)
@@ -198,7 +198,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     # The numbers as fields too, for the Notifications dashboard (deploy/grafana/): among them how long
     # the oldest moment waited, from its poll or build finding it to its push.
     waited = max((now - item.created_at).total_seconds() for item in items)
-    metrics.pushes([(urlparse(device[1]).hostname, error) for (_, device, _), (_, _, error) in zip(futures, results)], waited)
+    metrics.pushes([(_service(device), error) for (_, device, _), (_, _, error) in zip(futures, results)], waited)
     log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, pushes, sent, len(results),
              extra={"moments": len(claimed), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
     return sent
@@ -213,14 +213,14 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
 
 def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
-    device: (notification id, (device id, endpoint, p256dh, auth), payload, ttl, topic)."""
+    device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
     players = {i.player_id for i in items}
     events = {i.event_id for i in items if i.event_id}
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))):
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
     devices: dict[str, list[PushSubscription]] = {}
-    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels)).order_by(PushSubscription.id.desc())) if levels else []:
+    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())) if levels else []:
         mine = devices.setdefault(d.fan_id, [])
         # However many are stored, one fan's fan-out can't fill the push threads every other fan waits on.
         if len(mine) < MAX_DEVICES:
@@ -243,7 +243,7 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             db.flush()
             payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
             for d in fan_devices:
-                jobs.append((row.id, (d.id, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
     return jobs
 
 
@@ -260,19 +260,40 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
 
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
     """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES.
-    A message too big for the push service (413) isn't counted against the device."""
+    A message too big for the push service (413) isn't counted against the device, nor a refusal of this
+    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device)."""
     if error is None:
         db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
     elif error in (404, 410):
         db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
-    elif error == 413:
-        return  # the message was too big for the push service: not the device's fault
+    elif error in (401, 413):
+        return  # this server's key, or a message too big for the push service: not the device's fault
     else:
         row = db.get(PushSubscription, device_id)
         if row is not None:
             row.failures += 1
             if row.failures >= MAX_FAILURES:
                 db.delete(row)
+
+
+def transports() -> tuple[str, ...]:
+    """The transports this server can send by: Web Push always (a browser can't subscribe without its
+    keys), FCM with its key (fcm.py). A device of a transport that's off is neither sent to nor counted."""
+    return ("webpush", "fcm") if fcm.enabled() else ("webpush",)
+
+
+def deliver(device: tuple, payload: dict[str, Any], ttl: int, topic: str | None = None) -> int | str | None:
+    """One push to one device, (id, transport, endpoint, p256dh, auth), by its transport. Returns None
+    when the push service took it, else what _health reads."""
+    _, transport, endpoint, p256dh, auth = device
+    if transport == "fcm":
+        return fcm.push(endpoint, json.loads(_fit(payload)), ttl)  # FCM's tag and collapse key are the payload's tag
+    return push(endpoint, p256dh, auth, payload, ttl, topic)
+
+
+def _service(device: tuple) -> str | None:
+    """Which push service a device's pushes go to, for the metrics: FCM for the Android app, else its endpoint's host."""
+    return "fcm" if device[1] == "fcm" else urlparse(device[2]).hostname
 
 
 def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: int, topic: str | None = None) -> int | str | None:
@@ -327,10 +348,10 @@ def _fit(payload: dict[str, Any]) -> str:
 def send_test(fan_id: str) -> int:
     """A test notification to each of this fan's devices. Returns how many took it."""
     with session() as db:
-        newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
-        devices = [(d.id, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
+        newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
+        devices = [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
     payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
-    results = [(i, push(e, p, a, payload, 600)) for i, e, p, a in devices]
+    results = [(device[0], deliver(device, payload, 600)) for device in devices]
     with session() as db:
         for device_id, error in results:
             _health(db, device_id, error)

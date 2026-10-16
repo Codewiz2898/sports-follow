@@ -1,11 +1,10 @@
 // Alerts, the web's NotificationsPage.tsx: what's happened to the fan's players (Latest), and what reaches this
-// phone and how much to hear about each player (Settings). Notifications on the phone itself come with push
-// (BHA-230); the per-player levels already apply to the fan's other devices.
+// phone (on or off, quiet hours: push.ts) and how much to hear about each player (Settings).
 
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { LEVELS, levelText } from '../../../web/src/alerts'
+import { DEVICE, LEVELS, levelText } from '../../../web/src/alerts'
 import { dayLabel, relative } from '../../../web/src/format'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
@@ -17,8 +16,9 @@ import { useFollowing } from '../following'
 import { ChevronIcon, UserIcon } from '../icons'
 import { Segmented } from '../results'
 import { colour, dsp, font, t } from '../theme'
-import { Btn, Card, ErrorBox, Eyebrow, SectionHead, Spinner } from '../ui'
+import { Btn, Card, ErrorBox, Eyebrow, SectionHead, Spinner, Switch, TimeField } from '../ui'
 import { Page } from '../page'
+import { usePush } from '../push'
 
 export default function AlertsScreen() {
   const params = useLocalSearchParams<{ tab?: string }>()
@@ -132,12 +132,7 @@ function Settings() {
   return (
     <>
       <AccountRow />
-      <Card style={{ paddingVertical: 4, paddingHorizontal: 18 }}>
-        <View style={{ paddingVertical: 14, gap: 4 }}>
-          <Text style={t.title}>On this device</Text>
-          <Text style={[t.small, t.muted]}>Notifications on this phone come with the next version of the app. What you choose below already applies on your other devices.</Text>
-        </View>
-      </Card>
+      <Device />
 
       <View style={{ gap: 10 }}>
         <SectionHead title="Per player" right={<Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>Key moments is the default</Text>} />
@@ -168,7 +163,51 @@ function Settings() {
   )
 }
 
+/** On or off for this phone, its quiet hours, and a test alert (the web's "On this device"). */
+function Device() {
+  const push = usePush()
+  const [start, setStart] = useState(push.quiet.start ?? '22:00')
+  const [end, setEnd] = useState(push.quiet.end ?? '07:00')
+  useEffect(() => {
+    if (push.quiet.start && push.quiet.end) {
+      setStart(push.quiet.start)
+      setEnd(push.quiet.end)
+    }
+  }, [push.quiet.start, push.quiet.end])
+  const quietOn = Boolean(push.quiet.start && push.quiet.end)
+  return (
+    <Card style={{ paddingVertical: 4, paddingHorizontal: 18 }}>
+      <View style={[s.setting, push.on && s.line]}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={t.title}>On this device</Text>
+          <Text style={[t.small, t.muted]}>{push.unavailable ?? (push.on ? DEVICE.on : DEVICE.off)}</Text>
+        </View>
+        {push.unavailable ? null : <Switch label="Alerts on this device" on={push.on} disabled={push.busy} onChange={(on) => (on ? push.enable() : push.disable())} />}
+      </View>
+      {push.on ? (
+        <>
+          <View style={[s.setting, s.line, { flexWrap: 'wrap' }]}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={t.title}>Quiet hours</Text>
+              <Text style={[t.small, t.muted]}>{DEVICE.quiet}</Text>
+            </View>
+            <Switch label="Quiet hours" on={quietOn} onChange={(next) => push.saveQuiet(next ? { start, end } : { start: null, end: null })} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%' }}>
+              <TimeField label="Quiet from" value={start} onChange={(time) => { setStart(time); if (quietOn) push.saveQuiet({ start: time, end }) }} />
+              <Text style={[t.small, t.muted]}>to</Text>
+              <TimeField label="Quiet until" value={end} onChange={(time) => { setEnd(time); if (quietOn) push.saveQuiet({ start, end: time }) }} />
+            </View>
+          </View>
+          <Btn kind="link" label="Send a test alert" disabled={push.busy} onPress={push.test} style={{ height: 48 }} />
+        </>
+      ) : null}
+      {push.message ? <Text style={[t.small, { fontFamily: font[700], paddingBottom: 14 }]}>{push.message}</Text> : null}
+    </Card>
+  )
+}
+
 const s = StyleSheet.create({
+  setting: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
   list: { paddingVertical: 4, paddingHorizontal: 16 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 14, minHeight: 44 },
   line: { borderBottomWidth: 1, borderBottomColor: colour.line },
