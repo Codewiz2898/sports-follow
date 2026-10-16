@@ -8,10 +8,9 @@ on: the middle of a .dsp box, (ascent + descent) / 2 above the baseline.
 A leaning letter reaches past its own width (its top to the right, its foot to the left), and Android lays a
 line out by the ink: React Native sizes a Text to the letters' widths, then Android puts a last word that
 pokes out of that box on a line of its own, which the box hides. So each letter's width is grown to hold
-its ink with a pixel to spare, and a kerning lookup takes the growth back between two letters:
-inside a word the letters sit as
-Anton sets them, as on the site, while a word's first and last letters (next to a space, or at either end)
-keep the room their ink needs.
+its ink with a pixel to spare, and a kerning lookup takes the growth back between two letters: inside a word
+the letters sit as Anton sets them, as on the site, while a word's first and last letters (next to a space,
+or at either end) keep the room their ink needs. The digits all grow alike, so they keep Anton's widths.
 
 Anton is under the SIL Open Font License 1.1 with no reserved name; the copy keeps its copyright and licence
 (assets/fonts/AntonSlanted.LICENSE) and is named AntonSlanted, the family the app asks for (theme.ts) and,
@@ -26,7 +25,7 @@ import math
 import shutil
 from pathlib import Path
 
-from fontTools.otlLib.builder import buildLookup, buildPairPosClassesSubtable, buildValue
+from fontTools.otlLib.builder import LOOKUP_FLAG_IGNORE_MARKS, buildLookup, buildPairPosClassesSubtable, buildValue
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -40,7 +39,7 @@ OUT = MOBILE / "assets/fonts"
 NAME = "AntonSlanted"
 ANGLE = 7  # degrees, as .dsp's skewX(-7deg)
 STEP = 8  # font units: a letter's growth is rounded up to this, so the kerning needs few classes
-MARGIN = 48  # font units (0.023 em) of room inside a letter's width: a pixel at the smallest .dsp, 19 dp
+MARGIN = 64  # font units (0.031 em) of room inside a letter's width: a pixel down to 16 dp on a 2x screen
 HINTING = ("fpgm", "prep", "cvt ", "hdmx", "LTSH", "VDMX")  # written for upright outlines, so dropped
 
 
@@ -76,6 +75,13 @@ def main() -> None:
         advance, _ = hmtx[name]
         if advance and glyph.numberOfContours:
             left[name], right[name] = up(MARGIN - glyph.xMin), up(glyph.xMax - (advance - MARGIN))
+    cmap = font.getBestCmap()
+    # The digits grow alike, so a countdown keeps its place as its digits change.
+    digits = [cmap[code] for code in range(0x30, 0x3A) if code in cmap]
+    for side in (left, right):
+        widest = max(side[g] for g in digits)
+        for g in digits:
+            side[g] = widest
 
     shift: dict[str, int] = {}
     for name in order:
@@ -91,7 +97,6 @@ def main() -> None:
 
     # A space isn't kerned (a line may break there), so the letters either side of it keep their growth;
     # the space gives back what a word's end and start grow on average, so words sit as far apart as upright.
-    cmap = font.getBestCmap()
     sample = [cmap[ord(c)] for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" if ord(c) in cmap]
     tighten = round((sum(right.get(g, 0) for g in sample) + sum(left.get(g, 0) for g in sample)) / len(sample))
     for code in (0x20, 0xA0):  # space, no-break space
@@ -121,6 +126,10 @@ def main() -> None:
     }.items():
         names.setName(value, record_id, 3, 1, 0x409)
         names.setName(value, record_id, 1, 0, 0)
+    version = names.getDebugName(5)
+    names.setName(f"{version}; slanted", 5, 3, 1, 0x409)
+    names.setName(f"{version}; slanted", 5, 1, 0, 0)
+    font["OS/2"].recalcAvgCharWidth(font)
 
     OUT.mkdir(parents=True, exist_ok=True)
     font.save(OUT / f"{NAME}.ttf")
@@ -174,7 +183,8 @@ def kern_back(font: TTFont, left: dict[str, int], right: dict[str, int]) -> None
             if grow_right + grow_left:
                 pairs[(tuple(firsts), tuple(seconds))] = (buildValue({"XAdvance": -(grow_right + grow_left)}), None)
     glyph_map = font.getReverseGlyphMap()
-    lookup = buildLookup([buildPairPosClassesSubtable(pairs, glyph_map)])
+    # Over marks, as Anton's own kerning (an accent between two letters doesn't keep them apart).
+    lookup = buildLookup([buildPairPosClassesSubtable(pairs, glyph_map)], flags=LOOKUP_FLAG_IGNORE_MARKS)
     gpos = font["GPOS"].table
     gpos.LookupList.Lookup.append(lookup)
     gpos.LookupList.LookupCount = len(gpos.LookupList.Lookup)
