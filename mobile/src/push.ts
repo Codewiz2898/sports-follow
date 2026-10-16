@@ -36,6 +36,11 @@ const QUIET = 'stann.quiet-hours' // { start: "22:00", end: "07:00" } in the pho
 
 export type Quiet = { start: string | null; end: string | null }
 
+// Told whenever this phone comes on or off the server, so what shows it (usePush) follows a registration the
+// app made by itself: the first follow's, which a campaign page's alerts prompt is waiting on.
+const changes = new Set<() => void>()
+const changed = () => { for (const heard of changes) heard() }
+
 // With the app in front, a moment shows as it would behind it: in the tray, and as a banner with sound only
 // when it's loud (on the loud channel).
 Notifications.setNotificationHandler({
@@ -90,6 +95,7 @@ async function register(token: string, previous: string | null): Promise<void> {
     previous_token: previous && previous !== token ? previous : null,
   })
   await AsyncStorage.setItem(TOKEN, JSON.stringify(token))
+  changed()
 }
 
 /** Takes this phone off the server, if it's on. */
@@ -98,6 +104,7 @@ async function unregister(): Promise<void> {
   if (!token) return
   await api.unregisterPush(token)
   await AsyncStorage.removeItem(TOKEN)
+  changed()
 }
 
 /** Registers this phone if Android lets the app notify, asking first when `ask` and it may still ask.
@@ -164,7 +171,8 @@ export function useNotificationTaps(): void {
   }, [])
 }
 
-/** Notifications on this phone for Alerts' Settings, as the web's usePush: on or off, quiet hours, a test. */
+/** Notifications on this phone for Alerts' Settings and a campaign page, as the web's usePush: on or off,
+ * quiet hours, a test. */
 export function usePush() {
   const { epoch } = useAccount()
   const [why, setWhy] = useState<string | null>(null)
@@ -186,6 +194,11 @@ export function usePush() {
     setQuiet(saved ?? { start: null, end: null })
   }, [])
   useEffect(() => { load() }, [load, epoch])
+  useEffect(() => {
+    const heard = () => { load().catch(() => {}) }
+    changes.add(heard)
+    return () => { changes.delete(heard) }
+  }, [load])
 
   const run = (work: () => Promise<void>) => async () => {
     setBusy(true)

@@ -203,7 +203,7 @@ const MOMENT_KIND: Record<string, { bg: string; fg: string }> = {
  * The live scoreboard (.board): an ink scorebug whatever the sport, drawn by the sport's board. Today's is
  * compact: with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is
  * one row with the game's `latest` moment under it; a player's page has their line on their sport's colour,
- * and the game's moments.
+ * and the game's moments. With no `playerName` (a game on a campaign page), the board alone.
  */
 export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
@@ -219,7 +219,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
         {live.event ? <Eyebrow color={colour.inkMuted} style={{ textAlign: 'right', flexShrink: 1 }}>{live.event}</Eyebrow> : null}
       </View>
       <GameBoard live={live} compact={compact} teams={teams} pal={pal} />
-      {compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
+      {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
       {!compact && live.moments?.length ? (
         <View style={{ gap: 8 }}>
           {live.moments.slice(0, 5).map((m, i) => {

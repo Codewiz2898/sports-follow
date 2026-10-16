@@ -6,10 +6,17 @@
 // committed. It's GOOGLE_SERVICES_JSON's file when that's set, else mobile/google-services.json (gitignored);
 // a build without either runs, without notifications.
 
+//
+// stann.in links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
+// needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
+// (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android trusts the
+// claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed it
+// (README.md, "Android app").
+
 /// <reference types="node" />
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExpoConfig } from 'expo/config'
+import type { ExpoConfig, ExpoConfigAndroidIntentFiltersData } from 'expo/config'
 
 const { name } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sports_follow', 'app.json'), 'utf8')) as { name: string }
 if (!name) throw new Error('sports_follow/app.json has no name')
@@ -20,6 +27,18 @@ const BLUE = '#1F5BEF' // stann's own blue, the badge's (web/scripts/make_icons.
 const FONTS = 'node_modules/@expo-google-fonts'
 const GOOGLE_SERVICES = process.env.GOOGLE_SERVICES_JSON || './google-services.json'
 const FIREBASE = fs.existsSync(path.resolve(__dirname, GOOGLE_SERVICES))
+const SITE = 'stann.in'
+
+/** The addresses on the site the app has a page for: one per route file, every one under a route folder. */
+function pages(): ExpoConfigAndroidIntentFiltersData[] {
+  return fs.readdirSync(path.join(__dirname, 'src', 'app'), { withFileTypes: true }).flatMap((f): ExpoConfigAndroidIntentFiltersData[] => {
+    const route = f.name.replace(/\.tsx$/, '')
+    if (f.isDirectory()) return [{ pathPrefix: `/${route}/` }]
+    if (route === 'index') return [{ path: '/' }, { path: '' }] // "https://stann.in/", and without its slash
+    if (route === '[slug]') return [{ pathAdvancedPattern: '/[a-z0-9-]+' }]
+    return /^[a-z]+$/.test(route) ? [{ path: `/${route}` }] : [] // not _layout or +not-found
+  })
+}
 
 export default (): ExpoConfig => ({
   name,
@@ -35,6 +54,12 @@ export default (): ExpoConfig => ({
     package: 'io.stann.app',
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
+    intentFilters: [{
+      action: 'VIEW',
+      autoVerify: true,
+      category: ['BROWSABLE', 'DEFAULT'],
+      data: [{ scheme: 'https', host: SITE }, ...pages()],
+    }],
     ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
   },
   ios: { bundleIdentifier: 'io.stann.app' },

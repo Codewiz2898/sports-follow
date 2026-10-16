@@ -96,7 +96,7 @@ AGENT = os.environ.get("SPORTS_FOLLOW_AGENT", "1") != "0"
 # pages come from the agent without live scores or alerts, and no model calls go to watching games.
 AGENT_LIVE = AGENT and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
 
-# The Android app (a Trusted Web Activity wrapping the web app): its package name and the SHA-256
-# fingerprints of its signing certificates (comma separated), published at /.well-known/assetlinks.json.
+# The Android app (mobile/): its package name and the SHA-256 fingerprints of its signing certificates (comma
+# separated), published at /.well-known/assetlinks.json so stann.in links open it (App Links).
 ANDROID_PACKAGE = os.environ.get("SPORTS_FOLLOW_ANDROID_PACKAGE", "")
 ANDROID_CERT_SHA256 = [x.strip() for x in os.environ.get("SPORTS_FOLLOW_ANDROID_CERT_SHA256", "").split(",") if x.strip()]
