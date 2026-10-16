@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
+from .. import sports
+
 if TYPE_CHECKING:
     from .budget import Budget
 
@@ -39,11 +41,12 @@ class PlayerRef:
     # found by matching these against the competitors' names.
     other_teams: list[str] = field(default_factory=list)
     # The competition family the id lives in, where the source needs it: "nba", "wnba", "atp", "wta"; an
-    # esports pro's game ("valorant", "cs-go").
+    # esports pro's game as the source names it ("valorant", "cs-go", "pubgmobile").
     league: str | None = None
     # Birth date as the source gives it, ISO ("1988-11-05"); how the registry confirms a name match.
     born: str | None = None
-    # The game an esports pro plays, as fans name it ("Valorant", "BGMI"): their sport on Sports Follow.
+    # The game an esports pro plays, as the app names it ("Valorant", "BGMI"): their sport on Sports Follow
+    # (Adapter.sport_of).
     game: str | None = None
 
 
@@ -67,9 +70,10 @@ class Fixture:
     # schedule's games are ranked by their sport (Sport.notable), which reads it.
     tier: int = 0
     # What else the source knows that its sport ranks a game by (Sport.notable), in the shape the sport's
-    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}, esports'
-    # {"game": "Valorant"}.
+    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}.
     facts: dict[str, Any] = field(default_factory=dict)
+    # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
+    sport: str = ""
 
 
 @dataclass
@@ -109,7 +113,7 @@ class LiveGame:
     snapshot: Snapshot
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
-    league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+    league: str | None = None  # where a source covers several games (esports), this one's, as the registry's league
     # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
     # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
     fixtures: list[str] = field(default_factory=list)
@@ -117,6 +121,8 @@ class LiveGame:
     # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
     # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
     tier: int = 0
+    # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
+    sport: str = ""
 
 
 @dataclass
@@ -223,17 +229,18 @@ class Adapter:
 
     Optional, where a source has it (asked for with getattr): search(name, league) -> [PlayerRef] (the
     registry's name lookup), spare() (whether background reads leave live games their share),
-    snapshots(locators) (below), warm() (a shared index kept fresh); for esports, games and game_of(ref),
-    game_names (every name its games go by) and game_of_league(league, country); and a roster for the
-    registry: roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep) -> Roster, which
-    hands keep() its athletes (Rostered) a page at a time, and roster_every (seconds) for a source whose
-    list is read more often than the weekly import; and for a source that has changed how it names its
+    snapshots(locators) (below), warm() (a shared index kept fresh); for esports, games (its own names for
+    the games it covers: PandaScore's slugs, Liquipedia's wikis); and a roster for the registry:
+    roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep, sports) -> Roster, which hands
+    keep() its athletes of those sports (Rostered) a page at a time, and roster_every (seconds) for a
+    source whose list is read more often than the weekly import; and for a source that has changed how it names its
     athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
     the old ids, and the registry drops its rows holding one."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
-    sport: str  # the sport it serves (sports.Sport.key): "cricket"
+    # The sports it serves (sports.Sport.key): ("cricket",); a source of several esports games, each game's.
+    sports: tuple[str, ...]
     live_cadence: int  # seconds between polls while an event is live
     name: str  # the source as a player's page names it: "ESPNcricinfo"
     provider: Provider
@@ -257,6 +264,15 @@ class Adapter:
     def wikidata_id(self, athlete_id: str) -> str:
         """One of its athlete ids as Wikidata writes it, under wikidata_property."""
         return athlete_id
+
+    def sport_of(self, ref: PlayerRef) -> str:
+        """The sport one of its athletes plays: its one sport; for a source of several, the athlete's game's."""
+        return self.sports[0]
+
+    def running(self) -> tuple[str, ...]:
+        """Its sports that run now (sports.ENABLED): a source of several reads only their games."""
+        on = {s.key for s in sports.ENABLED}
+        return tuple(s for s in self.sports if s in on)
 
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py): its provider's, and any other source's it reads."""

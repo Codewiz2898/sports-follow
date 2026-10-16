@@ -4,6 +4,7 @@ one; see tests/test_players.py for setting it up. Sources and Redis are made up 
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -65,8 +66,8 @@ def sources(monkeypatch):
     for system in [s for s, a in ADAPTERS.items() if callable(getattr(a, "live_now", None))]:
         monkeypatch.delitem(ADAPTERS, system)
     on = SimpleNamespace(pitch=[], arena=[])
-    monkeypatch.setitem(ADAPTERS, "pitch", SimpleNamespace(system="pitch", sport="football", live_now=lambda: on.pitch))
-    monkeypatch.setitem(ADAPTERS, "arena", SimpleNamespace(system="arena", sport="esports", live_now=lambda: on.arena))
+    monkeypatch.setitem(ADAPTERS, "pitch", SimpleNamespace(system="pitch", sports=("football",), live_now=lambda: on.pitch))
+    monkeypatch.setitem(ADAPTERS, "arena", SimpleNamespace(system="arena", sports=("dota2", "cs2"), live_now=lambda: on.arena))  # two esports games
     return on
 
 
@@ -118,31 +119,46 @@ def test_a_removed_player_isnt_offered(db, redis, sources):
 
 
 def test_a_game_naming_only_its_teams_offers_its_titles_pros_the_registry_knows(db, redis, sources):
-    registry.upsert(db, [athlete("pandascore:1", "esports", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=3, league="dota-2"),
-                         athlete("pandascore:2", "esports", "Collapse", {"arena": "12"}, teams=["Team Spirit"], league="dota-2"),
-                         athlete("pandascore:5", "esports", "Donk", {"arena": "15"}, teams=["Team Spirit"], sitelinks=9, league="cs-go"),  # same team, another title
-                         athlete("pandascore:3", "esports", "Retired Pro", {"arena": "13"}, teams=["Team Spirit"], current=False, league="dota-2"),
-                         athlete("pandascore:4", "esports", "Elsewhere", {"arena": "14"}, teams=["Other Team"], league="dota-2")])
+    registry.upsert(db, [athlete("pandascore:1", "dota2", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=3, league="dota-2"),
+                         athlete("pandascore:2", "dota2", "Collapse", {"arena": "12"}, teams=["Team Spirit"], league="dota-2"),
+                         athlete("pandascore:5", "cs2", "Donk", {"arena": "15"}, teams=["Team Spirit"], sitelinks=9, league="cs-go"),  # same team, another title
+                         athlete("pandascore:3", "dota2", "Retired Pro", {"arena": "13"}, teams=["Team Spirit"], current=False, league="dota-2"),
+                         athlete("pandascore:4", "dota2", "Elsewhere", {"arena": "14"}, teams=["Other Team"], league="dota-2")])
     db.commit()
     sources.arena = [LiveGame(source_id="7", title="Team Spirit vs Tundra", competition="The International", start_utc=None, snapshot=snapshot("1 – 0"),
-                              teams=["Team Spirit", "Tundra"], league="dota-2")]
+                              teams=["Team Spirit", "Tundra"], league="dota-2", sport="dota2")]
     live.read("arena", NOW)
-    [esports] = live.offer(db, None, NOW)[0]
-    assert [(p["name"], p["athlete_id"], p["league"]) for p in esports["games"][0]["players"]] == [("Yatoro", "11", "dota-2"), ("Collapse", "12", "dota-2")]
+    [dota] = live.offer(db, None, NOW)[0]
+    assert (dota["key"], dota["label"]) == ("dota2", "Dota 2")  # each game a sport of its own
+    assert [(p["name"], p["athlete_id"], p["league"]) for p in dota["games"][0]["players"]] == [("Yatoro", "11", "dota-2"), ("Collapse", "12", "dota-2")]
+
+
+def test_a_source_of_several_games_offers_each_games_under_its_sport_and_none_of_a_game_turned_off(db, redis, sources, monkeypatch):
+    def on(source_id: str, title: str, sport: str) -> LiveGame:
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), tier=3, sport=sport)
+
+    sources.arena = [on("1", "Team Spirit vs Tundra", "dota2"), on("2", "Vitality vs FaZe", "cs2")]
+    live.read("arena", NOW)
+    assert [(s["key"], [g["title"] for g in s["games"]]) for s in live.offer(db, None, NOW)[0]] == [("cs2", ["Vitality vs FaZe"]), ("dota2", ["Team Spirit vs Tundra"])]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cs2"))
+    assert [s["key"] for s in live.offer(db, None, NOW)[0]] == ["dota2"]
+    # A read from before games said their sport: a source of several can't say whose, so none is offered.
+    redis[live._key("arena")] = json.dumps({**live.last_read("arena"), "games": [{k: v for k, v in g.items() if k != "sport"} for g in live.last_read("arena")["games"]]})
+    assert live.offer(db, None, NOW)[0] == []
 
 
 def test_the_biggest_events_games_come_first_however_followed_or_known(db, redis, sources):
     # A source that rates its events (an esports tournament's tier): a bigger tier's game comes first, though a
     # smaller one's pro is better known and followed here; among equals, the source's order.
-    db.add(Player(id=6, slug="yatoro", name="Yatoro", sport="Esports"))
+    db.add(Player(id=6, slug="yatoro", name="Yatoro", sport="Dota 2"))
     db.flush()
     db.add_all([PlayerCard(player_id=6, status="ready", card={}), PlayerIdentity(player_id=6, system="arena", external_id="11", confidence=1.0),
                 Follow(fan_id="fan", player_id=6, alert_rules={})])
-    registry.upsert(db, [athlete("pandascore:1", "esports", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=9, league="dota-2")])
+    registry.upsert(db, [athlete("pandascore:1", "dota2", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=9, league="dota-2")])
     db.commit()
 
     def on(source_id: str, title: str, tier: int) -> LiveGame:
-        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier)
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier, sport="dota2")
 
     sources.arena = [on("1", "Team Spirit vs Tundra", 1), on("2", "T1 vs Gen.G", 3), on("3", "Cloud9 vs Karmine Corp", 2), on("4", "FURIA vs Legacy", 2)]
     live.read("arena", NOW)
@@ -154,11 +170,11 @@ def test_the_biggest_events_games_come_first_however_followed_or_known(db, redis
 def test_a_big_events_game_outlasts_the_cuts_however_little_known(db, redis, sources, monkeypatch):
     # A busy day: smaller events' games with better known pros outnumber what a read keeps, and what the API
     # ranks; the big event's game, with no pro the registry knows, is kept by both.
-    registry.upsert(db, [athlete(f"pandascore:{i}", "esports", f"Pro {i}", {"arena": str(i)}, teams=[f"Team {i}"], sitelinks=10 - i, league="dota-2") for i in (1, 2, 3)])
+    registry.upsert(db, [athlete(f"pandascore:{i}", "dota2", f"Pro {i}", {"arena": str(i)}, teams=[f"Team {i}"], sitelinks=10 - i, league="dota-2") for i in (1, 2, 3)])
     db.commit()
 
     def on(source_id: str, title: str, tier: int) -> LiveGame:
-        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier)
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier, sport="dota2")
 
     sources.arena = [on("1", "Team 1 vs A", 1), on("2", "Team 2 vs B", 1), on("3", "Team 3 vs C", 1), on("4", "T1 vs Gen.G", 3)]
     monkeypatch.setattr(live, "GAMES", 1)  # the API ranks GAMES * 2 of a sport's games

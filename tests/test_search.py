@@ -452,8 +452,11 @@ def test_local_search_filters_with_what_the_trigram_index_answers():
 class _NoFixturesInPreview:
     """A source whose games take many reads (as chess broadcasts do): its preview shows stats only."""
 
-    sport = "chess"
+    sports = ("chess",)
     preview_fixtures = False
+
+    def sport_of(self, ref):
+        return "chess"
 
     def player(self, athlete_id, league):
         from sports_follow.adapters.base import PlayerRef

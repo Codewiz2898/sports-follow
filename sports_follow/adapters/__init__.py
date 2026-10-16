@@ -25,9 +25,9 @@ from .sportmonks_football import SportmonksFootball
 
 # Every source, in order of preference where two serve a sport: for_sport() picks the first that runs.
 # Licensed sources run only with a token, so where both run (a development build) football and cricket
-# come from Sportmonks, as in a public build, which lists only licensed sources. Esports comes from three
-# sources side by side, each for its own games: PandaScore for team titles (Valorant, CS2…), Liquipedia
-# for battle royale (BGMI, Free Fire, Apex Legends), PUBG's own API for PUBG.
+# come from Sportmonks, as in a public build, which lists only licensed sources. Each esports game (a sport
+# of its own) comes from one of three sources: PandaScore for team titles (Valorant, CS2…), Liquipedia for
+# battle royale (BGMI, Free Fire, Apex Legends), PUBG's own API for PUBG.
 KNOWN: dict[str, Adapter] = {a.system: a for a in (
     SportmonksFootball(),
     EspnSoccer(),
@@ -45,9 +45,10 @@ ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
 
 
 def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: Sequence[sports.Sport] = sports.ALL) -> dict[str, Adapter]:
-    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names, of the sports that run."""
+    """The adapters that run: all of them, or only those SPORTS_FOLLOW_SOURCES names, that serve a sport that
+    runs (a source of several games runs while any of them does, and reads only theirs: Adapter.running)."""
     keys = {s.key for s in enabled}
-    return {a.system: a for a in adapters if (not sources or a.system in sources) and a.sport in keys}
+    return {a.system: a for a in adapters if (not sources or a.system in sources) and keys.intersection(a.sports)}
 
 
 class Running(MutableMapping[str, Adapter]):
@@ -108,18 +109,18 @@ class Running(MutableMapping[str, Adapter]):
 ADAPTERS: Running = Running()
 
 
+def serving(sport: sports.Sport) -> list[Adapter]:
+    """The running sources of a sport, in order of preference; of a group, those of any of its sports."""
+    keys = {sport.key, *(s.key for s in sports.members(sport))}
+    return [a for a in ADAPTERS.values() if keys.intersection(a.sports)]
+
+
 def for_sport(name: str | None) -> Adapter | None:
-    """The adapter for a sport as the research agent names it ("Cricket", "Soccer", "Chess"): its first
-    running source, or for a game, the source that covers that game ("Valorant", "BGMI"). A name of a game
-    no source covers ("LoL") has none."""
+    """The adapter for a sport as the research agent names it ("Cricket", "Soccer", "Chess", "BGMI"): its
+    first running source. For a group ("Esports": a pro whose game isn't said), the first of any of its
+    sports', which looks the pro up by name across its games."""
     sport = sports.get(name)
-    if sport is None:
-        return None
-    wanted = (name or "").strip().lower()
-    theirs = [a for a in ADAPTERS.values() if a.sport == sport.key]
-    claimed = next((a for a in theirs if wanted in {g.lower() for g in getattr(a, "game_names", ())}), None)
-    if claimed or wanted not in (sport.key, sport.label.lower(), *sport.names):
-        return claimed
+    theirs = serving(sport) if sport else []
     return theirs[0] if theirs else None
 
 
@@ -139,5 +140,5 @@ def source_name(system: str) -> str:
 
 __all__ = [
     "ADAPTERS", "ALL", "KNOWN", "Absence", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "PlayerRef", "Provider",
-    "Roster", "Rostered", "SearchResult", "Snapshot", "for_sport", "pick", "providers", "source_name",
+    "Roster", "Rostered", "SearchResult", "Snapshot", "for_sport", "pick", "providers", "serving", "source_name",
 ]

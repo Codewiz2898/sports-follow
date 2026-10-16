@@ -430,10 +430,12 @@ def config(request: Request) -> dict[str, Any]:
 def sports_list(response: Response) -> dict[str, Any]:
     """The sports this app knows, in the order it lists them (sports.ALL): each one's name, the free-text
     names that are it, what its alerts say, and whether this build runs it and has live scores for it.
-    "other" is any sport no module knows."""
+    "other" is any sport no module knows; "groups" the sports each standing for several of them, not listed
+    (esports: every game), as a game no source covers ("Call of Duty: Mobile") is drawn."""
     response.headers["cache-control"] = "public, max-age=300"
-    live = {a.sport for a in ADAPTERS.values()}
-    return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False)}
+    live = {k for a in ADAPTERS.values() for k in a.running()}
+    return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False),
+            "groups": [sports.shown(g, any(m.key in live for m in sports.members(g))) for g in sports.GROUPS]}
 
 
 @app.get("/api/sports.css")
@@ -666,7 +668,7 @@ def _same_athlete(person: registry.Person, ref: Any) -> bool:
     them, or has none in this source and they match by birth date (or name and team). The client sends
     both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
     adapter = ADAPTERS.get(ref.system)
-    if adapter is None or person.sport != adapter.sport:
+    if adapter is None or person.sport not in adapter.sports:
         return False
     known = person.ids.get(ref.system)
     return known == ref.athlete_id if known else registry.same_person(person, ref)

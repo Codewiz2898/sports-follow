@@ -29,12 +29,13 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from .. import naming
+from .. import naming, sports
 from ..sports import esports
 from . import pubg
 from .base import Adapter, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
 
-GAME = "PUBG"
+SPORT = "pubg"  # the game, a sport of its own (sports/esports.py)
+GAME = sports.BY_KEY[SPORT].label
 MAPS = {
     "Baltic_Main": "Erangel", "Erangel_Main": "Erangel", "Desert_Main": "Miramar", "Savage_Main": "Sanhok", "DihorOtok_Main": "Vikendi",
     "Tiger_Main": "Taego", "Kiki_Main": "Deston", "Neon_Main": "Rondo", "Chimera_Main": "Paramo", "Summerland_Main": "Karakin", "Heaven_Main": "Haven",
@@ -217,7 +218,6 @@ def parse_fixture(lobby: dict[str, Any], now: datetime | None = None) -> Fixture
         locator={"tournament": lobby["tournament"], "day": lobby["day"], "n": lobby["n"]},
         detail=None,
         result={"teams": len(table), "standings": [{k: r[k] for k in ("id", "name", "place", "points", "kills", "wins")} for r in table]} if status == "final" else None,
-        facts={"game": GAME},
     )
 
 
@@ -325,8 +325,8 @@ class PubgEsports(Adapter):
     provider = pubg.PROVIDER
     covers = "PUBG"
     id_pattern = re.compile(r"[a-z0-9_-]{1,64}")  # a pro (pro_id); never an event account ("account.…"), as pros were followed by once (rekey)
-    sport = "esports"
-    games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
+    sports = (SPORT,)
+    games = ("pubg",)  # its own name for it, beside the other esports sources': players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
     live_note = "Standings update from PUBG after each match."
     lag_note = "PUBG lobbies update after each match ends."
@@ -338,9 +338,6 @@ class PubgEsports(Adapter):
 
     def spare(self) -> bool:
         return True  # no history pages: PUBG keeps 14 days, which the index already covers
-
-    def game_of(self, ref: PlayerRef) -> str:
-        return GAME
 
     def _recent(self) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
@@ -416,7 +413,6 @@ class PubgEsports(Adapter):
     def players(self) -> dict[str, dict[str, Any]]:
         return players_of(self.lobbies())
 
-    game_names = (GAME, "PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds")
     roster_prefix = "pubg:"
     roster_every = 6 * 3600  # from the index warm() keeps, so it costs no requests of its own
 
@@ -424,10 +420,7 @@ class PubgEsports(Adapter):
     def available(cls) -> bool:
         return bool(pubg.token())
 
-    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
-        return GAME if league == "pubg" else None
-
-    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
+    def roster(self, keep: Callable[[list[Rostered]], int], wanted: set[str] | None = None) -> Roster:
         """The players of PUBG's recent tournaments, from the index (no requests of their own once it's
         warm). PUBG keeps a fortnight of matches, so a player not seen for three weeks is dropped."""
         keep(rostered(self.players()))

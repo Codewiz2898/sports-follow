@@ -32,11 +32,14 @@ def spell(source_id: str, athlete_id: str, name: str, since: date | None, until:
 class Source:
     """A made-up source: who it has out, by team, at each read."""
 
-    system, sport = SYSTEM, "football"
+    system, sports = SYSTEM, ("football",)
 
     def __init__(self):
         self.teams: dict[str, list[Absence]] = {"19": [], "20": []}
         self.failing = False
+
+    def sport_of(self, ref: PlayerRef) -> str:
+        return self.sports[0]
 
     def sidelined(self) -> dict[str, list[Absence]]:
         if self.failing:

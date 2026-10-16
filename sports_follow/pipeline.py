@@ -194,7 +194,7 @@ def _claim(db: Session, player_id: int, system: str, external_id: str, evidence_
 
 
 def registry_sport(sport: str | None) -> str:
-    """A sport as the registry names it: "football" for "Football" or "Soccer", "esports" for any game."""
+    """A sport as the registry names it: "football" for "Football" or "Soccer", "cs2" for "CS2"."""
     return sports.family(sport)
 
 
@@ -879,11 +879,13 @@ def due_work(now: datetime | None = None) -> Due:
         polls: set[int] = set()
         lanes: set[str] = set()
         for event_id, live_binding, pid in armed:
+            if not sports.on(sport_of.get(pid)):
+                continue  # a sport turned off isn't polled, though its source runs for another (an esports game)
             if live_binding and structured.batched(live_binding.get("adapter")):
                 lanes.add(live_binding["adapter"])
             elif live_binding:
                 polls.add(event_id)
-            elif pid not in bindings and sports.on(sport_of.get(pid)):
+            elif pid not in bindings:
                 lives.add(pid)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]

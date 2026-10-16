@@ -83,10 +83,11 @@ def _ranked(db: Session, sport: str, system: str, game: LiveGame, blocked: set[t
     return players, max((p["fame"] for p in players), default=0)
 
 
-def _dump(game: LiveGame, players: list[dict[str, Any]], fame: int) -> dict[str, Any]:
+def _dump(game: LiveGame, sport: str, players: list[dict[str, Any]], fame: int) -> dict[str, Any]:
     snap = game.snapshot
     return {
         "source_id": game.source_id,
+        "sport": sport,  # the sport it's of (a source of several esports games names each game's)
         "fixtures": game.fixtures or [game.source_id],  # an event's key is "system:fixture" (structured.upsert_event)
         "title": game.title,
         "competition": game.competition,
@@ -109,7 +110,7 @@ def read(system: str, now: datetime | None = None) -> int:
     games = cast(Any, adapter).live_now()
     with session() as db:
         blocked = registry.blocked(db)
-        dumped = [_dump(g, *_ranked(db, adapter.sport, system, g, blocked)) for g in games]
+        dumped = [_dump(g, sport, *_ranked(db, sport, system, g, blocked)) for g in games if (sport := g.sport or adapter.sports[0])]
     dumped.sort(key=lambda g: (-g["tier"], -g["fame"]))
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)
@@ -150,7 +151,10 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
         if age > FRESH:
             stale.append(adapter.system)
         if age <= SERVE:
-            by_sport.setdefault(adapter.sport, []).extend((adapter.system, g) for g in (read_ or {}).get("games") or [])
+            # A read from before games said their sport is its source's one sport's, or for a source of several, none's.
+            one = adapter.sports[0] if len(adapter.sports) == 1 else ""
+            for g in (read_ or {}).get("games") or []:
+                by_sport.setdefault(g.get("sport") or one, []).append((adapter.system, g))
     blocked = registry.blocked(db) if by_sport else set()
     ranked = {sport.key: sorted(by_sport.get(sport.key, []), key=lambda sg: (-sg[1].get("tier", 0), -sg[1].get("fame", 0)))[: GAMES * 2] for sport in sports.ENABLED}
     keys = {k for candidates in ranked.values() for system, game in candidates for k in _event_keys(system, game)}

@@ -140,9 +140,9 @@ def test_an_added_athlete_is_kept_through_the_weekly_import(db, monkeypatch):
 
 
 def test_adding_a_source_id_already_in_the_registry_pins_that_athlete(db, capsys):
-    registry.upsert(db, [athlete("pandascore:34470", "esports", "amster", {"pandascore_esports": "34470"})])
+    registry.upsert(db, [athlete("pandascore:34470", "cs2", "amster", {"pandascore_esports": "34470"})])
     db.commit()
-    assert players.main(["add", "--sport", "esports", "--name", "amster", "--id", "pandascore_esports=34470"]) == 0
+    assert players.main(["add", "--sport", "cs2", "--name", "amster", "--id", "pandascore_esports=34470"]) == 0
     assert "Already in the registry, now kept: amster" in capsys.readouterr().out
     assert [a.qid for a in db.scalars(select(Athlete))] == ["pandascore:34470"]
     assert players.main(["add", "--sport", "cricket", "--name", "X", "--id", "pandascore_esports=1"]) == 2  # not a cricket source
@@ -151,16 +151,16 @@ def test_adding_a_source_id_already_in_the_registry_pins_that_athlete(db, capsys
 class Lister(Adapter):
     """A source whose roster no longer lists anyone."""
 
-    system, sport, name, covers, roster_prefix = "fake_esports", "esports", "Fake", "Fake", "pandascore:"
+    system, sports, name, covers, roster_prefix = "fake_esports", ("cs2",), "Fake", "Fake", "pandascore:"
     provider = pubg.PROVIDER
 
-    def roster(self, keep):
+    def roster(self, keep, wanted=None):
         keep([Rostered(key="pandascore:5", ref=PlayerRef("fake_esports", "5", "Listed", [], []))])
         return Roster(complete=True)
 
 
 def test_a_pinned_pro_stays_when_their_source_stops_listing_them(db):
-    registry.upsert(db, [athlete("pandascore:34470", "esports", "amster"), athlete("pandascore:7", "esports", "Retired")])
+    registry.upsert(db, [athlete("pandascore:34470", "cs2", "amster"), athlete("pandascore:7", "cs2", "Retired")])
     db.execute(update(Athlete).values(updated_at=LONG_AGO))
     db.commit()
     assert players.main(["add", "pandascore:34470"]) == 0
@@ -194,7 +194,7 @@ def tenz(db, followed: bool = True) -> None:
                 PlayerCard(player_id=3, status="ready", card={"player": {"name": "TenZ", "photo": PHOTO}}, version=1),
                 Photo(file="SEN TENZ 2023.jpg", name="TenZ", status="ok", digest="abc", media_type="image/jpeg", fetched_at=LONG_AGO),
                 *([Follow(fan_id="a", player_id=3, alert_rules={})] if followed else [])])
-    registry.upsert(db, [athlete("pandascore:20401", "esports", "TenZ", {"pandascore_esports": "20401", "wikidata": "Q113450352"}, image="SEN TENZ 2023.jpg")])
+    registry.upsert(db, [athlete("pandascore:20401", "valorant", "TenZ", {"pandascore_esports": "20401", "wikidata": "Q113450352"}, image="SEN TENZ 2023.jpg")])
     db.commit()
 
 
@@ -204,7 +204,7 @@ def test_unmatching_a_pro_takes_their_photo_off_at_once_and_rematching_takes_it_
     monkeypatch.setattr(bus, "store_card", published.__setitem__)
     assert players.main(["unmatch", "3", "--note", "someone else's face"]) == 0
     out = capsys.readouterr().out
-    assert "Took back TenZ (esports, pandascore:20401); no run matches them to anyone again." in out and "Took the photo off 1 card(s)." in out
+    assert "Took back TenZ (valorant, pandascore:20401); no run matches them to anyone again." in out and "Took the photo off 1 card(s)." in out
     db.expire_all()
     [a] = db.scalars(select(Athlete)).all()
     assert a.ids == {"pandascore_esports": "20401"} and a.image is None
@@ -212,11 +212,11 @@ def test_unmatching_a_pro_takes_their_photo_off_at_once_and_rematching_takes_it_
     assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}  # off the fans' screens too
     assert not db.scalars(select(Photo)).all()  # and off the Credits page
     [u] = db.scalars(select(AthleteUnmatch)).all()
-    assert (u.qid, u.sport, u.person, u.note) == ("pandascore:20401", "esports", None, "someone else's face")
+    assert (u.qid, u.sport, u.person, u.note) == ("pandascore:20401", "valorant", None, "someone else's face")
     assert players.main(["list"]) == 0 and "pandascore:20401      TenZ  not anyone  (someone else's face)" in capsys.readouterr().out
 
     assert players.main(["unmatch", "pandascore_esports:20401", "Q113450352"]) == 0  # by source id, and only that person
-    assert "Nothing to take back now for TenZ (esports, pandascore:20401) (not matched to Q113450352)" in capsys.readouterr().out
+    assert "Nothing to take back now for TenZ (valorant, pandascore:20401) (not matched to Q113450352)" in capsys.readouterr().out
     assert sorted((u.person or "") for u in db.scalars(select(AthleteUnmatch))) == ["", "Q113450352"]
     assert players.main(["rematch", "pandascore:20401", "Q113450352"]) == 0 and "No longer unmatched from Q113450352: TenZ" in capsys.readouterr().out
     assert players.main(["rematch", "pandascore:20401"]) == 0 and "No longer unmatched from anyone: TenZ" in capsys.readouterr().out
@@ -376,13 +376,13 @@ def test_a_starter_in_two_sports_needs_the_sport(db, capsys):
 
 def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, capsys, monkeypatch, live_source):
     """Esports sources sit side by side, each for its own games: a pro from the second is checked there,
-    not looked for by name in the sport's first source."""
-    for system in [s for s, a in adapters.ADAPTERS.items() if a.sport == "esports"]:
+    not looked for by name in the game's first source."""
+    for system in [s for s, a in adapters.ADAPTERS.items() if "bgmi" in a.sports]:
         monkeypatch.delitem(adapters.ADAPTERS, system)
     asked: list[tuple[str, str]] = []
     for system in ("first_esports", "second_esports"):
-        monkeypatch.setitem(adapters.ADAPTERS, system, SimpleNamespace(system=system, sport="esports", player=lambda xid, league=None, s=system: asked.append((s, xid)) or object()))
-    registry.upsert(db, [athlete("pro:77", "esports", "Jonathan", {"second_esports": "77"}, league="bgmi")])
+        monkeypatch.setitem(adapters.ADAPTERS, system, SimpleNamespace(system=system, sports=("bgmi",), player=lambda xid, league=None, s=system: asked.append((s, xid)) or object()))
+    registry.upsert(db, [athlete("pro:77", "bgmi", "Jonathan", {"second_esports": "77"}, league="pubgmobile")])
     db.commit()
     assert players.main(["starter", "add", "pro:77"]) == 0
     assert "followed live through second_esports" in capsys.readouterr().out

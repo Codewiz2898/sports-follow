@@ -1,8 +1,9 @@
 """Athletes from the sources' own lists (esports pros) matched to their Wikidata person, for their photos.
 
 The registry imports most sports from Wikidata, so each of their rows has the athlete's Wikidata id and
-photo file (P18). Esports pros come from their sources instead (registry.import_rosters), keyed by the
-source's id ("pandascore:20401"), with neither. This step finds each pro's Wikidata person and records
+photo file (P18). Esports pros come from their sources instead (registry.import_rosters), each under their
+game's sport, keyed by the source's id ("pandascore:20401"), with neither. A group's sports are matched
+together (every esports game: one read of Wikidata, and a person two games' rows could be is no one's). This step finds each pro's Wikidata person and records
 them in the pro's row: the Wikidata id in its ids ("wikidata": "Q113450352"), the photo file in its image.
 The photos job then fetches the photos of those followed or offered as starters, as for any other athlete
 (photos.py: on the profile only, recoloured, with a credit).
@@ -32,6 +33,7 @@ An operator who finds a wrong match takes it back with `players unmatch <pro> [Q
 the pro loses the Wikidata id and photo, and no run matches them to that person again, or to anyone.
 
     .venv/bin/python -m sports_follow.roster_wikidata                      # every roster sport, as the weekly import does after it
+    .venv/bin/python -m sports_follow.roster_wikidata valorant cs2         # some games' pros
     .venv/bin/python -m sports_follow.roster_wikidata --dry-run --show 20  # what it would match, 20 at random, written nowhere
 """
 
@@ -325,16 +327,16 @@ def read_people(kind: sports.Sport) -> tuple[list[Person], bool]:
 # ---------------------------------------------------------------- matching
 
 
-def rows(db: Session, kind: sports.Sport) -> list[Row]:
-    """The sport's registry athletes, as matching needs them."""
+def rows(db: Session, kind: sports.Sport, within: Iterable[str]) -> list[Row]:
+    """The registry athletes of these sports (kind's group's), as matching needs them."""
     out = []
-    for a in db.scalars(select(Athlete).where(Athlete.sport == kind.key)):
+    for a in db.scalars(select(Athlete).where(Athlete.sport.in_(list(within)))):
         ids = []
         for system, xid in (a.ids or {}).items():
             adapter = KNOWN.get(system)
             if adapter is not None and adapter.wikidata_property:
                 ids.append((adapter.wikidata_property, adapter.wikidata_id(str(xid))))
-        out.append(Row(a.qid, a.name, list(a.aliases or []), a.birth_date, kind.game_key(kind.result_sport(a)), list(a.teams or []), ids))
+        out.append(Row(a.qid, a.name, list(a.aliases or []), a.birth_date, kind.game_key(sports.of(a.sport).result_sport(a)), list(a.teams or []), ids))
     return out
 
 
@@ -407,11 +409,17 @@ def match(rows: list[Row], everyone: list[Person], filler: Iterable[str] = (), v
 # ---------------------------------------------------------------- the registry
 
 
-def vetoes(db: Session, sport: str) -> dict[str, set[str | None]]:
-    """Who an operator said each of a sport's athletes isn't (players unmatch), by registry id: a Wikidata
-    person, or None for anyone."""
+def _with_groups(within: Iterable[str]) -> list[str]:
+    """Sport keys and their groups': a decision kept as "esports", from before each game was a sport, is every game's."""
+    keys = list(within)
+    return list(dict.fromkeys([*keys, *(g for k in keys if (g := sports.of(k).group))]))
+
+
+def vetoes(db: Session, within: Iterable[str]) -> dict[str, set[str | None]]:
+    """Who an operator said each of these sports' athletes isn't (players unmatch), by registry id: a
+    Wikidata person, or None for anyone."""
     out: dict[str, set[str | None]] = defaultdict(set)
-    for qid, person in db.execute(select(AthleteUnmatch.qid, AthleteUnmatch.person).where(AthleteUnmatch.sport == sport)).all():
+    for qid, person in db.execute(select(AthleteUnmatch.qid, AthleteUnmatch.person).where(AthleteUnmatch.sport.in_(_with_groups(within)))).all():
         out[qid].add(person)
     return dict(out)
 
@@ -422,33 +430,33 @@ def vetoed(vetoes: Mapping[str, set[str | None]], row: str, person: str | None) 
     return None in never or person in never
 
 
-def forget(db: Session, sport: str, qids: Iterable[str], person: str | None = None) -> list[str]:
-    """Take these athletes' matches back, their Wikidata id and photo; given a person, only a match to them.
-    Returns whose were taken back."""
+def forget(db: Session, within: Iterable[str], qids: Iterable[str], person: str | None = None) -> list[str]:
+    """Take these athletes' matches back (in these sports), their Wikidata id and photo; given a person, only
+    a match to them. Returns whose were taken back."""
     held = [Athlete.ids[KEY].astext == person] if person else [or_(Athlete.ids.has_key(KEY), Athlete.image.is_not(None))]
-    stmt = update(Athlete).where(Athlete.qid.in_(list(qids)), Athlete.sport == sport, *held).values(ids=Athlete.ids.op("-")(KEY), image=None)
+    stmt = update(Athlete).where(Athlete.qid.in_(list(qids)), Athlete.sport.in_(list(within)), *held).values(ids=Athlete.ids.op("-")(KEY), image=None)
     return list(db.scalars(stmt.returning(Athlete.qid)))
 
 
-def record(db: Session, sport: str, found: list[Match], complete: bool) -> dict[str, int]:
+def record(db: Session, within: list[str], found: list[Match], complete: bool) -> dict[str, int]:
     """Write each match into its row (their Wikidata id, and photo file or none), and take back the matches
     that no longer hold after a complete read, and those an operator took back (players unmatch) after any.
     Returns how many rows changed and were taken back."""
     # The vetoes as of now, not as of the read before Wikidata's: one made meanwhile waits for this to
     # commit, and then takes its match back itself.
     db.execute(text("LOCK TABLE athlete_unmatch IN SHARE MODE"))
-    off = vetoes(db, sport)
+    off = vetoes(db, within)
     now = {m.row.qid: (m.person.qid, m.person.image) for m in found if not vetoed(off, m.row.qid, m.person.qid)}
     held = Athlete.ids[KEY].astext
-    have = {qid: (wd, image) for qid, wd, image in db.execute(select(Athlete.qid, held, Athlete.image).where(Athlete.sport == sport, or_(Athlete.ids.has_key(KEY), Athlete.image.is_not(None))))}
+    have = {qid: (wd, image) for qid, wd, image in db.execute(select(Athlete.qid, held, Athlete.image).where(Athlete.sport.in_(within), or_(Athlete.ids.has_key(KEY), Athlete.image.is_not(None))))}
     changed = 0
     for row, (qid, image) in now.items():
         if have.get(row) != (qid, image):
-            db.execute(update(Athlete).where(Athlete.qid == row, Athlete.sport == sport).values(ids=Athlete.ids.op("||")(func.jsonb_build_object(KEY, qid)), image=image))
+            db.execute(update(Athlete).where(Athlete.qid == row, Athlete.sport.in_(within)).values(ids=Athlete.ids.op("||")(func.jsonb_build_object(KEY, qid)), image=image))
             changed += 1
     gone = [row for row, (wd, _) in have.items() if row not in now and (complete or vetoed(off, row, wd))]
     if gone:
-        forget(db, sport, gone)
+        forget(db, within, gone)
     return {"changed": changed, "taken_back": len(gone)}
 
 
@@ -463,25 +471,38 @@ def tally(found: list[Match]) -> dict[str, int]:
     return count
 
 
-def match_sport(sport: str, write: bool = True) -> tuple[list[Match], dict[str, Any]]:
-    """Match a roster sport's athletes to Wikidata people and, unless write is False, record them."""
-    kind = sports.BY_KEY[sport]
+def match_sport(kind: sports.Sport, within: list[str], write: bool = True) -> tuple[list[Match], dict[str, Any]]:
+    """Match the athletes of these roster sports, all of kind's (a group's, or kind itself), to the people
+    kind counts as its own on Wikidata, read once, and unless write is False, record them."""
     everyone, complete = read_people(kind)
     with session() as db:
-        athletes, off = rows(db, kind), vetoes(db, sport)
+        athletes, off = rows(db, kind, within), vetoes(db, within)
     found = match(athletes, everyone, kind.team_filler, off)
     done: dict[str, Any] = {"people": len(everyone), "athletes": len(athletes), **tally(found), "complete": complete}
     if write:
         with session() as db:
-            done |= record(db, sport, found, complete)
+            done |= record(db, within, found, complete)
     return found, done
 
 
-def run(sport: str) -> dict[str, Any]:
-    """The weekly run for one roster sport (registry.find_people), logged."""
-    _, done = match_sport(sport)
-    log.info("roster wikidata %s: %s", sport, done)
+def run(kind: sports.Sport, within: list[str]) -> dict[str, Any]:
+    """The weekly run for some roster sports of one kind (registry.find_people), logged."""
+    _, done = match_sport(kind, within)
+    log.info("roster wikidata %s (%s): %s", kind.key, ", ".join(within), done)
     return done
+
+
+def by_group(keys: Iterable[str]) -> list[tuple[sports.Sport, list[str]]]:
+    """Roster sports, each group's together under the group's sport (whose people they all are, and whose
+key the rows of a pro whose game can't be told have), in the order given: [(esports, ["esports",
+"valorant", "cs2", …])]."""
+    out: dict[str, tuple[sports.Sport, list[str]]] = {}
+    for key in keys:
+        sport = sports.BY_KEY[key]
+        kind = sports.BY_KEY.get(sport.group) or sport
+        if matches(sport):
+            out.setdefault(kind.key, (kind, [kind.key] if kind is not sport else []))[1].append(key)
+    return list(out.values())
 
 
 def matches(kind: sports.Sport) -> bool:
@@ -504,21 +525,22 @@ def show(m: Match) -> str:
 
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="python -m sports_follow.roster_wikidata", description="Match esports pros to their Wikidata person, for their photos.")
-    parser.add_argument("sport", nargs="*", help="roster sports (default: every one that runs)")
+    parser.add_argument("sport", nargs="*", help="roster sports, or a group of them: esports (default: every one that runs)")
     parser.add_argument("--dry-run", action="store_true", help="match, but write nothing")
     parser.add_argument("--show", type=int, default=0, metavar="N", help="print N matches at random, with what each rests on")
     args = parser.parse_args(argv)
     every = roster_sports()
-    unknown = [s for s in args.sport if s not in every]
+    wanted = sports.expand(args.sport) or every
+    unknown = [s for s in wanted if s not in every]
     if unknown:
         sys.exit(f"unknown roster sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")
     token = None if args.dry_run else bus.try_lock(registry.LOCK, 3600)
     if not args.dry_run and token is None:
         sys.exit(f"a registry import is running (it matches the pros itself when it's done); try again later, or redis-cli del lock:{registry.LOCK} if none is")
     try:
-        for sport in args.sport or every:
-            found, done = match_sport(sport, write=not args.dry_run)
-            print(sport, done)
+        for kind, within in by_group(wanted):
+            found, done = match_sport(kind, within, write=not args.dry_run)
+            print(kind.key, within, done)
             for m in random.sample(found, min(args.show, len(found))):
                 print(show(m))
     finally:

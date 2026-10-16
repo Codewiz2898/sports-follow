@@ -10,7 +10,8 @@ series are polled once a minute, all of them in one request (structured.poll_lan
 series moments.
 
 Players are known by their PandaScore id: the registry imports the pros of IMPORT_GAMES from here
-(registry.import_rosters), since Wikidata knows only a few thousand esports players.
+(registry.import_rosters), since Wikidata knows only a few thousand esports players. Each title is a sport of
+its own (sports/esports.py); one turned off isn't read, searched or imported.
 
 Dota 2 series get what happens inside each map from OpenDota (dota.py): kills, the clock and the gold
 lead while a map is on, and every roster player's hero and numbers once it's over.
@@ -25,18 +26,18 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from .. import bus, naming
+from .. import bus, naming, sports
 from . import budget, dota, opendota, pandascore
 from .base import Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot
 
 log = logging.getLogger("sports_follow.esports")
 
-# PandaScore's team titles: slug -> the name fans use. Its 1v1 titles (StarCraft, EA Sports FC), battle
-# royale (PUBG) and simulated matches (eSoccer, eCricket…) are left out.
+# PandaScore's team titles: slug -> the sport each is (sports/esports.py: "cs-go" is CS2). Its 1v1 titles
+# (StarCraft, EA Sports FC), battle royale (PUBG) and simulated matches (eSoccer, eCricket…) are left out.
 GAMES = {
-    "valorant": "Valorant", "cs-go": "CS2", "league-of-legends": "League of Legends", "dota-2": "Dota 2",
-    "mlbb": "Mobile Legends", "r6-siege": "Rainbow Six Siege", "ow": "Overwatch", "rl": "Rocket League",
-    "cod-mw": "Call of Duty", "lol-wild-rift": "Wild Rift", "kog": "King of Glory",
+    "valorant": "valorant", "cs-go": "cs2", "league-of-legends": "lol", "dota-2": "dota2",
+    "mlbb": "mlbb", "r6-siege": "r6siege", "ow": "overwatch", "rl": "rocketleague",
+    "cod-mw": "cod", "lol-wild-rift": "wildrift", "kog": "hok",
 }
 GAME_IDS = {"league-of-legends": 1, "cs-go": 3, "dota-2": 4, "ow": 14, "rl": 22, "cod-mw": 23, "r6-siege": 24, "valorant": 26, "kog": 27, "lol-wild-rift": 28, "mlbb": 34}
 # The titles whose pros the registry imports, so search finds them: every team title, for fans anywhere
@@ -71,7 +72,13 @@ COUNTRIES = {
 
 
 def game_name(slug: str | None) -> str | None:
-    return GAMES.get(slug or "")
+    """A title as the app names it: "cs-go" is "CS2"."""
+    return sports.BY_KEY[GAMES[slug]].label if slug in GAMES else None
+
+
+def game_ids(slugs: list[str]) -> str:
+    """PandaScore's ids for these titles, as a filter takes them."""
+    return ",".join(str(GAME_IDS[g]) for g in slugs if g in GAME_IDS)
 
 
 def country(code: str | None) -> str | None:
@@ -175,7 +182,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             locator={"match": str(m["id"])},
             detail=" · ".join(x for x in (_stage(m), _format(m)) if x) or None,
             result=result,
-            facts={"game": game} if (game := game_name((m.get("videogame") or {}).get("slug"))) else {},
+            sport=GAMES.get((m.get("videogame") or {}).get("slug") or "", ""),
         ))
     return out
 
@@ -310,8 +317,8 @@ class PandascoreEsports(Adapter):
     name = "PandaScore"
     provider = pandascore.PROVIDER
     covers = "Valorant, CS2, League of Legends, Dota 2 and other team games"
-    sport = "esports"
-    games = tuple(GAMES)  # covers these games of the sport, beside Liquipedia's: players never move between them
+    sports = tuple(dict.fromkeys(GAMES.values()))
+    games = tuple(GAMES)  # its own names for them, beside Liquipedia's: players never move between them
     live_cadence = 60  # map results arrive as each map ends; one request a round for every live series
     MULTI_MAX = 100  # match ids one request takes (a page)
     WINDOW_BACK, WINDOW_AHEAD = 60, 45  # days of series a refresh reads; older ones come from history_pages
@@ -328,9 +335,16 @@ class PandascoreEsports(Adapter):
         """Whether history.py may read now: live series need the hour's last LIVE_RESERVE requests."""
         return pandascore.spare()
 
-    def game_of(self, ref: PlayerRef) -> str | None:
-        """The pro's game, from the ref, or from its league for a binding stored before refs had one."""
-        return ref.game or game_name(ref.league)
+    def sport_of(self, ref: PlayerRef) -> str:
+        """The pro's game, from the title the ref names (its league), or the game a binding stored before
+        refs had a league says."""
+        found = GAMES.get(ref.league or "") or (sports.family(ref.game) if ref.game else "")
+        return found if found in self.sports else self.sports[0]
+
+    def _on(self) -> list[str]:
+        """The titles whose sports run now: the only ones read."""
+        running = self.running()
+        return [g for g, sport in GAMES.items() if sport in running]
 
     def _keep(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for m in rows:
@@ -341,22 +355,19 @@ class PandascoreEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
-    # A pro's sport is their game ("CS2"), and for_sport() finds the source by it.
-    game_names = (*GAMES.values(), "Counter-Strike", "CS:GO")
     roster_prefix = "pandascore:"
 
     @classmethod
     def available(cls) -> bool:
         return bool(pandascore.token())
 
-    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
-        return game_name(league)
-
-    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
-        """The active pros of IMPORT_GAMES, a page of 100 every ROSTER_PACE seconds and only while live
-        series keep their share of the hour (pandascore.spare)."""
-        games = ",".join(str(GAME_IDS[g]) for g in IMPORT_GAMES)
-        params = {"filter[videogame_id]": games, "filter[active]": "true", "sort": "id", "page[size]": pandascore.PAGE}
+    def roster(self, keep: Callable[[list[Rostered]], int], wanted: set[str] | None = None) -> Roster:
+        """The active pros of IMPORT_GAMES of the sports wanted (all of its own by default), a page of 100
+        every ROSTER_PACE seconds and only while live series keep their share of the hour (pandascore.spare)."""
+        read = [g for g in IMPORT_GAMES if wanted is None or GAMES[g] in wanted]
+        if not read:
+            return Roster(complete=True, leagues=[])
+        params = {"filter[videogame_id]": game_ids(read), "filter[active]": "true", "sort": "id", "page[size]": pandascore.PAGE}
         page, waited, complete = 1, 0, True
         while True:
             if not pandascore.spare() and waited < ROSTER_WAIT:
@@ -383,7 +394,7 @@ class PandascoreEsports(Adapter):
                 break
             page += 1
             time.sleep(ROSTER_PACE)
-        return Roster(complete=complete, leagues=list(IMPORT_GAMES))
+        return Roster(complete=complete, leagues=read)
 
     def credits_also(self) -> list[dict[str, Any]]:
         if not opendota.ENABLED:
@@ -400,7 +411,10 @@ class PandascoreEsports(Adapter):
         return f"{self.name} and OpenDota" if snap.state.get("dota") else self.name
 
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
-        params = {"search[name]": name, "filter[videogame_id]": ",".join(str(i) for i in GAME_IDS.values()), "page[size]": 10}
+        games = game_ids(self._on())
+        if not games:
+            return []
+        params = {"search[name]": name, "filter[videogame_id]": games, "page[size]": 10}
         rows = pandascore.get_json("/players", ttl=24 * 3600, **params)
         return [parse_player(p) for p in rows if p.get("id")] if isinstance(rows, list) else []
 
@@ -519,7 +533,9 @@ class PandascoreEsports(Adapter):
         """The big series on now in the plan's games (matches/running, one request): those of a tournament in
         LIVE_TIERS, the biggest tier first and of equals in PandaScore's order. Its teams, not its players: a
         match names no players, and the registry knows the teams' pros."""
-        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        games = game_ids(self._on())
+        if not games:
+            return []
         # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
         # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
         rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
@@ -532,7 +548,7 @@ class PandascoreEsports(Adapter):
             snap = parse_match(m)
             if tier and snap.status == "live":
                 out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
-                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier))
+                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier, sport=f.sport))
         return sorted(out, key=lambda g: -g.tier)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
@@ -541,7 +557,9 @@ class PandascoreEsports(Adapter):
         one in eight is S or A, so the S and A tournaments come first (on now, starting in the window, ended
         in it: a request each), then their series in the window, a page of 100 a request."""
         span = f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z"
-        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        games = game_ids(self._on())
+        if not games:
+            return []
         # Tournaments filter by game as "videogame_id", and by tier.
         which = {"filter[videogame_id]": games, "filter[tier]": ",".join(SCHEDULE_TIERS), "page[size]": pandascore.PAGE}
         tiers: dict[str, int] = {}

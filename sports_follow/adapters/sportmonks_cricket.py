@@ -333,7 +333,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
 
 class SportmonksCricket(Adapter):
     system = "sportmonks_cricket"
-    sport = "cricket"
+    sports = ("cricket",)
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Cricket"

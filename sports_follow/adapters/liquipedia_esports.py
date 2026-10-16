@@ -1,5 +1,5 @@
-"""Battle royale esports from Liquipedia: BGMI and PUBG Mobile, Free Fire and Apex Legends. (PUBG itself
-comes from PUBG's own API, with every player's numbers: pubg_esports.)
+"""Battle royale esports from Liquipedia: BGMI and PUBG Mobile, Free Fire and Apex Legends, each a sport of its
+own (sports/esports.py). (PUBG itself comes from PUBG's own API, with every player's numbers: pubg_esports.)
 
 A battle royale "match" on Liquipedia is a lobby, not two teams: 12 to 24 teams play several games
 (maps) in a row, each team scoring points for its placement and its finishes (kills) in every game,
@@ -28,7 +28,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from .. import naming
+from .. import naming, sports
 from ..sports import esports
 from . import liquipedia
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Roster, Rostered, Snapshot
@@ -37,10 +37,12 @@ from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Roster, Roste
 # (Lua-Modules: each wiki's MatchGroup/Input/Custom.lua hands them to standardProcessFfaMaps).
 log = logging.getLogger("sports_follow.esports")
 
-WIKIS = {"pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "apexlegends": "Apex Legends"}
+# Each wiki's game, as the sport it is (sports/esports.py); an Indian player on the PUBG Mobile wiki plays BGMI.
+WIKIS = {"pubgmobile": "pubgmobile", "freefire": "freefire", "apexlegends": "apex"}
+INDIA = {"pubgmobile": "bgmi"}
 WIN_WORD = {"pubgmobile": "Chicken dinner", "freefire": "Booyah", "apexlegends": "Champions"}
 # A match's own game field, where a wiki holds more than one ("bgmi" events on the PUBG Mobile wiki).
-GAME_NAMES = {"bgmi": "BGMI", "pubgm": "PUBG Mobile", "pubgmobile": "PUBG Mobile", "freefire": "Free Fire", "ffmax": "Free Fire MAX"}
+GAME_FIELD = {"bgmi": "bgmi", "pubgm": "pubgmobile", "pubgmobile": "pubgmobile", "freefire": "freefire", "ffmax": "freefire"}
 SHORT = {"pubgmobile": "pubgm", "freefire": "ff", "apexlegends": "apex"}  # registry keys: "lp:pubgm:<page id>"
 IMPORT_WIKIS = [w for w in os.environ.get("SPORTS_FOLLOW_LIQUIPEDIA_WIKIS", ",".join(WIKIS)).split(",") if w in WIKIS]
 NO_DATE = ("1970-01-01", "0000-01-01")  # Liquipedia's placeholders for a date nobody entered
@@ -67,14 +69,19 @@ def team_name(page: str | None) -> str:
     return (page or "").replace("_", " ").strip()
 
 
+def _label(sport: str | None) -> str | None:
+    return sports.BY_KEY[sport].label if sport else None
+
+
 def game_name(wiki: str | None, game: str | None = None) -> str | None:
-    return GAME_NAMES.get((game or "").lower()) or WIKIS.get(wiki or "")
+    """A lobby's game as the app names it: its own game field's, else its wiki's ("BGMI", "Free Fire")."""
+    return _label(GAME_FIELD.get((game or "").lower()) or WIKIS.get(wiki or ""))
 
 
-def player_game(wiki: str | None, country: str | None = None) -> str | None:
-    """The game a player on a wiki plays: India plays PUBG Mobile as BGMI, its own version."""
-    if wiki == "pubgmobile" and (country or "").strip().lower() == "india":
-        return "BGMI"
+def player_sport(wiki: str | None, country: str | None = None) -> str | None:
+    """The game a player on a wiki plays, as its sport: India plays PUBG Mobile as BGMI, its own version."""
+    if (country or "").strip().lower() == "india" and wiki in INDIA:
+        return INDIA[wiki]
     return WIKIS.get(wiki or "")
 
 
@@ -298,7 +305,7 @@ def parse_player(p: dict[str, Any], wiki: str) -> PlayerRef:
         profile_url=f"https://liquipedia.net/{wiki}/{team_id(p.get('pagename'))}" if p.get("pagename") else None,
         league=wiki,
         born=None if (p.get("birthdate") or "").startswith(NO_DATE) else p.get("birthdate") or None,
-        game=player_game(wiki, p.get("nationality")),
+        game=_label(player_sport(wiki, p.get("nationality"))),
     )
 
 
@@ -344,8 +351,8 @@ class LiquipediaEsports(Adapter):
     provider = liquipedia.PROVIDER
     covers = "BGMI, PUBG Mobile, Free Fire and Apex Legends"
     id_pattern = re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}")  # wiki:Page_name
-    sport = "esports"
-    games = tuple(WIKIS)  # covers these games of the sport, beside PandaScore's: players never move between them
+    sports = tuple(dict.fromkeys([*INDIA.values(), *WIKIS.values()]))
+    games = tuple(WIKIS)  # its own names for them, beside PandaScore's: players never move between them
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
     live_note = "Standings update from Liquipedia every few minutes as results are recorded."
     lag_note = "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."
@@ -359,8 +366,15 @@ class LiquipediaEsports(Adapter):
     def spare(self) -> bool:
         return liquipedia.spare()
 
-    def game_of(self, ref: PlayerRef) -> str | None:
-        return ref.game or player_game(ref.league)
+    def sport_of(self, ref: PlayerRef) -> str:
+        """The player's game: the one their ref names (BGMI for an Indian player), else their wiki's."""
+        found = (sports.family(ref.game) if ref.game else "") or player_sport(ref.league) or ""
+        return found if found in self.sports else self.sports[0]
+
+    def _wikis(self, wanted: set[str] | None = None) -> list[str]:
+        """The wikis whose games are wanted (by default, those of its sports that run now)."""
+        wanted = set(self.running()) if wanted is None else wanted
+        return [w for w in WIKIS if {WIKIS[w], INDIA.get(w, WIKIS[w])} & wanted]
 
     def _keep(self, rows: list[dict[str, Any]], wiki: str) -> list[dict[str, Any]]:
         for x in rows:
@@ -371,7 +385,6 @@ class LiquipediaEsports(Adapter):
                 self._seen.pop(key, None)
         return rows
 
-    game_names = (*WIKIS.values(), *GAME_NAMES.values(), "Battlegrounds Mobile India")  # a pro's sport is their game
     roster_prefix = "lp:"
     wikidata_property = "P10918"  # Liquipedia ID: "pubgmobile/Jonathan"
 
@@ -382,14 +395,13 @@ class LiquipediaEsports(Adapter):
     def available(cls) -> bool:
         return bool(liquipedia.token())
 
-    def game_of_league(self, league: str | None, country: str | None = None) -> str | None:
-        return player_game(league, country)
-
-    def roster(self, keep: Callable[[list[Rostered]], int]) -> Roster:
-        """The active players of each battle royale wiki, 1,000 a request, only while the hour's reserve
-        for live lobbies holds (liquipedia.spare): the free key allows 60 requests an hour."""
+    def roster(self, keep: Callable[[list[Rostered]], int], wanted: set[str] | None = None) -> Roster:
+        """The active players of each battle royale wiki of the sports wanted (all of its own by default),
+        1,000 a request, only while the hour's reserve for live lobbies holds (liquipedia.spare): the free key
+        allows 60 requests an hour. The PUBG Mobile wiki is read once for both its games."""
         complete = True
-        for wiki in IMPORT_WIKIS:
+        read = [w for w in IMPORT_WIKIS if w in self._wikis(set(self.sports) if wanted is None else wanted)]
+        for wiki in read:
             offset, waited = 0, 0
             while True:
                 if not liquipedia.spare() and waited < ROSTER_WAIT:
@@ -407,12 +419,12 @@ class LiquipediaEsports(Adapter):
                 if len(players) < liquipedia.PAGE:
                     break
                 offset += liquipedia.PAGE
-        return Roster(complete=complete, leagues=list(IMPORT_WIKIS))
+        return Roster(complete=complete, leagues=read)
 
     def search(self, name: str, league: str | None = None) -> list[PlayerRef]:
-        """Players whose handle is exactly this, on every battle royale wiki."""
+        """Players whose handle is exactly this, on every battle royale wiki of a game that runs."""
         found = []
-        for wiki in WIKIS:
+        for wiki in self._wikis():
             for p in liquipedia.get("player", 24 * 3600, wiki=wiki, conditions=f"[[id::{name}]]", limit=10):
                 found.append(parse_player(p, wiki))
         return found

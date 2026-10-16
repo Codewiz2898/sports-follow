@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import httpx
 
 from sports_follow import credits, form, moments, registry, search, sports, structured
-from sports_follow.sports.esports import game_of_league
 from sports_follow.adapters import ADAPTERS, KNOWN, SearchResult, budget, pandascore, pandascore_esports as ps
 from sports_follow.adapters.base import PlayerRef
 from sports_follow.models import Athlete
@@ -69,8 +68,8 @@ def test_fixtures_read_both_teams_the_stage_and_the_result():
     assert (finished.status, finished.team_ids, finished.locator) == ("final", [str(SEN), str(NRG)], {"match": "777"})
     assert finished.start_utc == datetime(2026, 10, 11, 19, 12, tzinfo=timezone.utc)  # when it began
     assert finished.result["teams"][0] == {"id": str(SEN), "name": "Sentinels", "score": 2, "winner": True}
-    assert finished.facts == {"game": "Valorant"}  # its group among the big esports games (Sport.notable)
-    assert ps.parse_fixtures([{**FINAL, "videogame": {"id": 99, "slug": "unknown"}}])[0].facts == {}
+    assert finished.sport == "valorant"  # each title is a sport of its own
+    assert ps.parse_fixtures([{**FINAL, "videogame": {"id": 99, "slug": "unknown"}}])[0].sport == ""
     # A bracket slot still to be decided, and no prefix in the name: the tournament is the stage.
     assert (scheduled.title, scheduled.detail, scheduled.result) == ("Sentinels vs TBD", "Playoffs · Bo3", None)
     assert scheduled.start_utc == datetime(2026, 10, 11, 19, 0, tzinfo=timezone.utc)
@@ -211,17 +210,17 @@ def test_a_forfeit_is_a_result():
 
 
 def test_a_pros_sport_is_their_game():
-    assert {sports.family(s) for s in ("Valorant", "CS2", "BGMI", "Free Fire", "League of Legends", "Esports")} == {"esports"}
+    assert [sports.family(s) for s in ("Valorant", "CS2", "Counter-Strike", "League of Legends", "LoL", "Esports")] == ["valorant", "cs2", "cs2", "lol", "lol", "esports"]
     assert sports.family("Cricket") == "cricket"
-    assert [sports.label(s) for s in ("CS2", "League of Legends", "PUBG Mobile", "cricket", "esports")] == ["CS2", "League of Legends", "PUBG Mobile", "Cricket", "Esports"]
-    assert (game_of_league("cs-go"), game_of_league("pubgmobile", "India"), game_of_league("pubgmobile", "Nepal"), game_of_league("freefire")) == ("CS2", "BGMI", "PUBG Mobile", "Free Fire")
-    assert (game_of_league("mlbb"), game_of_league("kog"), game_of_league("apexlegends"), game_of_league("pubg")) == ("Mobile Legends", "King of Glory", "Apex Legends", "PUBG")  # PUBG's own API
-    assert {sports.family(s) for s in ("Mobile Legends", "Apex Legends", "PUBG", "Rainbow Six Siege")} == {"esports"}
+    assert [sports.label(s) for s in ("CS2", "cs2", "League of Legends", "PUBG Mobile", "cricket", "esports")] == ["CS2", "CS2", "League of Legends", "PUBG Mobile", "Cricket", "Esports"]
+    assert [sports.family(s) for s in ("Mobile Legends", "King of Glory", "Honor of Kings", "Rainbow Six Siege", "Free Fire MAX")] == ["mlbb", "hok", "hok", "r6siege", "freefire"]
     adapter = ps.PandascoreEsports()
+    assert {s: adapter.sport_of(PlayerRef("pandascore_esports", "1", "x", [], [], league=s)) for s in ("cs-go", "kog", "league-of-legends")} == {"cs-go": "cs2", "kog": "hok", "league-of-legends": "lol"}
     assert structured.sport_name(adapter, ps.parse_player(PLAYER)) == "Valorant"
     stored_before = PlayerRef("pandascore_esports", "1", "amster", ["138811"], ["6666"], league="cs-go")  # a binding saved without a game
     assert structured.sport_name(adapter, stored_before) == "CS2"
-    # The rules read the family: a CS2 pro's series ends like any esports series.
+    assert structured.sport_name(adapter, PlayerRef("pandascore_esports", "1", "amster", [], [], game="King of Glory")) == "Honor of Kings"  # its game's name now
+    # The rules are esports', every game's: a CS2 pro's series ends like any esports series.
     [final] = moments.detect("CS2", "TenZ", str(TENZ), _seen(LIVE), _seen(FINAL))
     assert final.title == "TenZ: Sentinels win 2–1"
     assert form.summarize("Valorant", [({"result": "Won 2–1"}, None)], [])[1] == "Last 1 series"
@@ -238,18 +237,22 @@ def test_form_counts_series_and_maps():
 
 
 def test_registry_rows_from_pandascore_players():
-    rows = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}]))
+    rows = registry.roster_rows(KNOWN["pandascore_esports"], ps.rostered([PLAYER, {**PLAYER, "id": 5, "name": "Serral", "current_videogame": {"slug": "starcraft-2"}}, {**PLAYER, "id": 6, "name": "  "}]))
     [row] = rows
     assert row["qid"] == f"pandascore:{TENZ}" and len(row["qid"]) <= 20
-    assert (row["sport"], row["name"], row["aliases"], row["teams"], row["league"], row["country"]) == ("esports", "TenZ", ["Tyson Ngo"], ["Sentinels"], "valorant", "Canada")
+    assert (row["sport"], row["name"], row["aliases"], row["teams"], row["league"], row["country"]) == ("valorant", "TenZ", ["Tyson Ngo"], ["Sentinels"], "valorant", "Canada")
+    # Each pro under their game; a run of some games keeps only theirs.
+    cs = {**PLAYER, "id": 7, "name": "s1mple", "current_videogame": {"slug": "cs-go"}}
+    assert [r["sport"] for r in registry.roster_rows(KNOWN["pandascore_esports"], ps.rostered([PLAYER, cs]))] == ["valorant", "cs2"]
+    assert [r["qid"] for r in registry.roster_rows(KNOWN["pandascore_esports"], ps.rostered([PLAYER, cs]), {"cs2"})] == ["pandascore:7"]
     assert row["ids"] == {"pandascore_esports": str(TENZ)} and row["current"] is True
     assert row["search_text"] == " tenz | tyson ngo |"
 
 
 def test_an_esports_row_is_a_search_result_keyed_by_its_pandascore_id(monkeypatch):
     monkeypatch.setitem(ADAPTERS, "pandascore_esports", KNOWN["pandascore_esports"])  # it runs only with its token
-    monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "esports" else None)
-    row = registry.roster_rows("pandascore_esports", ps.rostered([PLAYER]))[0]
+    monkeypatch.setattr(registry, "live_system", lambda sport: "pandascore_esports" if sport == "valorant" else None)
+    row = registry.roster_rows(KNOWN["pandascore_esports"], ps.rostered([PLAYER]))[0]
     r = search.from_athlete(Athlete(**{k: v for k, v in row.items() if k != "search_text"}), "tyson ngo")
     assert (r.key, r.system, r.athlete_id, r.sport) == (f"pandascore_esports:{TENZ}", "pandascore_esports", str(TENZ), "Valorant")  # the game, not "Esports"
     assert r.qid is None  # following goes by the PandaScore id; the server takes only Wikidata ids as qids

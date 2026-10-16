@@ -2,7 +2,7 @@
 
     .venv/bin/python -m sports_follow.players list
     .venv/bin/python -m sports_follow.players add Q1234 [--sport cricket]   # pin a registry athlete: no import drops them
-    .venv/bin/python -m sports_follow.players add --sport esports --name amster --id pandascore_esports=34470 --team 6666 --league cs-go
+    .venv/bin/python -m sports_follow.players add --sport cs2 --name amster --id pandascore_esports=34470 --team 6666 --league cs-go
     .venv/bin/python -m sports_follow.players remove 17                    # a player's page, by its id
     .venv/bin/python -m sports_follow.players remove Q1234                 # or a registry id, or a source id (espn_cricket:253802)
     .venv/bin/python -m sports_follow.players restore Q1234                # take the decision back
@@ -99,8 +99,9 @@ def find(db: Session, ref: str, sport: str | None = None) -> Found:
         holders = select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id == ref)
         found.players = list(db.scalars(select(Player).where(or_(Player.id.in_(holders), Player.wikidata_qid == ref))))
     if sport:
-        found.athletes = [a for a in found.athletes if a.sport == sport]
-        found.players = [p for p in found.players if sports.family(p.sport) == sport]
+        within = {sport, *sports.expand([sport])}  # "esports": any game's
+        found.athletes = [a for a in found.athletes if a.sport in within]
+        found.players = [p for p in found.players if sports.family(p.sport) in within]
     return found
 
 
@@ -168,15 +169,14 @@ def add(db: Session, sport: str, name: str, *, aliases: Sequence[str] = (), team
         league: str | None = None, born: date | None = None, ids: dict[str, str] | None = None, note: str | None = None) -> tuple[Athlete, bool]:
     """Put an athlete no source lists in the registry, kept there, or pin the one already there with one of
     these source ids. Returns the athlete and whether they were new."""
-    kind = sports.BY_KEY.get(sport)
-    if kind is None:
+    if sport not in {s.key for s in sports.ALL}:
         raise Refused(f"unknown sport {sport!r}; choose from {', '.join(s.key for s in sports.ALL)}")
     if not registry.words(name):
         raise Refused("a name needs letters or digits in Latin script")
     ids = dict(ids or {})
     for system, xid in ids.items():
         adapter = KNOWN.get(system)
-        if adapter is not None and (adapter.sport != sport or not adapter.id_pattern.fullmatch(xid)):
+        if adapter is not None and (sport not in adapter.sports or not adapter.id_pattern.fullmatch(xid)):
             raise Refused(f"{system}:{xid} isn't one of that source's {sport} athlete ids")
     there = db.scalars(select(Athlete).where(Athlete.sport == sport, or_(*[Athlete.ids.contains({s: x}) for s, x in ids.items()]))).first() if ids else None
     if there is not None:
@@ -193,7 +193,8 @@ def add(db: Session, sport: str, name: str, *, aliases: Sequence[str] = (), team
 
 
 def _refuse_removed(db: Session, qid: str, sport: str) -> None:
-    if db.scalar(select(AthleteOverride.id).where(AthleteOverride.qid == qid, AthleteOverride.sport == sport, AthleteOverride.action == "remove")):
+    within = [sport, *([group] if (group := sports.of(sport).group) else [])]  # removed as "esports": every game's
+    if db.scalar(select(AthleteOverride.id).where(AthleteOverride.qid == qid, AthleteOverride.sport.in_(within), AthleteOverride.action == "remove")):
         raise Refused(f"{qid} ({sport}) was removed; restore it first")
 
 
@@ -227,7 +228,7 @@ def unmatch(db: Session, found: Found, person: str | None = None, note: str | No
         stmt = insert(AthleteUnmatch).values(qid=a.qid, sport=a.sport, person=person, name=a.name[:200], note=note)
         db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport", "person"], set_={"name": a.name[:200], "note": note, "created_at": func.now()}))
         image = a.image
-        taken = bool(roster_wikidata.forget(db, a.sport, [a.qid], person))
+        taken = bool(roster_wikidata.forget(db, [a.sport], [a.qid], person))
         out.append((a, taken, image if taken else None))
     return out
 

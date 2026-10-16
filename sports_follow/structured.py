@@ -244,11 +244,10 @@ def describe(player_id: int) -> str | None:
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
         adapter = ADAPTERS.get(row.adapter)
-        named = sports.of(adapter.sport).leagues if adapter else ()
-        league = f" ({loc['league'].upper()})" if loc.get("league") in named else ""
-        game = adapter.game_of(PlayerRef(**loc)) if getattr(adapter, "games", None) else None
-        if game:
-            league = f" ({game} pro, known by this handle)"
+        kind = sports.BY_KEY.get(adapter.sport_of(PlayerRef(**loc))) if adapter else None
+        league = f" ({loc['league'].upper()})" if kind and loc.get("league") in kind.leagues else ""
+        if kind and kind.group:
+            league = f" ({kind.label} pro, known by this handle)"  # one game of a group: an esports pro's
         page = f" Their page on {source_name(row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
         return f"{loc.get('name') or player.name}, {player.sport if league else player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
@@ -312,10 +311,9 @@ def retry_at(health: dict[str, Any] | None) -> datetime | None:
 
 
 def sport_name(adapter: Adapter, ref: PlayerRef) -> str:
-    """A player's sport as Sports Follow names it: their game for an esports pro ("CS2", "BGMI"), else
-    the sport their source covers ("Football")."""
-    game_of = getattr(adapter, "game_of", None)
-    return (game_of(ref) if game_of else None) or sports.label(adapter.sport)
+    """A player's sport as Sports Follow names it: the sport their source has them in ("Football"; an esports
+    pro's game, "CS2", "BGMI")."""
+    return sports.label(adapter.sport_of(ref))
 
 
 def rebind(current: str | None, preferred: Adapter | None) -> bool:
@@ -370,9 +368,9 @@ def _refresh(player_id: int) -> None:
         card_row = db.get(PlayerCard, player_id)
         if player is None or card_row is None:
             return
-        game = sport_name(adapter, ref) if getattr(adapter, "games", None) else None
-        if game and player.sport != game:
-            player.sport = game  # an esports pro's sport is their game (bound as "Esports", or changed games)
+        kind = sports.BY_KEY.get(adapter.sport_of(ref))
+        if kind and kind.group and sports.get(player.sport) is not kind:
+            player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
         events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
         for f, snap in recent:
             if snap:
@@ -792,7 +790,8 @@ def _team_ids(db: Session, system: str, player_ids: list[int]) -> dict[int, list
 
 def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, str]]] | None:
     """An event's live binding, its adapter and the followed players in it (player id, their id in the
-    source); None when no followed player is in it or its source doesn't run."""
+    source) whose sport runs; None when there are none or its source doesn't run. A source of several
+    sports (esports games) runs while one does: a game turned off isn't polled."""
     with session() as db:
         event = db.get(Event, event_id)
         if event is None or not event.live_binding:
@@ -803,11 +802,13 @@ def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, s
             return None
         followed = select(Follow.player_id)
         watchers = db.execute(
-            select(PlayerIdentity.player_id, PlayerIdentity.external_id)
+            select(PlayerIdentity.player_id, PlayerIdentity.external_id, Player.sport)
             .join(EventPlayer, EventPlayer.player_id == PlayerIdentity.player_id)
+            .join(Player, Player.id == PlayerIdentity.player_id)
             .where(EventPlayer.event_id == event_id, PlayerIdentity.system == adapter.system, PlayerIdentity.player_id.in_(followed))
         ).all()
-    return (live_binding, adapter, [(pid, xid) for pid, xid in watchers]) if watchers else None
+    on = [(pid, xid) for pid, xid, sport in watchers if sports.on(sport)]
+    return (live_binding, adapter, on) if on else None
 
 
 def poll_once(event_id: int) -> tuple[str, int, bool]:
