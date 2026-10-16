@@ -6,7 +6,7 @@
 
 import Constants from 'expo-constants'
 import { router, useLocalSearchParams } from 'expo-router'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { allFollowed, campaignLive, campaignRows, followAllFailed, followAllWords, keyAlertsLine, schedule } from '../../../web/src/campaign'
@@ -155,16 +155,18 @@ function FollowBlocks({ c, tone, follow, reload, keyLine }: { c: Campaign; tone:
   const following = useFollowing()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const asking = useRef(false) // a follow-all under way, from the first tap: a second can't open another dialog
 
   const toggleOne = (r: SearchResult) => void follow.toggle(r).then(reload)
   const toggleAll = async (key: string, rows: SearchResult[], which: { team: string } | { players: true }, ask: string) => {
-    if (busy) return
+    if (asking.current) return
+    asking.current = true
     const undo = allFollowed(rows, follow.followed)
-    // Some may have been followed elsewhere first, with their own alerts: ask before they all go.
-    if (undo && !(await confirm(ask))) return
-    setBusy(key)
-    setError(null)
     try {
+      // Some may have been followed elsewhere first, with their own alerts: ask before they all go.
+      if (undo && !(await confirm(ask))) return
+      setBusy(key)
+      setError(null)
       if (undo) {
         for (const r of rows) if (r.player_id != null && following.isFollowing(r.player_id)) await following.unfollow(r.player_id)
       } else {
@@ -176,6 +178,7 @@ function FollowBlocks({ c, tone, follow, reload, keyLine }: { c: Campaign; tone:
     } catch (e) {
       setError((e as Error).message)
     } finally {
+      asking.current = false
       setBusy(null)
     }
   }

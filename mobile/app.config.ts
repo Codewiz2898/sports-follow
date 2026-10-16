@@ -34,7 +34,7 @@ function pages(): ExpoConfigAndroidIntentFiltersData[] {
   return fs.readdirSync(path.join(__dirname, 'src', 'app'), { withFileTypes: true }).flatMap((f): ExpoConfigAndroidIntentFiltersData[] => {
     const route = f.name.replace(/\.tsx$/, '')
     if (f.isDirectory()) return [{ pathPrefix: `/${route}/` }]
-    if (route === 'index') return [{ path: '/' }]
+    if (route === 'index') return [{ path: '/' }, { path: '' }] // "https://stann.in/", and without its slash
     if (route === '[slug]') return [{ pathAdvancedPattern: '/[a-z0-9-]+' }]
     return /^[a-z]+$/.test(route) ? [{ path: `/${route}` }] : [] // not _layout or +not-found
   })
