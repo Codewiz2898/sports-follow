@@ -271,6 +271,15 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
+def _elevens(x: dict[str, Any], f: Fixture, system: str) -> list[list[PlayerRef]]:
+    """Each side's playing eleven, in the line-up's order, named as it names them (an impact player waiting to
+    come in isn't one of them)."""
+    teams = dict(zip(f.team_ids, f.team_names))
+    playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
+    return [[PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
+             for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+
+
 def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
     """Livescores -> the matches on now, each with its playing elevens, named as the line-up names them."""
     out = []
@@ -279,14 +288,19 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
         snap = parse_match(x)
         if snap.status != "live":
             continue
-        teams = dict(zip(f.team_ids, f.team_names))
-        playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
-        sides = [[p for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+        sides = _elevens(x, f, system)
         # The sides in turn, each in the line-up's order: a game's best known come from both.
-        players = [PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
-                   for i in range(max((len(s) for s in sides), default=0)) for team, side in zip(f.team_ids, sides) if i < len(side) for p in [side[i]]]
+        players = [side[i] for i in range(max((len(s) for s in sides), default=0)) for side in sides if i < len(side)]
         out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
     return out
+
+
+def parse_game(x: dict[str, Any], system: str) -> LiveGame:
+    """A match with its scorecard (MATCH_INCLUDE) -> the game for its match page: its snapshot, with every
+    player's line, and the home side's eleven, then the visitors'."""
+    f = parse_fixture(x)
+    players = [p for side in _elevens(x, f, system) for p in side]
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
 
 
 def _season_year(name: str) -> int:
@@ -435,6 +449,12 @@ class SportmonksCricket(Adapter):
         """Every match in the plan's competitions on now, with its playing elevens: one request (livescores)."""
         rows = sportmonks.get_json(f"{API}/livescores", ttl=30, include=LIST_INCLUDE).get("data") or []
         return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One match by its id, whoever follows it, for its match page: its scorecard and both elevens. One
+        request, the one a followed player's live poll makes, so while one is polled it's often read already."""
+        x = sportmonks.get_json(f"{API}/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
+        return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.
