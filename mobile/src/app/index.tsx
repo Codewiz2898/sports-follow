@@ -8,7 +8,7 @@ import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
-import { AHEAD_DAYS, comingUp, FEW, latestIn, liveGames, notTheirs, results, resultsDay, stillToCome, TAIL, theirEvents } from '../../../web/src/today'
+import { AHEAD_DAYS, comingUp, FEW, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, theirEvents } from '../../../web/src/today'
 import type { League } from '../api'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
@@ -80,13 +80,13 @@ function SaveNudge() {
 
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions the
- * app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest. Nothing until the
- * server answers, and a rail with nothing in it isn't there.
+ * app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports taking
+ * turns. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
 function BigGames({ league, now }: { league: League | null; now: number }) {
   if (!league) return null
   const done = league.results.games
-  const coming = stillToCome(league.coming.games, now)
+  const coming = leagueComingUp(league.coming.games, new Set(), now)
   return (
     <>
       {done.length > 0 ? (
@@ -148,10 +148,13 @@ export default function TodayScreen() {
   const games = liveGames(cards)
   const done = results(cards, now, (sport) => sports.info(sport).key)
   const coming = comingUp(cards, now)
-  // After the fan's own, the big games none of their players are in, outlined.
+  // After the fan's own, the big games none of their players are in, outlined. Once the follow list has
+  // answered: a rail of only big games that the fan's own then come in front of would stay on the big ones
+  // (a snapped row keeps its card in view), and one of the fan's own would show as a big game until then.
   const theirs = theirEvents(cards)
-  const bigDone = league ? notTheirs(league.results.games, theirs) : []
-  const bigComing = league ? stillToCome(notTheirs(league.coming.games, theirs), now) : []
+  const big = loaded || failed ? league : null
+  const bigDone = big ? notTheirs(big.results.games, theirs) : []
+  const bigComing = big ? leagueComingUp(big.coming.games, theirs, now) : []
   const resultCount = (done?.games.length ?? 0) + bigDone.length
   // The day the rail's results are from: the fan's, the big ones', or, when those differ, the latest of each.
   const ownDay = done && (done.day ?? 'Since yesterday')

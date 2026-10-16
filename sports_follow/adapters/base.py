@@ -67,7 +67,8 @@ class Fixture:
     # schedule's games are ranked by their sport (Sport.notable), which reads it.
     tier: int = 0
     # What else the source knows that its sport ranks a game by (Sport.notable), in the shape the sport's
-    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}.
+    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}, esports'
+    # {"game": "Valorant"}.
     facts: dict[str, Any] = field(default_factory=dict)
 
 

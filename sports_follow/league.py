@@ -11,8 +11,10 @@ sport turned off isn't read: its sources don't run. Of a sport's sources, the fi
 is read, or every one where they sit side by side (Sport.side_by_side: each covers its own games).
 
 The API serves the finished games since yesterday, or of the latest day that has some (days where the fan
-is: the app says its UTC offset), and those to come in the next AHEAD days, each list biggest first of
-every sport together, at most RESULTS and COMING.
+is: the app says its UTC offset), and those to come in the next AHEAD days, at most RESULTS and COMING. In
+each list the sports take turns, so one sport's busy week never fills it: each sport's biggest game, the
+biggest of those first, then each one's next biggest, and so on; and within a sport its groups (an esports
+title: Notable.group) take turns the same way. Today shows Coming up's first few soonest first (web/src/today.ts).
 Each game says which of Sports Follow's events it is (event_ids, by the source's fixture id), so Today
 shows a game a fan's player is in once, as theirs.
 """
@@ -22,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -71,6 +74,7 @@ def _dump(system: str, sport: str, f: Fixture, n: Notable) -> dict[str, Any]:
         "word": n.word,
         "line": n.line,
         "why": n.why,
+        "group": n.group,
     }
 
 
@@ -113,7 +117,8 @@ def _start(game: dict[str, Any]) -> datetime:
 
 def _results(games: list[dict[str, Any]], now: datetime, tz: int = 0) -> tuple[list[dict[str, Any]], date | None]:
     """The finished games since yesterday, or failing that of the latest day that had some, and that day
-    (None for since yesterday), the days as a fan tz minutes east of UTC has them; biggest first, then newest."""
+    (None for since yesterday), the days as a fan tz minutes east of UTC has them; in turns, biggest first,
+    then newest."""
     def day_of(at: datetime) -> date:
         return (at + timedelta(minutes=tz)).date()
 
@@ -125,18 +130,38 @@ def _results(games: list[dict[str, Any]], now: datetime, tz: int = 0) -> tuple[l
         day = max(day_of(_start(g)) for g in finished)
         shown = [g for g in finished if day_of(_start(g)) == day]
     shown.sort(key=lambda g: (-g["rank"], -_start(g).timestamp()))
-    return shown[:RESULTS], day
+    return _turns(shown)[:RESULTS], day
 
 
 def _coming(games: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """The games still to start in the next AHEAD days, biggest first, then soonest."""
+    """The games still to start in the next AHEAD days, in turns, biggest first, then soonest."""
     ahead = [g for g in games if g["status"] == "scheduled" and now < _start(g) <= now + timedelta(days=AHEAD)]
     ahead.sort(key=lambda g: (-g["rank"], _start(g).timestamp()))
-    return ahead[:COMING]
+    return _turns(ahead)[:COMING]
+
+
+def _turns(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Games, best first, as their sports take turns: every sport's best, then every sport's next best, and
+    so on, a round in the order given; a sport's own turns go round its groups (esports titles) the same way."""
+    return _rounds(games, lambda g: g["sport"], lambda g: g.get("group") or "")
+
+
+def _rounds(items: list[dict[str, Any]], *by: Callable[[dict[str, Any]], str]) -> list[dict[str, Any]]:
+    if not by:
+        return items
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        groups.setdefault(by[0](item), []).append(item)
+    queues = [_rounds(group, *by[1:]) for group in groups.values()]
+    at = {id(item): i for i, item in enumerate(items)}
+    out: list[dict[str, Any]] = []
+    for n in range(max(map(len, queues), default=0)):
+        out += sorted((q[n] for q in queues if n < len(q)), key=lambda item: at[id(item)])
+    return out
 
 
 def _shown(game: dict[str, Any], events: dict[str, int]) -> dict[str, Any]:
-    return {**{k: v for k, v in game.items() if k != "status"}, "event_ids": [events[game["key"]]] if game["key"] in events else []}
+    return {**{k: v for k, v in game.items() if k not in ("status", "group")}, "event_ids": [events[game["key"]]] if game["key"] in events else []}
 
 
 def _gather(now: datetime) -> tuple[list[dict[str, Any]], list[str], tuple[str | None, ...]]:

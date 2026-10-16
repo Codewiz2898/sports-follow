@@ -217,6 +217,7 @@ def parse_fixture(lobby: dict[str, Any], now: datetime | None = None) -> Fixture
         locator={"tournament": lobby["tournament"], "day": lobby["day"], "n": lobby["n"]},
         detail=None,
         result={"teams": len(table), "standings": [{k: r[k] for k in ("id", "name", "place", "points", "kills", "wins")} for r in table]} if status == "final" else None,
+        facts={"game": GAME},
     )
 
 

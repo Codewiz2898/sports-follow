@@ -246,17 +246,19 @@ class Esports(Sport):
         """A series or lobby of a big event (Fixture.tier S or A), as big as its tier and, for a series, how
         late in the event it is (its stage, as its detail says: "Grand final · Bo5"), 8 more once it's over
         if it went the distance. A forfeit isn't one. Its word is the series score, the winner's first, or a
-        lobby's winner."""
+        lobby's winner. Its group is its game, as its source names it (facts["game"]: "Valorant"), so each
+        game takes its turn among the sport's and one game's season never fills Today."""
         r = fixture.result or {}
+        group = str(fixture.facts.get("game") or "")
         if "standings" in r or (fixture.status != "final" and len(fixture.team_ids) > 2):
             rank = LOBBY_RANK.get(fixture.tier)
             if rank is None:
                 return None
             table = r.get("standings") or []
             if fixture.status != "final" or not table:
-                return Notable(rank, why=TIERS[fixture.tier])
+                return Notable(rank, why=TIERS[fixture.tier], group=group)
             top = table[0]
-            return Notable(rank, word=str(top.get("name") or ""), line=f"Won the lobby · {points(top.get('points'))} pts · {r.get('teams')} teams", why=TIERS[fixture.tier])
+            return Notable(rank, word=str(top.get("name") or ""), line=f"Won the lobby · {points(top.get('points'))} pts · {r.get('teams')} teams", why=TIERS[fixture.tier], group=group)
         if fixture.tier not in SERIES_RANK or r.get("forfeit"):
             return None
         level, said = stage(fixture.detail)
@@ -264,7 +266,7 @@ class Esports(Sport):
         why = said or TIERS[fixture.tier]
         sides = r.get("teams") or []
         if fixture.status != "final" or len(sides) != 2:
-            return Notable(rank, why=why)
+            return Notable(rank, why=why, group=group)
         scores = sorted((int(t.get("score") or 0) for t in sides), reverse=True)
         best_of = re.search(r"\bBo(\d+)\b", fixture.detail or "")
         distance = scores[1] > 0 and (scores[0] - scores[1] == 1) and (not best_of or scores[0] + scores[1] == int(best_of[1]))
@@ -274,7 +276,7 @@ class Esports(Sport):
         first, second = (winner, loser) if winner and loser else sides
         line = f"{winner['name']} beat {loser['name']}" if winner and loser else ""
         return Notable(min(100, rank + (8 if distance else 0)), word=f"{first.get('score')}–{second.get('score')}", line=line,
-                       why=why if said or not distance else "Decider")
+                       why=why if said or not distance else "Decider", group=group)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         """Battle royale: placings and points from the lobby results ("3rd of 16 · 87 pts"). Team series:
