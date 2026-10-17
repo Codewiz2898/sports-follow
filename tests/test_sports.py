@@ -179,28 +179,8 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
 def test_each_sport_brings_its_colour(api):
     res = api.call("GET", "/api/sports.css")
     assert res.headers["content-type"].startswith("text/css")
-    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; --photo-dark: #0d2a7a; --photo-light: #133be0; }" in res.text
+    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; }" in res.text
     assert all(f"[data-sport='{s.key}']" in res.text for s in sports.ALL)
-
-
-def _rgb(colour: str) -> tuple[float, ...]:
-    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
-
-
-@pytest.mark.parametrize("sport", [s for s in sports.ALL if s.colour], ids=lambda s: s.key)
-def test_a_photo_is_recoloured_from_the_sports_deep_colour_to_its_block_colour(sport):
-    """The page multiplies the grey photo by --photo-light and screens --photo-dark over it (styles.css,
-    .duo): black must come out as the deep colour, white as the block colour, and grey in between."""
-    dark, light = sports.photo_tones(sport)
-    d, pre, block = _rgb(dark), _rgb(light), _rgb(sport.colour["sport"])
-    assert all(dc < bc for dc, bc in zip(d, block)) or sum(d) < sum(block), "the photo's darks must be the darker"
-
-    def shown(grey: float) -> tuple[float, ...]:
-        return tuple(1 - (1 - grey * p) * (1 - dc) for p, dc in zip(pre, d))
-
-    assert shown(0) == pytest.approx(d)
-    assert shown(1) == pytest.approx(block, abs=1 / 255)
-    assert shown(0.5) == pytest.approx(tuple((dc + bc) / 2 for dc, bc in zip(d, block)), abs=1 / 255)
 
 
 WEB = PACKAGE.parent / "web" / "src"

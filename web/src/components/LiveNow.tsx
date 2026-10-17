@@ -62,8 +62,9 @@ export function useLive(): LiveSport[] {
 
 type Follow = ReturnType<typeof useFollowToggle>
 
-/** A game's players to follow, each with a tap (the server puts those already on stann first). */
-function FollowPills({ game, follow }: { game: LiveGame; follow: Follow }) {
+/** A game's players to follow, each with a tap (the server puts those already on stann first): a live card's,
+ * or one side's on a match page. */
+export function FollowPills({ game, follow }: { game: Pick<LiveGame, 'title' | 'players'>; follow: Follow }) {
   if (!game.players.length) return null
   return (
     <div className="who" role="group" aria-label={`Follow from ${game.title}`}>
@@ -96,6 +97,7 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
       <Rail title="Live now" note={`${games.length} on`}>
         {games.map((g) => (
           <article key={g.key} className="live-game" data-sport={g.sport} aria-label={`${g.title}, live`}>
+            <MatchLink game={g} />
             <span className="row" style={{ gap: 8 }}>
               <span className="badge-live">Live</span>
               {g.live.clock && <span className="eyebrow clock">{g.live.clock}</span>}
@@ -111,12 +113,19 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
   )
 }
 
+/** The whole of a live game's card opens its match page, but its follow buttons (a link can't hold them, so it
+ * lies under them: .card-link). */
+function MatchLink({ game }: { game: LiveGame }) {
+  return game.match ? <Link to={`/match/${game.match}`} className="card-link" aria-label={`${game.title}: the match`} /> : null
+}
+
 /** One game on now that none of the fan's players are in, on Today or the Live page (LivePage.tsx):
  * outlined, so it doesn't pass for theirs. */
 export function OtherGame({ game, label, follow }: { game: LiveGame & { sport: string }; label: string; follow: Follow }) {
   return (
     <article className="live-other" data-sport={game.sport} aria-label={`${label}: ${game.title}, live`}>
       <Backdrop sport={game.sport} seed={game.key} />
+      <MatchLink game={game} />
       <span className="sport-tag">{game.competition || label}</span>
       {/* A state in a shape this app doesn't know shows as the plain score. In a row of taller cards (a chess
           board's), the board sits in the middle. */}

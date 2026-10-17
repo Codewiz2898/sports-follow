@@ -92,7 +92,7 @@ function PhotoList({ items }: { items: PhotoCredit[] }) {
               {safeHref(p.page) ? <a href={safeHref(p.page)} target="_blank" rel="noreferrer" className="link">Photo</a> : 'Photo'}
               {` by ${p.author}, `}
               {safeHref(p.licence_url) ? <a href={safeHref(p.licence_url)} target="_blank" rel="noreferrer" className="link">{p.licence}</a> : p.licence}
-              {', from Wikimedia Commons, recoloured'}
+              {', from Wikimedia Commons, cropped'}
             </span>
           </li>
         ))}

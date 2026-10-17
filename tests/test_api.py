@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, league, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1245,6 +1245,38 @@ def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch
     # The read failed, or hasn't come yet: the next looks within a minute don't ask again, but still say one's coming.
     assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is True
     assert [j for j in api.queue.jobs if j[0] == "read_live"] == [("read_live", "pitch")]
+
+
+def test_a_match_page_is_served_and_its_game_read_at_most_once_a_minute(api, monkeypatch):
+    """GET /api/match/<source>/<game> answers from match.view at once, and asks one read a minute of a game
+    whose last read is over a minute old, and at most match.READS a minute of one source (tests/test_match.py
+    holds what's shown). A source or game id of the wrong shape, or a game no source has named, is a 404."""
+    asked: list[tuple[str, str, str]] = []
+    page = {"key": "lichess_chess:abcd1234-5", "title": "A v B", "sides": []}
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: asked.append((fan, system, game)) or (page, True))
+    answer = api.call("GET", "/api/match/lichess_chess/abcd1234-5", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {**page, "refreshing": True}
+    assert asked == [("fan", "lichess_chess", "abcd1234-5")]
+    assert api.queue.jobs[-1] == ("read_match", "lichess_chess", "abcd1234-5") and api.queue.options["_job_id"] == "read_match:lichess_chess:abcd1234-5"
+    # Within the minute, another fan's look asks nothing more of the source, but still says a read is coming.
+    assert api.call("GET", "/api/match/lichess_chess/abcd1234-5", fan="other").json()["refreshing"] is True
+    assert [j for j in api.queue.jobs if j[0] == "read_match"] == [("read_match", "lichess_chess", "abcd1234-5")]
+    # Other games of one source share its READS a minute.
+    monkeypatch.setattr(match, "READS", 2)
+    for game in ("abcd1234-6", "abcd1234-7"):
+        api.call("GET", f"/api/match/lichess_chess/{game}", fan="fan")
+    assert [j[2] for j in api.queue.jobs if j[0] == "read_match"] == ["abcd1234-5", "abcd1234-6"]
+    # Counted by the source's allowance: Sportmonks' football and cricket share one.
+    monkeypatch.setattr(match, "READS", 1)
+    for system in ("sportmonks_football", "sportmonks_cricket"):
+        api.call("GET", f"/api/match/{system}/123", fan="fan")
+    assert [j[1] for j in api.queue.jobs if j[0] == "read_match"][-1] == "sportmonks_football" and ("read_match", "sportmonks_cricket", "123") not in api.queue.jobs
+
+    for path in ("/api/match/nowhere/1", "/api/match/lichess_chess/..", "/api/match/lichess_chess/a%2Fb", f"/api/match/lichess_chess/{'1' * 65}"):
+        assert api.call("GET", path, fan="fan").status_code == 404, path
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: (None, False))
+    answer = api.call("GET", "/api/match/lichess_chess/abcd1234-9", fan="fan")
+    assert answer.status_code == 404 and answer.json() == {"detail": "This game isn't here: it may have ended before anyone opened it."}
 
 
 def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_again(api, monkeypatch):

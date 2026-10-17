@@ -27,6 +27,7 @@ from sports_follow.models import Athlete, Campaign, Follow, Player, PlayerCard, 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 WEB = Path(__file__).resolve().parent.parent / "web" / "src"
+APP_ROUTES = Path(__file__).resolve().parent.parent / "mobile" / "src" / "app"
 
 
 # ---------------------------------------------------------------- addresses, times and previews
@@ -38,6 +39,19 @@ def test_no_campaign_can_take_an_address_the_web_app_has():
     assert campaigns.SLUG.fullmatch("gukesh") and campaigns.SLUG.fullmatch("ipl-2027")
     for bad in ("Gukesh", "-x", "x-", "sw.js", "a/b", "", "x" * 41):
         assert not campaigns.SLUG.fullmatch(bad), bad
+
+
+def test_no_campaign_can_take_an_address_the_android_app_has():
+    # Its routes are files (Expo Router), and stann.in links to them open the app (mobile/app.config.ts).
+    routes = {re.sub(r"\.tsx$", "", p.name) for p in APP_ROUTES.iterdir()}
+    pages = {r for r in routes if re.fullmatch(r"[a-z]+", r)} - {"index"}
+    assert pages and pages <= campaigns.TAKEN, pages - campaigns.TAKEN
+    assert "[slug]" in routes  # the campaign page itself
+    # It claims every one-word address for campaigns, so a one-word page of the web app's that it doesn't have
+    # would open its Not found: the admin panel is the one that may (README.md, "Android app"). A longer
+    # address it has no folder for, such as /match/<source>/<game>, isn't claimed and stays in the browser.
+    web = set(re.findall(r'<Route path="/([a-z]+)(?:/\*)?"', (WEB / "main.tsx").read_text()))
+    assert web - pages == {"admin"}, web - pages
 
 
 def test_a_games_time_is_typed_and_shown_in_india_time_unless_said():

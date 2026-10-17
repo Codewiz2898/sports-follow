@@ -278,6 +278,22 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
     return out
 
 
+def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
+    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page: its snapshot, and each side's
+    starting eleven once the clubs have published them, attackers first, the home side's then the away side's."""
+    fixtures = parse_fixtures([x])
+    if not fixtures:
+        return None
+    f = fixtures[0]
+    teams = dict(zip(f.team_ids, f.team_names))
+    starters = [] if _predicted(x) else [r for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")]
+    players = [
+        PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[team], team_names=[teams.get(team, "")])
+        for team in f.team_ids for r in sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2))
+    ]
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
+
+
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
     """The team sheet, published about an hour before kick-off: who starts and who's on the bench. Until
     then Sportmonks fills the line-ups with its own prediction (eleven starters a side, days ahead), marked
@@ -474,6 +490,12 @@ class SportmonksFootball(Adapter):
         which Sportmonks counts as Fixture requests)."""
         rows = sportmonks.get_json("/football/livescores/inplay", ttl=30, include=LIVE_INCLUDE).get("data") or []
         return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One match by its id, whoever follows it, for its match page: the timeline, every player's line and
+        both starting elevens. One Fixture request."""
+        x = sportmonks.get_json(f"/football/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
+        return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
 
     def sidelined(self) -> dict[str, list[Absence]]:
         """Every team of the plan's leagues, with who of theirs is out now: the leagues with their current

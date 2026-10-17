@@ -227,6 +227,19 @@ export function Chip({ label, dot, pressed, on, onPress, bare }: { label: string
 
 // ---------------------------------------------------------------- the page
 
+/** No page at this address (the web's NotFound, main.tsx), and the way back to Today. */
+export function NotFound() {
+  return (
+    <>
+      <Text style={dsp(54)}>Not found</Text>
+      <Card pad style={{ gap: 12 }}>
+        <Text style={t.title}>There's no page at this address.</Text>
+        <Btn kind="primary" label="Back to Today" style={{ alignSelf: 'flex-start' }} onPress={() => router.replace('/')} />
+      </Card>
+    </>
+  )
+}
+
 /** A page's head with the way back (the web's back button beside the title). */
 export function BackHead({ title }: { title: string }) {
   return (

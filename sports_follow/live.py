@@ -173,7 +173,8 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
             mine.sort(key=lambda r: r.player_id is None)  # already on Sports Follow first; otherwise as the read ranked them
             players = mine[:PLAYERS]
             rank = (-game.get("tier", 0), -max((p.followers for p in players), default=0), -game.get("fame", 0))  # biggest event, most followed, best known
-            games.append((rank, {"key": f"{system}:{game['source_id']}", "title": game["title"], "competition": game["competition"],
+            # Its match page's address (match.path): a chess board's, by the first of its players' fixtures.
+            games.append((rank, {"key": f"{system}:{game['source_id']}", "match": f"{system}/{min(game.get('fixtures') or [game['source_id']])}", "title": game["title"], "competition": game["competition"],
                                  "start_utc": game.get("start_utc"), "live": game["live"], "players": [search.public(p) for p in players],
                                  "event_ids": sorted({events[k] for k in _event_keys(system, game) if k in events})}))
         games.sort(key=lambda g: g[0])

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, type Campaign, type SearchResult } from '../api'
 import { APP_NAME } from '../app'
-import { allFollowed, campaignLive, campaignRows, schedule } from '../campaign'
+import { allFollowed, campaignLive, campaignRows, followAllFailed, followAllWords, keyAlertsLine, schedule } from '../campaign'
 import { LiveScoreboard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CheckIcon, PlusIcon } from '../components/Icons'
@@ -85,7 +85,7 @@ function CampaignView({ c, reload }: { c: Campaign; reload: () => Promise<void> 
         </section>
       )}
 
-      <FollowBlocks c={c} follow={follow} reload={reload} keyLine={info.alerts.key[1]} />
+      <FollowBlocks c={c} follow={follow} reload={reload} keyLine={keyAlertsLine(info)} />
 
       {anyFollowed && <AlertsPrompt />}
 
@@ -138,7 +138,7 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
       } else {
         const done = await api.campaignFollow(c.slug, which)
         await following.reload()
-        if (done.failed) setError(`Couldn't follow ${done.failed === 1 ? 'one of them' : `${done.failed} of them`}. Try again in a moment.`)
+        if (done.failed) setError(followAllFailed(done.failed))
       }
       await reload()
     } catch (e) {
@@ -151,7 +151,7 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
   if (!c.players.length && !c.teams.length) {
     return <div className="card card-pad"><span className="title">Who to follow is coming soon.</span></div>
   }
-  const both = c.players.length === 2 ? 'both' : 'all'
+  const own = followAllWords(c)
   return (
     <section className="section" aria-label="Follow">
       {c.players.length > 0 && (
@@ -169,12 +169,12 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
             })}
           </div>
           {c.players.length > 1 && (
-            <FollowAll on={allFollowed(c.players, follow.followed)} busy={busy === 'players'} onClick={() => void toggleAll('players', c.players, { players: true }, `Unfollow ${both === 'both' ? 'both' : `all ${c.players.length}`}?`)}
-              label={`Follow ${both}`} done={`Following ${both}`} />
+            <FollowAll on={allFollowed(c.players, follow.followed)} busy={busy === 'players'} onClick={() => void toggleAll('players', c.players, { players: true }, own.ask)}
+              label={own.label} done={own.done} />
           )}
         </>
       )}
-      {c.teams.length > 0 && <div className="campaign-teams">{c.teams.map((t) => (
+      {c.teams.length > 0 && <div className="campaign-teams">{c.teams.map((t) => { const words = followAllWords(c, t); return (
         <article key={t.team_id} className="campaign-team" data-sport={c.sport} aria-label={t.name}>
           <div className="row" style={{ alignItems: 'flex-end' }}>
             <h2 className="dsp team-name">{t.name}</h2>
@@ -196,19 +196,15 @@ function FollowBlocks({ c, follow, reload, keyLine }: { c: Campaign; follow: Fol
             <span className="small soft">The line-up is coming soon.</span>
           )}
           {t.players.length > 0 && (
-            <FollowAll on={allFollowed(t.players, follow.followed)} busy={busy === t.team_id} onClick={() => void toggleAll(t.team_id, t.players, { team: t.team_id }, `Unfollow all ${t.players.length} of ${t.name}'s players?`)}
-              label={`Follow ${t.name} · ${t.players.length} players`} done={`Following ${t.name}`} onSport />
+            <FollowAll on={allFollowed(t.players, follow.followed)} busy={busy === t.team_id} onClick={() => void toggleAll(t.team_id, t.players, { team: t.team_id }, words.ask)}
+              label={words.label} done={words.done} onSport />
           )}
         </article>
-      ))}</div>}
-      <p className="small muted" style={{ fontWeight: 600 }}>Key alerts: {lower(keyLine)}.</p>
+      ) })}</div>}
+      <p className="small muted" style={{ fontWeight: 600 }}>{keyLine}</p>
       {(error || follow.error) && <div className="error-box">{error || follow.error}</div>}
     </section>
   )
-}
-
-function lower(text: string): string {
-  return text ? text[0].toLowerCase() + text.slice(1) : text
 }
 
 function FollowAll({ on, busy, onClick, label, done, onSport }: { on: boolean; busy: boolean; onClick: () => void; label: string; done: string; onSport?: boolean }) {

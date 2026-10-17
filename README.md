@@ -73,16 +73,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   is getting each sport's own line art instead). `sports_follow/photos.py`: every 15 minutes the worker asks
   the Commons API about the registry's photo file of each followed and starter athlete it hasn't got, 50 to
   a request, and keeps those under a licence fans may see them under (public domain, CC0, CC BY, CC BY-SA,
-  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 330-pixel
-  thumbnails, author, licence and file page go in the `photo` table, and the app gets them from our own
-  origin (`/api/photos/<digest>.jpg`, cached a year, never hot-linked) with the card and the previews. Each
-  file is asked about again every 90 days (a new upload, licence or author, or a file Commons deleted,
-  which then stops showing), one that failed the next day; a file fetched over 30 days ago that nobody
+  GODL-India; not GFDL, Commons' generic "Attribution" or "copyrighted free use"). Their 960-pixel
+  thumbnails (about 290 KB; the face's square shows about pixel for pixel on a phone), author, licence and
+  file page go in the `photo` table, and the app gets them from our own origin (`/api/photos/<digest>.jpg`,
+  cached a year, never hot-linked) with the card and the previews. Each file is asked about again every 90
+  days (a new upload, licence or author, or a file Commons deleted, which then stops showing), one that
+  failed the next day, and one kept at another width at once (`photos.WIDTH` changed: they're fetched
+  again, 100 a run, and show at their old size meanwhile); a file fetched over 30 days ago that nobody
   follows or is offered now is forgotten. A photo goes into followed players' cards, and leaves any card
-  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app recolours each photo in its sport's colour (a duotone
-  from the sport's `deep` colour, or the text on it, to its block colour: `sports.photo_tones`), so its
-  credit says so: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons, recoloured", under the photo,
-  linking to the file's page. The Credits page lists them all. Players without a photo show none. Never a
+  that shows it once its athlete no longer has it, followed or not (anyone may open a page). The app shows
+  each photo in its own colours, cropped around the face and fading into the band, and changes nothing
+  else; its credit says the crop, as CC BY and CC BY-SA ask: "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia
+  Commons, cropped", under the photo, linking to the file's page. The Credits page lists them all and says
+  how they're cropped and faded. Players without a photo show none. Never a
   data provider's photos (their terms don't license them), and never generated likenesses.
   The job also finds the face in each new thumbnail, once (`sports_follow/faces.py`: OpenCV's YuNet
   detector, a 230 KB MIT model in `sports_follow/data/`, a few milliseconds a photo, loaded by the worker
@@ -139,14 +142,25 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   requests an hour, not 240 per match, and one worker thread, not one per match.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
+- **A page for every game.** Every live game on Today opens its match page, `/match/<source>/<game id>`
+  (`sports_follow/match.py`, `GET /api/match/...`): its board large in a block of its sport's colour, what
+  its sport shows under it (a football timeline, a cricket scorecard, an esports series by map or a lobby's
+  standings), the moments found for the players followed in it, and both sides' players to follow with a
+  tap. A game's address is its source and the id a fixture of it has there, as its event's key holds them,
+  so it's the same whether or not anyone follows a player in it, and once it's over. Where a fan follows
+  someone in it, its board is their live card's, as fresh as the polls. Any other game's board, and every
+  game's line-ups and players' lines, come from a read of its source (an adapter's `match`) by the worker: at
+  most once a minute a game and only while someone has its page open, for a game a source has named (on
+  Live now, or a followed player's), at most six a minute of a source's allowance, and none more for hours
+  once one finds it over or not there. The page shows Live now's copy until the first read comes, and looks
+  again while it's in view. A sport turned off has no match pages.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
   shows the last update of your players; live scores and streams always go to the network. A new
-  version waits for the fan to tap Reload, so a game in progress isn't cut off. For the Play Store the
-  same site is wrapped as a Trusted Web Activity; `/.well-known/assetlinks.json` publishes the app's
-  package and certificate once `SPORTS_FOLLOW_ANDROID_PACKAGE` and `SPORTS_FOLLOW_ANDROID_CERT_SHA256`
-  are set.
+  version waits for the fan to tap Reload, so a game in progress isn't cut off. The Android app
+  (`mobile/`) opens stann.in links once `/.well-known/assetlinks.json` publishes its package and
+  certificates (`SPORTS_FOLLOW_ANDROID_PACKAGE`, `SPORTS_FOLLOW_ANDROID_CERT_SHA256`; "Android app", below).
 - **Links that preview.** A player's page shared in WhatsApp or X shows a card, not a bare address: the
   server writes each page's Open Graph and Twitter card tags into it (`sports_follow/share.py`), since the
   crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
@@ -244,6 +258,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
+  `match` for a game's match page (one game by a fixture's id, whoever follows it, with its line-ups and
+  every player's line, in a request; ids of another shape than its `fixture_pattern` are refused;
+  `sports_follow/match.py`),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
@@ -284,9 +301,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
-  finish, or none, as for a cricket final whose sides are still "TBC"; for Today's big results and big games coming up), its form summary,
-  how search shows its athletes, and its colours (a player's photo is recoloured with them, and their link
-  previews are drawn in them). Shared code
+  finish, or none, as for a cricket final whose sides are still "TBC"; for Today's big results and big games
+  coming up), what its match page shows under the board (`match_page`: a football timeline, a cricket
+  scorecard, an esports series by map; by default the source's key events), its form summary,
+  how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -312,8 +330,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   line in its list: its facts, `web/src/sports/facts/<sport>.ts` (in `FACTS`: the scoreboard kinds it
   draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
   `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
-  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`) and `mobile/src/sports/<sport>.tsx` (in
-  `BOARDS`). A sport without them shows the plain score and no line art. The Android app (`mobile/`)
+  and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`, with its match page's part, `Match`, drawn
+  from what its `match_page` sends) and `mobile/src/sports/<sport>.tsx` (in `BOARDS`). A sport without them
+  shows the plain score and no line art. The Android app (`mobile/`)
   takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
   on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
@@ -495,7 +514,8 @@ once signed in.
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
 `lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
-`follow.ts`), what a Share button shares (`share.ts`), and each sport's facts (`sports/facts/`: the scoreboard kinds it draws, its line art, how it
+`follow.ts`), what a Share button shares (`share.ts`), what a campaign page offers and when its games are
+(`campaign.ts`), and each sport's facts (`sports/facts/`: the scoreboard kinds it draws, its line art, how it
 words a player's line). Only the drawing is each app's own: a sport's live board is
 `web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,
 the app takes the sports, their names and their colours from `GET /api/sports`:
@@ -503,10 +523,27 @@ the app takes the sports, their names and their colours from `GET /api/sports`:
 `sports_follow/app.json`'s and the icons are the web's (`mobile/app.config.ts`).
 
 Every page is there: Today (with the welcome for a new fan), Live now, Search and an athlete's preview, a
-player's page with its tabs, Following, Alerts, Account (sign-in by email code), Credits and Privacy. Where the web
+player's page with its tabs, Following, Alerts, Account (sign-in by email code), Credits, Privacy and a
+campaign's page (stann.in/gukesh, without the web's "install the app" part). Where the web
 listens to the fan stream, the app reads again every 30 s for now (BHA-231). Notifications come through
 FCM (below); the lock-screen live score and a widget follow (BHA-232). The native project
 (`mobile/android`) is generated by Expo and not committed.
+
+**stann.in links open the app** when it's installed (Android App Links), at the same page: a player
+shared on WhatsApp, a campaign's link in a launch post. The app claims the addresses it has a page for,
+which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/search` and the
+rest, and any one-word address for a campaign (Android 12 and later; older phones open campaigns in the
+browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the app's "Not found";
+typed into Chrome, it stays there. A page the app doesn't have yet, such as a match's `/match/…` (BHA-272),
+isn't claimed, so its links open in the browser. Android trusts the claim only once
+`https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
+certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.stann.app` and
+`SPORTS_FOLLOW_ANDROID_CERT_SHA256` with the upload key's and Play App Signing's fingerprints, comma
+separated (BHA-25), never the debug key's, which anyone can sign with. A build signed with the debug key
+(`npm run android`) gets the links when they're turned on by hand on the phone: the app's Android settings,
+Open by default, Add link, stann.in; or over USB,
+`adb shell pm set-app-links-user-selection --user cur --package io.stann.app true stann.in`.
+`adb shell pm get-app-links io.stann.app` says whether Android verified the site.
 
 Needs JDK 17 and the Android SDK (platform 36, an emulator or a phone with USB debugging):
 
@@ -541,8 +578,8 @@ on, once:
 4. In the app, follow a player and allow notifications. Their next moment arrives as a notification.
 
 `android/` still holds the earlier route, a Trusted Web Activity around the site; it goes once the
-native app is on Play (BHA-39). `/.well-known/assetlinks.json` stays: the native app will use it to open
-stann.in links (BHA-27).
+native app is on Play (BHA-39). `/.well-known/assetlinks.json` names one package: set to `io.stann.app`, it's
+the native app's, and the TWA loses its full screen.
 
 ## Design
 

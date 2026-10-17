@@ -423,3 +423,18 @@ def test_only_the_games_that_run_are_read_and_none_when_none_do(monkeypatch):
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key not in adapter.sports))
     assert (adapter.live_now(), adapter.schedule(date(2026, 10, 9), date(2026, 10, 30)), adapter.search("tenz"), adapter.find_teams("T1")) == ([], [], [], [])
     assert asked == []  # not one request
+
+
+def test_a_match_page_reads_one_series_by_its_teams(monkeypatch):
+    asked = []
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or LIVE)
+    game = ps.PandascoreEsports().match("777")
+    assert asked == ["/matches/777"]
+    assert game is not None and (game.source_id, game.teams, game.league, game.tier, game.players) == ("777", ["Sentinels", "NRG"], "valorant", 2, [])
+    assert game.snapshot.state["maps"][1]["status"] == "running"
+
+    def missing(path, ttl, **params):
+        raise pandascore.NotFound("PandaScore has nothing at /matches/1")
+
+    monkeypatch.setattr(pandascore, "get_json", missing)
+    assert ps.PandascoreEsports().match("1") is None

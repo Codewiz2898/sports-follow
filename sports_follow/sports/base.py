@@ -205,10 +205,8 @@ class Sport:
     # ---- how the app shows it (GET /api/sports, /api/sports.css)
 
     # Its colour, as CSS custom properties on [data-sport]: the block colour, text on it, softer text on
-    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A player's photo
-    # is recoloured from "deep" (its darks) to the block colour (its lights); without "deep", from the text
-    # on it, which must then be the darker. A link preview's picture is the block colour with the text on
-    # it (share.py).
+    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A link preview's
+    # picture is the block colour with the text on it (share.py).
     colour: dict[str, str] = {}
     # Which free-text sport names it is (a page's "Women's football", the agent's "T20 cricket"): a
     # regular expression over the lower-case name, and one that rules a name out ("american football").
@@ -381,6 +379,16 @@ class Sport:
         """A player of this sport back from a spell of this kind (out_fact), as the Wire tells it; None for a
         kind it doesn't tell."""
         return None
+
+    # ---- a game's match page (match.py)
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """What a game's match page shows under its board, as sections its sport's web view draws by name
+        (web/src/sports/<sport>.tsx, Match), from its scoreboard (Snapshot.state), the source's key events,
+        newest first (Snapshot.moments), every player's line the source gave, by their id there, and who those
+        are ({id: (name, team)}). By default the key events as they come, which the page lists for any sport
+        ({"events": [{"clock", "kind", "text"}]}); a sport whose board says it all (chess) has nothing more."""
+        return {"events": [{k: e.get(k) for k in ("clock", "kind", "text")} for e in events]} if events else {}
 
     # ---- live games and cards (structured.py)
 

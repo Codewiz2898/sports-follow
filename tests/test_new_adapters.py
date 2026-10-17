@@ -207,6 +207,19 @@ def test_chess_fixture_and_result_label_from_each_side():
     assert lichess_chess.fmt_points(2.5) == "2½" and lichess_chess.fmt_points(0.5) == "½" and lichess_chess.fmt_points(0) == "0"
 
 
+def test_chess_match_page_is_one_players_board_with_both_players():
+    data = load("lichess/round-final")
+    rnd = data["round"]["id"]
+    game = lichess_chess.parse_game(data, LAZAVIK, "lichess_chess")
+    assert game is not None and game.source_id == f"{rnd}-{LAZAVIK}"
+    # Both players, white first in the board shown, each with the fixture their own card has it under.
+    assert {(p.athlete_id, p.name) for p in game.players} == {(CARLSEN, "Magnus Carlsen"), (LAZAVIK, "Denis Lazavik")}
+    assert sorted(game.fixtures) == sorted(f"{rnd}-{p}" for p in (CARLSEN, LAZAVIK))
+    assert game.snapshot.state["match"] == {"games": 8, "score": "2–6"} and game.snapshot.status == "final"
+    assert lichess_chess.parse_game(data, "1", "lichess_chess") is None  # not paired in this round
+    assert lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}-{CARLSEN}") and not lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}:abc")
+
+
 def test_chess_single_game_round():
     data = load("lichess/round-final")
     first = data["games"][0]  # Carlsen–Lazavik 1-0, as if it were the round's only game

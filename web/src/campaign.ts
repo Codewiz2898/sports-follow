@@ -2,7 +2,7 @@
 // its zone and the fan's own, and which games on now are its. Shared by the web app and the Android app
 // (mobile/): no browser here.
 
-import type { Campaign, CampaignGame, Card, LiveGame, LiveSport, SearchResult } from './types'
+import type { Campaign, CampaignGame, CampaignTeam, Card, LiveGame, LiveSport, SearchResult, SportInfo } from './types'
 
 /** Every row a campaign offers to follow: its own players, then each team's. */
 export function campaignRows(c: Campaign): SearchResult[] {
@@ -82,4 +82,26 @@ export function campaignLive(c: Campaign, cards: Card[], sports: LiveSport[]): {
 /** Whether every row is followed (`followed` says of one), and there's one at least. */
 export function allFollowed(rows: SearchResult[], followed: (r: SearchResult) => boolean): boolean {
   return rows.length > 0 && rows.every(followed)
+}
+
+/** What a follow-all button says, and asks before it unfollows them all: the campaign's own players ("Follow
+ * both" for two), or a team's whole roster ("Follow T1 · 5 players"). */
+export function followAllWords(c: Campaign, team?: CampaignTeam): { label: string; done: string; ask: string } {
+  if (team) {
+    const n = team.players.length
+    return { label: `Follow ${team.name} · ${n} players`, done: `Following ${team.name}`, ask: `Unfollow all ${n} of ${team.name}'s players?` }
+  }
+  const both = c.players.length === 2
+  return { label: both ? 'Follow both' : 'Follow all', done: both ? 'Following both' : 'Following all', ask: both ? 'Unfollow both?' : `Unfollow all ${c.players.length}?` }
+}
+
+/** What a follow-all says when some of its players couldn't be followed (the follow's `failed`), or null. */
+export function followAllFailed(failed: number): string | null {
+  return failed ? `Couldn't follow ${failed === 1 ? 'one of them' : `${failed} of them`}. Try again in a moment.` : null
+}
+
+/** The line under the follow buttons: what a follow's key alerts are, in the sport's words. */
+export function keyAlertsLine(info: SportInfo): string {
+  const hint = info.alerts.key[1]
+  return `Key alerts: ${hint ? hint[0].toLowerCase() + hint.slice(1) : hint}.`
 }

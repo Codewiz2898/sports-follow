@@ -15,7 +15,7 @@ import { tennis } from './tennis'
 import type { SportView } from './view'
 
 export { loadSports, runningSports, sportDrawn, sportInfo, sportKey, sportName, type SportInfo } from './catalog'
-export type { BoardProps, SportView } from './view'
+export type { BoardProps, MatchProps, SportView } from './view'
 
 const VIEWS: SportView[] = [football, cricket, basketball, tennis, chess, esports]
 

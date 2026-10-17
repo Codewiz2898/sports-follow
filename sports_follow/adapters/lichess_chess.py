@@ -335,6 +335,25 @@ def live_boards(round_data: dict[str, Any], system: str, now: datetime | None = 
     return out
 
 
+def parse_game(round_data: dict[str, Any], fide_id: str, system: str, now: datetime | None = None) -> LiveGame | None:
+    """A broadcast round -> one player's board in it as a game for its match page, with both players and the
+    fixture each has it under; None when they aren't paired in it."""
+    rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
+    if not rnd.get("id") or not games_of(round_data, fide_id):
+        return None
+    snap = parse_board(round_data, fide_id, now)
+    refs = [PlayerRef(system=system, athlete_id=s["id"], name=s["name"], team_ids=[s["id"]], team_names=[s["name"]]) for s in (snap.state.get("white"), snap.state.get("black")) if s and s.get("id")]
+    return LiveGame(
+        source_id=f"{rnd['id']}-{fide_id}",
+        title=" v ".join(r.name for r in refs),
+        competition=" · ".join(x for x in (tour.get("name"), rnd.get("name")) if x),
+        start_utc=_dt(rnd.get("startsAt")),
+        snapshot=snap,
+        players=refs,
+        fixtures=[f"{rnd['id']}-{r.athlete_id}" for r in refs],  # as fixture_for names each player's
+    )
+
+
 def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None = None) -> Snapshot:
     """One player's board in a broadcast round -> snapshot: the game in play (or the last one), and
     over a multi-game round the match score. Lines for both players, keyed by FIDE id."""
@@ -579,6 +598,7 @@ class LichessChess(Adapter):
     # A chess player's tournaments take a dozen rate-limited Lichess reads to find; the preview shows
     # ratings only and the page finds the tournaments once followed.
     preview_fixtures = False
+    fixture_pattern = re.compile(r"[A-Za-z0-9]{8}-[0-9]{1,12}")  # a player's board in a round: "<round id>-<FIDE id>"
 
     def credits_also(self) -> list[dict[str, Any]]:
         return [{
@@ -731,6 +751,14 @@ class LichessChess(Adapter):
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
         return parse_board(data, locator["fide"])
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One board by a fixture of it ("<round id>-<FIDE id>", one player's game or mini-match in a round),
+        whoever follows it, for its match page: its position, clocks and match score, and both players. One
+        round request, the one Live now and a followed player's live poll make."""
+        round_id, _, fide = source_id.partition("-")
+        data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
+        return parse_game(data, fide, self.system)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)

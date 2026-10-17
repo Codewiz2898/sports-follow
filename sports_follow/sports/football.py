@@ -168,6 +168,18 @@ class Football(Sport):
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """A timeline: each goal (one VAR ruled out, marked) and card at its minute, newest first, on the side
+        it counts for (0 home, 1 away; an own goal the other side's)."""
+        ids = [str((state.get(side) or {}).get("id")) for side in ("home", "away")]
+        timeline = []
+        for e in events:
+            side = ids.index(str(e.get("team_id"))) if str(e.get("team_id")) in ids else None
+            if side is not None and e.get("own_goal"):
+                side = 1 - side
+            timeline.append({"clock": e.get("clock"), "kind": e.get("kind"), "text": e.get("text"), "side": side})
+        return {"timeline": timeline} if timeline else {}
+
     def left_out(self, now: Seen) -> bool:
         # A national team game shows up for every player of that country, called up or not.
         return now.lineups and now.line is None

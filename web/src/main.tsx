@@ -17,6 +17,7 @@ import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
 import { FollowingPage } from './pages/FollowingPage'
 import { LivePage } from './pages/LivePage'
+import { MatchPage } from './pages/MatchPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
@@ -197,6 +198,7 @@ function App() {
             <Route path="/live" element={<LivePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
+            <Route path="/match/:source/:game" element={<MatchPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/credits" element={<CreditsPage />} />

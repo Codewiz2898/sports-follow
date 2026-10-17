@@ -101,7 +101,7 @@ class Chess(Sport):
     engine = True
     draws = True
     source_line_first = True
-    colour = {"sport": "#7c3aed", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#a98bff", "deep": "#3b1680"}
+    colour = {"sport": "#7c3aed", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#a98bff"}
     pattern = r"chess"
     alerts = {
         "key": ("Games turning and results", "A game starting, turning (winning, in trouble, a turnaround) and the result"),

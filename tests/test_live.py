@@ -190,7 +190,7 @@ def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, s
     live.read("pitch", NOW)
     live.read("arena", NOW)
     assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "group": "", "games": [
-        {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": [], "event_ids": []}]}], [])
+        {"key": "pitch:100", "match": "pitch/100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": [], "event_ids": []}]}], [])
     games, stale = live.offer(db, None, NOW + timedelta(seconds=90))
     assert stale == ["pitch", "arena"] and games  # a minute on: still served, and a read asked for
     assert live.offer(db, None, NOW + timedelta(seconds=live.SERVE + 1))[0] == []  # too old to call live
@@ -211,3 +211,5 @@ def test_a_game_names_the_events_it_is_here_by_the_sources_fixture_ids(db, redis
     live.read("pitch", NOW)
     games = {g["title"]: g["event_ids"] for g in live.offer(db, None, NOW)[0][0]["games"]}
     assert games == {"A vs B": [ids["pitch:100"]], "C v D": sorted([ids["pitch:r5-7"], ids["pitch:r5-8"]]), "E vs F": []}  # another source's 101 isn't this one
+    # Each opens its match page (match.py), a board by the first of its players' fixtures.
+    assert [g["match"] for g in live.offer(db, None, NOW)[0][0]["games"]] == ["pitch/100", "pitch/r5-7", "pitch/101"]

@@ -256,6 +256,27 @@ class Esports(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
+        Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
+        won each of its matches."""
+        if state.get("kind") == "battle_royale":
+            teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
+            return {
+                "standings": [{k: t.get(k) for k in ("place", "name", "points", "kills", "wins")} for t in state.get("standings") or []],
+                "games": [{"n": g.get("n"), "map": g.get("map"), "winner": teams.get(g.get("winner"))} for g in state.get("games") or []],
+            }
+        teams = {t.get("id"): t.get("name") for t in state.get("teams") or []}
+        dota = {m.get("n"): m.get("players") or {} for m in (state.get("dota") or {}).get("maps") or []}
+        maps = []
+        for m in state.get("maps") or []:
+            numbers = dota.get(m.get("n")) or {}
+            best = max(numbers.items(), key=lambda p: (p[1].get("kills") or 0, -(p[1].get("deaths") or 0)), default=None)
+            who = best and names.get(best[0], ("", ""))[0]
+            maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
+                         "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
+        return {"maps": maps} if maps else {}
+
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
         lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""
@@ -352,34 +373,34 @@ class Game(Esports):
 
 
 def _light(block: str, ink: str) -> dict[str, str]:
-    """A light block with dark text on it (its photo's darks are that text), as basketball's."""
+    """A light block with dark text on it, as basketball's."""
     r, g, b = (int(ink[i : i + 2], 16) for i in (1, 3, 5))
     return {"sport": block, "on": ink, "on_soft": f"rgba({r}, {g}, {b}, 0.85)", "ink": block}
 
 
-def _dark(block: str, ink: str, deep: str) -> dict[str, str]:
-    """A dark block with white text on it, its colour lighter as text on ink, and its photo's darks, as cricket's."""
-    return {"sport": block, "on": "#ffffff", "on_soft": "#ffffff", "ink": ink, "deep": deep}
+def _dark(block: str, ink: str) -> dict[str, str]:
+    """A dark block with white text on it, and its colour lighter as text on ink, as cricket's."""
+    return {"sport": block, "on": "#ffffff", "on_soft": "#ffffff", "ink": ink}
 
 
 # Every game a source covers, in the order the app lists them, after the other sports. Each colour reads
 # with its text at 4.5:1 or better and stands apart from every other sport's (tests/test_sports.py).
 GAMES: tuple[Game, ...] = (
     Game("valorant", "Valorant", _light("#ff6b6b", "#1f0005")),
-    Game("cs2", "CS2", _dark("#334155", "#a8b8cc", "#141b24"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b"),
+    Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b"),
     Game("lol", "League of Legends", _light("#19c3e6", "#00161c"), ("LoL",), r"league of legends|\blol\b"),
-    Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3", "#4d0f1b"), ("Dota", "Dota2"), r"\bdota ?2?\b"),
-    Game("bgmi", "BGMI", _dark("#166534", "#4ade80", "#082a15"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india"),
+    Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3"), ("Dota", "Dota2"), r"\bdota ?2?\b"),
+    Game("bgmi", "BGMI", _dark("#166534", "#4ade80"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india"),
     Game("freefire", "Free Fire", _light("#e879f9", "#1f0024"), ("Free Fire MAX", "Garena Free Fire"), r"free ?fire"),
     Game("pubgmobile", "PUBG Mobile", _light("#60a5fa", "#001a33"), ("PUBGM",), r"pubg ?mobile|\bpubgm\b"),
     Game("pubg", "PUBG", _light("#ffc61a", "#1a1400"), ("PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds"), r"\bpubg\b|playerunknown|battlegrounds"),
-    Game("mlbb", "Mobile Legends", _dark("#0f766e", "#2dd4bf", "#053a36"), ("Mobile Legends: Bang Bang", "MLBB"), r"mobile legends|\bmlbb\b"),
-    Game("hok", "Honor of Kings", _dark("#8b5a2b", "#e0a96d", "#3f2812"), ("King of Glory", "Honour of Kings"), r"hono(?:u)?r of kings|king of glory"),
-    Game("r6siege", "Rainbow Six Siege", _dark("#6b2d5c", "#e79ad3", "#2e1228"), ("Rainbow Six", "R6 Siege"), r"rainbow six|\br6\b"),
+    Game("mlbb", "Mobile Legends", _dark("#0f766e", "#2dd4bf"), ("Mobile Legends: Bang Bang", "MLBB"), r"mobile legends|\bmlbb\b"),
+    Game("hok", "Honor of Kings", _dark("#8b5a2b", "#e0a96d"), ("King of Glory", "Honour of Kings"), r"hono(?:u)?r of kings|king of glory"),
+    Game("r6siege", "Rainbow Six Siege", _dark("#6b2d5c", "#e79ad3"), ("Rainbow Six", "R6 Siege"), r"rainbow six|\br6\b"),
     Game("overwatch", "Overwatch", _light("#ffb37a", "#1f0d00"), ("Overwatch 2",), r"overwatch"),
-    Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c", "#3a1408"), ("Apex",), r"apex legends|\bapex\b"),
+    Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c"), ("Apex",), r"apex legends|\bapex\b"),
     Game("rocketleague", "Rocket League", _light("#5eead4", "#00201b")),
-    Game("cod", "Call of Duty", _dark("#6b5d4f", "#d2c4b4", "#2b241e"), ("CoD",), r"call of duty(?!:? ?mobile)|\bcod\b"),
+    Game("cod", "Call of Duty", _dark("#6b5d4f", "#d2c4b4"), ("CoD",), r"call of duty(?!:? ?mobile)|\bcod\b"),
     Game("wildrift", "Wild Rift", _light("#c4b5fd", "#1a0f3d"), ("League of Legends: Wild Rift",), r"(?:league of legends:? )?wild ?rift"),
 )
 SPORT = Esports()

@@ -11,12 +11,21 @@ export interface BoardProps<S = unknown> {
   live: LiveStatus
 }
 
+/** What a sport's part of a match page is drawn from: its sections (the server's Sport.match_page, by name:
+ * a timeline, a scorecard, maps), and the game's live block, if it has one yet. */
+export interface MatchProps<P = unknown> {
+  page: P
+  live: LiveStatus | null
+}
+
 /**
  * How the web app draws one sport: its facts (the kinds it draws, its line art, how it words a player's
- * line: facts/, shared with the Android app) and its live board. Everything else about a sport (its name,
- * colour, alerts) comes from the server (catalog.ts). A sport without a view gets the plain score and no
- * line art.
+ * line: facts/, shared with the Android app), its live board, and what its match page shows under the board
+ * (Match; a sport without one lists the game's key events, if the source names any). Everything else about
+ * a sport (its name, colour, alerts) comes from the server (catalog.ts). A sport without a view gets the
+ * plain score and no line art.
  */
 export interface SportView extends SportFacts {
   Board: (props: BoardProps<never>) => ReactNode
+  Match?: (props: MatchProps<never>) => ReactNode
 }

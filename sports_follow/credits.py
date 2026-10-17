@@ -72,7 +72,7 @@ def _model() -> str:
 
 
 PHOTO_NOTICES = [
-    "Player photos come from Wikimedia Commons, under the licences listed with each. We recolour them in each sport's colour and crop them; a recoloured photo keeps its licence.",
+    "Player photos come from Wikimedia Commons, under the licences listed with each. We show each in its own colours, cropped to fit the page around the player's face and faded into it at one edge; its credit links to the whole photo.",
     "A photo shows who a player is. It doesn't mean the player endorses us.",
 ]
 
@@ -104,7 +104,7 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
         also.append({
             "name": "Wikimedia Commons",
             "url": "https://commons.wikimedia.org",
-            "what": "Player photos, recoloured in each sport's colour. Each one's author and licence are under Photos.",
+            "what": "Player photos, on each player's page. Each one's author and licence are under Photos.",
         })
     for adapter in adapters.values():
         also += adapter.credits_also()

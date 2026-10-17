@@ -902,6 +902,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
         card["live"] = {
             "is_live": True,
             "event_id": event.id,
+            "match": event.key.replace(":", "/", 1) if event.key else None,  # its match page's address (match.path)
             "event": title,
             "competition": event.competition,
             "score": snap.score_label,
