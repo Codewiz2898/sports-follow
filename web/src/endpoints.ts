@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowedMatch, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowedMatch, FollowedTeam, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -11,7 +11,7 @@ export const json = (method: string, body: unknown): RequestInit => ({ method, h
 
 export function endpoints(request: Request) {
   return {
-    following: () => request<{ players: Card[] }>('/api/me/following'),
+    following: () => request<{ players: Card[]; teams?: FollowedTeam[] }>('/api/me/following'),
     follow: (target: FollowTarget) =>
       request<{ player_id: number; card: Card }>('/api/follows', {
         method: 'POST',
@@ -33,6 +33,10 @@ export function endpoints(request: Request) {
     followMatch: (source: string, game: string, on: boolean) =>
       request<{ following: boolean; event_id?: number }>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}/follow`, { method: on ? 'PUT' : 'DELETE' }),
     matches: () => request<{ matches: FollowedMatch[] }>('/api/me/matches'),
+    // A team's page, and following it (sports_follow/teams.py): each of its games' moments, its results from its side.
+    team: (teamId: number) => request<TeamPage>(`/api/teams/${teamId}`),
+    followTeam: (teamId: number, on: boolean) => request<{ team_id: number; following: boolean }>(`/api/teams/${teamId}/follow`, { method: on ? 'PUT' : 'DELETE' }),
+    setTeamAlerts: (teamId: number, level: AlertLevel) => request<{ team_id: number; alerts: AlertLevel }>(`/api/teams/${teamId}/alerts`, json('PUT', { level })),
     unfollowMatch: (eventId: number) => request<{ event_id: number; following: false }>(`/api/me/matches/${eventId}`, { method: 'DELETE' }),
     setMatchAlerts: (eventId: number, level: AlertLevel) => request<{ event_id: number; alerts: AlertLevel }>(`/api/me/matches/${eventId}/alerts`, json('PUT', { level })),
     // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.

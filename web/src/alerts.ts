@@ -31,6 +31,16 @@ export function gameLevelText(level: AlertLevel, sport: SportInfo): string {
   return 'No notifications for this game'
 }
 
+/** A level for a team the fan follows (sports_follow/teams.py), in full: each of its games' key moments from both
+ * sides, as a game followed by itself has them (its sport's game_alerts), and the result from the team's side. */
+export function teamLevelText(level: AlertLevel, sport: SportInfo): string {
+  const { key, more } = sport.game_alerts ?? { key: ['', 'Its key moments and the result'], more: ['', ''] }
+  if (level === 'key') return `${key[1]}, from both sides, in each of its games, and the result from its side`
+  if (level === 'everything') return more[1] ? `Key moments, plus ${more[1]}. Those arrive without sound` : `${key[1]}, in each of its games: every moment it tells is a key one`
+  if (level === 'results') return 'Just each result, from its side'
+  return 'No notifications for this team'
+}
+
 /** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
 export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | 'kind'>): boolean {
   if (level === 'everything') return true
