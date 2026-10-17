@@ -42,22 +42,23 @@ const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's 
 const teamTag = (teamId: number) => `team:${teamId}`
 
 /** The level a game's own moment reaches the fan at, as alerts.plan has it for a push: the game's, followed by
- * itself, or their teams' in it (the moment says which teams fans follow in it), the loudest; null where they
+ * itself, else the loudest of their teams' in it (the moment says which teams fans follow in it); null where they
  * follow neither, for a result told from a side that isn't theirs (or one they set to off), and for the game's own
  * result where their team's side tells it too: theirs comes instead. */
 export function gameLevel(m: PlayerMoment, matches: FollowedMatch[], teams: FollowedTeam[]): AlertLevel | null {
   const heard = new Set(teams.filter((t) => t.alerts !== 'off').map((t) => teamTag(t.team_id)))
   if (m.sides?.length && !m.sides.some((s) => heard.has(s))) return null
   if (m.told_by?.some((s) => heard.has(s))) return null
+  const game = matches.find((g) => g.event_id === m.event_id)?.alerts
+  if (game) return game  // the game's own follow sets its level, as notify._plan's does
   const order: AlertLevel[] = ['off', 'results', 'key', 'everything']
-  const levels = [
-    matches.find((g) => g.event_id === m.event_id)?.alerts,
-    ...teams.filter((t) => m.teams?.includes(teamTag(t.team_id))).map((t) => t.alerts),
-  ].filter((l): l is AlertLevel => l != null)
+  const levels = teams.filter((t) => m.teams?.includes(teamTag(t.team_id))).map((t) => t.alerts)
   return levels.length ? levels.reduce((a, b) => (order.indexOf(b) > order.indexOf(a) ? b : a)) : null
 }
 
-const STREAM_AHEAD_MS = 36 * 3600_000  // a team's games this soon are on the fan stream (sports_follow/teams.event_ids)
+// A team's games this soon are on the fan stream: the server's 36 h (sports_follow/teams.event_ids), less an hour
+// here, so a clock running fast never connects again before the server counts the game.
+const STREAM_AHEAD_MS = 35 * 3600_000
 
 /** The games of the fan's teams the stream carries now: each team's next game (its game on now, while it's on)
  * from a day and a half before it starts. A game ending changes nothing here, so its result still comes on the
