@@ -280,8 +280,17 @@ class Adapter:
         return athlete_id
 
     def sport_of(self, ref: PlayerRef) -> str:
-        """The sport one of its athletes plays: its one sport; for a source of several, the athlete's game's."""
+        """The sport one of its athletes plays: its one sport; for a source of several, the athlete's game's
+        (one_of)."""
         return self.sports[0]
+
+    def one_of(self, found: str | None) -> str:
+        """One of its sports, as found for an athlete; where it can't tell which (a game it doesn't cover, or
+        none named), the group its sports are of: an esports pro whose game is unknown is "esports", never
+        another game's."""
+        if found and found in self.sports:
+            return found
+        return sports.of(self.sports[0]).group or self.sports[0]
 
     def running(self) -> tuple[str, ...]:
         """Its sports that run now (sports.ENABLED): a source of several reads only their games."""

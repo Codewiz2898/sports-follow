@@ -565,7 +565,7 @@ def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> 
     starts = [Athlete.search_text.like(f"% {w}%") for w in typed]
     base = running(select(Athlete).where(*starts))
     if sport:
-        base = base.where(Athlete.sport == sport)
+        base = base.where(Athlete.sport.in_(sports.within(sport)))  # a group: any of its sports
     exact = db.scalars(base.where(named(" ".join(typed))).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(NAMESAKES)).all()
     popular = db.scalars(base.order_by(score().desc(), Athlete.current.desc()).limit(limit)).all()
     return list({a.id: a for a in [*exact, *popular]}.values())
@@ -579,7 +579,7 @@ def near(db: Session, query: str, sport: str | None = None, limit: int = 10) -> 
     db.execute(text("SET LOCAL pg_trgm.word_similarity_threshold = 0.5"))
     stmt = running(select(Athlete).where(literal(folded).op("<%")(Athlete.search_text)))
     if sport:
-        stmt = stmt.where(Athlete.sport == sport)
+        stmt = stmt.where(Athlete.sport.in_(sports.within(sport)))  # a group: any of its sports
     return list(db.scalars(stmt.order_by(func.word_similarity(folded, Athlete.search_text).desc(), Athlete.sitelinks.desc()).limit(limit)))
 
 
@@ -799,7 +799,10 @@ def describe(player_id: int) -> str | None:
 def main(argv: list[str]) -> None:
     new_only = "--new" in argv
     every = importable()
-    wanted = sports.expand(a for a in argv if a != "--new") or every  # "esports": every game
+    asked = [a for a in argv if a != "--new"]
+    wanted = sports.expand(asked, among=every) or every  # "esports": every game that runs
+    if asked and not sports.expand(asked, among=every):
+        sys.exit(f"none of {', '.join(asked)} runs here; choose from {', '.join(every)}")
     unknown = [s for s in wanted if s not in every]
     if unknown:
         sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")

@@ -387,3 +387,39 @@ def test_no_big_tournament_no_series_asked_for(monkeypatch):
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or [])
     assert ps.PandascoreEsports().schedule(date(2026, 10, 9), date(2026, 10, 30)) == []
     assert "/matches" not in asked
+
+
+def test_a_pro_whose_game_it_cant_tell_is_esports_never_another_games(monkeypatch):
+    """No title, a title it doesn't cover (StarCraft), or an old binding with neither: the esports group, so a
+    refresh never rewrites the pro's sport to Valorant."""
+    adapter = ps.PandascoreEsports()
+    for ref in (PlayerRef("pandascore_esports", "1", "x", [], []), PlayerRef("pandascore_esports", "1", "x", [], [], league="starcraft-2"),
+                ps.parse_player({**PLAYER, "current_videogame": None})):
+        assert adapter.sport_of(ref) == "esports", ref
+        assert structured.sport_name(adapter, ref) == "Esports"
+
+
+def test_only_the_games_that_run_are_read_and_none_when_none_do(monkeypatch):
+    """Each title is a sport the admin panel turns off on its own: PandaScore asks for the running ones' ids only
+    (Valorant's 26 off here), and nothing at all when none of its games runs."""
+    asked: list[tuple[str, dict]] = []
+
+    def get_json(path, ttl, **params):
+        asked.append((path, params))
+        return [{"id": 3, "tier": "s"}] if path.startswith("/tournaments") else []
+
+    monkeypatch.setattr(pandascore, "get_json", get_json)
+    monkeypatch.setattr(pandascore, "get_all", lambda path, ttl, pages=2, **params: asked.append((path, params)) or [])
+    monkeypatch.setattr(pandascore, "spare", lambda: True)
+    adapter = ps.PandascoreEsports()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    adapter.live_now(), adapter.schedule(date(2026, 10, 9), date(2026, 10, 30)), adapter.search("tenz"), adapter.find_teams("T1")
+    ids = [params.get("filter[videogame]") or params.get("filter[videogame_id]") for _, params in asked if "filter[videogame]" in params or "filter[videogame_id]" in params]
+    assert len(ids) == 6 and all("26" not in i.split(",") and "3" in i.split(",") for i in ids), ids  # CS2's 3, never Valorant's 26
+    asked.clear()
+    adapter.roster(lambda rows: 0, {"cs2"})  # the registry's run of one game: only its pros
+    assert [params["filter[videogame_id]"] for _, params in asked] == ["3"]
+    asked.clear()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key not in adapter.sports))
+    assert (adapter.live_now(), adapter.schedule(date(2026, 10, 9), date(2026, 10, 30)), adapter.search("tenz"), adapter.find_teams("T1")) == ([], [], [], [])
+    assert asked == []  # not one request

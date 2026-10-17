@@ -46,13 +46,22 @@ def members(group: Sport) -> tuple[Sport, ...]:
     return tuple(s for s in ALL if s.group and s.group == group.key)
 
 
-def expand(keys: Iterable[str]) -> list[str]:
-    """Sport keys as given, a group's standing for each of its sports ("esports": every game's), in the order given."""
+def expand(keys: Iterable[str], among: Iterable[str] | None = None) -> list[str]:
+    """Sport keys as given, a group's standing for each of its sports ("esports": every game's), or for those of
+    them among some (the ones that run), in the order given. A group none of whose sports is among them stands
+    for none."""
+    known = None if among is None else set(among)
     out: list[str] = []
     for key in keys:
         group = members(BY_KEY[key]) if key in BY_KEY else ()
-        out += [s.key for s in group] or [key]
+        out += [s.key for s in group if known is None or s.key in known] if group else [key]
     return list(dict.fromkeys(out))
+
+
+def within(key: str) -> list[str]:
+    """A sport's key, and for a group its sports' too: what a filter or a campaign of it takes in ("esports":
+    itself and every game)."""
+    return list(dict.fromkeys([key, *expand([key])]))
 
 
 # The sports this build may run (SPORTS_FOLLOW_SPORTS): the admin panel turns them off and on within these.
@@ -202,5 +211,5 @@ def names_of(sport: Sport) -> list[str]:
 
 __all__ = [
     "ALL", "ALLOWED", "BY_KEY", "ENABLED", "GROUPS", "OTHER", "Fact", "Found", "Notable", "Seen", "Sport", "css", "expand", "family", "get", "label", "members",
-    "named", "names_of", "of", "of_state", "on", "photo_tones", "pick", "running_keys", "shown",
+    "named", "names_of", "of", "of_state", "on", "photo_tones", "pick", "running_keys", "shown", "within",
 ]

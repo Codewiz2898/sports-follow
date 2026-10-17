@@ -355,7 +355,7 @@ class PandascoreEsports(Adapter):
         """The pro's game, from the title the ref names (its league), or the game a binding stored before
         refs had a league says."""
         found = GAMES.get(ref.league or "") or (sports.family(ref.game) if ref.game else "")
-        return found if found in self.sports else self.sports[0]
+        return self.one_of(found)  # a title it doesn't cover, or none: esports, the group
 
     def _on(self) -> list[str]:
         """The titles whose sports run now: the only ones read."""

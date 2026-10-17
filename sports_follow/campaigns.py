@@ -85,7 +85,7 @@ def _sport(key: str) -> sports.Sport:
 
 def _within(key: str) -> list[str]:
     """The sports a campaign's players and teams may be of: its sport, or for a group, any of the group's."""
-    return list(dict.fromkeys([key, *sports.expand([key])]))
+    return sports.within(key)
 
 
 def _text(value: str, longest: int, what: str) -> str:
@@ -348,10 +348,10 @@ def next_game(c: Campaign | dict[str, Any], now: datetime | None = None) -> dict
 
 
 def _team_rows(db: Session, sport: sports.Sport, team: dict[str, Any], blocked: set[tuple[str, str]], fan: str | None) -> list[dict[str, Any]]:
-    """A team's players as the app's result rows, followed by the source's id; none while its source isn't running."""
+    """A team's players as the app's result rows, followed by the source's id; none while its source, or its game, isn't running."""
     system = team["system"]
-    if system not in ADAPTERS:
-        return []
+    if system not in ADAPTERS or not sports.on(team.get("game")):
+        return []  # a game turned off (a group campaign's team of it) offers no one, as its source's off
     refs = [PlayerRef(system=system, athlete_id=p["athlete_id"], name=p["name"], team_ids=[team["team_id"]], team_names=[team["name"]], league=p.get("league"))
             for p in team["players"] if (system, p["athlete_id"]) not in blocked]
     return [search.public(r) for r in search.offered_refs(db, team.get("game") or sport.label, refs, fan)]

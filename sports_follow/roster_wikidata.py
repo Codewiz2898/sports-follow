@@ -530,7 +530,9 @@ def main(argv: list[str]) -> None:
     parser.add_argument("--show", type=int, default=0, metavar="N", help="print N matches at random, with what each rests on")
     args = parser.parse_args(argv)
     every = roster_sports()
-    wanted = sports.expand(args.sport) or every
+    wanted = sports.expand(args.sport, among=every) or every  # "esports": every game that runs
+    if args.sport and not sports.expand(args.sport, among=every):
+        sys.exit(f"none of {', '.join(args.sport)} runs here; choose from {', '.join(every)}")
     unknown = [s for s in wanted if s not in every]
     if unknown:
         sys.exit(f"unknown roster sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")

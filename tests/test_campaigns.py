@@ -243,10 +243,13 @@ def test_a_campaign_of_a_sport_turned_off_has_no_page(db, monkeypatch):
 
 
 @needs_db
-def test_an_esports_campaign_takes_any_games_teams(db, teams):
-    """An event of several games (the Esports World Cup) is the esports group's: a team of any game."""
+def test_an_esports_campaign_takes_any_games_teams(db, teams, monkeypatch):
+    """An event of several games (the Esports World Cup) is the esports group's: a team of any game; one of a
+    game turned off offers no one, as a team whose source is off doesn't."""
     teams.rosters = {"126061": ["Faker"], "3": ["TenZ"]}
     teams.games = {"3": "Valorant"}
     campaigns.main(["set", "ewc", "--sport", "esports", "--title", "Esports World Cup"])
     assert campaigns.main(["team", "add", "ewc", "pandascore_esports:126061"]) == 0 and campaigns.main(["team", "add", "ewc", "pandascore_esports:3"]) == 0
-    assert [t["game"] for t in campaigns.page(db, "ewc", None)["teams"]] == ["League of Legends", "Valorant"]
+    assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 1)]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 0)]

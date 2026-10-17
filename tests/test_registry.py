@@ -284,3 +284,27 @@ def test_a_run_by_hand_takes_the_weekly_runs_lock(monkeypatch, capsys):
     from sports_follow import worker
     worker._import_registry()
     assert len(held) == 1
+
+
+def test_the_commands_take_esports_as_its_games_that_run(monkeypatch, capsys):
+    """`registry esports` and `roster_wikidata esports` with a game turned off: the games that run."""
+    from sports_follow import roster_wikidata
+
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cod"))
+    games = [s.key for s in sports.ALL if s.group and s.key != "cod"]
+    asked = []
+    monkeypatch.setattr(registry, "import_locked", lambda keys, new_only=False: asked.append(list(keys)) or dict.fromkeys(keys, 1))
+    registry.main(["esports"])
+    registry.main(["valorant", "chess"])
+    assert asked == [games, ["valorant", "chess"]]
+    with pytest.raises(SystemExit, match="unknown sport"):
+        registry.main(["cod"])  # turned off: not one that runs
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if not s.group))
+    with pytest.raises(SystemExit, match="none of esports runs"):
+        registry.main(["esports"])
+
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cod"))
+    matched = []
+    monkeypatch.setattr(roster_wikidata, "match_sport", lambda kind, within, write=True: matched.append((kind.key, within)) or ([], {}))
+    roster_wikidata.main(["esports", "--dry-run"])
+    assert matched == [("esports", ["esports", *games])]

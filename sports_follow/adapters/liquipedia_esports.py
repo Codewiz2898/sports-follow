@@ -369,7 +369,7 @@ class LiquipediaEsports(Adapter):
     def sport_of(self, ref: PlayerRef) -> str:
         """The player's game: the one their ref names (BGMI for an Indian player), else their wiki's."""
         found = (sports.family(ref.game) if ref.game else "") or player_sport(ref.league) or ""
-        return found if found in self.sports else self.sports[0]
+        return self.one_of(found)  # a title it doesn't cover, or none: esports, the group
 
     def _wikis(self, wanted: set[str] | None = None) -> list[str]:
         """The wikis whose games are wanted (by default, those of its sports that run now)."""

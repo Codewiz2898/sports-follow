@@ -412,3 +412,31 @@ def test_snapshot_of_a_finished_lobby_needs_no_request(monkeypatch):
     adapter.snapshots({1: {"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}})
     snap = adapter.snapshot({"wiki": WIKI, "match": "aBcDeFgHiJ_0003"}, final=True)
     assert isinstance(snap, Snapshot) and snap.status == "final" and len(calls) == 1
+
+
+def test_a_player_whose_game_it_cant_tell_is_esports_never_another_games():
+    adapter = lp.LiquipediaEsports()
+    assert adapter.sport_of(lp.PlayerRef("liquipedia_esports", "x:Y", "Y", [], [])) == "esports"
+    assert adapter.sport_of(lp.PlayerRef("liquipedia_esports", "x:Y", "Y", [], [], league="dota2")) == "esports"  # a wiki it doesn't read
+    assert adapter.sport_of(lp.parse_player(PLAYER, WIKI)) == "bgmi" and adapter.sport_of(lp.parse_player({**PLAYER, "nationality": "Nepal"}, WIKI)) == "pubgmobile"
+
+
+def test_only_the_wikis_of_games_that_run_are_read_and_the_pubg_mobile_wiki_once_for_both(monkeypatch):
+    from sports_follow import sports
+
+    asked: list[str] = []
+    monkeypatch.setattr(liquipedia, "get", lambda datatype, ttl, **params: asked.append(params["wiki"]) or [])
+    monkeypatch.setattr(liquipedia, "spare", lambda: True)
+    adapter = lp.LiquipediaEsports()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key in ("football", "freefire")))
+    adapter.search("Nobru")
+    assert asked == ["freefire"]  # BGMI, PUBG Mobile and Apex off: their wikis aren't asked
+    asked.clear()
+    adapter.roster(lambda rows: 0, {"bgmi", "pubgmobile"})
+    assert asked == ["pubgmobile"]  # both games' players are on one wiki: read once
+    asked.clear()
+    adapter.roster(lambda rows: 0, {"bgmi"})
+    assert asked == ["pubgmobile"]
+    asked.clear()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key == "football"))
+    assert adapter.search("Nobru") == [] and asked == []  # none of its games runs: not one request

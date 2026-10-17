@@ -136,6 +136,18 @@ def test_a_pro_removed_as_esports_isnt_brought_back_in_any_game_and_one_kept_so_
             players._refuse_removed(db, "pandascore:99", "valorant")
 
 
+def test_a_search_filtered_to_esports_finds_its_games_that_run(engine, monkeypatch):
+    from sports_follow import sports
+
+    with registry.session() as db:
+        registry.upsert(db, [athlete("pandascore:1", "cs-go", sport="cs2"), athlete("pandascore:2", "valorant", sport="valorant"),
+                             athlete("op:3", None), {**athlete("Q4", None, sport="football"), "name": "pandascore:4", "search_text": " pandascore:4 |"}])
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    with registry.session() as db:
+        assert sorted(a.qid for a in registry.find(db, "pandascore", "esports")) == ["pandascore:1"]  # a game's, not one off, not football's
+        assert sorted(a.qid for a in registry.find(db, "op", "esports")) == ["op:3"]  # a pro of no game: the group's own
+
+
 def test_a_run_of_some_games_keeps_and_drops_only_theirs(engine):
     """A source of several games read for one: its other games' rows are left alone."""
     adapter = KNOWN["pandascore_esports"]
@@ -155,3 +167,45 @@ def test_a_run_of_some_games_keeps_and_drops_only_theirs(engine):
     assert registry.import_roster(OneGame(), ["valorant"]) == {"valorant": 1}
     with registry.session() as db:
         assert sorted(db.execute(select(Athlete.qid, Athlete.sport)).all()) == [("pandascore:1", "valorant"), ("pandascore:3", "cs2")]  # 2 gone; CS2's untouched
+
+
+def test_a_game_turned_off_isnt_polled_while_its_source_runs_for_another(engine, monkeypatch):
+    """A CS2 pro's armed series and a Valorant pro's, from one source of both games: with Valorant turned off,
+    only the CS2 one is polled (pipeline.due_work) and watched (structured._watching)."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from sports_follow import bus, pipeline, sports, structured
+
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        c.execute(text("""INSERT INTO player (id, slug, name, sport, status, teams) VALUES (1, 'a', 'A', 'CS2', 'active', '[]'), (2, 'b', 'B', 'Valorant', 'active', '[]')"""))
+        c.execute(text("""INSERT INTO player_card (player_id, status, card, version, freshness, is_live) VALUES
+            (1, 'ready', '{}', 1, '{}', false), (2, 'ready', '{}', 1, '{}', false)"""))
+        c.execute(text("INSERT INTO follow (fan_id, player_id, alert_rules) VALUES ('fan', 1, '{}'), ('fan', 2, '{}')"))
+        c.execute(text("INSERT INTO player_identity (player_id, system, external_id, confidence) VALUES (1, 'arena', '11', 1), (2, 'arena', '22', 1)"))
+        c.execute(text("""INSERT INTO event (id, key, sport, competition, title, status, participants, start_utc, live_binding) VALUES
+            (1, 'arena:1', 'CS2', '', 'X v Y', 'armed', '[]', :start, '{"adapter": "arena", "locator": {"match": "1"}}'),
+            (2, 'arena:2', 'Valorant', '', 'Z v W', 'armed', '[]', :start, '{"adapter": "arena", "locator": {"match": "2"}}')"""), {"start": now + timedelta(minutes=10)})
+        c.execute(text("INSERT INTO event_player (event_id, player_id) VALUES (1, 1), (2, 2)"))
+    made = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def unit():
+        s = made()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    monkeypatch.setattr(pipeline, "session", unit)
+    monkeypatch.setattr(structured, "session", unit)
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    monkeypatch.setattr(pipeline, "rebuild_due", lambda card, now: False)
+    monkeypatch.setitem(structured.ADAPTERS, "arena", SimpleNamespace(system="arena", sports=("cs2", "valorant")))
+    assert sorted(pipeline.due_work(now).polls) == [1, 2]
+    assert structured._watching(2) is not None
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert pipeline.due_work(now).polls == [1]
+    assert structured._watching(2) is None and structured._watching(1) == ({"adapter": "arena", "locator": {"match": "1"}}, structured.ADAPTERS["arena"], [(1, "11")])

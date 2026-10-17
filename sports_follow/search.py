@@ -112,7 +112,7 @@ def local(db: Session, query: str, fan: str | None, sport: str | None) -> list[S
         .limit(LOCAL_LIMIT * 2)
     )
     if sport:
-        q = q.where(func.lower(Player.sport).in_(sports.names_of(sports.BY_KEY[sport])))  # any name for it: "CS2", "Counter-Strike"
+        q = q.where(func.lower(Player.sport).in_([n for k in sports.within(sport) for n in sports.names_of(sports.BY_KEY[k])]))  # any name for it: "CS2", "Counter-Strike"
     rows = db.execute(q).all()
     if not rows:
         return []
@@ -282,7 +282,9 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     from .config import AGENT
 
     query = " ".join(query.split())[:80]
-    sport = sport if sport in {s.key for s in sports.ENABLED} else None
+    # One of the sports that run, or a group any of them is in ("esports", from an app before each game was a
+    # sport): its games that run.
+    sport = sport if sport in sports.running_keys() else None
     ask = functools.cache(may_ask)
     if len(query) < 2 or not searchable(query):
         # Nothing to search by ("--", "विराट कोहली"), nor to research: a researched player is named by
@@ -314,7 +316,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # registry's row, confirmed by birth date when followed, stands for both.
         named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
         for hits in answers:
-            hits = [r for r in hits if (not sport or sports.family(r.sport) == sport) and sports.on(r.sport) and (tuple(_key(r.name)), r.sport) not in named]
+            hits = [r for r in hits if (not sport or sports.family(r.sport) in sports.within(sport)) and sports.on(r.sport) and (tuple(_key(r.name)), r.sport) not in named]
             found += hits[: LIVE_LIMIT + 4]
     sources = [*matched, *found]
     _ours(db, sources, fan)
@@ -430,7 +432,7 @@ def _live(query: str, sport: str | None, by_word: bool = False) -> list[tuple[Pr
         live = provider.search
         if live is None or len(query) < live.min_length or (by_word and not live.by_word):
             continue
-        if any(sport in a.sports for a in adapters) if sport else live.unfiltered:
+        if any(set(sports.within(sport)) & set(a.sports) for a in adapters) if sport else live.unfiltered:
             out.append((provider, adapters))
     return out
 
@@ -456,7 +458,7 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     jobs = {f"{provider.name}:{w}": _pool.submit(budget.carry(provider.search.find), w, sport, adapters) for provider, adapters in by_word for w in words}
     answers, _ = _collect(jobs)
     for r in (r for hits in answers for r in hits):
-        if (not sport or sports.family(r.sport) == sport) and r.live_scores and sports.on(r.sport):
+        if (not sport or sports.family(r.sport) in sports.within(sport)) and r.live_scores and sports.on(r.sport):
             pool.setdefault(r.key, r)
     scored = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -x[0])
     return [r for score, r in scored if score >= SUGGEST_MIN][:3]
