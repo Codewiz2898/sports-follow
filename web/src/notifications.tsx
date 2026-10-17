@@ -156,7 +156,7 @@ export function MomentToasts({ moments, dismiss, playerOf }: { moments: PlayerMo
   return (
     <div className="toasts" role="status" aria-live="polite">
       {moments.map((m) => {
-        const player = playerOf(m.player_id)?.player
+        const player = m.player_id != null ? playerOf(m.player_id)?.player : undefined  // a game's own moment has none
         return (
           <div key={m.id} className="toast">
             {player && <Avatar name={player.name} sport={player.sport} />}

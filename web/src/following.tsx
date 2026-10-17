@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, subscribe, type AlertLevel, type Card, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
+import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
 
 interface FollowingState {
@@ -17,6 +17,12 @@ interface FollowingState {
   dismissMoment: (id: number) => void
   heard: number  // moments the stream has brought, any level, and its reconnects: the activity list refreshes on it
   listen: (onEvent: (e: StreamEvent) => void) => () => void  // every event the fan stream brings, for a followed player's page
+  // The games the fan follows by themselves (sports_follow/matches.py), each board as last polled, and whether
+  // the list has come; following one, or stopping, by its address after /match/; its level.
+  matches: FollowedMatch[]
+  matchesLoaded: boolean
+  followMatch: (address: string, on: boolean) => Promise<void>
+  setMatchAlerts: (eventId: number, level: AlertLevel) => Promise<void>
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -24,6 +30,7 @@ const MAX_PROGRESS = 8
 const TOAST_MS = 8000
 const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
+const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's players' of its kind in the game is that one
 
 /** The fan's players as the server lists them, and any this app followed that the list doesn't have yet. */
 function withLocal(players: Card[], prev: Card[]): Card[] {
@@ -42,9 +49,15 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState<Record<number, string[]>>({})
   const [moments, setMoments] = useState<PlayerMoment[]>([])
   const [heard, setHeard] = useState(0)
+  const [matches, setMatches] = useState<FollowedMatch[]>([])
+  const [matchesLoaded, setMatchesLoaded] = useState(false)
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
+  const gamesKey = matches.map((m) => m.event_id).sort((a, b) => a - b).join(',')
   const cardsRef = useRef(cards)
   cardsRef.current = cards
+  const matchesRef = useRef(matches)
+  matchesRef.current = matches
+  const toasted = useRef<{ event: number | null; kind: string; at: number }[]>([])
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
   const listeners = useRef(new Set<(e: StreamEvent) => void>())
@@ -57,6 +70,9 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   }, () => setFailed(true)), [])
 
   useEffect(() => { reload() }, [reload])
+
+  const reloadMatches = useCallback(() => api.matches().then((r) => setMatches(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [])
+  useEffect(() => { reloadMatches() }, [reloadMatches])
 
   // Until the list loads, try again: soon, then less often, and at once on coming back online or to the app.
   useEffect(() => {
@@ -96,17 +112,27 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         return f && f.version >= c.version ? { ...c, ...f, alerts: c.alerts } : c
       }))
       setProgress((p) => ({ ...p, ...Object.fromEntries(e.players.filter((c) => c.status !== 'building').map((c) => [c.player_id, []])) }))
+      if (e.matches) { setMatches(e.matches); setMatchesLoaded(true) }
       setHeard((n) => n + 1)
+    } else if (e.type === 'match') {
+      // A followed game's board, as its poll found it; the fan's level for it stays as this app has it.
+      setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, ...e.match, alerts: m.alerts } : m)))
     } else if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
     } else if (e.type === 'moment') {
       setHeard((n) => n + 1)
       // With the app in front the service worker skips the system notification, so the toast
-      // follows the same per-player level the push does.
-      const level = cardsRef.current.find((c) => c.player_id === e.moment.player_id)?.alerts ?? 'key'
-      if (!wanted(level, e.moment)) return
-      setMoments((m) => (m.some((x) => x.id === e.moment.id) ? m : [...m, e.moment].slice(-3)))
+      // follows the same level the push does: the player's, or the game's for a game's own moment.
+      const m = e.moment
+      const level = (m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts : matchesRef.current.find((g) => g.event_id === m.event_id)?.alerts) ?? 'key'
+      if (!wanted(level, m)) return
+      // One the fan's player's said a moment ago (their goal, the result) shows once, as theirs: the push does too.
+      const now = Date.now()
+      toasted.current = toasted.current.filter((t) => now - t.at < SAME_MS)
+      if (m.player_id == null && toasted.current.some((t) => t.event === (m.event_id ?? null) && t.kind === m.kind)) return
+      if (m.player_id != null) toasted.current.push({ event: m.event_id ?? null, kind: m.kind, at: now })
+      setMoments((ms) => (ms.some((x) => x.id === m.id) ? ms : [...ms, m].slice(-3)))
       window.setTimeout(() => setMoments((m) => m.filter((x) => x.id !== e.moment.id)), TOAST_MS)
     } else if (e.type === 'progress') {
       setProgress((p) => ({ ...p, [e.player_id]: [...(p[e.player_id] ?? []), e.message].slice(-MAX_PROGRESS) }))
@@ -125,10 +151,24 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     return () => { listeners.current.delete(onEvent) }
   }, [])
 
+  // The stream's channels are the fan's players and followed games as it connects: a change reconnects it.
   useEffect(() => {
-    if (!idsKey) return
+    if (!idsKey && !gamesKey) return
     return subscribe('/api/me/stream', apply)
-  }, [idsKey, apply])
+  }, [idsKey, gamesKey, apply])
+
+  const followMatch = useCallback(async (address: string, on: boolean) => {
+    const at = address.indexOf('/')
+    await api.followMatch(address.slice(0, at), address.slice(at + 1), on)
+    await reloadMatches()
+  }, [reloadMatches])
+
+  const setMatchAlerts = useCallback(async (eventId: number, level: AlertLevel) => {
+    const was = matchesRef.current.find((m) => m.event_id === eventId)?.alerts ?? 'key'
+    const show = (value: AlertLevel) => setMatches((prev) => prev.map((m) => (m.event_id === eventId ? { ...m, alerts: value } : m)))
+    show(level)
+    try { await api.setMatchAlerts(eventId, level) } catch (e) { show(was); throw e }
+  }, [])
 
   const follow = useCallback(async (target: FollowTarget) => {
     const { card } = await api.follow(target)
@@ -183,7 +223,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     dismissMoment,
     heard,
     listen,
-  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen])
+    matches,
+    matchesLoaded,
+    followMatch,
+    setMatchAlerts,
+  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen, matches, matchesLoaded, followMatch, setMatchAlerts])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -21,6 +21,14 @@ export function levelText(level: AlertLevel, sport: SportInfo): { brief: string;
   return { brief: 'Nothing for this player', hint: 'No notifications for this player' }
 }
 
+/** A level for a game followed by itself (sports_follow/matches.py), in full: its own moments, from both sides. */
+export function gameLevelText(level: AlertLevel): string {
+  if (level === 'key') return 'Its key moments from both sides, as they happen, and the result. Until it ends'
+  if (level === 'everything') return 'Key moments, plus the smaller ones (a yellow card, a set, an edge). Those arrive without sound'
+  if (level === 'results') return 'Just the final result'
+  return 'No notifications for this game'
+}
+
 /** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
 export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | 'kind'>): boolean {
   if (level === 'everything') return true
