@@ -235,10 +235,11 @@ export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
 
 /** Something worth telling a player's fans (sports_follow/moments.py). */
 /** A moment as the stream brings it: a player's, or (player_id null) a game's own, for the fans following the
- * game by itself (sports_follow/matches.py) or a team in it (sports_follow/teams.py). A game's own told from one
- * team's side (its result: "Arsenal won 2–1 v Chelsea") names whose (`sides`, team tags: "team:7"), for that
- * team's fans; the game's own result says whose sides tell it too (`told_by`), so their fans get theirs instead. */
-export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor'; sides?: string[]; told_by?: string[] }
+ * game by itself (sports_follow/matches.py) or a team in it (sports_follow/teams.py). A game's own says which of
+ * its teams fans follow (`teams`, by tag: "team:7"), so a fan's level for it is their team's; one told from one
+ * team's side (its result: "Arsenal won 2–1 v Chelsea") names whose (`sides`), for that team's fans; the game's own
+ * result says whose sides tell it too (`told_by`), so their fans get theirs instead. */
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor'; teams?: string[]; sides?: string[]; told_by?: string[] }
 
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, and of the games
  * they follow by themselves, pushed or not. A game's own has no player, and says its sport. */

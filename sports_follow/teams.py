@@ -551,6 +551,16 @@ def activity(fan: str, taken: Any, days: int) -> Select[Moment, str, bool, str]:
     )
 
 
+def followed_in(db: Session, events: set[int]) -> dict[int, list[str]]:
+    """The teams fans follow in each of these games, by tag: the fan stream's toasts say them, so the app finds a
+    fan's level for a game's own moment by their team in it, as alerts.plan does for a push."""
+    out: dict[int, list[str]] = {}
+    if events:
+        for event_id, team_id in db.execute(select(EventTeam.event_id, EventTeam.team_id).where(EventTeam.event_id.in_(events), EventTeam.team_id.in_(select(TeamFollow.team_id))).order_by(EventTeam.team_id)):
+            out.setdefault(event_id, []).append(tag(team_id))
+    return out
+
+
 def side_finals(db: Session, event: Event, rules_: sports.Sport, state: dict[str, Any], score: str, clock: str) -> list[Found]:
     """A finished game's result from the side of each team fans follow in it (Sport.side_final), for those fans
     (alerts.plan: in place of the game's own): "Arsenal won 2–1 v Chelsea". About the whole game, so a fan who

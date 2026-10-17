@@ -41,18 +41,35 @@ const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's 
 /** A team's tag, as a game's own moment told from its side names it (PlayerMoment.sides). */
 const teamTag = (teamId: number) => `team:${teamId}`
 
-/** The level a game's own moment reaches the fan at: the game's, followed by itself, or that of their team in it
- * (the loudest, should they follow both); null for a moment told from a side of theirs set to off, or from the
- * other side's, and for the game's own result where their team's side tells it too: theirs comes instead. */
+/** The level a game's own moment reaches the fan at, as alerts.plan has it for a push: the game's, followed by
+ * itself, or their teams' in it (the moment says which teams fans follow in it), the loudest; null where they
+ * follow neither, for a result told from a side that isn't theirs (or one they set to off), and for the game's own
+ * result where their team's side tells it too: theirs comes instead. */
 export function gameLevel(m: PlayerMoment, matches: FollowedMatch[], teams: FollowedTeam[]): AlertLevel | null {
-  const mine = teams.filter((t) => t.alerts !== 'off')
-  const tags = new Set(mine.map((t) => teamTag(t.team_id)))
-  if (m.sides?.length && !m.sides.some((s) => tags.has(s))) return null
-  if (m.told_by?.some((s) => tags.has(s))) return null
-  const game = matches.find((g) => g.event_id === m.event_id)?.alerts
-  const theirs = teams.filter((t) => t.live?.event_id === m.event_id || m.sides?.includes(teamTag(t.team_id))).map((t) => t.alerts)
+  const heard = new Set(teams.filter((t) => t.alerts !== 'off').map((t) => teamTag(t.team_id)))
+  if (m.sides?.length && !m.sides.some((s) => heard.has(s))) return null
+  if (m.told_by?.some((s) => heard.has(s))) return null
   const order: AlertLevel[] = ['off', 'results', 'key', 'everything']
-  return game ?? (theirs.length ? theirs.reduce((a, b) => (order.indexOf(b) > order.indexOf(a) ? b : a)) : 'key')
+  const levels = [
+    matches.find((g) => g.event_id === m.event_id)?.alerts,
+    ...teams.filter((t) => m.teams?.includes(teamTag(t.team_id))).map((t) => t.alerts),
+  ].filter((l): l is AlertLevel => l != null)
+  return levels.length ? levels.reduce((a, b) => (order.indexOf(b) > order.indexOf(a) ? b : a)) : null
+}
+
+const STREAM_AHEAD_MS = 36 * 3600_000  // a team's games this soon are on the fan stream (sports_follow/teams.event_ids)
+
+/** The games of the fan's teams the stream carries now: each team's next game (its game on now, while it's on)
+ * from a day and a half before it starts. A game ending changes nothing here, so its result still comes on the
+ * stream it's on; the list moves on when Following next loads (the stream's next connect, a follow). */
+export function streamedGames(teams: FollowedTeam[], now: number): string[] {
+  return teams.map((t) => t.next).filter((n) => n?.match && (n.status === 'live' || n.status === 'armed' || (Date.parse(n.start_utc ?? '') - now < STREAM_AHEAD_MS))).map((n) => n!.match!).sort()
+}
+
+/** When the soonest of the fan's teams' next games comes within the stream's reach, or null: then it connects again. */
+export function nextInReach(teams: FollowedTeam[], now: number): number | null {
+  const at = teams.map((t) => Date.parse(t.next?.start_utc ?? '') - STREAM_AHEAD_MS).filter((ms) => Number.isFinite(ms) && ms > now)
+  return at.length ? Math.min(...at) : null
 }
 
 /** The fan's players as the server lists them, and any this app followed that the list doesn't have yet. */
@@ -77,9 +94,17 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [teams, setTeams] = useState<FollowedTeam[]>([])
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const gamesKey = matches.map((m) => m.event_id).sort((a, b) => a - b).join(',')
-  // A followed team's games are on the stream from a day and a half before (teams.event_ids): a follow, or its game
-  // on now changing, connects it again.
-  const teamsKey = teams.map((t) => `${t.team_id}:${t.live?.event_id ?? t.next?.match ?? ''}`).sort().join(',')
+  // A followed team's games are on the stream from a day and a half before (teams.event_ids): a follow, or one of
+  // its games coming within reach (a timer for the soonest), connects it again; a game ending doesn't.
+  const [reach, setReach] = useState(0)
+  // `reach` is the timer's tick: the games in reach are worked out again by the clock then.
+  const teamsKey = useMemo(() => (teams.length ? `${teams.map((t) => t.team_id).sort((a, b) => a - b).join(',')}|${streamedGames(teams, Date.now()).join(',')}|${reach}` : ''), [teams, reach])
+  useEffect(() => {
+    const at = nextInReach(teams, Date.now())
+    if (at == null) return
+    const timer = window.setTimeout(() => setReach((n) => n + 1), Math.min(at - Date.now() + 1000, 2 ** 31 - 1))
+    return () => window.clearTimeout(timer)
+  }, [teams, reach])
   const cardsRef = useRef(cards)
   cardsRef.current = cards
   const matchesRef = useRef(matches)
@@ -167,8 +192,9 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       const level = m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts ?? 'key' : gameLevel(m, matchesRef.current, teamsRef.current)
       if (level == null || !wanted(level, m)) return
       // A result told from both sides the fan follows shows once.
-      if (m.sides?.length && toasted.current.some((t) => t.event === (m.event_id ?? null) && t.kind === 'final:side')) return
-      if (m.sides?.length) toasted.current.push({ event: m.event_id ?? null, kind: 'final:side', at: Date.now() })
+      const sideFinal = m.kind === 'final' && Boolean(m.sides?.length)
+      if (sideFinal && toasted.current.some((t) => t.event === (m.event_id ?? null) && t.kind === 'final:side')) return
+      if (sideFinal) toasted.current.push({ event: m.event_id ?? null, kind: 'final:side', at: Date.now() })
       // One the fan's player's said a moment ago (their goal, the result) shows once, as theirs: the push does too.
       const now = Date.now()
       toasted.current = toasted.current.filter((t) => now - t.at < SAME_MS)

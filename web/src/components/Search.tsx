@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, type Research, type SearchResponse, type SearchResult, type TeamSummary } from '../api'
 import { APP_NAME } from '../app'
 import { followTarget } from '../follow'
-import { allowance, exactName as namesakesName, fold, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, teamNext, type Section } from '../search'
+import { allowance, exactName as namesakesName, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, teamNext, teamsFirst, type Section } from '../search'
 import { runningSports, sportInfo, sportName } from '../sports'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
@@ -49,6 +49,18 @@ export type { Section }
 export function sections(data: SearchResponse): Section[] {
   return sectionsOf(data, APP_NAME)
 }
+
+/** A row of the results, as they're shown and arrowed through: an athlete, or a team (by "team:<id>"). */
+export type Entry = { key: string; result: SearchResult; team?: undefined } | { key: string; team: TeamSummary; result?: undefined }
+
+/** Every row in the order the results show them (teamsFirst), for the keyboard. */
+export function entries(data: SearchResponse): Entry[] {
+  const athletes: Entry[] = sections(data).flatMap((s) => s.items.map((r) => ({ key: r.key, result: r })))
+  const teams: Entry[] = (data.teams ?? []).map((t) => ({ key: teamKey(t), team: t }))
+  return teamsFirst(data) ? [...teams, ...athletes] : [...athletes, ...teams]
+}
+
+const teamKey = (t: TeamSummary) => `team:${t.team_id}`
 
 /** Opening and following results, the same from the search page, the sidebar and a preview. */
 export function useSearchActions(onDone?: () => void) {
@@ -157,12 +169,12 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
 }
 
 /** A team by that name (sports_follow/teams.py): its sport and what it plays in, its next game, and Follow. */
-export function TeamResultRow({ t, query, actions }: { t: TeamSummary; query: string; actions: ReturnType<typeof useSearchActions> }) {
+export function TeamResultRow({ t, query, actions, active, id }: { t: TeamSummary; query: string; actions: ReturnType<typeof useSearchActions>; active?: boolean; id?: string }) {
   const following = t.following || actions.isFollowingTeam(t.team_id)
   const busy = actions.pending === `team:${t.team_id}`
   const next = teamNext(t)
   return (
-    <li className="result">
+    <li className={`result${active ? ' active' : ''}`} id={id}>
       <button type="button" className="result-main" onClick={() => actions.openTeam(t)}>
         <Avatar name={t.name} sport={t.sport} />
         <span className="stack">
@@ -220,20 +232,18 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
   loading?: boolean
   actions: ReturnType<typeof useSearchActions>
   activeKey?: string
-  idFor?: (r: SearchResult) => string
+  idFor?: (key: string) => string  // a row's element id, by its key (Entry.key)
 }) {
   const parts = sections(data)
   const exactName = namesakesName(data)
   const teams = data.teams ?? []
   const nothing = !data.results.length && !teams.length
-  // Teams come first when one is called just what was typed ("Arsenal"), or no athlete is ("lakers": before
-  // any spellings it might have meant); else after the athletes.
-  const teamsFirst = teams.some((t) => fold(t.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
+  const first = teamsFirst(data)
   const teamSection = teams.length > 0 && (
     <section className="section" aria-label="Teams">
       <span className="eyebrow">Teams</span>
       <ul className="card list results">
-        {teams.map((t) => <TeamResultRow key={`team-${t.team_id}`} t={t} query={query} actions={actions} />)}
+        {teams.map((t) => <TeamResultRow key={teamKey(t)} t={t} query={query} actions={actions} active={activeKey === teamKey(t)} id={idFor?.(teamKey(t))} />)}
       </ul>
     </section>
   )
@@ -251,16 +261,16 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
       {nothing && !data.suggestions.length && !loading && (
         <p className="small muted" style={{ margin: 0 }}>No athlete in the live sources is called “{data.query}”.</p>
       )}
-      {teamsFirst && teamSection}
+      {first && teamSection}
       {parts.map((s) => (
         <section key={s.key} className="section" aria-label={s.title || 'Athletes with this name'}>
           {s.title && <span className="eyebrow">{s.title}</span>}
           <ul className="card list results">
-            {s.items.map((r) => <ResultRow key={r.key} r={r} query={query} active={activeKey === r.key} actions={actions} id={idFor?.(r)} />)}
+            {s.items.map((r) => <ResultRow key={r.key} r={r} query={query} active={activeKey === r.key} actions={actions} id={idFor?.(r.key)} />)}
           </ul>
         </section>
       ))}
-      {!teamsFirst && teamSection}
+      {!first && teamSection}
       {data.partial.length > 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</p>
       )}

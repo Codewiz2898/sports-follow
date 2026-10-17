@@ -440,6 +440,12 @@ export function BuildProgress({ card, messages, onRetry, research = true }: { ca
   )
 }
 
+/** A team tile's name size: the tile's 30 px, smaller as its longest word grows past what fits a phone's half width. */
+function teamNameSize(name: string): number {
+  const longest = Math.max(...name.split(/\s+/).map((w) => w.length))
+  return longest <= 9 ? 30 : longest <= 12 ? 24 : 19
+}
+
 /** One followed team on the Following page: a block of its sport's colour, as a player's tile (lines.teamLine). */
 export function TeamTile({ team }: { team: FollowedTeam }) {
   const now = useNow()
@@ -447,7 +453,8 @@ export function TeamTile({ team }: { team: FollowedTeam }) {
     <Link to={`/team/${team.team_id}`} className="tile" data-sport={sportKey(team.sport)}>
       <span className="sport">{sportName(team.sport) || 'Team'} · Team</span>
       <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : null}</span>
-      <span className="dsp name">{team.name}</span>
+      {/* A team's whole name, never broken inside a word ("Mönchengladbach"): smaller for a long one. */}
+      <span className="dsp name" style={{ overflowWrap: 'normal', fontSize: teamNameSize(team.name) }}>{team.name}</span>
       <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{teamLine(team, now)}</span>
     </Link>
   )

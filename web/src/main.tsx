@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { lazy, StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AccountNotice, AccountProvider, useAccount } from './account'
@@ -7,7 +7,7 @@ import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow, TeamRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { BellIcon, ChevronIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
-import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
+import { entries, SearchResults, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
 import { FollowingProvider, useFollowing } from './following'
 import { AccountPage } from './pages/AccountPage'
@@ -33,7 +33,8 @@ import './styles.css'
 // The admin panel: its own chunk, so fans never download it.
 const AdminApp = lazy(() => import('./admin/AdminApp'))
 
-/** Desktop search: results drop down under the sidebar box. ↑ ↓ move, Enter opens, Shift+Enter follows, Esc closes, / focuses. */
+/** Desktop search: results drop down under the sidebar box, athletes and teams. ↑ ↓ move, Enter opens, Shift+Enter
+ * follows, Esc closes, / focuses. */
 function SidebarSearch() {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -45,7 +46,7 @@ function SidebarSearch() {
   const close = useCallback(() => { setOpen(false); setQuery(''); input.current?.blur() }, [])
   const actions = useSearchActions(close)
   const { data, fresh, loading } = useSearch(query, '')
-  const flat = data ? sections(data).flatMap((s) => s.items) : []
+  const flat = data ? entries(data) : []
   const current = flat[Math.min(active, flat.length - 1)]
 
   useEffect(() => setActive(0), [data])
@@ -83,9 +84,13 @@ function SidebarSearch() {
       if (!fresh && loading) return
       if (!fresh || !current) {
         if (query.trim().length >= 2) { navigate(`/search?q=${encodeURIComponent(query.trim())}`); close() }
+      } else if (current.team) {
+        if (!e.shiftKey) actions.openTeam(current.team)
+        else if (!actions.pending && !(current.team.following || actions.isFollowingTeam(current.team.team_id))) void actions.followTeam(current.team)
       } else if (e.shiftKey) {
-        if (!actions.pending && !(current.player_id && actions.isFollowing(current.player_id))) actions.follow(current)
-      } else if (current.player_id || current.system) actions.open(current)
+        const r = current.result
+        if (!actions.pending && !(r.player_id && actions.isFollowing(r.player_id))) actions.follow(r)
+      } else if (current.result.player_id || current.result.system) actions.open(current.result)
     }
   }
 
@@ -94,16 +99,16 @@ function SidebarSearch() {
     <>
       <form ref={box} onSubmit={(e) => e.preventDefault()} className="search" role="search" style={{ height: 46 }}>
         <SearchIcon width={18} height={18} style={{ flexShrink: 0 }} />
-        <label htmlFor="side-query" className="sr-only">Search players</label>
+        <label htmlFor="side-query" className="sr-only">Search players and teams</label>
         <input
-          ref={input} id="side-query" type="search" autoComplete="off" spellCheck={false} placeholder="Search players" value={query}
+          ref={input} id="side-query" type="search" autoComplete="off" spellCheck={false} placeholder="Search players and teams" value={query}
           onChange={(e) => { setQuery(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)} onKeyDown={onKeyDown} style={{ fontSize: 14 }}
         />
         {loading ? <span className="spinner" /> : <kbd className="key">/</kbd>}
       </form>
       {showing && data && (
         <div id="side-results" className="search-panel" style={{ top }}>
-          <SearchResults data={data} query={query} loading={loading} actions={actions} activeKey={current?.key} idFor={(r) => `side-${r.key}`} />
+          <SearchResults data={data} query={query} loading={loading} actions={actions} activeKey={current?.key} idFor={(key) => `side-${key}`} />
           {actions.error && <div className="error-box">{actions.error}</div>}
           <span className="tiny muted">↑ ↓ move · Enter open · Shift+Enter follow · Esc close</span>
         </div>
@@ -115,9 +120,10 @@ function SidebarSearch() {
 function Sidebar() {
   const { cards, progress, teams } = useFollowing()
   const { me } = useAccount()
-  const live = cards.filter((c) => c.live.is_live)
+  const live = [...cards.filter((c) => c.live.is_live), ...teams.filter((t) => t.live?.is_live)]
+  const listed = useMemo(() => ({ cards, teams }), [cards, teams])  // a newer list of either tries again after a bad row
   return (
-    <aside className="sidebar" aria-label="Followed players">
+    <aside className="sidebar" aria-label="Followed players and teams">
       <NavLink to="/" className="brand"><img src="/icons/mark.svg" alt="" width={36} height={36} />{APP_NAME}</NavLink>
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
@@ -129,12 +135,13 @@ function Sidebar() {
       <InstallButton compact />
       {/* The heading opens the Following page, every player as a tile. */}
       <NavLink to="/following" className="eyebrow side-head">Following · {cards.length + teams.length}{live.length ? ` · ${live.length} live` : ''}<ChevronIcon width={16} height={16} strokeWidth={2.6} /></NavLink>
-      <nav aria-label="Your players" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
-        <ErrorBoundary fallback={<span className="tiny muted" style={{ padding: '0 10px' }}>Your players couldn't be listed here.</span>} resetKey={cards}>
+      <nav aria-label="Your players and teams" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
+        <ErrorBoundary fallback={<span className="tiny muted" style={{ padding: '0 10px' }}>Your players couldn't be listed here.</span>} resetKey={listed}>
+          {/* Teams first, as on the Following page. */}
+          {teams.map((t) => <TeamRow key={`team-${t.team_id}`} team={t} />)}
           {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
             <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
           ))}
-          {teams.map((t) => <TeamRow key={`team-${t.team_id}`} team={t} />)}
         </ErrorBoundary>
       </nav>
       <span className="row tiny muted" style={{ marginTop: 'auto', justifyContent: 'flex-start' }}>

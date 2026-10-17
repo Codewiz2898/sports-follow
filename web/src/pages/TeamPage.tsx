@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
 import { APP_NAME } from '../app'
@@ -69,6 +69,13 @@ export function TeamPage() {
   const teamId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
   const { team, failed, again } = useTeam(teamId)
   const following = useFollowing()
+  // A followed team's games read anew (a follow's first read, a page that asked) reach Following too: its tile,
+  // and which of its games the fan stream carries.
+  // Once a read: Following's own functions change with every list it loads, so they're read through a ref.
+  const read = team?.fetched_at
+  const followingNow = useRef(following)
+  followingNow.current = following
+  useEffect(() => { if (read && followingNow.current.isFollowingTeam(teamId)) void followingNow.current.reload() }, [read, teamId])
   const { muted, setMuted } = useActivity()
   const follow = useFollowToggle()
   const now = useNow()
@@ -147,9 +154,8 @@ export function TeamPage() {
       {failed && <div className="notice" role="status">Couldn't update this team: {failed}</div>}
 
       <ErrorBoundary fallback={<BlockError />} resetKey={team}>
-        {live && (live.match
-          ? <Link to={`/match/${live.match}`} aria-label={`${live.event ?? 'The game on now'}: its match page`}><LiveScoreboard live={live} playerName="" sport={team.sport} /></Link>
-          : <LiveScoreboard live={live} playerName="" sport={team.sport} />)}
+        {/* The board links to its match page and its source itself: no link around it. */}
+        {live && <LiveScoreboard live={live} playerName="" sport={team.sport} />}
 
         <section className="section" aria-label="Coming up">
           <SectionHead title="Coming up" />
