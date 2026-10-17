@@ -1,15 +1,16 @@
-// Alerts, the web's NotificationsPage.tsx: what's happened to the fan's players (Latest), and what reaches this
-// phone (on or off, quiet hours: push.ts) and how much to hear about each player (Settings).
+// Alerts, the web's NotificationsPage.tsx: what's happened to the fan's players and games (Latest), and what
+// reaches this phone (on or off, quiet hours: push.ts) and how much to hear about each player and each game
+// followed by itself (Settings).
 
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { DEVICE, LEVELS, levelText } from '../../../web/src/alerts'
+import { DEVICE, gameLevelText, LEVELS, levelText } from '../../../web/src/alerts'
 import { dayLabel, relative } from '../../../web/src/format'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
 import type { ActivityItem, AlertLevel } from '../api'
-import { Avatar, Empty } from '../blocks'
+import { Avatar, Empty, openMatch } from '../blocks'
 import { useSports } from '../catalog'
 import { useNow } from '../clock'
 import { useFollowing } from '../following'
@@ -39,7 +40,7 @@ export default function AlertsScreen() {
 
 /** Every moment of the fan's players, newest first, by day; what came since they last looked is marked. */
 function Latest({ onSettings }: { onSettings: () => void }) {
-  const { cards } = useFollowing()
+  const { cards, matches } = useFollowing()
   const activity = useActivity()
   // What was new when the list opened stays marked while it's open; the badge clears at once.
   const [seenAtOpen] = useState(activity.seen)
@@ -52,7 +53,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
   if (!activity.items.length) {
     return (
       <Card style={{ paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center', gap: 4 }}>
-        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{cards.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players show up here as they happen.' : 'Follow a player to see their moments here.'}</Text>
+        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{cards.length || matches.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players and games show up here as they happen.' : 'Follow a player, or a game, to see their moments here.'}</Text>
         {cards.length > 0 ? <Btn kind="link" label="Choose what reaches this phone" onPress={onSettings} /> : null}
       </Card>
     )
@@ -121,14 +122,19 @@ function AccountRow() {
   )
 }
 
-/** On this phone, and how much to hear about each player. */
+/** On this phone, and how much to hear about each player and each game followed by itself. */
 function Settings() {
   const sports = useSports()
-  const { cards, setAlerts } = useFollowing()
+  const { cards, setAlerts, matches, setMatchAlerts } = useFollowing()
   const [failed, setFailed] = useState<Record<number, string>>({})
+  const [gameFailed, setGameFailed] = useState<Record<number, string>>({})
   const choose = (playerId: number, level: AlertLevel) => {
     setFailed((f) => ({ ...f, [playerId]: '' }))
     setAlerts(playerId, level).catch((e: Error) => setFailed((f) => ({ ...f, [playerId]: e.message })))
+  }
+  const chooseGame = (eventId: number, level: AlertLevel) => {
+    setGameFailed((f) => ({ ...f, [eventId]: '' }))
+    setMatchAlerts(eventId, level).catch((e: Error) => setGameFailed((f) => ({ ...f, [eventId]: e.message })))
   }
   return (
     <>
@@ -160,6 +166,28 @@ function Settings() {
           </Card>
         )}
       </View>
+
+      {/* The games followed by themselves, until each ends (sports_follow/matches.py). */}
+      {matches.length > 0 ? (
+        <View style={{ gap: 10 }}>
+          <SectionHead title="Per game" right={<Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>Until each one ends</Text>} />
+          <Card style={s.list}>
+            {matches.map((m, i) => (
+              <View key={m.event_id} style={[{ gap: 10, paddingVertical: 14 }, i < matches.length - 1 && s.line]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <Avatar name={m.title} sport={m.sport} size="sm" />
+                  <View style={{ flex: 1 }}>
+                    <Text onPress={openMatch(m.match)} accessibilityRole="link" style={t.title}>{m.title}</Text>
+                    <Text style={[t.tiny, t.muted]}>{gameLevelText(m.alerts, sports.info(m.sport))}</Text>
+                  </View>
+                </View>
+                <Segmented full options={LEVELS.map((l) => [l.value, l.short])} value={m.alerts} onChange={(l) => chooseGame(m.event_id, l)} />
+                {gameFailed[m.event_id] ? <ErrorBox>{gameFailed[m.event_id]}</ErrorBox> : null}
+              </View>
+            ))}
+          </Card>
+        </View>
+      ) : null}
     </>
   )
 }

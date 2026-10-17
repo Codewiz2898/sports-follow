@@ -9,7 +9,8 @@
 // timezone and quiet hours: at every start, after a sign-in or out (the cookie is another fan then), and
 // whenever FCM replaces the token, so the phone belongs to whoever the app is now and one the server dropped
 // comes back. Turned off here or in Android's settings, the phone comes off the server (FCM would go on
-// taking its pushes). A tap opens the player's page and tells the server it was opened.
+// taking its pushes). A tap opens the player's page, or a game's own moment its match page, and tells the
+// server it was opened.
 //
 // FCM needs the app's Firebase config (google-services.json, app.config.ts). A build without it, or a server
 // without its key, has no notifications, and Alerts says why.
@@ -127,8 +128,8 @@ async function turnOn(ask: boolean): Promise<boolean> {
 
 /**
  * Keeps this phone registered while the app runs, as whoever the app is now: once it's known whether the fan
- * follows anyone (`following`, null until then; the first time they do, it asks), again after a sign-in or
- * out (account.tsx's epoch), and whenever FCM replaces the token. Not while it's turned off on Alerts.
+ * follows anyone or any game (`following`, null until then; the first time they do, it asks), again after a
+ * sign-in or out (account.tsx's epoch), and whenever FCM replaces the token. Not while it's turned off on Alerts.
  */
 export function usePushRegistration(following: boolean | null): void {
   const { epoch } = useAccount()
@@ -153,7 +154,17 @@ export function usePushRegistration(following: boolean | null): void {
   }, [])
 }
 
-/** Opens the player's page for a tapped notification (one that started the app, or any while it runs). */
+/** Calls `arrived` whenever a notification comes to this phone while the app is running (one of the fan's
+ * moments: their activity list has something new). */
+export function useNotificationsArriving(arrived: () => void): void {
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener(() => arrived())
+    return () => sub.remove()
+  }, [arrived])
+}
+
+/** Opens the page a tapped notification is about (one that started the app, or any while it runs): the player's,
+ * or for a game followed by itself, its match page. */
 export function useNotificationTaps(): void {
   useEffect(() => {
     const open = (response: Notifications.NotificationResponse) => {
@@ -161,8 +172,11 @@ export function useNotificationTaps(): void {
       const data = response.notification.request.content.data ?? {}
       const id = Number(data.id)
       if (id > 0) api.opened(id).catch(() => { /* only the open rate misses it */ })
-      const player = typeof data.url === 'string' ? /^\/player\/(\d+)$/.exec(data.url) : null
+      const url = typeof data.url === 'string' ? data.url : ''
+      const player = /^\/player\/(\d+)$/.exec(url)
+      const game = /^\/match\/([^/?#]+)\/([^/?#]+)$/.exec(url)
       if (player) router.push({ pathname: '/player/[id]', params: { id: player[1] } })
+      else if (game) router.push({ pathname: '/match/[source]/[game]', params: { source: game[1], game: game[2] } })
     }
     const last = Notifications.getLastNotificationResponse()
     if (last) open(last)

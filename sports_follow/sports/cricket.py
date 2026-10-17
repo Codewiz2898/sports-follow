@@ -135,6 +135,7 @@ class Cricket(Sport):
     label = "Cricket"
     kinds = ("cricket",)
     team = True
+    follow_teams = True
     wikidata = {"espn_cricket": "P2697"}
     athletes = 19_745
     no_line = "Did not bat or bowl"
@@ -188,6 +189,21 @@ class Cricket(Sport):
         """The source's summary where it says how the match went ("India won by 57 runs", "Match tied (India won
         the Super Over)", "No result"); not a bare "Result", a summary still to come."""
         return clock if re.search(r"\b(?:won|drawn|tied|no result|abandoned)\b", clock, re.I) else ""
+
+    def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
+        """The source's summary from one side's: "India won by 57 runs v Australia", "Australia lost by 57 runs v
+        India", by which side it marks the winner, or else names. A tie, a draw or no result is the game's own
+        result, told instead ("")."""
+        pair = [t for t in state.get("teams") or [] if isinstance(t, dict)]
+        ours = next((t for t in pair if str(t.get("id") or "") == team_id), None)
+        theirs = next((t for t in pair if t is not ours), None)
+        said = re.search(r"^(.+?) won (by .+)$", (self.verdict(state, score, clock) or str(state.get("summary") or "")).strip())
+        if ours is None or theirs is None or not (ours.get("name") and theirs.get("name")) or said is None:
+            return ""
+        won = ours.get("winner") if ours.get("winner") is not None else team_key(said[1]) == team_key(ours["name"])
+        if not won and ours.get("winner") is None and team_key(said[1]) != team_key(theirs["name"]):
+            return ""  # the summary names neither side as the board does
+        return f"{ours['name']} {'won' if won else 'lost'} {said[2]} v {theirs['name']}"
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """Fifties, hundreds, out and wicket hauls in the player's latest innings: a line's stats are its

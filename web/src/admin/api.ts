@@ -46,6 +46,23 @@ export interface Allowance {
 }
 export interface SourcesView { sources: AdminSource[]; budgets: Allowance[] }
 
+/** Linear, where the project's work is tracked (sports_follow/linear.py): its plan and issues against the Free plan's limit.
+ * Without a key on the server only `configured: false`; `error` is the last read that failed, shown with the reading before it. */
+export interface LinearStatus {
+  configured: boolean
+  limit: number | null // the Free plan's issues; null on a paid plan
+  error?: string | null
+  failed_at?: string | null
+  workspace?: string
+  url?: string
+  plan?: string | null // "free", "basic", "business", "enterprise"; null: the key can't read it
+  trial_ends_at?: string | null
+  issues?: number // not counting archived ones
+  archived?: number
+  state?: 'ok' | 'near' | 'full'
+  read_at?: string
+}
+
 export interface Overview { accounts: number; active_week: number; blocked: number; anonymous: number; devices: number }
 export interface AccountRow {
   id: number
@@ -77,6 +94,7 @@ export const admin = {
   setSource: (system: string, on: boolean) => request<SourcesView>(at(`sources/${encodeURIComponent(system)}`), json('PUT', { on })),
   setLimits: (name: string, limits: Limits) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', limits)),
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
+  linear: () => request<LinearStatus>(at('linear')),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),

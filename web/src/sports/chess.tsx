@@ -1,5 +1,5 @@
 import './chess.css'
-import { chess as facts, chessMiddle, PIECES, position, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, movesAbout, PIECES, position, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
@@ -44,7 +44,7 @@ function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
  * it ended; of a mini-match, the last game's (the one on the board). */
 function ChessMatch({ page }: MatchProps<ChessPage>) {
   if (!page.moves?.length) return null
-  const about = [page.opening, page.ending && page.ending[0].toUpperCase() + page.ending.slice(1)].filter(Boolean).join(' · ')
+  const about = movesAbout(page)
   return (
     <MatchSection title="Moves" note={page.game ? `Game ${page.game}` : null}>
       <div className="card card-pad stack" style={{ gap: 10 }}>

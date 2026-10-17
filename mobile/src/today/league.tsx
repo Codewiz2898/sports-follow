@@ -1,14 +1,15 @@
 // The big results and big games coming up in the competitions the sources cover, whoever follows them (GET
 // /api/league), as the web's components/League.tsx: outlined cards, so they don't pass for the fan's own, after
-// the fan's in Today's rails, and alone for a fan with none.
+// the fan's in Today's rails, and alone for a fan with none; each opens its match page.
 
-import { useEffect, useRef, useState } from 'react'
-import { AppState, StyleSheet, Text, View } from 'react-native'
-import { dayLabel } from '../../../web/src/format'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { AppState, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native'
+import { dayLabel, shortWhen } from '../../../web/src/format'
 import { wordSize } from '../../../web/src/lines'
 import { leagueAbout, leagueComing } from '../../../web/src/today'
 import { api, type League, type LeagueGame } from '../api'
 import { Backdrop } from '../art'
+import { openMatch } from '../blocks'
 import { toneOf, useSports } from '../catalog'
 import type { RailCard } from '../rail'
 import { colour, dsp, font, RADIUS_TILE } from '../theme'
@@ -58,13 +59,21 @@ export function useLeague(theirs: string | null = null): League | null {
   return league
 }
 
+/** A big game's card: opening its match page where the server gave it one (match), else the card alone. */
+function LeagueCard({ game, label, style, children }: { game: LeagueGame; label: string; style: StyleProp<ViewStyle>; children: ReactNode }) {
+  return game.match
+    ? <Pressable onPress={openMatch(game.match)} accessibilityRole="link" accessibilityLabel={label} style={style}>{children}</Pressable>
+    : <View accessibilityLabel={label} style={style}>{children}</View>
+}
+
 /** A finished game none of the fan's players are in: outlined, its competition, when, its sport's big word for
- * it (the score, the margin, a lobby's winner), who played, and what made it big. Not a link. */
+ * it (the score, the margin, a lobby's winner), who played, and what made it big. It opens the game's match
+ * page: what happened in it. */
 export function LeagueResultCard({ game, now, fill }: { game: LeagueGame; now: number } & RailCard) {
   const tone = toneOf(useSports(), game.sport)
   const word = game.word || game.title
   return (
-    <View style={[s.card, s.result, fill && { width: undefined }]}>
+    <LeagueCard game={game} label={`${game.competition}: ${game.line || game.title}, ${word}`} style={[s.card, s.result, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={game.key} colour={tone.sport} opacity={0.2} />
       <View style={s.head}>
         <Pill small label={game.competition} bg={tone.sport} color={tone.on} style={{ flexShrink: 1 }} />
@@ -75,16 +84,17 @@ export function LeagueResultCard({ game, now, fill }: { game: LeagueGame; now: n
         {word !== game.title ? <Text style={[s.line, { fontFamily: font[800] }]} numberOfLines={2}>{game.line || game.title}</Text> : null}
         <Text style={[s.line, { color: colour.muted }]} numberOfLines={2}>{leagueAbout(game)}</Text>
       </View>
-    </View>
+    </LeagueCard>
   )
 }
 
-/** A big game to come, outlined: the countdown within a day, else the day, big; then the game. */
+/** A big game to come, outlined: the countdown within a day, else the day, big; then the game. It opens the
+ * game's match page: its line-ups as they come, and both sides' players to follow. */
 export function LeagueComingCard({ game, now, fill }: { game: LeagueGame; now: number } & RailCard) {
   const tone = toneOf(useSports(), game.sport)
   const { big, when } = leagueComing(game, now)
   return (
-    <View style={[s.card, s.coming, fill && { width: undefined }]}>
+    <LeagueCard game={game} label={`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`} style={[s.card, s.coming, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={game.key} colour={tone.sport} opacity={0.2} />
       <Pill small label={game.competition} bg={tone.sport} color={tone.on} />
       <Text style={dsp(44)} numberOfLines={1}>{big}</Text>
@@ -92,7 +102,7 @@ export function LeagueComingCard({ game, now, fill }: { game: LeagueGame; now: n
         <Text style={[s.line, { fontFamily: font[800] }]} numberOfLines={2}>{game.title}</Text>
         <Text style={[s.line, { color: colour.muted }]} numberOfLines={2}>{leagueAbout(game, when)}</Text>
       </View>
-    </View>
+    </LeagueCard>
   )
 }
 

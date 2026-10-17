@@ -9,7 +9,10 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   sound; everything adds the minor ones (a yellow card, each set) without sound; results only is the
   result; off is nothing. What's left out is still in the app's activity list.
 - **A game followed by itself** sends its own moments (a goal whoever scores it, every result), each
-  found until the game ended (Watch.until): what comes after the follow lapsed isn't theirs. A fan who
+  found until the game ended (Watch.until): what comes after the follow lapsed isn't theirs. A followed
+  team's games are followed games too (teams.py), and their result is told from the team's side ("Arsenal
+  won 2–1 v Chelsea") in place of the game's own, to its fans only, once even for a fan who follows both
+  sides. A fan who
   follows the game and a player in it hears each moment once: one of the game's about a player whose
   moment of the same kind reaches them (their goal, their wicket, the result) goes as their player's;
   and one the other side already said in an earlier push of the game (a source's events and its players'
@@ -86,11 +89,18 @@ class Item:
 
 @dataclass
 class Watch:
-    """A game a fan follows by itself (matches.py): their level for it, and when the follow lapsed (the game
-    ended), after which its moments aren't theirs."""
+    """A game a fan follows by itself (matches.py), or a team in (teams.py): their level for it, when the follow
+    lapsed (the game ended), after which its moments aren't theirs, and the teams in it they follow, by their
+    tags (teams.tag): a moment from one team's side (its result) is for that team's fans."""
 
     level: str
     until: datetime | None = None
+    teams: frozenset[str] = frozenset()
+
+
+def sided(item: Item) -> frozenset[str]:
+    """The teams a game's own moment is told from the side of (its about's team tags: teams.TAG)."""
+    return frozenset(a for a in item.about if a.startswith("team:"))
 
 
 @dataclass
@@ -138,6 +148,8 @@ def level_of(item: Item, levels: dict[int, str], games: dict[int, Watch]) -> str
     watch = games.get(item.event_id) if item.event_id is not None else None
     if watch is None or (watch.until is not None and item.created_at > watch.until):
         return None
+    if (sides := sided(item)) and not sides & watch.teams:
+        return None  # the other side's word for it
     return watch.level
 
 
@@ -180,6 +192,13 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
             # this fan was never sent.
             continue
         kept.append((item, how))
+    # A game's result from the side of a team the fan follows in it goes in place of the game's own, and of
+    # the other side's, should they follow both.
+    by_side: dict[int | None, int] = {}
+    for item, _ in kept:
+        if item.player_id is None and item.kind == "final" and sided(item):
+            by_side.setdefault(item.event_id, item.id)
+    kept = [(i, h) for i, h in kept if not (i.player_id is None and i.kind == "final" and i.event_id in by_side and by_side[i.event_id] != i.id)]
     # A game's own moment that one of the fan's players' says too goes once, as their player's; and one the
     # other side said in an earlier push isn't said again.
     theirs = [i for i, _ in kept if i.player_id is not None]

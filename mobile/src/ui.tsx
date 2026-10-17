@@ -2,7 +2,7 @@
 // live badge, cards and lists, section heads, and the page itself.
 
 import { router } from 'expo-router'
-import { useEffect, useState, type ReactNode } from 'react'
+import { Component, useEffect, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
 import { BackIcon } from './icons'
 import { colour, dsp, font, RADIUS_CARD, t } from './theme'
@@ -226,6 +226,32 @@ export function Chip({ label, dot, pressed, on, onPress, bare }: { label: string
 }
 
 // ---------------------------------------------------------------- the page
+
+interface BoundaryProps { children: ReactNode; fallback?: ReactNode; resetKey?: unknown }
+
+/** Keeps one bad render (a board or a match page's part in a shape the app doesn't expect) from taking the
+ * whole screen with it, as the web's ErrorBoundary: what's inside shows its fallback instead. A new `resetKey`
+ * (a newer read) tries again. */
+export class ErrorBoundary extends Component<BoundaryProps, { failed: boolean; key: unknown }> {
+  state = { failed: false, key: this.props.resetKey }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  static getDerivedStateFromProps(props: BoundaryProps, state: { failed: boolean; key: unknown }) {
+    return props.resetKey !== state.key ? { failed: false, key: props.resetKey } : null
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback ?? <BlockError /> : this.props.children
+  }
+}
+
+/** A part of a page that couldn't be shown; the rest of the page still works. */
+export function BlockError() {
+  return <Card style={{ paddingVertical: 28, paddingHorizontal: 20 }}><Text accessibilityRole="alert" style={[t.small, t.muted, { textAlign: 'center' }]}>This part of the page couldn't be shown.</Text></Card>
+}
 
 /** No page at this address (the web's NotFound, main.tsx), and the way back to Today. */
 export function NotFound() {

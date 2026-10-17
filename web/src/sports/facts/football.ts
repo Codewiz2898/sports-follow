@@ -7,6 +7,13 @@ export interface FootballState { kind: 'football'; home: FootballSide; away: Foo
 export interface TimelineEntry { clock: string; kind: string; text: string; side: 0 | 1 | null }
 export interface FootballPage { timeline?: TimelineEntry[] }
 
+const KINDS: Record<string, string> = { GOAL: 'Goal', DISALLOWED: 'No goal', YELLOW: 'Yellow', RED: 'Red' }
+
+/** What a timeline entry's chip says: "Goal", "No goal" (ruled out), "Yellow", "Red"; another kind in lower case. */
+export function timelineKind(kind: string): string {
+  return KINDS[kind] ?? kind.toLowerCase()
+}
+
 export const football: SportFacts = {
   key: 'football',
   kinds: ['football'],

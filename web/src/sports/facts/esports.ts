@@ -25,6 +25,11 @@ export interface SeriesMap { n: number; status: string; winner?: string | null; 
 export interface StandingRow { place: number; name: string; points: number; kills: number; wins: number }
 export interface EsportsPage { maps?: SeriesMap[]; standings?: StandingRow[]; games?: { n: number; map?: string | null; winner?: string | null }[] }
 
+/** Who won each of a lobby's matches so far, in a line: "M1 (Erangel): GodLike · M2: Soul"; "" before any. */
+export function lobbyWinners(page: EsportsPage): string {
+  return (page.games ?? []).filter((g) => g.winner).map((g) => `M${g.n}${g.map ? ` (${g.map})` : ''}: ${g.winner}`).join(' · ')
+}
+
 /** A lobby's standings, not a two-team series. */
 export function isLobby(state: EsportsState | BattleRoyaleState): state is BattleRoyaleState {
   return state.kind === 'battle_royale'
