@@ -2,7 +2,7 @@ import { Text, View } from 'react-native'
 import { dotaLine, esports as facts, isLobby, lobbyRows, lobbyWinners, place, points, shortTeam, type BattleRoyaleState, type EsportsPage, type EsportsState, type EsportsTeam } from '../../../web/src/sports/facts/esports'
 import { colour, font, num, t } from '../theme'
 import { Card, ListCard, LiveBadge } from '../ui'
-import { Clock, INK, LineRow, Muted, Note, Score, Sides, Title, type Board, type BoardProps, type MatchPart, type MatchProps, type Palette } from './board'
+import { Clock, INK, LineRow, LOBBY_COLUMNS, Muted, Note, Score, Sides, Title, type Board, type BoardProps, type MatchPart, type MatchProps, type Palette } from './board'
 import { MatchSection } from './section'
 
 /** One chip a map or match, the winner's tag in it; the one being played is happening now (esports.css). */
@@ -23,9 +23,9 @@ function LobbyBoard({ state, clock, teams, compact, pal }: BoardProps<BattleRoya
     <View style={{ gap: 12 }}>
       {clock ? <Clock pal={pal}>{clock}</Clock> : null}
       <View>
-        <LineRow pal={pal} head wide={1} right cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
+        <LineRow pal={pal} head wide={1} right widths={LOBBY_COLUMNS} cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
         {lobbyRows(state, teams, compact).map(({ team: x, ours }) => (
-          <LineRow key={x.id} pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total wide={1} right bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+          <LineRow key={x.id} pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total wide={1} right widths={LOBBY_COLUMNS} bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
         ))}
       </View>
       {!compact && state.games.length > 0 ? (
@@ -85,9 +85,9 @@ function EsportsMatch({ page }: MatchProps<EsportsPage>) {
       <MatchSection title="Standings" note={`${page.standings.length} teams`}>
         <Card pad style={{ gap: 12 }}>
           <View>
-            <LineRow pal={INK} head wide={1} right cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
+            <LineRow pal={INK} head wide={1} right widths={LOBBY_COLUMNS} cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
             {page.standings.map((x) => (
-              <LineRow key={`${x.place}-${x.name}`} pal={INK} total wide={1} right bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+              <LineRow key={`${x.place}-${x.name}`} pal={INK} total wide={1} right widths={LOBBY_COLUMNS} bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
             ))}
           </View>
           {won ? <Text style={[t.small, t.muted]}>{won}</Text> : null}

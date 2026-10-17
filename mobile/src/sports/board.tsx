@@ -63,6 +63,9 @@ export type MatchPart = (props: MatchProps<never>) => ReactNode
 /** Ink on a paper card, for a line score drawn under a match page's band (a scorecard, a lobby's standings). */
 export const INK = { text: colour.text, muted: colour.muted }
 
+/** A lobby's columns (#, team, matches won, finishes, points), on its board and its match page. */
+export const LOBBY_COLUMNS = [38, null, 44, 38, 42]
+
 // ---------------------------------------------------------------- shared pieces
 
 export function Title({ children, pal, style, lines }: { children: ReactNode; pal: Palette; style?: StyleProp<TextStyle>; lines?: number }) {
@@ -98,13 +101,14 @@ export function Sides({ left, right, middle }: { left: ReactNode; right: ReactNo
 
 /** A row of a line score (.linescore): its cells, the `wide` one (the first) taking the room, it and those before
  * it to the left, the rest centred, or to the right (`right`: a scorecard's, a lobby's). `total` is the column in
- * bold: the last, or the one at that index. */
-export function LineRow({ cells, pal, head, total, first = 1, bold, wide = 0, right }: { cells: ReactNode[]; pal: Pick<Palette, 'text' | 'muted'>; head?: boolean; total?: boolean | number; first?: number; bold?: boolean[]; wide?: number; right?: boolean }) {
+ * bold: the last, or the one at that index. `widths`, each column's own (none for the wide one), the same for
+ * every row of a table, so its columns line up as a table's do whatever's in them. */
+export function LineRow({ cells, pal, head, total, first = 1, bold, wide = 0, right, widths }: { cells: ReactNode[]; pal: Pick<Palette, 'text' | 'muted'>; head?: boolean; total?: boolean | number; first?: number; bold?: boolean[]; wide?: number; right?: boolean; widths?: (number | null)[] }) {
   const strong = total === true ? cells.length - 1 : typeof total === 'number' ? total : -1
   return (
     <View style={s.lineRow}>
       {cells.map((c, i) => (
-        <View key={i} style={i === wide ? { flex: first, minWidth: 0, paddingHorizontal: 6 } : { minWidth: 30, paddingHorizontal: 6, alignItems: i < wide ? 'flex-start' : right ? 'flex-end' : 'center' }}>
+        <View key={i} style={i === wide ? { flex: first, minWidth: 0, paddingHorizontal: 6 } : [widths?.[i] ? { width: widths[i] } : { minWidth: 30 }, { paddingHorizontal: 6, alignItems: i < wide ? 'flex-start' : right ? 'flex-end' : 'center' }]}>
           {typeof c === 'string' || typeof c === 'number' ? (
             <Text style={[head ? s.lineHead : s.lineCell, { color: i === strong || bold?.[i] ? pal.text : pal.muted }, i === strong && { fontFamily: font[800] }]} numberOfLines={i === wide ? 2 : 1}>{c}</Text>
           ) : c}

@@ -5,6 +5,10 @@ import { Card } from '../ui'
 import { INK, LineRow, Note, Score, Title, type Board, type BoardProps, type MatchPart, type MatchProps } from './board'
 import { MatchSection } from './section'
 
+// A scorecard's columns, the same in every row: the name takes the room.
+const BATTING = [null, 42, 38, 34, 34, 58]
+const BOWLING = [null, 42, 38, 34, 50]
+
 function CricketBoard({ state, clock, compact, pal }: BoardProps<CricketState>) {
   if (!state.innings.length) {
     return (
@@ -44,9 +48,9 @@ function CricketMatch({ page }: MatchProps<CricketPage>) {
           <Card pad style={{ gap: 14 }}>
             {side.batting.length > 0 ? (
               <View>
-                <LineRow pal={INK} head right cells={['Batting', 'R', 'B', '4s', '6s', 'SR']} />
+                <LineRow pal={INK} head right widths={BATTING} cells={['Batting', 'R', 'B', '4s', '6s', 'SR']} />
                 {side.batting.map((x) => (
-                  <LineRow key={x.name} pal={INK} right total={1} cells={[
+                  <LineRow key={x.name} pal={INK} right total={1} widths={BATTING} cells={[
                     <View key="who"><Text style={t.title}>{x.name}</Text><Text style={[t.tiny, t.muted]}>{x.out || 'not out'}</Text></View>,
                     x.runs, x.balls, x.fours, x.sixes, x.strike_rate,
                   ]} />
@@ -55,9 +59,9 @@ function CricketMatch({ page }: MatchProps<CricketPage>) {
             ) : null}
             {side.bowling.length > 0 ? (
               <View>
-                <LineRow pal={INK} head right cells={['Bowling', 'O', 'R', 'W', 'Econ']} />
+                <LineRow pal={INK} head right widths={BOWLING} cells={['Bowling', 'O', 'R', 'W', 'Econ']} />
                 {side.bowling.map((x) => (
-                  <LineRow key={x.name} pal={INK} right total={3} cells={[<Text key="who" style={t.title}>{x.name}</Text>, x.overs, x.runs, x.wickets, x.economy]} />
+                  <LineRow key={x.name} pal={INK} right total={3} widths={BOWLING} cells={[<Text key="who" style={t.title}>{x.name}</Text>, x.overs, x.runs, x.wickets, x.economy]} />
                 ))}
               </View>
             ) : null}
