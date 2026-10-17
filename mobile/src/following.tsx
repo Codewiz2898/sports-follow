@@ -16,7 +16,7 @@ interface Following {
   cards: Card[]
   loaded: boolean
   failed: boolean // the follow list couldn't be loaded (yet): not the same as following nobody
-  reload: () => Promise<void>
+  reload: () => Promise<boolean> // true when the list came back changed (heard)
   progress: Record<number, string[]> // a page being built's progress lines (the stream's; none yet here)
   follow: (target: FollowTarget) => Promise<Card>
   unfollow: (playerId: number) => Promise<void>
@@ -28,7 +28,7 @@ interface Following {
   // the list has come; following one, or stopping, by its address after /match/; its level.
   matches: FollowedMatch[]
   matchesLoaded: boolean
-  reloadMatches: () => Promise<void>
+  reloadMatches: () => Promise<boolean>
   followMatch: (address: string, on: boolean, eventId?: number | null) => Promise<void> // stopped by its event where known
   setMatchAlerts: (eventId: number, level: AlertLevel) => Promise<void>
 }
@@ -64,40 +64,48 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
 
   // The list as the server has it now: a player unfollowed elsewhere (or a whole account signed out) goes.
-  const reload = useCallback(async () => {
+  // True when it came back changed (heard).
+  const reload = useCallback(async (): Promise<boolean> => {
     const before = writes.current
     const asked = fan.current
     try {
       const { players } = await api.following()
-      if (writes.current !== before || fan.current !== asked) return
+      if (writes.current !== before || fan.current !== asked) return false
       setCards(players)
       setLoaded(true)
       setFailed(false)
       const now = players.map((c) => `${c.player_id}:${c.version}`).sort().join(',')
-      if (now !== versions.current) { versions.current = now; setHeard((n) => n + 1) }
+      if (now === versions.current) return false
+      versions.current = now
+      setHeard((n) => n + 1)
+      return true
     } catch {
       if (fan.current === asked) setFailed(true)
+      return false
     }
   }, [])
 
   // The games followed by themselves, as the server has them now. A followed game whose status or score moved
   // on since the last read (it started, a goal, a map, it ended) counts as the list changed (heard): the
   // activity list looks for its moments then, as the web's stream brings each. Not every new board, not a game
-  // just followed or dropped (the activity list loads again for those), nor the first read.
-  const reloadMatches = useCallback(async () => {
+  // just followed or dropped (the activity list loads again for those), nor the first read. True when heard.
+  const reloadMatches = useCallback(async (): Promise<boolean> => {
     const before = matchWrites.current.seen
     const busy = matchWrites.current.busy > 0
     const asked = fan.current
+    let moved = false
     try {
       const r = await api.matches()
-      if (fan.current !== asked || busy || matchWrites.current.seen !== before) return
+      if (fan.current !== asked || busy || matchWrites.current.seen !== before) return false
       setMatches(r.matches)
       const was = games.current
       const now = new Map<number, string>(r.matches.map((m) => [m.event_id, `${m.status}:${m.live?.score ?? ''}`]))
       games.current = now
-      if (was && [...now].some(([id, said]) => was.has(id) && was.get(id) !== said)) setHeard((n) => n + 1)
+      moved = Boolean(was && [...now].some(([id, said]) => was.has(id) && was.get(id) !== said))
+      if (moved) setHeard((n) => n + 1)
     } catch { /* the last list stays */ }
     if (fan.current === asked) setMatchesLoaded(true)
+    return moved
   }, [])
 
   // Every 30 s while the app is in front; at once on coming back to it. A sign-in or out (a new epoch) is
@@ -110,16 +118,20 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     setMatchesLoaded(false)
     versions.current = ''
     games.current = null
-    const both = () => { reload(); reloadMatches() }
+    const both = () => Promise.all([reload(), reloadMatches()])
     const start = () => {
       clearInterval(timer.current)
       timer.current = setInterval(both, EVERY_MS)
     }
     both()
     start()
-    // Back in front: what came while it was away (a notification in the tray) may be in the activity list.
+    // Back in front: what came while it was away (a notification in the tray) may be in the activity list,
+    // once (unless the lists coming back changed have said so already).
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') { both(); start(); setHeard((n) => n + 1) } else clearInterval(timer.current)
+      if (state !== 'active') { clearInterval(timer.current); return }
+      start()
+      const asked = fan.current
+      both().then((said) => { if (!said.some(Boolean) && fan.current === asked) setHeard((n) => n + 1) })
     })
     return () => { clearInterval(timer.current); sub.remove() }
   }, [reload, reloadMatches, epoch])
