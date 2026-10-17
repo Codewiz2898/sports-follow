@@ -52,7 +52,7 @@ do_deploy() {
   say "deploying $(git log -1 --format='%h %s' "$sha")${was:+ (live now: ${was:0:7})}"
 
   git checkout --quiet --detach "$sha"
-  c build --quiet
+  SPORTS_FOLLOW_COMMIT="$sha" c build --quiet   # the image knows its commit: /api/health says it
   docker tag sports-follow:latest "sports-follow:$sha"
   # Migrations on their own first: `up` would stop the old API and worker before running them, so a
   # failed migration would leave nothing running. This way the old code keeps serving.

@@ -50,7 +50,7 @@ a fan's id or email, or a client's address, in an issue, PR, commit or chat summ
 | `psql_ro`, read-only | `psql_ro() { c exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U sports sports_follow "$@"; }` | `psql_ro() { docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on' sports-follow-postgres psql -U sports sports_follow "$@"; }` |
 | Redis | `c exec -T redis redis-cli` | `docker exec -i sports-follow-redis redis-cli` |
 | A command of the app's | `c exec -T worker python -m sports_follow.<module> …` | `.venv/bin/python -m sports_follow.<module> …` |
-| What's deployed | `deploy/deploy.sh status`; the Deploy workflow's runs (`gh run list --workflow deploy.yml`) | `git log -1` |
+| What's deployed | `deploy/deploy.sh status`, or from anywhere `curl -s https://stann.in/api/health` (its `commit`); the Deploy workflow's runs (`gh run list --workflow deploy.yml`), and one waiting for Bharath's approval (`--status waiting`) | `git log -1` |
 
 Define `psql_ro` as a shell function, as written (a variable loses the quotes, and with them the
 read-only setting), and feed it SQL on stdin: `psql_ro <<'SQL' … SQL`. The database is the last word of

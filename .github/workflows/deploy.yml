@@ -3,9 +3,16 @@
 # https://<domain>/api/health from outside. The deploy key can run only deploy.sh (deploy/server-setup.sh,
 # DEPLOY_KEY), and deploy.sh deploys only commits on main. Setup and rollback: deploy/README.md.
 #
-# By hand for now (Actions → Deploy → Run workflow). Once trusted, uncomment workflow_run to deploy every
-# commit on main that CI passes. Never on pull_request: a fork's PR must not reach the deploy key.
+# Every commit on main that CI passes starts a run, which waits at the production environment until you
+# approve it (its required reviewer; GitHub's phone app shows the Approve button). Only the newest one
+# waits: a newer commit's run cancels the older waiting ones, and a run for a commit that a newer one has
+# replaced stops before it waits. With no required reviewer on production, nothing deploys by itself.
+# By hand too (Actions → Deploy → Run workflow), which also waits for approval. Never on pull_request: a
+# fork's PR must not reach the deploy key.
 name: Deploy
+run-name: >-
+  ${{ inputs.action == 'rollback' && 'Roll back to the previous deploy' ||
+      format('Deploy {0}', github.event.workflow_run.head_sha || github.sha) }}
 
 on:
   workflow_dispatch:
@@ -15,29 +22,118 @@ on:
         type: choice
         options: [deploy, rollback]
         default: deploy
-  # workflow_run:
-  #   workflows: [CI]
-  #   types: [completed]
-  #   branches: [main]
-
-concurrency:
-  group: production
-  cancel-in-progress: false
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
   actions: read   # to see CI's runs
 
 jobs:
-  deploy:
+  newest:
+    name: The newest commit CI passed
     # After CI: only a push to main that passed (a fork's PR can carry a branch named main too).
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write        # to cancel the waiting deploys this one replaces
+      deployments: read     # the summary: the last deploy
+      pull-requests: read   # the summary: what each pull request brings
+    outputs:
+      go: ${{ steps.newest.outputs.go }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ACTION: ${{ inputs.action || 'deploy' }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Still the newest, and production waits for approval
+        id: newest
+        run: |
+          go=true
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            # Without a required reviewer the deploy job wouldn't wait, so a merge would go live unseen.
+            reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
+              --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+            if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
+              echo "::error::The production environment has no required reviewer, so ${SHA:0:7} won't deploy by itself. Add one (deploy/README.md, Deploying), or run Deploy by hand."
+              exit 1
+            fi
+            # CI on main runs one push at a time (ci.yml's concurrency), so CI passes in order, but a re-run
+            # can pass an older commit late.
+            newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // empty')
+            if [ -n "$newest" ] && [ "$newest" != "$SHA" ] &&
+                [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$newest" --jq .status)" = ahead ]; then
+              echo "::notice::${newest:0:7} came after ${SHA:0:7} and passed CI too: its own Deploy run is the one to approve."
+              go=false
+            fi
+          fi
+          echo "go=$go" >>"$GITHUB_OUTPUT"
+      # A run waiting for approval holds the production concurrency group, so the next one would queue
+      # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
+      # a deploy that's running isn't stopped: each run is read again just before its cancel and skipped
+      # unless it's still waiting. GitHub has no "cancel only if waiting", so an approval in that second
+      # could still be cancelled; a failed cancel (rejected meanwhile) only warns.
+      - name: Cancel the waiting deploys this one replaces
+        id: replaced
+        if: steps.newest.outputs.go == 'true'
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?status=waiting&per_page=100" \
+            --jq ".workflow_runs[] | select(.event == \"workflow_run\" and .id != $GITHUB_RUN_ID) | \"\(.id) \(.display_title)\"")
+          count=0
+          while read -r id title; do
+            [ -n "$id" ] || continue
+            status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status || true)
+            if [ "$status" != waiting ]; then echo "\"$title\" (run $id) is $status now: left alone"; continue; fi
+            echo "Cancelling \"$title\" (run $id), which was waiting for approval"
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" --silent; then
+              count=$((count + 1))
+            else
+              echo "::warning::Couldn't cancel run $id; it may have been approved or rejected just now"
+            fi
+          done <<<"$runs"
+          echo "count=$count" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.newest.outputs.go == 'true' && env.ACTION == 'deploy'
+        with:
+          fetch-depth: 0       # the commits since the live one
+          filter: blob:none    # their messages, not their files
+      # On this run's page, above the Review deployments button. The first deploy to wait since the last
+      # one went out is also sent now; one that replaces a waiting deploy comes with the morning's summary
+      # (deploy-summary.yml). A summary that fails never stops the deploy.
+      - name: What it brings
+        if: steps.newest.outputs.go == 'true' && env.ACTION == 'deploy'
+        continue-on-error: true
+        env:
+          REPLACED: ${{ steps.replaced.outputs.count }}
+          APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          DEPLOY_SUMMARY_TO: ${{ secrets.DEPLOY_SUMMARY_TO }}
+          DEPLOY_SUMMARY_URL: ${{ secrets.DEPLOY_SUMMARY_URL }}
+        run: |
+          send=()
+          [ "$GITHUB_EVENT_NAME" != workflow_run ] || [ "$REPLACED" != 0 ] || send=(--send)
+          deploy/deploy-summary.sh "${send[@]}" "$SHA" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  deploy:
+    needs: newest
+    if: needs.newest.outputs.go == 'true'
+    # One deploy at a time, and one run queued behind it. On the job, not the workflow, so the newest job
+    # above can run (and cancel the waiting ones) while another run holds the group.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # The secrets live in this environment, which only main may use (Settings → Environments → production).
+    # The secrets live in this environment, which only main may use and which waits for your approval
+    # (Settings → Environments → production).
     environment:
       name: production
       url: ${{ vars.APP_URL }}
@@ -74,13 +170,25 @@ jobs:
           [ "$ACTION" != rollback ] || command=rollback
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
             "deploy@$DEPLOY_HOST" "$command"
+      # The site says which commit it runs (/api/health's commit): after a deploy, the one approved.
       - name: Health from outside
         env:
           APP_URL: ${{ vars.APP_URL }}
         run: |
           [ -n "$APP_URL" ] || { echo "::warning::APP_URL isn't set, so the outside check was skipped"; exit 0; }
           for _ in $(seq 12); do
-            if out=$(curl -fsS -m 10 "$APP_URL/api/health"); then echo "$out"; exit 0; fi
+            if out=$(curl -fsS -m 10 "$APP_URL/api/health"); then
+              echo "$out"
+              live=$(jq -r '.commit // empty' <<<"$out")
+              [ "$ACTION" = deploy ] || exit 0
+              if [ -z "$live" ]; then
+                echo "::notice::The site doesn't say which commit it runs yet (an image built before /api/health had it)."
+              elif [ "$live" != "$SHA" ]; then
+                echo "::error::$APP_URL says ${live:0:7} is live, not ${SHA:0:7}, which this run deployed"
+                exit 1
+              fi
+              exit 0
+            fi
             sleep 5
           done
           echo "::error::$APP_URL/api/health didn't answer, though the server found the API healthy inside: look at Caddy and DNS"

@@ -22,6 +22,9 @@ APP_NAME: str = json.loads(Path(__file__).with_name("app.json").read_text(encodi
 LOG_FORMAT = os.environ.get("SPORTS_FOLLOW_LOG_FORMAT", "text").strip().lower()
 LOG_LEVEL = os.environ.get("SPORTS_FOLLOW_LOG_LEVEL", "INFO").strip().upper()
 
+# The commit the image was built from (deploy.sh, through the Dockerfile): /api/health says it, so the
+# deploy workflow and its summary know what's live. Empty outside a deployed image.
+COMMIT = os.environ.get("SPORTS_FOLLOW_COMMIT", "").strip()
 # The app's public address: compose sets it from DOMAIN (https://<domain>). Empty in development.
 SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
 # Where fans write about their data: the privacy page shows it (and has no Questions part without it),
