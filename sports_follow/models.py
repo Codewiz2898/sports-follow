@@ -237,12 +237,49 @@ class Photo(Base):
 
 
 class Team(Base):
+    """A team fans can follow (teams.py, BHA-77): one source's team, by that source's id for it, imported weekly
+    from the source's list (Adapter.teams) for the sports whose athletes turn out for teams, or added by an
+    operator (teams add). Removing one (teams remove) takes its follows, its games' links and its results with
+    it, and leaves a TeamOverride, so no import writes it again."""
+
     __tablename__ = "team"
+    __table_args__ = (UniqueConstraint("system", "external_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
+    sport: Mapped[str] = mapped_column(String(60))  # its Sport's key: "football", "valorant"
+    competitions: Mapped[list] = mapped_column(JSONB, default=list)  # what it plays in: ["Premier League"]
+    system: Mapped[str] = mapped_column(String(60))  # its source: "sportmonks_football"
+    external_id: Mapped[str] = mapped_column(String(60))  # its id there (SourceTeam.team_id)
+    short: Mapped[str] = mapped_column(String(20), default="")  # the source's code for it: "ARS"
+    country: Mapped[str | None] = mapped_column(String(120))
+    tier: Mapped[int] = mapped_column(Integer, default=0)  # how big the source makes it (SourceTeam.tier): search's tie-break
+    # " arsenal | ars" folded to plain ASCII words, as an athlete's: trigram-indexed for search as you type.
+    search_text: Mapped[str] = mapped_column(Text, default="")
+    # What its page shows (teams.card): its games to come and its last results, from its side, and its squad.
+    card: Mapped[dict] = mapped_column(JSONB, default=dict)
+    health: Mapped[dict] = mapped_column(JSONB, default=dict)  # its refreshes: last_ok, failures, checked_at, error
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # its games last read
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the last import that listed it
+    created_at: Mapped[datetime] = _now()
+
+
+class TeamOverride(Base):
+    """What an operator decided about one source's team (teams.py), which every import respects. keep: added by
+    hand, or pinned, so an import never drops it. remove: taken out, with its follows; an import never writes it
+    again, and search leaves it out."""
+
+    __tablename__ = "team_override"
+    __table_args__ = (UniqueConstraint("system", "external_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system: Mapped[str] = mapped_column(String(60))
+    external_id: Mapped[str] = mapped_column(String(60))
+    action: Mapped[str] = mapped_column(String(10))  # keep | remove
+    name: Mapped[str] = mapped_column(String(200))  # which team, as it was called then
     sport: Mapped[str] = mapped_column(String(60))
-    competitions: Mapped[list] = mapped_column(JSONB, default=list)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
 
 
 class Membership(Base):
@@ -304,6 +341,20 @@ class EventPlayer(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True, index=True)
     # Once the event is over: the result from this player's side ({title, result, date,
     # player_contribution, competition, source_url, scorecard}), kept for their results history.
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class EventTeam(Base):
+    """Which followed teams play in an event (teams.refresh), as event_player is for players: its polls reach
+    their fans as a followed game's do (matches.py), and its result from each one's side is kept for the team's
+    page."""
+
+    __tablename__ = "event_team"
+
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"), primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id", ondelete="CASCADE"), primary_key=True, index=True)
+    # Once the event is over: the result from this team's side ({title, result, date, start_utc, competition,
+    # event_id, match}), for its last results.
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
@@ -400,6 +451,21 @@ class Follow(Base):
     fan_id: Mapped[str] = mapped_column(String(64), index=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
     alert_rules: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = _now()
+
+
+class TeamFollow(Base):
+    """A team a fan follows (teams.py, BHA-77): each of its games is followed as a game followed by itself is
+    (matches.py), with its moments from both sides by the fan's level, and its result told from the team's side.
+    A game of it they mute stays muted; unfollowing the team stops all of them."""
+
+    __tablename__ = "team_follow"
+    __table_args__ = (UniqueConstraint("fan_id", "team_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id", ondelete="CASCADE"), index=True)
+    alert_rules: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"level": ...}, as a player follow's
     created_at: Mapped[datetime] = _now()
 
 

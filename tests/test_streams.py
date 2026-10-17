@@ -32,13 +32,13 @@ class Rows(list):
 
 class Db:
     """Answers the few queries the async routes make; the statements themselves aren't checked, but for the
-    games the fan follows by themselves, of which GAMES are."""
+    games the fan follows by themselves, of which GAMES are, and the teams they follow, none."""
 
     games: list[int] = []
 
     def execute(self, stmt):
-        if "match_follow" in str(stmt):
-            return Rows([])  # the followed games' rows: the stream's first frame lists none
+        if "match_follow" in str(stmt) or "team_follow" in str(stmt):
+            return Rows([])  # the followed games' rows: the stream's first frame lists none; and no team
         return Rows(FOLLOWS if stmt.get_final_froms() else [(1,)])  # the fan's follows, or health's select(1)
 
     def scalars(self, stmt):
@@ -167,7 +167,7 @@ def test_async_routes_use_the_database_off_the_event_loop(api):
     assert [p["alerts"] for p in asyncio.run(server.following(fan="fan"))["players"]] == ["key", "off"]
     card = asyncio.run(server.card(1, Request(), Response(), fan="fan"))
     assert (card["following"], card["alerts"]) == (True, "off")
-    assert api.opened == ["thread"] * 3 and api.open == 0
+    assert api.opened == ["thread"] * 4 and api.open == 0  # health's, the follows' and the teams', the card's
 
 
 def test_no_async_route_takes_a_request_session():

@@ -137,14 +137,24 @@ class LiveGame:
 
 @dataclass
 class SourceTeam:
-    """A team as a source knows it, with its roster today (an adapter's team() and find_teams()): a campaign
-    page follows every player on it in one tap (campaigns.py)."""
+    """A team as a source knows it (an adapter's teams(), team() and find_teams()): the team registry's row of it
+    (teams.py), which fans follow, and with its roster today a campaign page follows every player on it in one
+    tap (campaigns.py)."""
 
     system: str  # the source's system, as PlayerRef.system
     team_id: str  # the source's id for the team
     name: str  # "T1"
     game: str | None = None  # where a sport's sources cover several games (esports), its game as fans name it ("League of Legends")
     players: list[PlayerRef] = field(default_factory=list)  # who plays for it now, followable by the source's own ids
+    # The sport it plays (sports.Sport.key), from a source of several (an esports team's game: "valorant"); "" for
+    # the source's one.
+    sport: str = ""
+    short: str = ""  # the source's short name or code for it, which fans type too: "ARS", "LAL", "MI"
+    competition: str = ""  # what it plays in, as a search result's line says it: "Premier League", "NBA", "International"
+    country: str = ""  # where it's from, where the source says: "England", "India"
+    # How big a team the source makes it, where it rates them (the tier of its tournaments; a top league's), on
+    # Fixture.tier's scale: 3 a world event's, 2 a top league's, 1 a smaller one's; 0 unrated. Search's tie-break.
+    tier: int = 0
 
 
 @dataclass
@@ -260,7 +270,16 @@ class Adapter:
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
     the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
     team(team_id) -> SourceTeam | None and find_teams(name) -> [SourceTeam], with team_id_pattern the shape
-    of its team ids: a campaign page follows a whole team through them (campaigns.py)."""
+    of its team ids: a campaign page follows a whole team through them (campaigns.py).
+
+    A source fans can follow teams from (teams.py) has, for its sports whose athletes turn out for teams
+    (Sport.team): teams() -> [SourceTeam], every team it covers in its sports that run (running()), players
+    left empty, read weekly for the team registry in a few requests; and team_fixtures(team_id) -> [Fixture],
+    one team's games, finished and to come, over the window fixtures() reads for a player of theirs, each with
+    the teams' ids (Fixture.team_ids), the follow's refresh. Its team(team_id) gives the team page its squad
+    (players), and its result_label(fixture, [team_id]) says each result from the team's side. One whose team ids
+    say more than its boards do (ESPN basketball's carry the league) has board_id(team_id) -> str, the id its
+    boards (Snapshot.state) give that team, so a result is told from the team's side (Sport.side_final)."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     # The sports it serves (sports.Sport.key): ("cricket",); a source of several esports games, each game's.

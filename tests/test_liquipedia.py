@@ -17,7 +17,7 @@ from sports_follow.adapters import liquipedia, liquipedia_esports as lp
 from sports_follow.adapters import KNOWN, budget
 from sports_follow.adapters.base import Snapshot
 from sports_follow.sports import esports
-from sports_follow.models import Athlete, Event, EventState, MatchFollow, Player, PlayerLine, SourceBinding
+from sports_follow.models import Athlete, Event, EventState, EventTeam, MatchFollow, Player, PlayerLine, SourceBinding
 
 from .test_structured import FakeSource, lane, redis  # noqa: F401 (redis: the fixture)
 
@@ -234,11 +234,11 @@ def test_a_player_left_out_of_the_lobby_hears_nothing():
 
 class PollSession:
     """The rows apply_poll reads and writes for one followed player in one lobby, kept in memory. Nobody
-    follows the lobby by itself (no match follow)."""
+    follows the lobby by itself (no match follow), nor a team in it (no team's game)."""
 
     def __init__(self, event: Event, player: Player, team_ids: list[str]):
         self.event, self.player, self.team_ids = event, player, team_ids
-        self.rows: dict[type, list] = {EventState: [], PlayerLine: [], MatchFollow: []}
+        self.rows: dict[type, list] = {EventState: [], PlayerLine: [], MatchFollow: [], EventTeam: []}
 
     def __enter__(self):
         return self

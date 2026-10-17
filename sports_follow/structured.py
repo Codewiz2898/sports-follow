@@ -359,7 +359,7 @@ def _refresh(player_id: int) -> None:
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
     ahead = upcoming(fixtures, now)
     # A game the schedule says is over but that is still armed or live here, the poller didn't see finish
-    # (it was between sessions, or the source's live feed was failing): _finish gives it a last poll.
+    # (it was between sessions, or the source's live feed was failing): finish gives it a last poll.
     with session() as db:
         unfinished = {key: event_id for event_id, key in db.execute(select(Event.id, Event.key).where(Event.key.in_([f"{adapter.system}:{f.source_id}" for f in finals_all]), Event.status.in_(("armed", "live")))).all()}
     recent: list[tuple[Fixture, Snapshot | None]] = []
@@ -372,7 +372,7 @@ def _refresh(player_id: int) -> None:
             recent.append((f, None))
     stats, note = adapter.stats(ref, [(f, s) for f, s in recent if s])
     snaps = {f.source_id: snap for f, snap in recent if snap}
-    _finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})
+    finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})
 
     with session() as db:
         player = db.get(Player, player_id)
@@ -429,7 +429,7 @@ def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale)][:UPCOMING_LIMIT]
 
 
-def _finish(unfinished: dict[int, Snapshot | None]) -> None:
+def finish(unfinished: dict[int, Snapshot | None]) -> None:
     """Games the schedule says are over that the poller never saw finish, with each one's scorecard read
     afresh (None if it couldn't be). A final one goes the poller's way (apply_poll), so its cards leave
     LIVE and the result is told; the rest are closed, and their cards stop showing them live."""
@@ -501,12 +501,20 @@ def next_status(current: str | None, from_schedule: str, moved_later: bool = Fal
 
 
 def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> Event:
+    event = upsert_game(db, adapter, player.sport, f)
+    db.execute(insert(EventPlayer).values(event_id=event.id, player_id=player.id).on_conflict_do_nothing())
+    return event
+
+
+def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
+    """A fixture's event, made or brought up to date from it, by its source's key for it: a followed player's
+    game (upsert_event), or a followed team's (teams.refresh). `sport` is the sport as an event names it ("Football")."""
     key = f"{adapter.system}:{f.source_id}"
     event = db.scalar(select(Event).where(Event.key == key))
     if event is None:
         # A teammate's refresh may be adding the same game at this moment: the first insert makes the
         # row, the other waits for it to commit and reads it back instead of failing on the key.
-        db.execute(insert(Event).values(key=key, sport=player.sport, title=f.title, status=f.status).on_conflict_do_nothing(index_elements=[Event.key]))
+        db.execute(insert(Event).values(key=key, sport=sport, title=f.title, status=f.status).on_conflict_do_nothing(index_elements=[Event.key]))
         event = db.scalars(select(Event).where(Event.key == key)).one()
     event.title = f.title
     event.competition = f.competition
@@ -515,10 +523,9 @@ def upsert_event(db: Session, adapter: Adapter, player: Player, f: Fixture) -> E
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    later = f.start_utc is not None and f.start_utc > _now() + arm_before(event.sport or player.sport) + timedelta(hours=1)
+    later = f.start_utc is not None and f.start_utc > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
     event.status = next_status(event.status, f.status, moved_later=later)
     db.flush()
-    db.execute(insert(EventPlayer).values(event_id=event.id, player_id=player.id).on_conflict_do_nothing())
     return event
 
 
@@ -946,7 +953,10 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     is recent (_polled's gap): a copy from before a gap (nobody followed the game a while, though its players'
     polls went on) would tell what happened meanwhile as new. A first look (no recent copy, or polling had a
     gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids, and this
-    poll as Redis is to keep it (its key, value and seconds), which apply_poll writes once they're committed."""
+    poll as Redis is to keep it (its key, value and seconds), which apply_poll writes once they're committed. A
+    game a fan follows a team in (teams.py) tells its result from that team's side too, for them."""
+    from . import teams  # a team's games are followed games (teams reads cards and boards from here)
+
     names = {**_roster_names(event), **snap.names, **{xid: people[pid][0] for pid, xid in watchers if pid in people}}
     now = sports.Played(snap.status, snap.state, snap.score_label, snap.clock_label, snap.moments,
                         {a: {"headline": ln.headline, "stats": ln.stats} for a, ln in snap.lines.items()}, names)
@@ -961,6 +971,9 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     rules = sports.of_state(snap.state)
     name = rules.matchup(snap.state) or event.title
     found = rules.game_moments(name, before, now, notify.told_game(db, event.id) if before else [])
+    if any(f.kind == "final" for f in found):
+        # And from the side of each team fans follow in it, for them (teams.py): "Arsenal won 2–1 v Chelsea".
+        found += teams.side_finals(db, event, rules, snap.state, snap.score_label, snap.clock_label)
     for f in found:
         f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))

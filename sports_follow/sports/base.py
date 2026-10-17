@@ -159,6 +159,13 @@ def undecided(sides: list[str]) -> bool:
     return bool(sides) and all(_UNDECIDED.fullmatch(s or "") for s in sides)
 
 
+def sides(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """A game's two sides as its board has them ({id, name, score, winner}): home and away (football,
+    basketball), or its two teams (cricket, an esports series); [] for a board of more or fewer (a lobby)."""
+    pair: list[Any] = [state.get("home"), state.get("away")] if state.get("home") or state.get("away") else list(state.get("teams") or [])
+    return pair if len(pair) == 2 and all(isinstance(s, dict) for s in pair) else []
+
+
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
     for s in (line or {}).get("stats") or []:
         if s.get("label") == label:
@@ -217,6 +224,9 @@ class Sport:
     # all of them at once ("esports": each esports game is a sport of its own); "" for a sport on its own.
     group = ""
     team = False  # its athletes turn out for teams: clubs, countries
+    # Fans can follow its teams (teams.py), where a running source of it lists them (Adapter.teams): a club, a
+    # country's side, an esports team. Not a sport whose sides are one player (tennis, chess).
+    follow_teams = False
     # Who counts as one of its athletes on Wikidata (anyone with any of these ids), and the ids kept,
     # keyed by the source that reads each one where one does ("espn_cricket"), or the database's name.
     wikidata: dict[str, str] = {}
@@ -442,6 +452,30 @@ class Sport:
         result line, with the final score under it."""
         said = self.verdict(now.state, now.score, now.clock) or self.result_text(now.score, now.clock) or "full time"
         return Found("final", "key", f"{name}: {said}", now.score if now.score != said else now.clock, "", 80, EVERYONE)
+
+    def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
+        """A finished game's result from one side's, by its id in the source, for the fans who follow that team
+        (teams.py): "Arsenal won 2–1 v Chelsea", "Chelsea lost 1–2 v Arsenal", "Arsenal drew 1–1 v Chelsea". By
+        default from a board of two sides (sides()): the one the source marks the winner, else the more on the
+        board. "" where the board doesn't say which side is the team's, or who won: the game's own result is
+        told instead (game_final)."""
+        pair = sides(state)
+        ours = next((s for s in pair if str(s.get("id") or "") == team_id), None)
+        if ours is None:
+            return ""
+        theirs = pair[1 - pair.index(ours)]
+        name, other = ours.get("name"), theirs.get("name")
+        mine, against = str(ours.get("score") or ""), str(theirs.get("score") or "")
+        if not (name and other):
+            return ""
+        if ours.get("winner") or theirs.get("winner"):
+            word = "won" if ours.get("winner") else "lost"
+        elif mine.isdigit() and against.isdigit():
+            word = "won" if int(mine) > int(against) else "lost" if int(mine) < int(against) else "drew"
+        else:
+            return ""
+        tally = f" {mine}–{against}" if mine and against else ""
+        return f"{name} {word}{tally} v {other}"
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """By default, every named player's moments as the player rules find them (during: a fifty, out, a

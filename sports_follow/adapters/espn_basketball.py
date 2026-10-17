@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
 from .. import naming
 from . import espn
-from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot
+from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, SourceTeam
 
 SPORT_UID = "s:40~"
 # ESPN's league ids (from search uids) -> the slug its URLs use.
 LEAGUES = {"46": "nba", "59": "wnba", "41": "mens-college-basketball", "54": "womens-college-basketball"}
+# The leagues whose teams fans can follow (teams): the pros. College basketball's are hundreds.
+TEAM_LEAGUES = ("nba", "wnba")
+# ESPN numbers each league's teams apart (the Cavaliers and the Fever are both 5), so a team's id here carries its
+# league: "nba:5", "wnba:5". A team's games name both sides so (team_fixtures); a player's games, every result and
+# every board keep ESPN's own numbers.
+TEAM_ID = re.compile(rf"(?:{'|'.join(TEAM_LEAGUES)}):[0-9]{{1,12}}")
+# A team's schedule comes a phase at a time, the plain one being the phase on now (preseason in October).
+_PHASES = ("", "?seasontype=2", "?seasontype=3")
 
 _STATUS = {"pre": "scheduled", "in": "live", "post": "final"}
 
@@ -160,12 +169,52 @@ def parse_season_stats(data: dict[str, Any]) -> tuple[list[dict[str, str]], str]
     return stats, f"{season} {kind} averages per game".strip()
 
 
+def parse_teams(data: dict[str, Any], league: str, system: str = "espn_basketball") -> list[SourceTeam]:
+    """A league's teams (…/basketball/{league}/teams) -> the team registry's rows of them, each by an id that carries
+    its league (TEAM_ID). An all-star side, or one that no longer plays, isn't a team to follow."""
+    out = []
+    for sport in data.get("sports") or []:
+        for listed in sport.get("leagues") or []:
+            for entry in listed.get("teams") or []:
+                t = entry.get("team") or {}
+                name = (t.get("displayName") or "").strip()
+                if t.get("id") and name and not t.get("isAllStar") and t.get("isActive") is not False:
+                    out.append(SourceTeam(system=system, team_id=f"{league}:{t['id']}", name=name, short=t.get("abbreviation") or "", competition=league.upper()))
+    return out
+
+
+def _born(athlete: dict[str, Any]) -> str | None:
+    """A roster's birth date (ISO, at midnight on the US west coast: "1984-12-30T08:00Z"), or an athlete record's."""
+    day = str(athlete.get("dateOfBirth") or "")[:10]
+    return day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else espn.birth_date(athlete)
+
+
+def parse_roster(data: dict[str, Any], league: str, system: str = "espn_basketball") -> SourceTeam | None:
+    """A team's roster (…/basketball/{league}/teams/{id}/roster) -> the team (its id as TEAM_ID has it) with its
+    players, each followable by their ESPN id in that league, as a search result is. None without the team."""
+    t = data.get("team") or {}
+    name = (t.get("displayName") or "").strip()
+    if not t.get("id") or not name:
+        return None
+    number = str(t["id"])
+    players: dict[str, PlayerRef] = {}
+    for listed in data.get("athletes") or []:
+        for a in listed.get("items") or [listed]:  # flat for basketball; grouped by position where a sport's are
+            who = (a.get("displayName") or a.get("fullName") or "").strip()
+            if a.get("id") and who:
+                players.setdefault(str(a["id"]), PlayerRef(system, str(a["id"]), who, [number], [name], espn.profile_link(a), league=league, born=_born(a)))
+    return SourceTeam(system=system, team_id=f"{league}:{number}", name=name, players=list(players.values()), short=t.get("abbreviation") or "", competition=league.upper())
+
+
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
+    """ "Won 101–99" / "Lost 85–102" from the player's team's side, else the plain score. A followed team's id
+    carries its league (TEAM_ID, "wnba:5"): ESPN's number in it is the side's."""
     r = fixture.result
     if not r:
         return ""
     home, away = r["home"], r["away"]
-    ours, theirs = (home, away) if home["id"] in team_ids else (away, home) if away["id"] in team_ids else (None, None)
+    numbers = [t.rpartition(":")[2] for t in team_ids]
+    ours, theirs = (home, away) if home["id"] in numbers else (away, home) if away["id"] in numbers else (None, None)
     if ours is None:
         return f"{away['name']} {away['score']}–{home['score']} {home['name']}"
     return f"{'Won' if ours.get('winner') else 'Lost'} {ours['score']}–{theirs['score']}"
@@ -206,19 +255,66 @@ class EspnBasketball(espn.EspnAdapter, Adapter):
             return PlayerRef(self.system, str(athlete["id"]), athlete.get("displayName") or "", team_ids, team_names, espn.profile_link(athlete), league=slug, born=espn.birth_date(athlete))
         return None
 
+    def _schedule(self, league: str, team_id: str) -> list[Fixture]:
+        """A team's games this season (by ESPN's number for it), every phase (_PHASES): a request a phase, kept half
+        an hour. A phase that can't be read is left out; none read at all is a failure."""
+        seen: dict[str, Fixture] = {}
+        failed: AdapterError | None = None
+        read = 0
+        for suffix in _PHASES:
+            try:
+                data = espn.get_json(f"{espn.SITE}/basketball/{league}/teams/{team_id}/schedule{suffix}", ttl=1800)
+            except AdapterError as exc:
+                failed = exc
+                continue
+            read += 1
+            for f in parse_schedule(data, league):
+                seen.setdefault(f.source_id, f)
+        if failed and not read:
+            raise failed
+        return list(seen.values())
+
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
         league = ref.league or "nba"
         seen: dict[str, Fixture] = {}
         for team_id in ref.team_ids:
-            # The plain schedule is the current phase only (preseason in October); ask for each phase.
-            for suffix in ("", "?seasontype=2", "?seasontype=3"):
-                try:
-                    data = espn.get_json(f"{espn.SITE}/basketball/{league}/teams/{team_id}/schedule{suffix}", ttl=1800)
-                except AdapterError:
-                    continue
-                for f in parse_schedule(data, league):
-                    seen.setdefault(f.source_id, f)
+            try:
+                found = self._schedule(league, team_id)
+            except AdapterError:
+                continue
+            for f in found:
+                seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    team_id_pattern = TEAM_ID
+
+    def teams(self) -> list[SourceTeam]:
+        """Every NBA and WNBA team (TEAM_LEAGUES), for the team registry: a request a league, kept a day."""
+        return [t for league in TEAM_LEAGUES for t in parse_teams(espn.get_json(f"{espn.SITE}/basketball/{league}/teams", ttl=24 * 3600), league, self.system)]
+
+    def team_fixtures(self, team_id: str) -> list[Fixture]:
+        """One team's games this season (its id as TEAM_ID has it: "nba:13"), every phase, as fixtures() reads a
+        player's: three requests, shared with them. Each game names its sides as teams are named here ("nba:2"
+        for the Celtics), so it says which is the team; its result and its board keep ESPN's numbers, which
+        result_label reads either way."""
+        if not TEAM_ID.fullmatch(team_id):
+            raise AdapterError(f"{team_id!r} isn't an ESPN basketball team id (league:number)")
+        league, _, number = team_id.partition(":")
+        found = self._schedule(league, number)
+        for f in found:
+            f.team_ids = [f"{league}:{t}" for t in f.team_ids]
+        return sorted(found, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def board_id(self, team_id: str) -> str:
+        """A team's id (TEAM_ID) as its games' boards have it: ESPN's number."""
+        return team_id.rpartition(":")[2]
+
+    def team(self, team_id: str) -> SourceTeam | None:
+        """A team (TEAM_ID) and its players now, for its page: its roster, one request kept 6 hours."""
+        if not TEAM_ID.fullmatch(team_id):
+            return None
+        league, _, number = team_id.partition(":")
+        return parse_roster(espn.get_json(f"{espn.SITE}/basketball/{league}/teams/{number}/roster", ttl=6 * 3600), league, self.system)
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
         """Last season's regular season and playoffs for each of the player's teams."""

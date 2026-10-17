@@ -1,6 +1,7 @@
 """Telling fans about moments (moments.py): store each once, then push them to every follower who
 wants them, on every device they turned notifications on for, by the noise rules in alerts.py. A game's
-own moments (Sport.game_moments) go the same way to the fans following the game itself (matches.py).
+own moments (Sport.game_moments) go the same way to the fans following the game itself (matches.py), or a
+team in it (teams.py).
 
 A poll's (or a rebuild's) new moments go out together as one batch: claimed in the database so they
 are sent once, planned per fan (one push per game, sound rationed), logged as notification rows, then
@@ -290,6 +291,8 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
 def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
+    from . import teams  # whose team is in a game (teams reads the pipeline that sends through here)
+
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
     levels: dict[str, dict[int, str]] = {}
@@ -300,6 +303,12 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     games: dict[str, dict[int, alerts.Watch]] = {}
     for fan, event_id, rules, until in db.execute(select(MatchFollow.fan_id, MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.until).where(MatchFollow.event_id.in_(events))) if events else []:
         games.setdefault(fan, {})[event_id] = alerts.Watch((rules or {}).get("level", DEFAULT_LEVEL), until)
+    # And the games of the teams fans follow (teams.py), followed as long as the team is: a game a fan follows by
+    # itself as well keeps its level there while that follow's on, and hears its result from their team's side too.
+    for fan, by_game in teams.watches(db, events).items():
+        for event_id, (level, sides) in by_game.items():
+            had = games.setdefault(fan, {}).get(event_id)
+            games[fan][event_id] = alerts.Watch(had.level if had is not None and had.until is None else level, None, frozenset(sides))
     fans = set(levels) | set(games)
     if games:
         items = for_games(db, items)  # whom each player moment is about, and where, to tell a game's own of the same

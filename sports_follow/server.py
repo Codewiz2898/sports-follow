@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -519,7 +519,8 @@ async def _following(fan: str) -> list[dict[str, Any]]:
 
 @app.get("/api/me/following")
 async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
-    return {"players": await _following(fan)}
+    """The fan's players, and the teams they follow (teams.py), each with its next game, last result and game on now."""
+    return {"players": await _following(fan), "teams": await in_db(teams.mine, fan)}
 
 
 @app.get("/api/live")
@@ -624,6 +625,69 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
     row.alert_rules = {**(row.alert_rules or {}), "level": level}
     db.commit()
     return {"event_id": event_id, "alerts": level}
+
+
+@app.get("/api/teams/{team_id}")
+async def team_page(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """A team's page (teams.py): who it is, whether this fan follows it and at what level, its game on now, its
+    games to come and last results from its side, and its squad to follow. Served from its last read; one that's
+    stale queues another for the worker (at most every teams.LOOK_AGAIN for a team nobody follows), so
+    "refreshing" says newer games may come in a moment."""
+
+    def view(db: Session) -> tuple[dict[str, Any] | None, bool]:
+        team = db.get(Team, team_id)
+        if team is None:
+            return None, False
+        shown = teams.page(db, team_id, fan)
+        return shown, shown is not None and teams.look_again(team)
+
+    shown, ask = await in_db(view)
+    if shown is None:
+        raise HTTPException(404, "No such team.")
+    if ask:
+        await enqueue("refresh_team", team_id)
+    return {**shown, "refreshing": ask}
+
+
+@app.put("/api/teams/{team_id}/follow")
+async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Follow a team (teams.py): each of its games' moments, from both sides, reach this fan by their level, and
+    its results from its side. No such team, or one of a sport turned off, is a 404; one whose source isn't
+    running, a 409; a fan following teams.MAX teams already, a 429."""
+
+    def save(db: Session) -> bool:
+        team = teams.follow(db, fan, team_id)
+        db.commit()  # before the answer: the tick that reads and polls its games reads it from now on
+        return teams.stale(team)
+
+    try:
+        stale = await in_db(save)
+    except teams.Refused as refused:
+        raise HTTPException(refused.status, refused.message)
+    if stale:
+        await enqueue("refresh_team", team_id)  # its games now, not at the next tick
+    return {"team_id": team_id, "following": True}
+
+
+@app.delete("/api/teams/{team_id}/follow")
+def unfollow_team(team_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Stop following a team: nothing more of its games is sent to this fan (their players in them still are, and
+    a game they follow by itself)."""
+    teams.unfollow(db, fan, team_id)
+    db.commit()
+    return {"team_id": team_id, "following": False}
+
+
+@app.put("/api/teams/{team_id}/alerts")
+def set_team_alerts(team_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Which of a followed team's games' moments the fan is told about: everything, key, results or off, as for a player."""
+    level = body.get("level")
+    if level not in moments.LEVELS:
+        raise HTTPException(400, f"level must be one of {', '.join(moments.LEVELS)}")
+    if not teams.set_level(db, fan, team_id, level):
+        raise HTTPException(404, "Follow the team first.")
+    db.commit()
+    return {"team_id": team_id, "alerts": level}
 
 
 @app.get("/api/league")
@@ -1633,7 +1697,8 @@ ACTIVITY_DAYS = 30
 @app.get("/api/me/activity")
 def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit: int = 30, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Every moment of the fan's players since they followed them, and of the games they follow by themselves
-    while they did (matches.py), newest first, whatever reached the phone: the app's activity list. Players and
+    while they did (matches.py), or a team in since they followed it (teams.py), newest first, whatever reached
+    the phone: the app's activity list. Players and
     games set to off are left out, a correction (a goal VAR ruled out) unless the list has the moment it takes
     back, and a game's moment that one of their players' in the list says too (alerts.same). Page with
     ?before=<next>."""
@@ -1664,11 +1729,16 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         .order_by(Moment.id.desc())
         .limit(limit)
     )
+    sided = teams.activity(fan, taken, ACTIVITY_DAYS).limit(limit)  # and of the games of the teams they follow
     if before is not None:
         query = query.where(Moment.id < before)
         games = games.where(Moment.id < before)
-    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + [(m, None, event, muted, sport) for m, event, muted, sport in db.execute(games)],
-                  key=lambda r: -r[0].id)[:limit]
+        sided = sided.where(Moment.id < before)
+    found = [(m, None, event, muted, sport) for m, event, muted, sport in [*db.execute(games), *db.execute(sided)]]
+    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)
+    # A game's result from their team's side is listed in place of the game's own.
+    told_sides = {m.event_id for m, *_ in rows if m.player_id is None and m.kind == "final" and teams.sided(m.about)}
+    rows = [r for r in rows if not (r[0].player_id is None and r[0].kind == "final" and r[0].event_id in told_sides and not teams.sided(r[0].about))][:limit]
     # A game's moment that one of the fan's players' says too is listed once, as their player's.
     planned = {i.id: i for i in notify.for_games(db, notify.as_items([r[0] for r in rows]))}
     theirs = [i for i in planned.values() if i.player_id is not None]
@@ -1789,7 +1859,9 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
 
 def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) -> dict[str, Any]:
     with session() as db:
-        return player_search.run(db, q, sport, fan, may_ask)
+        found = player_search.run(db, q, sport, fan, may_ask)
+        # And the teams by that name fans can follow (teams.py), from the registry alone: no source is asked.
+        return {**found, "teams": teams.find(db, found.get("query") or q, found.get("sport"), fan)}
 
 
 async def _source_search_allowed(fan: str, address: str | None) -> bool:
@@ -1806,7 +1878,7 @@ async def _source_search_allowed(fan: str, address: str | None) -> bool:
 
 @app.get("/api/search")
 async def search(request: Request, q: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
-    """Athletes matching a name, from players on Sports Follow and the live sources (search.py)."""
+    """Athletes matching a name, from players on Sports Follow and the live sources (search.py), and teams (teams.py)."""
     loop, address = asyncio.get_running_loop(), client_address(request)
 
     def may_ask() -> bool:

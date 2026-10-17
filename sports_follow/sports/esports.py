@@ -222,6 +222,7 @@ class Esports(Sport):
     roster = True
     team_moments = True
     side_by_side = True
+    follow_teams = True  # a team title's teams, where its source lists them (a lobby's teams are a source's tags)
     colour = {"sport": "#ff4fa3", "on": "#1a0010", "on_soft": "rgba(26, 0, 16, 0.85)", "ink": "#ff4fa3"}
     # A game no source covers is esports; eFootball is a game too.
     pattern = r"e-?sports?\b|e-?football|call of duty:? ?mobile|\bcodm\b"
@@ -330,6 +331,18 @@ class Esports(Sport):
         if winner is None or loser is None or not winner.get("name"):
             return ""
         return f"{winner['name']} won by forfeit" if state.get("forfeit") else f"{winner['name']} won {winner.get('score')}–{loser.get('score')}"
+
+    def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
+        """A series from one side's, as every sport's ("T1 won 3–1 v Gen.G"), or by forfeit ("NRG lost by forfeit
+        v Sentinels"). A lobby has no two sides: its result is the game's own."""
+        if state.get("forfeit"):
+            teams = [t for t in state.get("teams") or [] if isinstance(t, dict)]
+            ours = next((t for t in teams if str(t.get("id") or "") == team_id), None)
+            theirs = next((t for t in teams if t is not ours), None)
+            if ours is None or theirs is None or not (ours.get("name") and theirs.get("name")) or not (ours.get("winner") or theirs.get("winner")):
+                return ""
+            return f"{ours['name']} {'won' if ours.get('winner') else 'lost'} by forfeit v {theirs['name']}"
+        return super().side_final(state, score, clock, team_id)
 
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
