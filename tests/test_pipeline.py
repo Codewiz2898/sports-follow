@@ -260,7 +260,7 @@ def test_a_pick_waits_for_the_profile_and_news_only_with_the_agent(monkeypatch, 
     monkeypatch.setattr(structured, "record", lambda player_id, ref: None)
     monkeypatch.setattr(bus, "store_card", lambda player_id, card: None)
     ref = SimpleNamespace(system="pandascore_esports", athlete_id="8742", name="TenZ", team_ids=["1"], team_names=["Sentinels"], profile_url=None, game="Valorant")
-    _, created = pipeline.start_from_pick(SimpleNamespace(sport="esports"), ref)
+    _, created = pipeline.start_from_pick(SimpleNamespace(sports=("valorant",), sport_of=lambda ref: "valorant"), ref)
     [card] = [r for r in db.rows if isinstance(r, PlayerCard)]
     assert created and card.status == "ready" and card.card.get("pending") == pending
 
@@ -339,7 +339,7 @@ class RefusingSource:
     """A source whose fixtures read fails (a team its plan doesn't cover), counting its requests."""
 
     system = "fake_source"
-    sport = "hurling"
+    sports = ("hurling",)
     live_cadence = 15
 
     def __init__(self, room: bool = True):
@@ -347,6 +347,9 @@ class RefusingSource:
 
     def spare(self):
         return self.room
+
+    def sport_of(self, ref):
+        return self.sports[0]
 
     def fixtures(self, ref):
         self.requests.append(ref.athlete_id)
@@ -500,7 +503,7 @@ def test_a_typed_name_a_source_knows_lands_on_the_player_holding_that_athlete(mo
     typed = Player(id=3, slug="jokic-nikola", name="Jokic Nikola", sport="", teams=[])
     db = FakeDb(footballer, nba, typed, answers={"Player": footballer, "PlayerIdentity": SimpleNamespace(player_id=2)})
     ref = SimpleNamespace(system="espn_basketball", athlete_id="3112335", name="Nikola Jokić", team_ids=["7"], team_names=["Denver Nuggets"])
-    adapter = SimpleNamespace(sport="basketball")
+    adapter = SimpleNamespace(sports=("basketball",), sport_of=lambda ref: "basketball")
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
     assert pipeline._start_from_source(3, adapter, ref) == 2
     assert db.deleted == [typed]

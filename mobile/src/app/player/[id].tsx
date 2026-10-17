@@ -180,7 +180,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
   const marks = formMarks(results, p.teams)
   const last = results[0]
   const wl = last && outcome(last.result, p.teams)
-  const word = last && highlight(sports.info(p.sport).key, last.player_contribution)
+  const word = last && highlight(sports.drawn(p.sport), last.player_contribution)
   const score = last && bareScore(last.result)
   const sportName = sports.name(p.sport) || 'this sport'
 

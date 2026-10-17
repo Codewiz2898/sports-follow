@@ -8,17 +8,19 @@ import { basketball } from './basketball'
 import { chess } from './chess'
 import { cricket } from './cricket'
 import { esports } from './esports'
+import { sportDrawn } from './catalog'
 import { artPlace } from './facts'
 import { football } from './football'
 import { tennis } from './tennis'
 import type { SportView } from './view'
 
-export { loadSports, runningSports, sportInfo, sportKey, sportName, type SportInfo } from './catalog'
+export { loadSports, runningSports, sportDrawn, sportInfo, sportKey, sportName, type SportInfo } from './catalog'
 export type { BoardProps, MatchProps, SportView } from './view'
 
 const VIEWS: SportView[] = [football, cricket, basketball, tennis, chess, esports]
 
-/** The view for a sport's key ("football"), or none. */
+/** The view for a sport's key ("football"), or none; a sport of a group (an esports game) is drawn by its group's
+ * (sportDrawn). */
 export function viewOf(key: string): SportView | undefined {
   return VIEWS.find((v) => v.key === key)
 }
@@ -30,12 +32,12 @@ export function viewOfKind(kind?: string | null): SportView | undefined {
 
 /**
  * The sport's ground as faint line art behind a card, in the card's ink (currentColor); nothing for a sport
- * that draws none. Each game (its `seed`: an event id or key) turns, places and sizes it its own way
+ * that draws none. An esports game's is esports' (its group's). Each game (its `seed`: an event id or key) turns, places and sizes it its own way
  * (facts.artPlace), so a row of cards from one sport doesn't repeat. The card is `position: relative;
  * overflow: hidden`. The art is the sport's own constant markup (facts/), never anything a source sent.
  */
 export function Backdrop({ sport, seed }: { sport: string; seed: string }) {
-  const art = viewOf(sport)?.art
+  const art = viewOf(sportDrawn(sport))?.art
   if (!art) return null
   const at = artPlace(seed)
   const place = { '--bd-turn': `${at.turn}deg`, '--bd-x': `${at.x}%`, '--bd-y': `${at.y}%`, '--bd-size': at.size } as CSSProperties

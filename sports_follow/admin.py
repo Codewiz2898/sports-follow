@@ -162,23 +162,29 @@ def session_key(token: str) -> str:
 
 
 def sports_view() -> list[dict[str, Any]]:
-    """Every sport: whether the server's settings let it run, whether the panel has it on, and its sources."""
+    """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, and
+    the group it's one of (each esports game is a sport, under "Esports")."""
     off = controls.current().sports_off
     running = sports.ENABLED
     return [{
         "key": s.key,
         "label": s.label,
+        "group": sports.BY_KEY[s.group].label if s.group in sports.BY_KEY else "",
         "allowed": s in sports.ALLOWED,
-        "on": s.key not in off,
+        "on": not sports.named(s, off),
         "running": s in running,
-        "sources": list(dict.fromkeys(a.name for a in ADAPTERS.values() if a.sport == s.key)),
+        "sources": list(dict.fromkeys(a.name for a in ADAPTERS.values() if s.key in a.sports)),
     } for s in sports.ALL]
 
 
 def set_sport(key: str, on: bool) -> None:
-    if key not in sports.BY_KEY:
+    """Turn one sport off or on; one turned off with its whole group ("esports", in a row from before each
+    game was a sport) leaves the group's others as they were."""
+    sport = sports.BY_KEY.get(key)
+    if sport is None or sport not in sports.ALL:
         raise LookupError(key)
-    controls.turn_sport(key, on)
+    group = sports.BY_KEY.get(sport.group)
+    controls.turn_sport(key, on, {group.key: [m.key for m in sports.members(group)]} if group else None)
 
 
 # ---------------------------------------------------------------- sources and what they may spend
@@ -201,17 +207,20 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
     sport_on = {s.key for s in sports.ENABLED}
     out = []
     for system, a in KNOWN.items():
+        # A source of several sports of one group (esports games) is listed under the group.
+        first, groups = a.sports[0], {sports.of(k).group for k in a.sports}
+        sport = groups.pop() if len(a.sports) > 1 and len(groups) == 1 and "" not in groups else first
         out.append({
             "system": system,
             "name": a.name,
             "provider": a.provider.name,
             "covers": a.covers,
-            "sport": a.sport,
-            "sport_label": sports.BY_KEY[a.sport].label if a.sport in sports.BY_KEY else a.sport,
+            "sport": sport,
+            "sport_label": sports.BY_KEY[sport].label if sport in sports.BY_KEY else sport,
             "licensed": a.provider.licensed,
             "token": system in can,  # a licensed source needs its token
             "allowed": not SOURCES or system in SOURCES,
-            "sport_on": a.sport in sport_on,
+            "sport_on": bool(sport_on.intersection(a.sports)),
             "on": system not in off,
             "running": system in running,
             "budgets": [b.name for b in a.budgets()],

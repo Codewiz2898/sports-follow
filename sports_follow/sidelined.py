@@ -94,7 +94,10 @@ def read(system: str, now: datetime | None = None) -> dict[str, int]:
     with session() as db:
         stored = {row.source_id: row for row in db.scalars(select(Sidelined).where(Sidelined.system == system))}
         first = not stored
-        fame = _fame(db, adapter.sport, system, listed)
+        sport_of = {a.source_id: adapter.sport_of(a.ref) for a in listed}
+        fame: dict[str, int] = {}
+        for sport in dict.fromkeys(sport_of.values()):
+            fame |= _fame(db, sport, system, [a for a in listed if sport_of[a.source_id] == sport])
         ended: list[Sidelined] = []
         out = 0
         for a in listed:
@@ -114,7 +117,7 @@ def read(system: str, now: datetime | None = None) -> dict[str, int]:
                     row.out_at, out = now, out + 1
                 row.ended_at = row.back_at = None
             row.athlete_id, row.team_id = a.ref.athlete_id, (a.ref.team_ids or [""])[0]
-            row.sport, row.name, row.team = adapter.sport, a.ref.name, (a.ref.team_names or [""])[0]
+            row.sport, row.name, row.team = sport_of[a.source_id], a.ref.name, (a.ref.team_names or [""])[0]
             row.kind, row.what, row.since, row.until = a.kind, a.what, a.since, a.until
             row.fame, row.seen_at = fame.get(a.ref.athlete_id, 0), now
         on_list = {a.source_id for a in listed}
@@ -124,8 +127,7 @@ def read(system: str, now: datetime | None = None) -> dict[str, int]:
                 ended.append(row)
         # Out for a spell the sport tells: one it doesn't (not registered for the competition) doesn't keep
         # a player's return from injury untold.
-        told = sports.of(adapter.sport)
-        still_out = {row.athlete_id for row in stored.values() if row.ended_at is None and told.out_fact(row.name, row.kind, row.what, row.until) is not None}
+        still_out = {row.athlete_id for row in stored.values() if row.ended_at is None and sports.of(row.sport).out_fact(row.name, row.kind, row.what, row.until) is not None}
         back = {row.athlete_id for row in ended if row.athlete_id not in still_out}
         for row in ended:
             if row.athlete_id in back:

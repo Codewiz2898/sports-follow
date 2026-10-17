@@ -53,8 +53,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   query service asks; football is most of it); `--new` reads only people not imported yet. Esports
   pros come from their sources instead (Wikidata knows only a few thousand): the active players of
   `SPORTS_FOLLOW_ESPORTS_GAMES` from PandaScore and of `SPORTS_FOLLOW_LIQUIPEDIA_WIKIS` from
-  Liquipedia, by handle and real name, with each source's key
-  (`python -m sports_follow.registry esports`, part of the weekly run). After each import,
+  Liquipedia, by handle and real name, with each source's key, each under their game's sport ("cs2",
+  "bgmi": an Indian player on the PUBG Mobile wiki plays BGMI), each source read once for all its games
+  that run (`python -m sports_follow.registry esports` for every game, or `… registry valorant cs2`; part of
+  the weekly run). After each import,
   `sports_follow/roster_wikidata.py` finds each pro's Wikidata person among the few thousand Wikidata
   counts as esports people (a Liquipedia, HLTV or Esports Earnings id, or professional gamer), for their
   photo: by the source's id where Wikidata keeps it (Liquipedia's pages), by handle together with the
@@ -243,7 +245,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 - **Adding or removing a data source** is one module and one line. A source is a module in
   `sports_follow/adapters/` with an `Adapter` subclass (`adapters/base.py`) that describes itself: its
-  `system`, the `sport` it serves, its `name` on a page, its `provider` (the Credits entry, shared with
+  `system`, the `sports` it serves (one, or each esports game it covers, with `sport_of` saying which an
+  athlete plays and `running()` which run now, so it reads only theirs), its `name` on a page, its `provider` (the Credits entry, shared with
   the provider's other adapters), what it `covers`, its athlete `id_pattern`, and `available()` (a
   licensed source needs its token). Optional capabilities are opt-in, so nothing else changes: a name
   `search` for the registry, a `roster` of pros for the registry (esports) and the Wikidata property
@@ -261,8 +264,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
-  by in `Fixture.facts`: an esports source names each game's title in `facts["game"]`, its turn among the
-  sport's, or all its titles share one; read a few times a day at
+  by in `Fixture.facts`; a source of several sports says each game's in `Fixture.sport`, as in
+  `LiveGame.sport`; read a few times a day at
   most, only while fans look: Sportmonks football 3 or 4 requests a read, cricket 1, PandaScore about 6, PUBG
   none),
   `sidelined` for the Wire's facts (every player out of its competitions, injured or suspended, by team;
@@ -298,19 +301,32 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
-  finish, or none, as for a cricket final whose sides are still "TBC"; and its group, an esports title,
-  which takes its own turn within the sport's; for Today's big results and big games coming up), what its
-  match page shows under the board (`match_page`: a football timeline, a cricket scorecard, an esports
-  series by map; by default the source's key events), its form summary,
+  finish, or none, as for a cricket final whose sides are still "TBC"; for Today's big results and big games
+  coming up), what its match page shows under the board (`match_page`: a football timeline, a cricket
+  scorecard, an esports series by map; by default the source's key events), its form summary,
   how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
-  its sources each declare the `sport` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
+  its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
   code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport.
+
+  Sports that share their rules are a group: each esports game (Valorant, CS2, League of Legends, Dota 2,
+  BGMI, Free Fire, PUBG…) is a sport of its own, with its own tile, search filter, colour and switch, and
+  one `Game` entry in `sports_follow/sports/esports.py` (its key, name, other names and colour, which must
+  read at 4.5:1 with its text and stand apart from every other sport's colour: `tests/test_sports.py`);
+  everything else (series and lobby moments, form, alert wording, how big a game is, who's a pro on
+  Wikidata) is the `Esports` class's, once for all of them. Adding a game is its entry and the source
+  that covers it (its slug or wiki in that adapter's map to the game's key). The group itself
+  (`sports.GROUPS`, "esports") isn't listed: `SPORTS_FOLLOW_SPORTS=esports`, or "esports" turned off in the
+  admin panel before each game was a sport, stands for every game; it's the sport of a pro whose game
+  can't be told (still found by search while any game runs) and of a game no source covers ("Call of
+  Duty: Mobile"); and Today's big results and big games give the group one turn among the sports, which
+  its games take in turn.
 
   The web app keeps no list of sports: it takes them from the server (`GET /api/sports`: names, the
   free-text names that are each sport, alert wording, what runs; `/api/sports.css`: colours), loaded
-  before the first render and kept on the device. How a sport is drawn is in three places, each with one
+  before the first render and kept on the device; each sport there says the group it's drawn as (`group`:
+  an esports game is drawn as esports), and the groups come apart (`groups`). How a sport is drawn is in three places, each with one
   line in its list: its facts, `web/src/sports/facts/<sport>.ts` (in `FACTS`: the scoreboard kinds it
   draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
   `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
@@ -320,7 +336,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
   on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
-  no restart: it turns sports and sources off and on, sets what each source may spend (its allowance a
+  no restart: it turns sports (each esports game on its own) and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
   fans' share; the pause after a 429) next to what was spent, by lane, and looks after accounts (find
   one by address, see who they follow and their devices, sign them out everywhere, block them from
@@ -459,7 +475,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
 | `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
-| `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run, and its followed players' pages stay as they are. The admin panel turns these off and on while the app runs |
+| `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run (a source of several esports games reads only those left in), and its followed players' pages stay as they are. Each esports game is a sport (`valorant,cs2,lol,dota2,bgmi,freefire,pubgmobile,pubg,mlbb,hok,r6siege,overwatch,apex,rocketleague,cod,wildrift`), and `esports` stands for every game. The admin panel turns these off and on while the app runs |
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
@@ -470,7 +486,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages (none with `SPORTS_FOLLOW_AGENT=0`) |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
-| `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2). Naming a few imports just those, and removes only their stale players |
+| `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2, `kog` Honor of Kings), of the games that run. Naming a few imports just those, and removes only their stale players |
 | `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
 | `SPORTS_FOLLOW_PUBG_TOKEN` | from `~/.config/sports-follow/pubg-token` | PUBG developer API key (PUBG esports); the worker indexes recent tournaments every 10 minutes |
 | `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |

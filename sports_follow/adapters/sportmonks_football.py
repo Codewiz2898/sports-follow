@@ -405,7 +405,7 @@ def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_footb
 
 class SportmonksFootball(Adapter):
     system = "sportmonks_football"
-    sport = "football"
+    sports = ("football",)
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Football"

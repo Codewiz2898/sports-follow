@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from sqlalchemy.dialects import postgresql
 
-from sports_follow import naming, pipeline, registry, search
+from sports_follow import naming, pipeline, registry, search, sports
 from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
 from sports_follow.adapters import KNOWN, LiveSearch, Provider, SearchResult, espn, lichess_chess
 
@@ -452,8 +452,11 @@ def test_local_search_filters_with_what_the_trigram_index_answers():
 class _NoFixturesInPreview:
     """A source whose games take many reads (as chess broadcasts do): its preview shows stats only."""
 
-    sport = "chess"
+    sports = ("chess",)
     preview_fixtures = False
+
+    def sport_of(self, ref):
+        return "chess"
 
     def player(self, athlete_id, league):
         from sports_follow.adapters.base import PlayerRef
@@ -472,3 +475,14 @@ def test_a_preview_says_when_it_doesnt_read_the_athletes_games(monkeypatch):
     search._previews.clear()
     out = search.preview("test_source", "p1", None)
     assert out is not None and out["fixtures"] is False and out["next"] is None and out["last"] is None
+
+
+def test_esports_as_a_filter_from_an_older_app_is_its_games_that_run(monkeypatch):
+    """An app from before each game was a sport (an old web bundle, the installed Android app) asks for
+    sport=esports: its games, not an unfiltered search (registry.find takes a group's sports: test_esports_games_db)."""
+    asked = []
+    searching(monkeypatch)
+    monkeypatch.setattr(search.registry, "find", lambda db, query, sport, limit: asked.append(sport) or [])
+    assert search.run(None, "tenz", "esports")["sport"] == "esports" and asked and set(asked) == {"esports"}
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if not s.group))
+    assert search.run(None, "tenz", "esports")["sport"] is None  # no game runs: no such filter

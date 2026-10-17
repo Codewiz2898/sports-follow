@@ -19,7 +19,7 @@ SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__ini
 
 def test_every_source_describes_itself():
     for system, adapter in KNOWN.items():
-        assert adapter.system == system and sports.get(adapter.sport) and adapter.live_cadence > 0, system
+        assert adapter.system == system and adapter.sports and all(sports.get(k) for k in adapter.sports) and adapter.live_cadence > 0, system
         assert adapter.name and adapter.covers and isinstance(adapter.provider, Provider), system
         assert not adapter.id_pattern.fullmatch(""), system
     assert {p.name for p, _ in providers(KNOWN)} == {"Sportmonks", "ESPN", "Lichess", "PandaScore", "Liquipedia", "PUBG"}
@@ -49,7 +49,7 @@ def test_live_searches_are_asked_only_under_the_sports_their_sources_serve(monke
     assert asked("kohli") == asked("kohli", "cricket") == ["ESPN"]
     assert asked("carlsen", "chess") == ["Lichess"]  # FIDE's list only for a chess search
     assert asked("ca", "chess") == []  # three letters before Lichess is asked
-    assert asked("tenz", "esports") == []
+    assert asked("tenz", "valorant") == []
     assert asked("clark", by_word=True) == ["ESPN"]  # did-you-mean, word by word: ESPN has no typo tolerance
 
 
@@ -62,14 +62,15 @@ def _naming() -> Callable[[str], str | None]:
     """How a text names a source, if it does: by its system ("espn_cricket"); by its URL, on the domain (the
     last two labels) of its provider's site or of where its requests go ("espn.com"); or by name, its
     provider's or an API's it reads, in any case ("ESPN", "OpenDota", or "opendota", its budget's key). A
-    game as an adapter writes it (a slug in its games, a name in its game_names, or that name in lower
-    case) names the game, not a source ("pubg", "PUBG Mobile"), unless it's exactly a provider's name ("PUBG")."""
+    game as a source writes it (a slug in its games) or as the app names it (an esports game's key, label or
+    other name, as written or in lower case) names the game, not a source ("pubg", "PUBG Mobile"), unless
+    it's exactly a provider's name ("PUBG")."""
     provider_names = {p.name for p, _ in providers(KNOWN)}
     systems = re.compile(rf"\b({'|'.join(KNOWN)})\b")
     names = sorted(provider_names | {b.name for b in budget.known()}, key=len, reverse=True)  # "lichess-anonymous" first
     by_name = re.compile(rf"\b({'|'.join(map(re.escape, names))})\b", re.I)
     written = {g for a in KNOWN.values() for g in getattr(a, "games", ())}
-    written |= {n for a in KNOWN.values() for g in getattr(a, "game_names", ()) for n in (g, g.lower())}
+    written |= {n for s in sports.ALL if s.group for g in (s.key, s.label, *s.names) for n in (g, g.lower())}
     games = sorted(written - provider_names, key=len, reverse=True)
     game = re.compile(rf"\b({'|'.join(map(re.escape, games)) or '(?!)'})\b")
     urls = [p.url for p, _ in providers(KNOWN)] + [u for b in budget.known() for u in b.urls]
@@ -105,6 +106,9 @@ def test_no_shared_module_names_a_source():
         # A sport's Wikidata ids are keyed by the id they hold, which may be a source's ("espn_cricket").
         wikidata = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and [getattr(t, "id", None) for t in n.targets] == ["wikidata"]]
         skip |= {id(n) for w in wikidata for n in ast.walk(w)}
+        # A game's names are the game's, one its provider shares too ("PUBG", sports/esports.py's GAMES).
+        games = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Game"]
+        skip |= {id(n) for g in games for n in ast.walk(g)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
             if isinstance(node, ast.ImportFrom) and path in shared and node.level == 1:
