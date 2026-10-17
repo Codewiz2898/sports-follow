@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Found, Line, Notable, Poster, Seen, Sport, joined, ordinal, stage
+from .base import Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -162,6 +162,38 @@ def _lobby_final(who: str, now: Seen) -> Found:
     return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
 
 
+def _game_maps(name: str, before: Played, now: Played) -> list[Found]:
+    """Each map of a series taken since the last poll, from the side that took it, with the series score:
+    for a fan following the series itself these are its key moments, as goals are a match's."""
+    teams = {t.get("id"): t for t in now.state.get("teams") or []}
+    done = {m.get("n") for m in before.state.get("maps") or [] if m.get("winner")}
+    if len(teams) != 2 or now.status == "final":
+        return []  # the result says it
+    a, b = teams.values()
+    found = []
+    for m in now.state.get("maps") or []:
+        winner = teams.get(m.get("winner"))
+        if winner and m.get("n") not in done:
+            found.append(Found("map", "key", f"{name}: {winner.get('name')} take map {m.get('n')}", f"{a.get('name')} {a.get('score')}–{b.get('score')} {b.get('name')}", f"map{m.get('n')}", 60))
+    return found
+
+
+def _game_lobby(name: str, before: Played, now: Played) -> list[Found]:
+    """Each match of a lobby won since the last poll, by whom ("Booyah: GodLike Esports"), with who's top."""
+    teams = {t.get("id"): t for t in now.state.get("standings") or []}
+    done = {g.get("n") for g in before.state.get("games") or [] if g.get("winner")}
+    top = next((t for t in teams.values() if t.get("place") == 1), None)
+    if now.status == "final":
+        return []
+    found = []
+    for g in now.state.get("games") or []:
+        winner = teams.get(g.get("winner"))
+        if winner and g.get("n") not in done:
+            body = joined(f"Match {g['n']}", g.get("map"), f"{top['name']} top, {points(top.get('points'))} pts" if top and top.get("name") else None)
+            found.append(Found("dinner", "key", f"{name}: {now.state.get('win_word') or 'Win'}, {winner.get('name')}", body, f"g{g['n']}", 70))
+    return found
+
+
 def _series_won(won: int, lost: int) -> str:
     """A series won as a poster's word: "Sweep 2–0" when the other side took no map (of more than one), else "Win 2–1"."""
     return f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}"
@@ -196,6 +228,10 @@ class Esports(Sport):
     alerts = {
         "key": ("Starts, wins and results", "A series or lobby starting, winning a lobby match, going top, the result and transfers"),
         "more": ("every map and match", "each map or lobby match, a Dota player’s numbers each map, and milestones"),
+    }
+    game_alerts = {
+        "key": ("Maps and the result", "Each map of a series or match of a lobby won, the start and the result"),
+        "more": ("", ""),
     }
     stats_title = "Overview"
     keeps_names = True
@@ -255,6 +291,11 @@ class Esports(Sport):
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
+
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """A series' maps, each from the side that took it, or a lobby's matches, each by who won it: about the
+        whole game, as a fan of a player in it hears each from their team's side."""
+        return _game_lobby(name, before, now) if now.state.get("kind") == "battle_royale" else _game_maps(name, before, now)
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a

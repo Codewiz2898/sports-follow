@@ -1,13 +1,19 @@
 """The noise rules: which moments reach a fan's phone, grouped how, and which of them make a sound.
 
 plan() is pure. It takes a batch of new moments, one fan's level for each player they follow (a
-moment about anyone else isn't theirs), the games they muted and what they were sent lately, and
-returns the pushes to make (notify.py sends them). On a phone, notifications should feel like one
-sports app, not a feed of every poll:
+moment about anyone else isn't theirs) and for each game they follow by itself (matches.py), the games
+they muted and what they were sent lately, and returns the pushes to make (notify.py sends them). On a
+phone, notifications should feel like one sports app, not a feed of every poll:
 
-- **What reaches the phone.** The fan's level for the player: key moments make a sound; everything
-  adds the minor ones (a yellow card, each set) without sound; results only is the result; off is
-  nothing. What's left out is still in the app's activity list.
+- **What reaches the phone.** The fan's level for the player, or for the game: key moments make a
+  sound; everything adds the minor ones (a yellow card, each set) without sound; results only is the
+  result; off is nothing. What's left out is still in the app's activity list.
+- **A game followed by itself** sends its own moments (a goal whoever scores it, every result), each
+  found until the game ended (Watch.until): what comes after the follow lapsed isn't theirs. A fan who
+  follows the game and a player in it hears each moment once: one of the game's about a player whose
+  moment of the same kind reaches them (their goal, their wicket, the result) goes as their player's;
+  and one the other side already said in an earlier push of the game (a source's events and its players'
+  lines a poll apart) isn't said again, the same play by its detail.
 - **One notification per game.** Everything a fan hears from one game, whichever of their players
   it's about, lands on the same notification (tag "e{event}"): a new moment replaces it, with the
   story so far underneath, so the tray holds "Kohli reaches 100" over "Rohit out for 45", not a
@@ -40,6 +46,9 @@ GAME_COOLDOWN = timedelta(minutes=3)
 LOUD_PER_HOUR = 6
 BREAKTHROUGH = 90
 MAX_LINES = 5  # a phone shows about this many lines of an expanded notification
+# How close in time a game's own moment and a player's must be found to be taken for one play by their places
+# alone (same): a source's events and a player's line a poll or two apart. Past it, both are sent: twice beats never.
+PLAY_WINDOW = timedelta(minutes=5)
 
 LIVE_TTL = 15 * 60  # a goal an hour late isn't news; results and injuries keep for half a day
 LINEUP_TTL = 60 * 60  # a line-up is news until kick-off
@@ -56,7 +65,7 @@ class Item:
     """A new moment, as the planner sees it."""
 
     id: int
-    player_id: int
+    player_id: int | None  # None: the game's own, for the fans following the game (matches.py)
     event_id: int | None
     kind: str
     level: str  # key | minor
@@ -66,6 +75,22 @@ class Item:
     url: str
     created_at: datetime
     corrects: int | None = None  # the moment a correction takes back
+    # Whom it's about, by their ids in the game's source: a game's own moment's (Moment.about, "*" the whole
+    # game), a player's own (their id there), so the two can be told to be the same moment.
+    about: frozenset[str] = frozenset()
+    detail: str = ""  # what tells two moments of a kind apart (its key's: "goal@501", "50", "set2")
+    # Its place among its game's moments of its kind about the same player (their 2nd goal; the game's 2nd goal
+    # by them): the same play where one side names it by the source's id ("goal@501") and the other by count.
+    nth: int = 0
+
+
+@dataclass
+class Watch:
+    """A game a fan follows by itself (matches.py): their level for it, and when the follow lapsed (the game
+    ended), after which its moments aren't theirs."""
+
+    level: str
+    until: datetime | None = None
 
 
 @dataclass
@@ -73,7 +98,7 @@ class Sent:
     """An earlier push to this fan (a notification row)."""
 
     event_id: int | None
-    player_id: int
+    player_id: int | None
     loud: bool
     lines: list[str]
     at: datetime
@@ -83,7 +108,7 @@ class Sent:
 @dataclass
 class Push:
     event_id: int | None
-    player_id: int  # the lead moment's
+    player_id: int | None  # the lead moment's; None: the game's own
     kind: str  # the lead moment's
     moment_ids: list[int]
     lines: list[str]  # each moment's title, lead first
@@ -105,22 +130,66 @@ def tier(level: str, item: Item) -> str | None:
     return "silent"
 
 
-def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None) -> list[Push]:
+def level_of(item: Item, levels: dict[int, str], games: dict[int, Watch]) -> str | None:
+    """The fan's level for a moment: their player's, or, for a game's own, the game's while they followed it.
+    None: not theirs (someone else's player, a game they don't follow, or found after the follow lapsed)."""
+    if item.player_id is not None:
+        return levels.get(item.player_id)
+    watch = games.get(item.event_id) if item.event_id is not None else None
+    if watch is None or (watch.until is not None and item.created_at > watch.until):
+        return None
+    return watch.level
+
+
+def same(game: Item, player: Item, exact: bool = False) -> bool:
+    """Whether a game's own moment is one of a player's: of one game, of a kind, about that player or the
+    whole game ("Kohli out for 82" from the game's side and from Kohli's, a result). Found at one poll, that's
+    enough; `exact`, for one found at another poll, the play too, as a player may score twice: the same detail
+    ("goal@501", "50"), or, where one side names it by the source's id and the other only by count (a goal the
+    player's line counted before the source's events had it, any card: "red1" and "red@601"), the same place
+    among the player's of its kind (nth: their first, the game's first by them), found within PLAY_WINDOW of
+    each other: a goal the source dropped and listed again, told again by the game, isn't taken for the player's
+    next one later on."""
+    if not (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))):
+        return False
+    if not exact or game.detail == player.detail:
+        return True
+    by_id = "@" in game.detail, "@" in player.detail
+    near = abs(game.created_at - player.created_at) <= PLAY_WINDOW
+    return by_id[0] != by_id[1] and "*" not in game.about and game.nth > 0 and game.nth == player.nth and near
+
+
+def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
+         games: dict[int, Watch] | None = None, heard: list[Item] | None = None) -> list[Push]:
     """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
     moments corrections in these games have taken back, which leave the story (this batch's own
-    corrections count without it)."""
+    corrections count without it). `games` is the games the fan follows by themselves, by event; `heard`,
+    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about."""
     told = {m for s in sent for m in s.moment_ids}
     taken = (taken_back or set()) | {i.corrects for i in items if i.corrects is not None}
-    groups: dict[str, list[tuple[Item, bool]]] = {}
+    kept: list[tuple[Item, str]] = []
     for item in items:
-        if item.player_id not in levels:
-            continue  # someone else's player: a batch holds every player in the game, a sweep every game
-        how = tier(levels[item.player_id], item)
+        level = level_of(item, levels, games or {})
+        if level is None:
+            continue  # someone else's player, or game: a batch holds every player in the game, a sweep every game
+        how = tier(level, item)
         if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
             continue
         if item.id in taken or (item.corrects is not None and item.corrects not in told):
             # Taken back before it went (a batch the tick swept up late), or the correction of something
             # this fan was never sent.
+            continue
+        kept.append((item, how))
+    # A game's own moment that one of the fan's players' says too goes once, as their player's; and one the
+    # other side said in an earlier push isn't said again.
+    theirs = [i for i, _ in kept if i.player_id is not None]
+    heard_theirs = [h for h in heard or [] if h.player_id is not None]
+    heard_games = [h for h in heard or [] if h.player_id is None]
+    groups: dict[str, list[tuple[Item, bool]]] = {}
+    for item, how in kept:
+        if item.player_id is None and (any(same(item, p) for p in theirs) or any(same(item, p, exact=True) for p in heard_theirs)):
+            continue
+        if item.player_id is not None and any(same(g, item, exact=True) for g in heard_games):
             continue
         tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
         groups.setdefault(tag, []).append((item, how == "loud"))

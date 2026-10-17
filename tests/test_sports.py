@@ -162,6 +162,7 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
     assert [s["key"] for s in body["sports"] if s["on"]] == ["football", "chess"]
     football = body["sports"][0]
     assert football["label"] == "Football" and football["pattern"] and football["alerts"]["key"][0] == "Line-ups, goals and results"
+    assert football["game_alerts"]["key"][0] == "Goals, red cards and the result" and body["other"]["game_alerts"]["more"] == ["", ""]
     assert body["other"]["key"] == "other" and body["other"]["alerts"]["key"][0] == "Big news"
     # Each esports game is a sport of its own, drawn as esports (its group); the group itself isn't listed,
     # but the app knows it, for a game no source covers.

@@ -147,6 +147,10 @@ class Cricket(Sport):
         "key": ("Line-ups, fifties, wickets and results", "In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers"),
         "more": ("milestones", "milestones in the news"),
     }
+    game_alerts = {
+        "key": ("Wickets, fifties and the result", "Every wicket, fifties and hundreds, three wickets or more in a spell, the start and the result"),
+        "more": ("", ""),
+    }
     stats_title = "Overview"
 
     def lineup_title(self, who: str, starting: bool) -> str:

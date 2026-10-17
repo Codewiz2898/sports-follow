@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowedMatch, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -29,6 +29,12 @@ export function endpoints(request: Request) {
     live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
     // A game's match page, by its address after /match/ ("<source>/<game id>": from a live block or Live now).
     match: (source: string, game: string) => request<Match>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}`),
+    // Follow a game by itself, or stop (sports_follow/matches.py): by its address after /match/, as its page has it.
+    followMatch: (source: string, game: string, on: boolean) =>
+      request<{ following: boolean; event_id?: number }>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}/follow`, { method: on ? 'PUT' : 'DELETE' }),
+    matches: () => request<{ matches: FollowedMatch[] }>('/api/me/matches'),
+    unfollowMatch: (eventId: number) => request<{ event_id: number; following: false }>(`/api/me/matches/${eventId}`, { method: 'DELETE' }),
+    setMatchAlerts: (eventId: number, level: AlertLevel) => request<{ event_id: number; alerts: AlertLevel }>(`/api/me/matches/${eventId}/alerts`, json('PUT', { level })),
     // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.
     league: (fresh = false) => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`, fresh ? { cache: 'no-store' } : undefined),
     search: (q: string, sport?: string | null, signal?: AbortSignal) =>

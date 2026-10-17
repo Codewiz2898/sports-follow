@@ -6,7 +6,8 @@ shared code asks the sport (sports.get(name)) instead of branching on it. A spor
 from an AI-built page) gets Sport itself: start and result moments, a W–L record, nothing else.
 
 Seen and Found are the words moments are found in (moments.detect): an event and a player's line at one
-poll, and what happened since the last.
+poll, and what happened since the last. Played is a whole game at one poll, both sides, which a game's own
+moments are found in (Sport.game_moments), for fans who follow the game itself (matches.py).
 """
 
 from __future__ import annotations
@@ -63,6 +64,31 @@ class Found:
     # the kind and detail of the moment it takes back ("goal:goal@101").
     detail: str = ""
     priority: int = 0  # 0 to 100; 0 takes the kind's PRIORITY (moments.py)
+    # A game's own moment (Sport.game_moments): the players it's about, by their ids in the source (a goal's
+    # scorer, both players of a chess board), or "*", the whole game (its start, its result, a map).
+    about: tuple[str, ...] = ()
+
+
+# The statuses of a game not under way yet.
+PRE_MATCH = ("scheduled", "armed", "postponed")
+EVERYONE = ("*",)
+
+
+@dataclass
+class Played:
+    """A whole game at one poll, both sides, for fans who follow the game itself (Sport.game_moments)."""
+
+    status: str | None  # scheduled | armed | live | final | postponed
+    state: dict[str, Any] = field(default_factory=dict)
+    score: str = ""
+    clock: str = ""
+    events: list[dict[str, Any]] = field(default_factory=list)  # the source's key events, newest first
+    lines: dict[str, Line] = field(default_factory=dict)  # every player's line the source gave, by their id there
+    names: dict[str, str] = field(default_factory=dict)  # who those are, where known: a line of someone unnamed isn't told
+
+    def seen(self, athlete_id: str) -> Seen:
+        """One player's view of the game, for the rules that find a player's moments (Sport.during)."""
+        return Seen(self.status, self.state, self.lines.get(athlete_id), self.score, self.clock, lineups=bool(self.lines), events=self.events)
 
 
 @dataclass
@@ -216,6 +242,12 @@ class Sport:
     alerts = {
         "key": ("Big news", "Injuries, transfers and retirements, from the news: no live source covers this sport yet"),
         "more": ("milestones", "milestones in the news"),
+    }
+    # What a fan following a whole game hears at key moments, and what everything adds (game_moments): a line
+    # and in full; "" adds nothing.
+    game_alerts = {
+        "key": ("The start and the result", "The game starting and its result"),
+        "more": ("", ""),
     }
     stats_title = "Season"  # the Stats tab's first view: a season's numbers, or an overview (ranking, form)
     keeps_names = False  # a player's sport is shown as written ("CS2"), not title-cased (esports' games)
@@ -379,6 +411,55 @@ class Sport:
         """A player of this sport back from a spell of this kind (out_fact), as the Wire tells it; None for a
         kind it doesn't tell."""
         return None
+
+    # ---- a game followed by itself (matches.py): its own moments, from both sides
+
+    def game_moments(self, name: str, before: Played | None, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """What happened in a game since the last poll, from both sides, for fans who follow the game itself,
+        each titled with the game's name ("India v Australia: Kohli out for 82"): it starting (game_start), what
+        happened during it (game_during), and its result (game_final). Each says whom it's about (Found.about),
+        so a fan who also follows one of them hears it once, as their player's. before=None is a first look at
+        a game already under way (a follow, or polling, began mid-game): only its result is told, so nobody
+        hears of a wicket an hour old. `told` is what was found for the game before (each moment's kind and
+        detail, oldest first): what it may take back (a goal VAR rules out)."""
+        found: list[Found] = []
+        was = before.status if before else None
+        if before is not None and now.status == "live" and was in PRE_MATCH:
+            found.append(self.game_start(name, now))
+        if now.status == "final" and was != "final":
+            found.append(self.game_final(name, now))
+        if before is not None:
+            found += self.game_during(name, before, now, told)
+        for f in found:
+            f.about = f.about or EVERYONE
+        return found
+
+    def game_start(self, name: str, now: Played) -> Found:
+        return Found("start", "key", f"{name}: under way", joined(now.score, now.clock), "", 40, EVERYONE)
+
+    def game_final(self, name: str, now: Played) -> Found:
+        """The result as the head of its match page says it ("Arsenal won", "India won by 57 runs"), else its
+        result line, with the final score under it."""
+        said = self.verdict(now.state, now.score, now.clock) or self.result_text(now.score, now.clock) or "full time"
+        return Found("final", "key", f"{name}: {said}", now.score if now.score != said else now.clock, "", 80, EVERYONE)
+
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """By default, every named player's moments as the player rules find them (during: a fifty, out, a
+        wicket haul, 30 points), each about that player, in the same words and detail a fan of theirs gets. A
+        game whose earlier poll had no lines yet while it was live (the source's first lines) tells none: what
+        they say happened before. A sport whose moments are a side's, or the board's (football's goals, chess's
+        turning, esports' maps), overrides it."""
+        if before.status == "live" and not before.lines and now.lines:
+            return []
+        found = []
+        for athlete_id in now.lines:
+            who = now.names.get(athlete_id)
+            if not who:
+                continue
+            for f in self.during(who, athlete_id, before.seen(athlete_id), now.seen(athlete_id)):
+                f.title, f.about = f"{name}: {f.title}", (athlete_id,)
+                found.append(f)
+        return found
 
     # ---- a game's match page (match.py)
 

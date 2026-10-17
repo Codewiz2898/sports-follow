@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, ApiError, type Match } from '../api'
+import { useActivity } from '../activity'
+import { LEVELS } from '../alerts'
+import { api, ApiError, type Match, type MatchFollowState } from '../api'
 import { useNow } from '../clock'
 import { GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
-import { BackIcon } from '../components/Icons'
+import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
 import { dateOnly, dateTime, parseDate, relative } from '../format'
+import { useFollowing } from '../following'
 import { comingCard } from '../lines'
+import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
 const EVERY = 30_000  // a look again: a followed player's game is polled every few seconds, any other read once a minute
@@ -84,6 +88,38 @@ function Status({ match }: { match: Match }) {
 interface KeyEvent { clock: string; kind: string; text: string }
 
 /**
+ * Following the game by itself (sports_follow/matches.py): its key moments from both sides reach the fan until
+ * it ends, whoever they follow. The page's answer says whether they do and whether its moments can reach them
+ * at all; a toggle shows at once, and stays until the page's next look agrees. Once followed, the fan's level
+ * for it and "Mute this game", as a player's page has them.
+ */
+function useFollowGame(match: Match | null) {
+  const { followMatch, matches, setMatchAlerts } = useFollowing()
+  const { muted, setMuted } = useActivity()
+  const [mine, setMine] = useState<MatchFollowState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const said = match?.follow ?? null
+  useEffect(() => { setMine(null); setOpen(false); setError(null) }, [match?.key])
+  useEffect(() => { if (mine && said && said.following === mine.following) setMine(null) }, [said, mine])
+  const state = mine ?? said
+  const followed = match ? matches.find((m) => match.event_ids.includes(m.event_id) || (m.addresses ?? []).includes(match.match) || m.event_id === state?.event_id) : undefined
+  const attempt = (work: () => Promise<unknown>) => { setError(null); return work().catch((e: Error) => setError(e.message)) }
+  const toggle = async () => {
+    if (!match || !state) return
+    setBusy(true)
+    await attempt(async () => {
+      await followMatch(match.match, !state.following, state.event_id ?? followed?.event_id)
+      setMine({ ...state, following: !state.following })
+      if (state.following) setOpen(false)
+    })
+    setBusy(false)
+  }
+  return { state, busy, open, setOpen, error, toggle, followed, muted, setMuted, setMatchAlerts, attempt }
+}
+
+/**
  * One game, whoever follows anyone in it, live, to come or over (sports_follow/match.py): a head in its sport's
  * colour with the competition and its board (the sides and the big score, as its sport draws them), and over
  * a finished game's board who won, big; a game to come has its countdown there instead. Then what its sport
@@ -95,6 +131,7 @@ export function MatchPage() {
   const { source = '', game = '' } = useParams()
   const { match, failed } = useMatch(source, game)
   const follow = useFollowToggle()
+  const watch = useFollowGame(match)
   const now = useNow()
   const back = <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
 
@@ -110,15 +147,48 @@ export function MatchPage() {
   const soon = !board && (match.status === 'scheduled' || match.status === 'armed') ? startsIn(match, now) : null
   const events = (match.page.events ?? []) as KeyEvent[]
   const yours = match.yours ?? []
+  const { state, followed } = watch
+  const level = followed?.alerts ?? 'key'
+  const eventId = followed?.event_id ?? match.event_ids[0]
 
   return (
     <>
       <header className="player-band match-band" data-sport={key}>
         <div className="bar">
           {back}
-          {/* What a fan can do with the game itself goes here: following it (BHA-270). */}
-          <span className="row" style={{ gap: 8 }} />
+          {/* Following the game itself: none for one that's over, and no promise of alerts its source can't send. */}
+          <span className="row" style={{ gap: 8 }}>
+            {state?.following && (
+              <button type="button" className="btn icon" aria-label={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} aria-expanded={watch.open} onClick={() => watch.setOpen((o) => !o)}>
+                <BellIcon width={20} height={20} />
+              </button>
+            )}
+            {state && (state.following || state.alerts) && (
+              <button type="button" className="btn" onClick={watch.toggle} disabled={watch.busy} aria-pressed={state.following}>
+                {watch.busy && <span className="spinner" />}
+                {state.following ? <><CheckIcon width={16} height={16} />Following</> : <><PlusIcon width={16} height={16} />Follow</>}
+              </button>
+            )}
+            {state && !state.following && !state.alerts && match.status !== 'final' && (
+              <span className="pill outline" title={state.note ?? undefined}>No live alerts</span>
+            )}
+          </span>
         </div>
+        {watch.open && state?.following && (
+          <div className="alert-panel" style={{ color: 'var(--text)' }}>
+            <span className="row">
+              <span className="title">Alerts for this game</span>
+              <Link to="/notifications?tab=settings" className="link small">Settings</Link>
+            </span>
+            {followed && <AlertLevels label="Alerts for this game" value={level} onChange={(l) => { watch.attempt(() => watch.setMatchAlerts(followed.event_id, l)) }} />}
+            <span className="small muted">{gameLevelText(level, match.sport)}</span>
+            {eventId != null && (
+              <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} aria-pressed={watch.muted.has(eventId)} onClick={() => { watch.attempt(() => watch.setMuted(eventId, !watch.muted.has(eventId))) }}>
+                {watch.muted.has(eventId) ? 'Unmute this game' : 'Mute this game'}
+              </button>
+            )}
+          </div>
+        )}
         <div className="stack" style={{ gap: 10 }}>
           <span className="row" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
             <Status match={match} />
@@ -140,6 +210,8 @@ export function MatchPage() {
         {match.status === 'final' && match.verdict && <p className="dsp match-verdict">{match.verdict}</p>}
         {board?.as_of && <span className="tiny soft">Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</span>}
       </header>
+      {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
+      {state && (state.following ? state.held : !state.alerts) && state.note && match.status !== 'final' && <p className="small muted" role="status">{state.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
 
       {yours.length > 0 && (

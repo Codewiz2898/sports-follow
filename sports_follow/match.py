@@ -34,13 +34,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import bus, league, live, registry, search, sports
+from . import bus, league, live, matches, registry, search, sports
 from .adapters import ADAPTERS, KNOWN, Adapter, LiveGame, PlayerRef, source_name
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
@@ -99,6 +100,8 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
     with session() as db:
         players = _roster(db, sport, system, game) if game else []
         blocked = registry.blocked(db) if game and game.bench else set()
+        if game:
+            matches.learn(db, system, [[fixture, *game.fixtures]])  # a board's other address, for its follows
     bench = [{"athlete_id": r.athlete_id, "name": r.name, "team": (r.team_names or [""])[0]} for r in (game.bench if game else []) if (system, r.athlete_id) not in blocked]
     now = now or datetime.now(timezone.utc)
     over = game is not None and game.snapshot.status == "final"
@@ -257,22 +260,56 @@ def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: da
     return FRESH
 
 
+@dataclass
+class Said:
+    """What's known of a game by its address: its source's last read of it, Live now's copy, the league's, the
+    fixtures it's under (a chess board is one of each player's) and its events here, one per fixture."""
+
+    read: dict[str, Any] | None
+    listed: dict[str, Any] | None
+    big: dict[str, Any] | None
+    fixtures: list[str]
+    events: list[Event]
+
+    @property
+    def game(self) -> dict[str, Any] | None:
+        return (self.read or {}).get("game")
+
+    def named(self, source: Adapter | None) -> bool:
+        """Whether a source has named the game here (on Live now, among the league's big games, in a read, or a
+        followed player's), and its source runs a sport that's on: a sport turned off has no pages, as it isn't
+        searched or offered."""
+        return bool(self.events or self.game or self.listed or self.big) and not (source and not any(sports.on(k) for k in source.sports))
+
+    def sport(self, source: Adapter | None) -> str:
+        """The game's sport, which a read or Live now says (a source of several names each game's: "cs2"), else
+        its event's, else its source's one; "" when none says."""
+        events = self.events
+        return ((self.game or {}).get("sport") or (self.listed or {}).get("sport") or (self.big or {}).get("sport") or (events[0].sport if events else "")
+                or (source.sports[0] if source and len(source.sports) == 1 else ""))
+
+
+def find(db: Session, system: str, fixture: str) -> Said:
+    """What's known of the game at an address (Said)."""
+    read_ = last_read(system, fixture)
+    game = (read_ or {}).get("game")
+    listed = _listed(system, fixture)
+    fixtures: list[str] = list(dict.fromkeys([fixture, *((game or {}).get("fixtures") or []), *((listed or {}).get("fixtures") or [])]))
+    events = list(db.scalars(select(Event).where(Event.key.in_([f"{system}:{f}" for f in fixtures])).order_by(Event.id)))
+    return Said(read_, listed, _big(system, fixture), fixtures, events)
+
+
 def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime | None = None) -> tuple[dict[str, Any] | None, bool]:
     """A game's match page, and whether to ask its source for a new read; None when no source has named the
     game here (on Live now, among the league's big games, in a read, or a followed player's)."""
     now = now or datetime.now(timezone.utc)
-    read_ = last_read(system, fixture)
-    game = (read_ or {}).get("game")
-    listed = _listed(system, fixture)
-    big = _big(system, fixture)
-    fixtures = list(dict.fromkeys([fixture, *((game or {}).get("fixtures") or []), *((listed or {}).get("fixtures") or [])]))
-    events = list(db.scalars(select(Event).where(Event.key.in_([f"{system}:{f}" for f in fixtures])).order_by(Event.id)))
+    known = find(db, system, fixture)
+    read_, game, listed, big, fixtures, events = known.read, known.game, known.listed, known.big, known.fixtures, known.events
     source = KNOWN.get(system)
-    if not (events or game or listed or big) or (source and not any(sports.on(k) for k in source.sports)):
-        return None, False  # a sport turned off has no pages, as it isn't searched or offered
-    # The game's sport, which a read or Live now says (a source of several names each game's: "cs2"), else its
-    # event's, else its source's one; else, by its board's kind, the rules it's read by (esports' for any game).
-    named = (game or {}).get("sport") or (listed or {}).get("sport") or (big or {}).get("sport") or (events[0].sport if events else "") or (source.sports[0] if source and len(source.sports) == 1 else "")
+    if not known.named(source):
+        return None, False
+    # Else, by its board's kind, the rules it's read by (esports' for any game).
+    named = known.sport(source)
 
     boards = _boards(db, system, events, read_, listed)
     unread = events[0].status if events else (big or {}).get("status") or "scheduled"
@@ -326,10 +363,11 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
 
 def _moments(db: Session, event_ids: list[int]) -> list[dict[str, Any]]:
     """What was found for the players followed in the game, newest first (moments.py), but what each of them
-    gets alike."""
+    gets alike. Not the game's own moments, for fans following the game (matches.py): its board and timeline
+    say those."""
     if not event_ids:
         return []
-    rows = db.scalars(select(Moment).where(Moment.event_id.in_(event_ids), Moment.kind.not_in(ALIKE)).order_by(Moment.created_at.desc(), Moment.id.desc()).limit(MOMENTS))
+    rows = db.scalars(select(Moment).where(Moment.event_id.in_(event_ids), Moment.player_id.is_not(None), Moment.kind.not_in(ALIKE)).order_by(Moment.created_at.desc(), Moment.id.desc()).limit(MOMENTS))
     return [{"id": m.id, "at": m.created_at.isoformat(), "kind": m.kind, "level": m.level, "title": m.title, "body": m.body, "player_id": m.player_id} for m in rows]
 
 

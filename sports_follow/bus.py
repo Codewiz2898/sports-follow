@@ -1,4 +1,5 @@
-"""Redis: the hot copy of each card and the per-player channels fans subscribe to (design section 7)."""
+"""Redis: the hot copy of each card and the per-player channels fans subscribe to (design section 7), and a
+channel per game fans follow by itself (matches.py): its board and its own moments."""
 
 from __future__ import annotations
 
@@ -32,6 +33,15 @@ def channel(player_id: int) -> str:
 
 def publish(player_id: int, event: dict[str, Any]) -> None:
     sync_redis().publish(channel(player_id), json.dumps(event, default=str))
+
+
+def match_channel(event_id: int) -> str:
+    return f"match:{event_id}"
+
+
+def publish_match(event_id: int, event: dict[str, Any]) -> None:
+    """Tell the fans following a game by itself: its board as polled, a moment of its own."""
+    sync_redis().publish(match_channel(event_id), json.dumps(event, default=str))
 
 
 def store_card(player_id: int, card: dict[str, Any]) -> None:
