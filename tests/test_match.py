@@ -515,3 +515,37 @@ def test_a_partial_read_of_a_finished_game_is_read_again_till_its_whole(db, redi
     db.commit()
     page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(days=2))
     assert (page["status"], page["live"]["source"], page["page"]["moves"], ask) == ("final", "Pitch", ["1. e4 e5"], False)
+
+
+@needs_db
+def test_a_game_that_goes_on_after_a_read_called_it_over_shows_live(db, redis, source):
+    """A knockout mini-match's first game decided, its round still on: the read calls the board over (partial).
+    Live now has its next game on minutes later: that shows, and the game is read every minute again. Live
+    now's list a moment behind the read (under LAG) doesn't."""
+    chess = {"kind": "chess", "white": {"id": "7", "name": "A"}, "black": {"id": "9", "name": "B"}, "result": "1-0"}
+    source.game = game("A 1–0 B", status="final", players=ELEVENS[:2])
+    source.game.snapshot.state, source.game.partial = chess, True
+    match.read("pitch", "100", NOW)
+    assert json.loads(redis["match:pitch:100"])["partial"]
+
+    source.live = [game("A 1–0 B", players=ELEVENS[:2])]
+    live.read("pitch", NOW + timedelta(seconds=30))  # behind the result
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=2))
+    assert (page["status"], page["live"]["is_live"], ask) == ("final", False, False)
+
+    live.read("pitch", NOW + timedelta(minutes=5))  # game 2 on
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=5, seconds=10))
+    assert (page["status"], page["live"]["is_live"], ask) == ("live", True, True)  # live, and read again now, not CONFIRM on
+
+
+@needs_db
+def test_a_read_that_stays_partial_settles_once_its_waited_long_enough(db, redis, source):
+    source.game = game("Arsenal 3 – 2 Chelsea", status="final", players=ELEVENS)
+    source.game.partial = True  # a part its source never fills in (a round Lichess never marks finished)
+    match.read("pitch", "100", NOW)
+    match.read("pitch", "100", NOW + timedelta(hours=1))
+    assert redis.ttl["match:pitch:100"] == match.KEEP
+    match.read("pitch", "100", NOW + timedelta(seconds=match.PARTIAL + 1))
+    assert redis.ttl["match:pitch:100"] == match.FINAL_KEEP
+    assert not json.loads(redis["match:pitch:100"])["partial"]
+    assert not match.view(db, "fan", "pitch", "100", NOW + timedelta(days=2))[1]

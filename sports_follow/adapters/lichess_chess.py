@@ -791,7 +791,8 @@ class LichessChess(Adapter):
         round request, the one Live now and a followed player's live poll make; and once the game on the board
         is over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A board
         whose moves couldn't be read, or whose round is still on (a mini-match's next game may follow a decided
-        one), is partial: match.py reads it again later, and keeps it a week only once the round is over."""
+        one), is partial: match.py reads it again later, and keeps it a week once the round is over (or, if
+        Lichess never says so, once it has waited long enough: match.PARTIAL)."""
         round_id, _, fide = source_id.partition("-")
         data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
         game = parse_game(data, fide, self.system)

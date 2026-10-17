@@ -54,10 +54,14 @@ KEEP = 6 * 3600  # and Redis keeps it this long: a page open at full time, or op
 # A read that finds the game over is the first word, not the last: the source fills in what's missing in the
 # minutes after (a scorecard's lines, a result's note, a goal's correction), and a chess round's next game can
 # follow a decided one. So it's read once more CONFIRM after the game was first found over (and every CONFIRM
-# while the source says its read is partial), and that read, still over and whole, is settled: kept FINAL_KEEP
-# and not asked for again till then. A crowd opening yesterday's final costs its source two reads.
+# while the source says its read is partial, for PARTIAL at most), and that read, still over and whole, is
+# settled: kept FINAL_KEEP and not asked for again till then. A crowd opening yesterday's final costs its
+# source two reads. Till it's settled, a live board newer than it by LAG shows instead (a chess mini-match's
+# next game), and the game is read every FRESH again.
 CONFIRM = 30 * 60
+PARTIAL = 6 * 3600  # what a source's read of a finished game still lacks this long after it was first found over isn't coming
 FINAL_KEEP = 7 * 86400  # a week
+LAG = 2 * 60  # how much newer than a final board a live one must be to show over it: Live now's list can lag a game's end
 READS = 6  # reads a minute of one source for match pages, whichever games: what fans' looks may spend
 MOMENTS = 40  # the most of a game's moments a page lists
 # Moments every followed player in a game gets alike (their game started, they're in the XI): the board and
@@ -100,9 +104,11 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
     over = game is not None and game.snapshot.status == "final"
     before = last_read(system, fixture) or {}
     since = (before.get("final_since") if ((before.get("game") or {}).get("status") == "final") else None) or now.isoformat()
-    settled = over and not cast(LiveGame, game).partial and now - datetime.fromisoformat(since) >= timedelta(seconds=CONFIRM)
+    waited = now - datetime.fromisoformat(since)
+    partial = over and cast(LiveGame, game).partial and waited < timedelta(seconds=PARTIAL)
+    settled = over and not partial and waited >= timedelta(seconds=CONFIRM)
     payload = {"as_of": now.isoformat(), "game": _dump(adapter, game, sport, players, bench) if game else None,
-               "final_since": since if over else None, "settled": settled}
+               "final_since": since if over else None, "partial": partial, "settled": settled}
     bus.sync_redis().set(_key(system, fixture), json.dumps(payload, default=str), ex=FINAL_KEEP if settled else KEEP)
     return game is not None
 
@@ -226,16 +232,24 @@ def _boards(db: Session, system: str, events: list[Event], read_: dict[str, Any]
 
 
 def _shown(boards: list[Board]) -> Board:
-    """The board the page shows: a final one over any other (a finished game doesn't change, and a card can lag
-    its end), and of those the game's own read once it's settled (it has all the page shows: a chess game's
-    moves); else the newest."""
-    return max(boards, key=lambda b: (b[1] == "final", b[1] == "final" and b[4], datetime.fromisoformat(b[0])))
+    """The board the page shows: the game's own read once it's settled (over, confirmed, and with all the page
+    shows: a chess game's moves); else the newest, a final board standing over a live one less than LAG newer
+    (Live now's list can lag a game's end), so a game that goes on after its source called it over (a chess
+    mini-match's next game) shows live."""
+    def rank(b: Board) -> tuple[bool, datetime]:
+        at = datetime.fromisoformat(b[0])
+        return b[1] == "final" and b[4], at + timedelta(seconds=LAG) if b[1] == "final" else at
+
+    return max(boards, key=rank)
 
 
 def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: datetime) -> float:
-    """How long a read of the game is served before a look asks for another: FRESH; CONFIRM after a read that
-    found it over but isn't settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date
-    comes slowly, if at all), or to come more than SOON from its start, or with its day still to be fixed."""
+    """How long a read of the game is served before a look asks for another: FRESH while the board shown is live
+    (a newer one than a read that found it over, too: a mini-match's next game); CONFIRM after a read that found
+    it over but isn't settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date comes
+    slowly, if at all), or to come more than SOON from its start, or with its day still to be fixed."""
+    if status == "live":
+        return FRESH
     if ((read_ or {}).get("game") or {}).get("status") == "final":
         return CONFIRM
     if status == "postponed" or (status == "scheduled" and (not start or datetime.fromisoformat(start) - now > timedelta(seconds=SOON))):
