@@ -303,15 +303,19 @@ function PlayerLine({ live, playerName, tone }: { live: LiveStatus; playerName: 
 
 /** A game on now that none of the fan's players are in (.live-other): paper, an ink ring, its sport's tag and
  * line art, and its sport's own board in ink, where red is only the clock. The card opens its match page
- * (`match`), but its follow buttons (`children`), which take their own taps. */
-export function OtherGameCard({ live, sport, seed, tag, match, children, fill }: { live: LiveStatus; sport: string; seed: string; tag: string; match?: string | null; children?: ReactNode } & RailCard) {
+ * (`match`), but its follow buttons (`children`), which take their own taps. To a screen reader the card isn't
+ * one item: its tag and board are the link (`label`), and each follow button is its own. */
+export function OtherGameCard({ live, sport, seed, tag, label, match, children, fill }: { live: LiveStatus; sport: string; seed: string; tag: string; label: string; match?: string | null; children?: ReactNode } & RailCard) {
   const sports = useSports()
   const tone = toneOf(sports, sport)
+  const open = openMatch(match)
   return (
-    <Pressable disabled={!match} onPress={openMatch(match)} accessibilityRole={match ? 'link' : undefined} style={[b.other, fill && { width: undefined }]}>
+    <Pressable disabled={!match} onPress={open} accessible={false} focusable={false} importantForAccessibility="no" style={[b.other, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={seed} colour={tone.sport} opacity={0.2} />
-      <Pill small label={tag} bg={tone.sport} color={tone.on} />
-      <View style={{ marginVertical: 'auto' }}><GameBoard live={live} compact pal={onPaper(tone)} /></View>
+      <Pressable disabled={!match} onPress={open} accessibilityRole={match ? 'link' : undefined} accessibilityLabel={label} style={{ flex: 1, gap: 12 }}>
+        <Pill small label={tag} bg={tone.sport} color={tone.on} />
+        <View style={{ marginVertical: 'auto' }}><GameBoard live={live} compact pal={onPaper(tone)} /></View>
+      </Pressable>
       {children}
     </Pressable>
   )

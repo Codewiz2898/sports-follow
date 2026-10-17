@@ -85,17 +85,21 @@ export function FollowPills({ game, sport, follow }: { game: Pick<LiveGame, 'tit
 }
 
 /** One game in the welcome's "Live now" (.live-game): outlined in its sport's colour. The card opens its match
- * page, but its follow buttons, which take their own taps. */
+ * page, but its follow buttons, which take their own taps. To a screen reader the card isn't one item: what's
+ * on is the link, and each follow button is its own. */
 function LiveGameCard({ game, sport, follow, fill }: { game: LiveGame; sport: string; follow: Follow } & RailCard) {
   const tone = toneOf(useSports(), sport)
+  const open = openMatch(game.match)
   return (
-    <Pressable disabled={!game.match} onPress={openMatch(game.match)} accessibilityRole={game.match ? 'link' : undefined} accessibilityLabel={`${game.title}, live`} style={[s.liveGame, { borderColor: tone.sport }, fill && { width: undefined }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <LiveBadge />
-        {game.live.clock ? <Eyebrow color={colour.text}>{game.live.clock}</Eyebrow> : null}
-      </View>
-      <Eyebrow lines={1}>{game.competition}</Eyebrow>
-      <Text style={dsp(24)}>{game.live.score || game.title}</Text>
+    <Pressable disabled={!game.match} onPress={open} accessible={false} focusable={false} importantForAccessibility="no" style={[s.liveGame, { borderColor: tone.sport }, fill && { width: undefined }]}>
+      <Pressable disabled={!game.match} onPress={open} accessibilityRole={game.match ? 'link' : undefined} accessibilityLabel={`${game.title}, live${game.live.score ? `, ${game.live.score}` : ''}`} style={{ gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <LiveBadge />
+          {game.live.clock ? <Eyebrow color={colour.text}>{game.live.clock}</Eyebrow> : null}
+        </View>
+        <Eyebrow lines={1}>{game.competition}</Eyebrow>
+        <Text style={dsp(24)}>{game.live.score || game.title}</Text>
+      </Pressable>
       <View style={{ marginTop: 'auto' }}><FollowPills game={game} sport={sport} follow={follow} /></View>
     </Pressable>
   )
@@ -122,7 +126,7 @@ export function LiveNow({ first = [] }: { first?: string[] }) {
  * outlined, so it doesn't pass for theirs, with players to follow from it. */
 export function OtherGame({ game, label, follow, fill }: GameOn & { follow: Follow } & RailCard) {
   return (
-    <OtherGameCard live={game.live} sport={game.sport} seed={game.key} tag={game.competition || label} match={game.match} fill={fill}>
+    <OtherGameCard live={game.live} sport={game.sport} seed={game.key} tag={game.competition || label} label={`${label}: ${game.title}, live${game.live.score ? `, ${game.live.score}` : ''}`} match={game.match} fill={fill}>
       <FollowPills game={game} sport={game.sport} follow={follow} />
     </OtherGameCard>
   )
