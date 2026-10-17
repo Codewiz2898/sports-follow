@@ -98,7 +98,10 @@ def offer(db: Session, fan: str | None, system: str, fixture: str, page: dict[st
 
 
 def _over(known: Said) -> bool:
-    return any(e.status == "final" for e in known.events) or (known.game or {}).get("status") == "final" or (not known.events and (known.big or {}).get("status") == "final")
+    """Whether the game's over: polled to its end here, or its own read found it over and settled (match.read: a
+    chess mini-match can go on after a read called it over), or, with neither, the league's card says so."""
+    read_over = (known.game or {}).get("status") == "final" and bool((known.read or {}).get("settled"))
+    return any(e.status == "final" for e in known.events) or read_over or (not known.events and not known.game and (known.big or {}).get("status") == "final")
 
 
 def follow(db: Session, fan: str, system: str, fixture: str) -> int:

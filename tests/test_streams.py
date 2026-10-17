@@ -163,7 +163,7 @@ def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(ap
 
 
 def test_async_routes_use_the_database_off_the_event_loop(api):
-    assert asyncio.run(server.health(Response())) == {"ok": True, "db": True, "redis": True}
+    assert asyncio.run(server.health(Response())) == {"ok": True, "db": True, "redis": True, "commit": None}
     assert [p["alerts"] for p in asyncio.run(server.following(fan="fan"))["players"]] == ["key", "off"]
     card = asyncio.run(server.card(1, Request(), Response(), fan="fan"))
     assert (card["following"], card["alerts"]) == (True, "off")

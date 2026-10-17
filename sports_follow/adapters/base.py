@@ -129,6 +129,10 @@ class LiveGame:
     # The rest of its line-ups (substitutes, an impact player), by the source's ids, where a source's match()
     # names them: whose lines its match page names (a scorecard's), though only `players` are offered to follow.
     bench: list[PlayerRef] = field(default_factory=list)
+    # A finished game's match() read that isn't all its source will have, or may yet change: a chess board's moves
+    # it couldn't read, or a round with more games to come; a Dota 2 map OpenDota hasn't parsed yet. Its match
+    # page reads it again later instead of keeping it as the game's last word (match.read).
+    partial: bool = False
 
 
 @dataclass
@@ -351,7 +355,9 @@ class Adapter:
     # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py);
     # a source of several sports says the game's (LiveGame.sport). None: the source has no such game, or it's of
     # a sport turned off. Asked at most once a minute a game, only while someone has its page open, and only for
-    # a game a source named first (on Live now, or a followed player's).
+    # a game a source named first (on Live now, or a followed player's). A finished game whose read lacks a part
+    # the source will have later (a second request that failed), or that may still change, says so
+    # (LiveGame.partial): it's read again later, not kept a week.
     #
     # Optional, for a source whose live polls need nothing but a game's id (a fixture's source_id):
     #   def locator(self, source_id: str) -> dict[str, Any] | None

@@ -9,6 +9,8 @@ x-app: &app
   build:
     context: ..
     dockerfile: Dockerfile
+    args:
+      SPORTS_FOLLOW_COMMIT: ${SPORTS_FOLLOW_COMMIT:-}   # deploy.sh: the commit being built, for /api/health
   restart: unless-stopped
   env_file:
     - settings.env

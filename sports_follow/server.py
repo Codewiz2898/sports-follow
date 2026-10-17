@@ -43,7 +43,7 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -376,7 +376,8 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
 
 @app.get("/api/health")
 async def health(response: Response) -> dict[str, Any]:
-    """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't."""
+    """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't.
+    Also the commit this image was built from (null outside a deployed one), which the deploy workflow checks."""
     checks = {"db": False, "redis": False}
     try:
         checks["db"] = await in_db(lambda db: db.execute(select(1)).scalar() == 1)
@@ -389,7 +390,7 @@ async def health(response: Response) -> dict[str, Any]:
     ok = all(checks.values())
     if not ok:
         response.status_code = 503
-    return {"ok": ok, **checks}
+    return {"ok": ok, **checks, "commit": COMMIT or None}
 
 
 # ---------------------------------------------------------------- cards

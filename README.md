@@ -155,11 +155,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   game it lists its address (`match`) where it has a page, and the app never makes one up. Where a fan
   follows someone in it, its board is their live card's, as fresh as the polls. Any other game's board, and
   every game's line-ups and players' lines, come from a read of its source (an adapter's `match`) by the
-  worker: at most once a minute a game (a game still hours off, every half hour) and only while someone has
-  its page open, for a game a source has named (on Live now, among the big results and games coming up, or
-  a followed player's, their results included), at most six a minute of a source's allowance. A read that
-  finds the game over is kept a week and not asked for again till then, so a crowd opening yesterday's
-  final costs its source one read; one that finds it not there, for hours. The page shows Live now's copy
+  worker: at most once a minute a game (a game still hours off, or called off, every half hour) and only
+  while someone has its page open, for a game a source has named (on Live now, among the big results and
+  games coming up, or a followed player's, their results included), at most six a minute of a source's
+  allowance. A read that finds the game over is read once more half an hour on, when the source has filled
+  in what it hadn't at the whistle (and every half hour while the source says it's partial: a chess round
+  still on, moves or a Dota map's numbers not read yet); that one is kept a week and not asked for again
+  till then, so a crowd opening yesterday's final costs its source two reads. One that finds it not there
+  is the last for hours. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
@@ -288,8 +291,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),
   `match` for a game's match page (one game by a fixture's id, whoever follows it, live, to come or over,
   with its line-ups and every player's line, in a request or two: a finished chess board's moves are a
-  second; ids of another shape than its `fixture_pattern` are refused; `sports_follow/match.py`; a league
-  game whose source has none has no page of its own),
+  second; a finished game's read that lacks what the source will have later, or may still change, sets
+  `LiveGame.partial`, so it's read again rather than kept a week; ids of another shape than its
+  `fixture_pattern` are refused; `sports_follow/match.py`; a league game whose source has none has no page of
+  its own),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
@@ -502,6 +507,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
+| `SPORTS_FOLLOW_COMMIT` | none | the commit the image was built from, which `/api/health` says; `deploy.sh` passes it to the build, so set it by hand only to test |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |

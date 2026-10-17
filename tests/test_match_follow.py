@@ -272,6 +272,9 @@ def test_a_made_up_address_a_game_over_or_one_no_source_polls_makes_no_follow(db
     with pytest.raises(matches.Refused):
         matches.follow(db, "fan", "nowhere", "1")
     named(source, "200", status="final")
+    assert matches.follow(db, "fan", "pitch", "200")  # a read that found it over isn't sure yet (a mini-match goes on)
+    db.rollback()
+    match.read("pitch", "200", NOW + timedelta(seconds=match.CONFIRM + 1))  # read again, still over: settled
     with pytest.raises(matches.Refused) as over:
         matches.follow(db, "fan", "pitch", "200")
     assert (over.value.status, over.value.message) == (409, matches.OVER)
