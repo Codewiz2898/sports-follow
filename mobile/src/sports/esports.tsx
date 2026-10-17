@@ -1,7 +1,9 @@
 import { Text, View } from 'react-native'
-import { dotaLine, esports as facts, isLobby, lobbyRows, place, points, shortTeam, type BattleRoyaleState, type EsportsState, type EsportsTeam } from '../../../web/src/sports/facts/esports'
+import { dotaLine, esports as facts, isLobby, lobbyRows, lobbyWinners, place, points, shortTeam, type BattleRoyaleState, type EsportsPage, type EsportsState, type EsportsTeam } from '../../../web/src/sports/facts/esports'
 import { colour, font, num, t } from '../theme'
-import { Clock, LineRow, Muted, Note, Score, Sides, Title, type Board, type BoardProps, type Palette } from './board'
+import { Card, ListCard, LiveBadge } from '../ui'
+import { Clock, INK, LineRow, Muted, Note, Score, Sides, Title, type Board, type BoardProps, type MatchPart, type MatchProps, type Palette } from './board'
+import { MatchSection } from './section'
 
 /** One chip a map or match, the winner's tag in it; the one being played is happening now (esports.css). */
 function MapChip({ label, winner, running, pal }: { label: string; winner?: string | null; running?: boolean; pal: Palette }) {
@@ -21,9 +23,9 @@ function LobbyBoard({ state, clock, teams, compact, pal }: BoardProps<BattleRoya
     <View style={{ gap: 12 }}>
       {clock ? <Clock pal={pal}>{clock}</Clock> : null}
       <View>
-        <LineRow pal={pal} head first={1} cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
+        <LineRow pal={pal} head wide={1} right cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
         {lobbyRows(state, teams, compact).map(({ team: x, ours }) => (
-          <LineRow key={x.id} pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+          <LineRow key={x.id} pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total wide={1} right bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
         ))}
       </View>
       {!compact && state.games.length > 0 ? (
@@ -74,4 +76,41 @@ function EsportsBoard(props: BoardProps<EsportsState | BattleRoyaleState>) {
   return isLobby(props.state) ? <LobbyBoard {...(props as BoardProps<BattleRoyaleState>)} /> : <SeriesBoard {...(props as BoardProps<EsportsState>)} />
 }
 
-export const esports = { ...facts, Board: EsportsBoard as Board }
+/** A match page's part: a series map by map (who took each, the one being played, a Dota 2 map's best
+ * numbers), or a lobby's whole standings and who won each of its matches. */
+function EsportsMatch({ page }: MatchProps<EsportsPage>) {
+  if (page.standings?.length) {
+    const won = lobbyWinners(page)
+    return (
+      <MatchSection title="Standings" note={`${page.standings.length} teams`}>
+        <Card pad style={{ gap: 12 }}>
+          <View>
+            <LineRow pal={INK} head wide={1} right cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
+            {page.standings.map((x) => (
+              <LineRow key={`${x.place}-${x.name}`} pal={INK} total wide={1} right bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+            ))}
+          </View>
+          {won ? <Text style={[t.small, t.muted]}>{won}</Text> : null}
+        </Card>
+      </MatchSection>
+    )
+  }
+  if (!page.maps?.length) return null
+  return (
+    <MatchSection title="Maps">
+      <ListCard>
+        {page.maps.map((m) => (
+          <View key={m.n} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <View style={{ flexShrink: 1, gap: 2 }}>
+              <Text style={t.title}>Map {m.n}</Text>
+              {m.best ? <Text style={[t.small, t.muted]}>{m.best}</Text> : null}
+            </View>
+            {m.winner ? <Text style={[t.title, { textAlign: 'right', flexShrink: 1 }]}>{m.winner}</Text> : m.status === 'running' ? <LiveBadge label="Now" /> : <Text style={[t.small, t.muted]}>To play</Text>}
+          </View>
+        ))}
+      </ListCard>
+    </MatchSection>
+  )
+}
+
+export const esports = { ...facts, Board: EsportsBoard as Board, Match: EsportsMatch as MatchPart }

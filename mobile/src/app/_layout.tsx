@@ -13,12 +13,12 @@ import { useNotificationTaps, usePushRegistration } from '../push'
 import { TabBar } from '../tabbar'
 import { colour } from '../theme'
 
-/** Notifications on this phone (push.ts): registered as this fan once their players are known (it asks the
- * first time there are some), and a tapped one's player opened. After the stack, so a tap that started the
- * app opens over a mounted navigator. */
+/** Notifications on this phone (push.ts): registered as this fan once their players and games are known (it
+ * asks the first time there are some), and a tapped one's page opened. After the stack, so a tap that started
+ * the app opens over a mounted navigator. */
 function Push() {
-  const { cards, loaded } = useFollowing()
-  usePushRegistration(loaded ? cards.length > 0 : null)
+  const { cards, loaded, matches, matchesLoaded } = useFollowing()
+  usePushRegistration(loaded && matchesLoaded ? cards.length > 0 || matches.length > 0 : null)
   useNotificationTaps()
   return null
 }

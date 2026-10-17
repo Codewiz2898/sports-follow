@@ -1,12 +1,12 @@
 // A player's results history and stats, as the web's components/Results.tsx: every finished game newest first, a
-// page at a time, each opening to the final score, the player's whole line and the source; and the Stats tab,
-// the source's numbers or form over the last 10 or 5 results.
+// page at a time, each opening to the final score, the player's whole line, the game's match page and the
+// source; and the Stats tab, the source's numbers or form over the last 10 or 5 results.
 
 import { useEffect, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { day, hostname, outcome, playedOn, safeHref } from '../../web/src/format'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from './api'
-import { Empty, SourceNote, StatGrid } from './blocks'
+import { Empty, openMatch, SourceNote, StatGrid } from './blocks'
 import { useSports } from './catalog'
 import { ChevronIcon } from './icons'
 import { colour, font, num, t } from './theme'
@@ -25,10 +25,12 @@ export function Segmented<T extends string | number>({ options, value, onChange,
   )
 }
 
-/** teamOnly: a sport whose source has no player numbers (esports), so a result is the team's. */
-function GameView({ detail, error, teamOnly }: { detail: GameDetail | null; error: string | null; teamOnly?: boolean }) {
+/** teamOnly: a sport whose source has no player numbers (esports), so a result is the team's. match: the
+ * game's match page (what happened in it: the timeline, the scorecard, the maps), where a source has the game. */
+function GameView({ detail, error, teamOnly, match }: { detail: GameDetail | null; error: string | null; teamOnly?: boolean; match?: string | null }) {
   if (error) return <View style={s.body}><Text style={[t.small, t.muted]}>{error}</Text></View>
   if (!detail) return <View style={s.body}><Spinner /></View>
+  const page = match ?? detail.match
   const lineNote = teamOnly ? "The team's result: the source has no player numbers."
     : detail.scorecard === 'missing' ? 'The source has no scorecard for this game.'
       : detail.scorecard ? 'No line for the player in this game.' : "The player's line is still being read."
@@ -47,12 +49,17 @@ function GameView({ detail, error, teamOnly }: { detail: GameDetail | null; erro
           {detail.line.stats.length > 0 ? <StatGrid stats={detail.line.stats} paper /> : null}
         </>
       ) : <Text style={[t.small, t.muted]}>{lineNote}</Text>}
-      {url ? <Text onPress={() => Linking.openURL(url)} style={[t.small, t.link]}>Open on {hostname(detail.source_url)}</Text> : null}
+      {page || url ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
+          {page ? <Text onPress={openMatch(page)} accessibilityRole="link" style={[t.small, t.link]}>The match</Text> : null}
+          {url ? <Text onPress={() => Linking.openURL(url)} style={[t.small, t.link]}>Open on {hostname(detail.source_url)}</Text> : null}
+        </View>
+      ) : null}
     </View>
   )
 }
 
-/** One finished game; tapping it opens the final score, the player's whole line and the source. */
+/** One finished game; tapping it opens the final score, the player's whole line, the game's match page and the source. */
 function GameRow({ r, playerId, teams, teamOnly, last }: { r: RecentResult; playerId: number; teams?: string[]; teamOnly?: boolean; last: boolean }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<GameDetail | null>(null)
@@ -80,7 +87,7 @@ function GameRow({ r, playerId, teams, teamOnly, last }: { r: RecentResult; play
           {canOpen ? <View style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}><ChevronIcon size={16} color={colour.muted} /></View> : null}
         </View>
       </Pressable>
-      {open ? <GameView detail={detail} error={error} teamOnly={teamOnly} /> : null}
+      {open ? <GameView detail={detail} error={error} teamOnly={teamOnly} match={r.match} /> : null}
     </View>
   )
 }

@@ -15,7 +15,7 @@ import { Backdrop } from './art'
 import { toneOf, useSports, useTone, type Tone } from './catalog'
 import { useNow } from './clock'
 import type { RailCard } from './rail'
-import { boardFor, onInk, onPaper, type Palette } from './sports'
+import { boardFor, MomentKind, onInk, onPaper, type Palette } from './sports'
 import { colour, font, GUTTER, num, RADIUS_CARD, RADIUS_TILE, t } from './theme'
 import { alpha, breakable, Card as Surface, Dsp, Eyebrow, LiveBadge, Pill, Spinner, WL } from './ui'
 
@@ -23,6 +23,18 @@ const go = (path: string) => () => router.push(path as never)
 // The share of the player band the words take beside a photo: they stop where its fade starts to show, so
 // they're read on the band (.player-band.with-photo on the web).
 const BESIDE_PHOTO = 0.64
+
+/** A game's match page (app/match/), by its address after /match/ ("<source>/<game id>", as the API gives it). */
+export function matchHref(address: string) {
+  const at = address.indexOf('/')
+  return { pathname: '/match/[source]/[game]', params: { source: address.slice(0, at), game: address.slice(at + 1) } } as const
+}
+
+/** Opens a game's match page where it has one (`address`), else `otherwise` (a player's page), else nothing. */
+export const openMatch = (address?: string | null, otherwise?: string) => () => {
+  if (address) router.push(matchHref(address))
+  else if (otherwise) router.push(otherwise as never)
+}
 
 // ---------------------------------------------------------------- small pieces
 
@@ -72,15 +84,17 @@ export function LineStats({ text, sport }: { text?: string | null; sport?: strin
 // ---------------------------------------------------------------- Today's cards
 
 /** A finished game of the fan's on Today (lines.resultCard says what): a block of its sport's colour with one
- * big word, the players and their lines, and their win, draw or loss. The hero leads a day with nothing live. */
+ * big word, the players and their lines, and their win, draw or loss. The hero leads a day with nothing live.
+ * It opens the game's match page, what happened in it, where a source has the game; else the first player's. */
 export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?: boolean; now: number } & RailCard) {
   const sports = useSports()
   const tone = toneOf(sports, game.players[0].sport)
   const c = resultCard(game, Boolean(hero), now, sports.drawn(game.players[0].sport))
   const badge = c.wl ? <WL mark={c.wl} on={tone.on} block={tone.sport} /> : null
   const line = (text: string, strong?: boolean) => <Text key={text} style={[b.resultLine, { color: tone.on, fontFamily: strong ? font[800] : font[700] }]} numberOfLines={2}>{text}</Text>
+  const page = game.players.find((p) => p.result.match)?.result.match
   return (
-    <Pressable onPress={go(`/player/${c.r.player_id}`)} style={[b.result, hero && b.resultHero, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
+    <Pressable onPress={openMatch(page, `/player/${c.r.player_id}`)} style={[b.result, hero && b.resultHero, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={game.key} colour={tone.on} />
       <View style={b.row}>
         {hero ? <Pill label={c.when} bg={tone.on} color={tone.sport} /> : <Eyebrow color={tone.onSoft} lines={1} style={{ flexShrink: 1 }}>{[c.when, c.r.competition].filter(Boolean).join(' · ')}</Eyebrow>}
@@ -116,19 +130,21 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
 }
 
 /** One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it. */
-export function ComingCard({ event, players, seed, fill }: { event: UpcomingEvent; players: Card[]; seed: string } & RailCard) {
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it, or
+ * saying they follow the game itself (`sport`: its sport, with no players). It opens the game's match page (the
+ * line-ups as they come, both sides' players), else the first player's page. */
+export function ComingCard({ event, players, seed, sport, fill }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string } & RailCard) {
   const now = useNow()
-  const tone = useTone(players[0].player.sport)
+  const tone = useTone(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Pressable onPress={go(`/player/${players[0].player_id}`)} style={[b.coming, fill && { width: undefined }]}>
+    <Pressable onPress={openMatch(event.match, players[0] ? `/player/${players[0].player_id}` : undefined)} style={[b.coming, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={seed} colour={tone.ink} />
       <Eyebrow color={colour.inkMuted} lines={1}>{eyebrow}</Eyebrow>
       <Dsp size={44} color={tone.ink}>{big}</Dsp>
       <View style={{ gap: 6 }}>
         <Text style={[b.resultLine, { color: colour.bg }]} numberOfLines={2}>{event.title}</Text>
-        <Pill small label={players.map((c) => shortName(c.player.name)).join(' · ')} bg={tone.sport} color={tone.on} />
+        <Pill small label={players.length ? players.map((c) => shortName(c.player.name)).join(' · ') : 'Following this game'} bg={tone.sport} color={tone.on} />
       </View>
     </Pressable>
   )
@@ -193,12 +209,6 @@ export function GameBoard({ live, compact, teams, pal }: { live: LiveStatus; com
   return Board && live.state ? <Board state={live.state as never} clock={live.clock} compact={compact} teams={teams} live={live} pal={pal} /> : <PlainScore live={live} pal={pal} />
 }
 
-const MOMENT_KIND: Record<string, { bg: string; fg: string }> = {
-  goal: { bg: colour.live, fg: '#FFFFFF' },
-  yellow: { bg: '#F2C94C', fg: '#1A1400' },
-  red: { bg: '#EF5A5A', fg: '#1A0000' },
-}
-
 /**
  * The live scoreboard (.board): an ink scorebug whatever the sport, drawn by the sport's board. Today's is
  * compact: with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is
@@ -222,23 +232,24 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
       {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
       {!compact && live.moments?.length ? (
         <View style={{ gap: 8 }}>
-          {live.moments.slice(0, 5).map((m, i) => {
-            const kind = MOMENT_KIND[m.kind.toLowerCase()] ?? { bg: colour.inkRaised, fg: colour.inkMuted }
-            return (
-              <View key={`${m.clock}-${i}`} style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
-                <Text style={[num(17), { minWidth: 44, color: '#FFFFFF' }]}>{m.clock}</Text>
-                <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: kind.bg }}>
-                  <Text style={{ fontFamily: font[800], fontSize: 11, letterSpacing: 0.66, textTransform: 'uppercase', color: kind.fg }}>{m.kind[0] + m.kind.slice(1).toLowerCase()}</Text>
-                </View>
-                <Text style={[t.small, { color: '#FFFFFF', flex: 1 }]}>{m.text}</Text>
-              </View>
-            )
-          })}
+          {live.moments.slice(0, 5).map((m, i) => (
+            <View key={`${m.clock}-${i}`} style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
+              <Text style={[num(17), { minWidth: 44, color: '#FFFFFF' }]}>{m.clock}</Text>
+              <MomentKind kind={m.kind} label={m.kind[0] + m.kind.slice(1).toLowerCase()} />
+              <Text style={[t.small, { color: '#FFFFFF', flex: 1 }]}>{m.text}</Text>
+            </View>
+          ))}
         </View>
       ) : null}
       <View style={b.row}>
         <Text style={[t.tiny, { color: colour.inkMuted, flexShrink: 1 }]}>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</Text>
-        {!compact && url ? <Text onPress={() => Linking.openURL(url)} style={[t.tiny, t.link, { color: '#FFFFFF' }]}>Open source</Text> : null}
+        {/* A compact board is a tap on its game already (Today's open its match page). */}
+        {!compact && (live.match || url) ? (
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            {live.match ? <Text onPress={openMatch(live.match)} accessibilityRole="link" style={[t.tiny, t.link, { color: '#FFFFFF' }]}>The match</Text> : null}
+            {url ? <Text onPress={() => Linking.openURL(url)} style={[t.tiny, t.link, { color: '#FFFFFF' }]}>Open source</Text> : null}
+          </View>
+        ) : null}
       </View>
     </View>
   )
@@ -291,17 +302,18 @@ function PlayerLine({ live, playerName, tone }: { live: LiveStatus; playerName: 
 }
 
 /** A game on now that none of the fan's players are in (.live-other): paper, an ink ring, its sport's tag and
- * line art, and its sport's own board in ink, where red is only the clock. */
-export function OtherGameCard({ live, sport, seed, tag, children, fill }: { live: LiveStatus; sport: string; seed: string; tag: string; children?: ReactNode } & RailCard) {
+ * line art, and its sport's own board in ink, where red is only the clock. The card opens its match page
+ * (`match`), but its follow buttons (`children`), which take their own taps. */
+export function OtherGameCard({ live, sport, seed, tag, match, children, fill }: { live: LiveStatus; sport: string; seed: string; tag: string; match?: string | null; children?: ReactNode } & RailCard) {
   const sports = useSports()
   const tone = toneOf(sports, sport)
   return (
-    <View style={[b.other, fill && { width: undefined }]}>
+    <Pressable disabled={!match} onPress={openMatch(match)} accessibilityRole={match ? 'link' : undefined} style={[b.other, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={seed} colour={tone.sport} opacity={0.2} />
       <Pill small label={tag} bg={tone.sport} color={tone.on} />
       <View style={{ marginVertical: 'auto' }}><GameBoard live={live} compact pal={onPaper(tone)} /></View>
       {children}
-    </View>
+    </Pressable>
   )
 }
 

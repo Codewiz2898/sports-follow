@@ -1,6 +1,6 @@
-// The fan's activity list (every moment of their players, pushed or not, newest first), how much of it is new,
-// and the games they muted, as the web app's ActivityProvider (web/src/activity.tsx). "Seen" is per device,
-// kept on the phone.
+// The fan's activity list (every moment of their players, and of the games they follow by themselves, pushed or
+// not, newest first), how much of it is new, and the games they muted, as the web app's ActivityProvider
+// (web/src/activity.tsx). "Seen" is per device, kept on the phone.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createContext, use, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
@@ -23,7 +23,7 @@ const ActivityContext = createContext<Activity | null>(null)
 const SEEN = 'stann.alerts-seen'
 
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { cards, loaded: following, heard } = useFollowing()
+  const { cards, loaded: following, heard, matches } = useFollowing()
   const { epoch } = useAccount()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [next, setNext] = useState<number | null>(null)
@@ -31,8 +31,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   const [seen, setSeen] = useState<number | null>(null)
   const [seenRead, setSeenRead] = useState(false)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
-  // Following someone new, or turning a player off, changes the whole list.
-  const who = cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`).sort().join(',')
+  // Following someone new, or turning a player off, changes the whole list; a game too.
+  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`)].sort().join(',')
 
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
@@ -47,7 +47,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!following || !seenRead) return
-    if (!who) { setItems([]); setNext(null); setLoaded(true); return }
+    // Asked even when the fan follows nothing now: a game they followed by itself has lapsed since it ended, and
+    // its moments stay in the list (30 days), as a player's do.
     let stale = false
     api.activity().then((r) => {
       if (stale) return
@@ -65,9 +66,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     return () => { stale = true }
   }, [following, who, seenRead])
 
-  // New moments, when the follow list came back changed.
+  // New moments, when the follow list (or a followed game's board) came back changed.
   useEffect(() => {
-    if (!heard || !who) return
+    if (!heard) return
     let stale = false
     api.activity().then((r) => {
       if (stale) return
@@ -77,7 +78,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
       })
     }).catch(() => {})
     return () => { stale = true }
-  }, [heard, who, epoch])
+  }, [heard, epoch])
 
   const more = useCallback(async () => {
     if (next == null) return
