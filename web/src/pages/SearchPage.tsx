@@ -5,8 +5,10 @@ import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
 import { starterNames, useStarters } from '../components/Starters'
+import { fold } from '../search'
 
-/** Follow a player: search every source as you type, pick the exact athlete, or hand a name to the research agent. */
+/** Follow a player or a team: search every source as you type, pick the exact athlete or the team, or hand a name
+ * to the research agent. */
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const [query, setQuery] = useState(params.get('q') ?? '')
@@ -29,7 +31,9 @@ export function SearchPage() {
     // Still showing the previous query's results: they aren't what was asked for.
     if (!fresh) return
     const first = data && sections(data)[0]?.items[0]
-    if (first && (first.exact || data.results.length === 1)) actions.open(first)
+    const team = data?.teams?.find((t) => fold(t.name) === fold(data.query))
+    if (team) actions.openTeam(team)  // "Arsenal": the team, first in the results
+    else if (first && (first.exact || data.results.length === 1)) actions.open(first)
   }
 
   return (
@@ -38,7 +42,7 @@ export function SearchPage() {
       <form onSubmit={submit} className="search" role="search">
         <SearchIcon width={22} height={22} style={{ flexShrink: 0 }} />
         <label htmlFor="player-query" className="sr-only">Player name</label>
-        <input id="player-query" type="search" autoFocus autoComplete="off" spellCheck={false} placeholder="Any athlete, any sport" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input id="player-query" type="search" autoFocus autoComplete="off" spellCheck={false} placeholder="Any athlete or team, any sport" value={query} onChange={(e) => setQuery(e.target.value)} />
         {loading && <span className="spinner" aria-label="Searching" />}
       </form>
       <SportChips sport={sport} onChange={setSport} />

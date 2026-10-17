@@ -167,6 +167,45 @@ export interface SearchResponse {
   partial: string[]  // sources that didn't answer in time
   research: Research
   researchable: boolean  // false: nothing to search or research by ("--", a name in another script)
+  teams?: TeamSummary[]  // teams by that name fans can follow (sports_follow/teams.py), from the registry alone
+}
+
+/** A team fans can follow (sports_follow/teams.py), as search and Following list it: what it plays in and where
+ * it's from (`detail`), how many follow it, whether this fan does, and its next game as last read. */
+export interface TeamSummary {
+  team_id: number
+  name: string
+  short: string  // its source's code for it: "ARS"
+  sport: string  // a sport's key
+  detail: string
+  followers: number
+  following: boolean
+  next?: { title?: string | null; start_utc?: string | null; status?: string | null; match?: string | null; versus?: string | null } | null
+}
+
+/** A team the fan follows (GET /api/me/following's teams): with their level, its last result from its side, and
+ * its game on now as last polled (a live block like a card's), if any. */
+export interface FollowedTeam extends TeamSummary {
+  alerts: AlertLevel
+  last?: (RecentResult & { versus?: string | null }) | null
+  live?: LiveStatus | null
+}
+
+/** A team's page (GET /api/teams/<id>): who it is, whether this fan follows it and at what level, whether it can
+ * be followed now (its source runs) and why not, its game on now, its games to come and last results from its
+ * side, its form, and its squad as search results, each followed as one is. */
+export interface TeamPage extends TeamSummary {
+  alerts: AlertLevel
+  can_follow: boolean
+  note: string | null
+  live?: LiveStatus | null
+  upcoming: (UpcomingEvent & { versus?: string | null })[]
+  recent: (RecentResult & { versus?: string | null })[]
+  form: ('W' | 'D' | 'L')[]
+  squad: SearchResult[]
+  source: string
+  fetched_at?: string | null
+  refreshing: boolean  // its games are being read again: a newer page may come in a moment
 }
 
 export interface AthletePreview {
@@ -196,8 +235,10 @@ export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
 
 /** Something worth telling a player's fans (sports_follow/moments.py). */
 /** A moment as the stream brings it: a player's, or (player_id null) a game's own, for the fans following the
- * game by itself (sports_follow/matches.py). */
-export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor' }
+ * game by itself (sports_follow/matches.py) or a team in it (sports_follow/teams.py). A game's own told from one
+ * team's side (its result: "Arsenal won 2–1 v Chelsea") names whose (`sides`, team tags: "team:7"), for that
+ * team's fans; the game's own result says whose sides tell it too (`told_by`), so their fans get theirs instead. */
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor'; sides?: string[]; told_by?: string[] }
 
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, and of the games
  * they follow by themselves, pushed or not. A game's own has no player, and says its sport. */
@@ -220,10 +261,10 @@ export interface WireRow { id: string; player_id: number | null; player: string;
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =
-  // The fan stream's first frame on every connect: GET /api/me/following's players, and GET /api/me/matches's games.
-  | { type: 'following'; players: Card[]; matches?: FollowedMatch[] }
+  // The fan stream's first frame on every connect: GET /api/me/following's players and teams, and GET /api/me/matches's games.
+  | { type: 'following'; players: Card[]; matches?: FollowedMatch[]; teams?: FollowedTeam[] }
   | { type: 'card'; player_id: number; card: Card }
-  | { type: 'match'; event_id: number; match: FollowedMatch }  // a game followed by itself, as its poll found it
+  | { type: 'match'; event_id: number; match: FollowedMatch }  // a game followed by itself, or a team's, as its poll found it
   | { type: 'moment'; player_id: number | null; moment: PlayerMoment }
   | { type: 'progress'; player_id: number; message: string }
   | { type: 'moved'; from: number; to: number }

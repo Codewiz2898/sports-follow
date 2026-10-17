@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api, type Research, type SearchResponse, type SearchResult } from '../api'
+import { api, type Research, type SearchResponse, type SearchResult, type TeamSummary } from '../api'
 import { APP_NAME } from '../app'
 import { followTarget } from '../follow'
-import { allowance, exactName as namesakesName, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, type Section } from '../search'
-import { runningSports, sportInfo } from '../sports'
+import { allowance, exactName as namesakesName, fold, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, teamNext, type Section } from '../search'
+import { runningSports, sportInfo, sportName } from '../sports'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
@@ -90,9 +90,28 @@ export function useSearchActions(onDone?: () => void) {
 
   const follow = useCallback((r: SearchResult) => run(r.key, () => following.follow(followTarget(r))), [following, run])
 
+  // A team (sports_follow/teams.py): its page, and following it there, as a player's.
+  const openTeam = useCallback((t: TeamSummary) => { navigate(`/team/${t.team_id}`); onDone?.() }, [navigate, onDone])
+  const followTeam = useCallback(async (t: TeamSummary) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setError(null)
+    setPending(`team:${t.team_id}`)
+    try {
+      await following.followTeam(t.team_id, true)
+      onDone?.()
+      navigate(`/team/${t.team_id}`)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      inFlight.current = false
+      setPending(null)
+    }
+  }, [following, navigate, onDone])
+
   const research = useCallback((query: string) => run(`research:${query}`, () => following.follow({ query })), [following, run])
 
-  return { open, follow, research, pending, error, isFollowing: following.isFollowing }
+  return { open, follow, research, pending, error, isFollowing: following.isFollowing, openTeam, followTeam, isFollowingTeam: following.isFollowingTeam }
 }
 
 /** The name with the typed start of each word in bold: "Caitl" in Caitlin Clark (search.ts). */
@@ -131,6 +150,32 @@ export function ResultRow({ r, query, active, actions, id }: { r: SearchResult; 
         <button type="button" className={`btn${r.live_scores || r.player_id ? ' primary' : ''}`} disabled={Boolean(actions.pending)} onClick={() => actions.follow(r)} aria-label={`${r.live_scores || r.player_id ? 'Follow' : 'Research'} ${r.name}`}>
           {busy ? <span className="spinner" /> : r.live_scores || r.player_id ? <PlusIcon width={16} height={16} /> : <SparkIcon width={16} height={16} />}
           {r.live_scores || r.player_id ? 'Follow' : 'Research'}
+        </button>
+      )}
+    </li>
+  )
+}
+
+/** A team by that name (sports_follow/teams.py): its sport and what it plays in, its next game, and Follow. */
+export function TeamResultRow({ t, query, actions }: { t: TeamSummary; query: string; actions: ReturnType<typeof useSearchActions> }) {
+  const following = t.following || actions.isFollowingTeam(t.team_id)
+  const busy = actions.pending === `team:${t.team_id}`
+  const next = teamNext(t)
+  return (
+    <li className="result">
+      <button type="button" className="result-main" onClick={() => actions.openTeam(t)}>
+        <Avatar name={t.name} sport={t.sport} />
+        <span className="stack">
+          <span className="title"><Highlight name={t.name} query={query} /></span>
+          <span className="small muted">{[sportName(t.sport), t.detail, t.followers ? `${t.followers} following` : ''].filter(Boolean).join(' · ')}</span>
+          {next && <span className="tiny" style={{ color: next.live ? 'var(--live-text)' : 'var(--text)', fontWeight: 800 }}>{next.text}</span>}
+        </span>
+      </button>
+      {following ? (
+        <span className="btn" aria-disabled="true"><CheckIcon width={16} height={16} />Following</span>
+      ) : (
+        <button type="button" className="btn primary" disabled={Boolean(actions.pending)} onClick={() => actions.followTeam(t)} aria-label={`Follow ${t.name}`}>
+          {busy ? <span className="spinner" /> : <PlusIcon width={16} height={16} />}Follow
         </button>
       )}
     </li>
@@ -179,7 +224,18 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
 }) {
   const parts = sections(data)
   const exactName = namesakesName(data)
-  const nothing = !data.results.length
+  const teams = data.teams ?? []
+  const nothing = !data.results.length && !teams.length
+  // Teams come first when one is called just what was typed ("Arsenal"); else after the athletes.
+  const teamsFirst = teams.some((t) => fold(t.name) === fold(data.query))
+  const teamSection = teams.length > 0 && (
+    <section className="section" aria-label="Teams">
+      <span className="eyebrow">Teams</span>
+      <ul className="card list results">
+        {teams.map((t) => <TeamResultRow key={`team-${t.team_id}`} t={t} query={query} actions={actions} />)}
+      </ul>
+    </section>
+  )
   return (
     <div className="search-results" aria-busy={loading || undefined}>
       {data.namesakes > 1 && (
@@ -194,6 +250,7 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
       {nothing && !data.suggestions.length && !loading && (
         <p className="small muted" style={{ margin: 0 }}>No athlete in the live sources is called “{data.query}”.</p>
       )}
+      {teamsFirst && teamSection}
       {parts.map((s) => (
         <section key={s.key} className="section" aria-label={s.title || 'Athletes with this name'}>
           {s.title && <span className="eyebrow">{s.title}</span>}
@@ -202,6 +259,7 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
           </ul>
         </section>
       ))}
+      {!teamsFirst && teamSection}
       {data.partial.length > 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</p>
       )}

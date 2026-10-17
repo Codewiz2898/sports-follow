@@ -23,6 +23,11 @@ export function sharePlayer(id: number, name: string, app: string): Shared {
   return { path: `/player/${id}`, title: `${name} on ${app}`, label: `Share ${name}` }
 }
 
+/** A team's page, shared as "<name> on <app>". */
+export function shareTeam(id: number, name: string, app: string): Shared {
+  return { path: `/team/${id}`, title: `${name} on ${app}`, label: `Share ${name}` }
+}
+
 /** A This week poster: its game (/player/<id>?g=<event id>), whose link previews this moment; the player's page when it has no game. */
 export function sharePoster(poster: WeekPoster): Shared {
   const game = poster.event_id != null ? `?g=${poster.event_id}` : ''

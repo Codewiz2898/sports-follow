@@ -3,7 +3,7 @@
 // and the Android app (mobile/), so it touches nothing of a browser's.
 
 import { relative } from './format'
-import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport } from './types'
+import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport, TeamSummary } from './types'
 
 export interface Section { key: string; title: string; items: SearchResult[] }
 
@@ -41,6 +41,16 @@ export function highlightParts(name: string, query: string): { text: string; bol
 }
 
 /** The line under a result: its page being set up, its game on now, or its next game. */
+/** A team result's next game, in one line: "Live now · v Chelsea", "Next v Chelsea · in 2 days". */
+export function teamNext(t: TeamSummary, now = Date.now()): { text: string; live: boolean } | null {
+  const n = t.next
+  if (!n) return null
+  const who = n.versus ? `v ${n.versus}` : n.title ?? ''
+  if (n.status === 'live') return { text: `Live now · ${who}`, live: true }
+  const when = relative(n.start_utc, now)
+  return who || when ? { text: ['Next', who, when && `· ${when}`].filter(Boolean).join(' '), live: false } : null
+}
+
 export function nextLine(r: SearchResult): { text: string; live: boolean } | null {
   if (r.status === 'building') return { text: 'Page being set up…', live: false }
   if (r.next?.live) return { text: `Live · ${r.next.live}`, live: true }

@@ -226,10 +226,18 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         corrects = {i.corrects for i in items if i.corrects is not None}
         toasted = set(db.scalars(select(Moment.id).where(Moment.id.in_(corrects), Moment.id.not_in(claimed), Moment.sent_at.is_not(None))).all()) if corrects else set()
     # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself. A game's
-    # own go to the fans following the game.
+    # own go to the fans following the game, or a team in it: one from a team's side says whose (sides), and the
+    # game's own result says whose sides tell it too (told_by), so the app shows each fan their team's, as a push.
+    told_by: dict[int | None, set[str]] = {}
+    for item in items:
+        if item.player_id is None and item.kind == "final":
+            told_by.setdefault(item.event_id, set()).update(alerts.sided(item))
     for item in items:
         if item.id not in taken_back and (item.corrects is None or item.corrects in toasted) and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
             told_ = {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}}
+            if item.player_id is None:
+                sides = alerts.sided(item)
+                told_["moment"] |= {"sides": sorted(sides)} if sides else {"told_by": sorted(told_by.get(item.event_id, ()))} if item.kind == "final" and told_by.get(item.event_id) else {}
             if item.player_id is not None:
                 bus.publish(item.player_id, told_)
             elif item.event_id is not None:

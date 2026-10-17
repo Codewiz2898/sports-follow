@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate }
 import { AccountNotice, AccountProvider, useAccount } from './account'
 import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
-import { PlayerRow } from './components/Blocks'
+import { PlayerRow, TeamRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { BellIcon, ChevronIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
 import { SearchResults, sections, useSearch, useSearchActions } from './components/Search'
@@ -18,6 +18,7 @@ import { CreditsPage } from './pages/CreditsPage'
 import { FollowingPage } from './pages/FollowingPage'
 import { LivePage } from './pages/LivePage'
 import { MatchPage } from './pages/MatchPage'
+import { TeamPage } from './pages/TeamPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
@@ -112,7 +113,7 @@ function SidebarSearch() {
 }
 
 function Sidebar() {
-  const { cards, progress } = useFollowing()
+  const { cards, progress, teams } = useFollowing()
   const { me } = useAccount()
   const live = cards.filter((c) => c.live.is_live)
   return (
@@ -127,12 +128,13 @@ function Sidebar() {
       </nav>
       <InstallButton compact />
       {/* The heading opens the Following page, every player as a tile. */}
-      <NavLink to="/following" className="eyebrow side-head">Following · {cards.length}{live.length ? ` · ${live.length} live` : ''}<ChevronIcon width={16} height={16} strokeWidth={2.6} /></NavLink>
+      <NavLink to="/following" className="eyebrow side-head">Following · {cards.length + teams.length}{live.length ? ` · ${live.length} live` : ''}<ChevronIcon width={16} height={16} strokeWidth={2.6} /></NavLink>
       <nav aria-label="Your players" style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '-6px -10px 0' }}>
         <ErrorBoundary fallback={<span className="tiny muted" style={{ padding: '0 10px' }}>Your players couldn't be listed here.</span>} resetKey={cards}>
           {[...cards].sort((a, b) => Number(b.live.is_live) - Number(a.live.is_live)).map((c) => (
             <PlayerRow key={c.player_id} card={c} progress={progress[c.player_id]} />
           ))}
+          {teams.map((t) => <TeamRow key={`team-${t.team_id}`} team={t} />)}
         </ErrorBoundary>
       </nav>
       <span className="row tiny muted" style={{ marginTop: 'auto', justifyContent: 'flex-start' }}>
@@ -199,6 +201,7 @@ function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/match/:source/:game" element={<MatchPage />} />
+            <Route path="/team/:id" element={<TeamPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/credits" element={<CreditsPage />} />
