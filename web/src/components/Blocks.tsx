@@ -1,9 +1,9 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
-import type { Card, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
+import type { Card, FollowedTeam, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
-import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, WON, wordSize, type GameResult } from '../lines'
+import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -437,6 +437,38 @@ export function BuildProgress({ card, messages, onRetry, research = true }: { ca
         : 'Looking them up in the live sources.'}</p>
       {messages.length > 0 && <ol className="progress-log">{messages.map((m, i) => <li key={i}>{m}</li>)}</ol>}
     </div>
+  )
+}
+
+/** One followed team on the Following page: a block of its sport's colour, as a player's tile (lines.teamLine). */
+export function TeamTile({ team }: { team: FollowedTeam }) {
+  const now = useNow()
+  return (
+    <Link to={`/team/${team.team_id}`} className="tile" data-sport={sportKey(team.sport)}>
+      <span className="sport">{sportName(team.sport) || 'Team'} · Team</span>
+      <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : null}</span>
+      {/* A team's whole name, never broken inside a word ("Mönchengladbach"): smaller for a long one. */}
+      <span className="dsp name" style={{ overflowWrap: 'normal', fontSize: teamNameSize(team.name) }}>{team.name}</span>
+      <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{teamLine(team, now)}</span>
+    </Link>
+  )
+}
+
+/** A followed team in the desktop sidebar, as a player's row. */
+export function TeamRow({ team }: { team: FollowedTeam }) {
+  const now = useNow()
+  const live = Boolean(team.live?.is_live)
+  return (
+    <Link to={`/team/${team.team_id}`} className="row" style={{ padding: '8px 10px', minHeight: 44, borderRadius: 12 }}>
+      <div className="row" style={{ justifyContent: 'flex-start', minWidth: 0 }}>
+        <Avatar name={team.name} sport={team.sport} size="sm" />
+        <div className="stack" style={{ gap: 1 }}>
+          <span className="title" style={{ fontSize: 14 }}>{team.name}</span>
+          <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teamLine(team, now)}</span>
+        </div>
+      </div>
+      {live ? <span className="live-dot" /> : null}
+    </Link>
   )
 }
 

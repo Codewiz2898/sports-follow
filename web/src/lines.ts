@@ -5,7 +5,7 @@
 
 import { ahead, countdown, dateOnly, day, dayLabel, lineStats, outcome, parseDate, playedOn, shortName, shortWhen } from './format'
 import { factsOf, factsOfKind } from './sports/facts'
-import type { Card, LatestResult, LiveStatus, Stat, UpcomingEvent } from './types'
+import type { Card, FollowedTeam, LatestResult, LiveStatus, Stat, UpcomingEvent } from './types'
 
 export const WON = { W: 'Won', D: 'Drew', L: 'Lost' } as const
 
@@ -32,6 +32,28 @@ export function statusLine(card: Card, progress: string[] | undefined, now: numb
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
   if (card.player.status === 'retired') return 'Retired · news only'
   return card.news?.[0]?.headline ?? sport
+}
+
+/** What a followed team's tile says, as a player's does: its game on now, then a game this week, then its last
+ * result from its side ("Won 2–1 v Chelsea"), then its next game, then what it plays in. */
+export function teamLine(team: FollowedTeam, now: number): string {
+  if (team.live?.is_live) return [team.live.score, team.live.clock].filter(Boolean).join(' · ') || 'Live now'
+  const next = team.next && ahead(team.next.start_utc, now) ? team.next : null
+  const nextAt = parseDate(next?.start_utc)?.getTime() ?? Infinity
+  const last = team.last
+  const lastAt = parseDate(last ? playedOn(last) : null)?.getTime() ?? 0
+  const versus = (v?: string | null) => (v ? `v ${v}` : '')
+  if (next && nextAt - now < 7 * 864e5) return `${shortWhen(next.start_utc, now)} · ${versus(next.versus) || next.title}`
+  if (last && now - lastAt < 14 * 864e5) return [last.result, versus(last.versus)].filter(Boolean).join(' ')
+  if (next) return `Next ${day(next.start_utc)} · ${versus(next.versus) || next.title}`
+  return team.detail
+}
+
+/** A team tile's name size: the tile's 30 px, smaller as its longest word grows past what fits a phone's half
+ * width, so a long name ("Mönchengladbach") is never broken inside a word. */
+export function teamNameSize(name: string): number {
+  const longest = Math.max(...name.split(/\s+/).map((w) => w.length))
+  return longest <= 9 ? 30 : longest <= 12 ? 24 : 19
 }
 
 /** A stat in words: "3 shots", "1 key pass"; an abbreviation stays as it is ("22 PTS", "2 4s"), and a value
