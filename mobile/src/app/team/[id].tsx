@@ -6,7 +6,7 @@
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, teamLevelText } from '../../../../web/src/alerts'
 import { relative } from '../../../../web/src/format'
@@ -14,7 +14,7 @@ import { EVERY, nextLook } from '../../../../web/src/match'
 import { shareTeam } from '../../../../web/src/share'
 import { useActivity } from '../../activity'
 import { api, ApiError, type TeamPage } from '../../api'
-import { Empty, FormStrip, LiveScoreboard, matchHref, PlayerBand, ResultsList, UpcomingList } from '../../blocks'
+import { FormStrip, LiveScoreboard, PlayerBand, ResultsList, UpcomingList } from '../../blocks'
 import { toneOf, useSports } from '../../catalog'
 import { useNow } from '../../clock'
 import { useFollowing } from '../../following'
@@ -137,16 +137,13 @@ export default function TeamScreen() {
       {!team.can_follow && team.note ? <Text style={[t.small, t.muted]}>{team.note}</Text> : null}
       {error ? <Text style={[t.small, t.muted]}>Couldn't update this team: {error}</Text> : null}
 
-      {live ? (
-        <Pressable disabled={!live.match} onPress={() => live.match && router.push(matchHref(live.match) as never)} accessibilityLabel={`${live.event ?? 'The game on now'}: its match page`}>
-          <LiveScoreboard live={live} playerName="" sport={team.sport} />
-        </Pressable>
-      ) : null}
+      {/* The board links to its match page and its source itself, as the web's. */}
+      {live ? <LiveScoreboard live={live} playerName="" sport={team.sport} /> : null}
 
       <View style={s.section}>
         <SectionHead title="Coming up" />
         {team.refreshing && !team.upcoming.length && !team.recent.length ? (
-          <Empty style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Spinner /><Text style={[t.small, t.muted]}>Reading its games…</Text></Empty>
+          <Card pad style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}><Spinner /><Text style={[t.small, t.muted]}>Reading its games…</Text></Card>
         ) : (
           <UpcomingList items={team.upcoming.filter((u) => u.event_id !== eventId)} empty="No games coming up found." />
         )}

@@ -7,7 +7,7 @@ import { router } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native'
 import { followTarget } from '../../web/src/follow'
-import { allowance, exactName, fold, highlightParts, liveNote, nextLine, OTHER_SCRIPT, sections, teamNext } from '../../web/src/search'
+import { allowance, exactName, highlightParts, liveNote, nextLine, OTHER_SCRIPT, sections, teamNext, teamsFirst } from '../../web/src/search'
 import { api, type Research, type SearchResponse, type SearchResult, type TeamSummary } from './api'
 import { Avatar } from './blocks'
 import { toneOf, useSports } from './catalog'
@@ -207,8 +207,7 @@ export function SearchResults({ data, query, loading, actions }: { data: SearchR
   const parts = sections(data, APP)
   const teams = data.teams ?? []
   const nothing = !data.results.length && !teams.length
-  // As the web's: teams first when one is called just what was typed, or no athlete is; else after the athletes.
-  const teamsFirst = teams.some((x) => fold(x.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
+  const first = teamsFirst(data) // as the web's: teams first when one is called just that, or no athlete is
   const teamSection = teams.length > 0 ? (
     <View style={{ gap: 10 }}>
       <Eyebrow>Teams</Eyebrow>
@@ -227,7 +226,7 @@ export function SearchResults({ data, query, loading, actions }: { data: SearchR
       ) : null}
       {nothing && data.suggestions.length > 0 ? <Text style={[t.small, t.muted]}>No athlete in the live sources is called “{data.query}”. The closest spelling:</Text> : null}
       {nothing && !data.suggestions.length && !loading ? <Text style={[t.small, t.muted]}>No athlete in the live sources is called “{data.query}”.</Text> : null}
-      {teamsFirst ? teamSection : null}
+      {first ? teamSection : null}
       {parts.map((x) => (
         <View key={x.key} style={{ gap: 10 }}>
           {x.title ? <Eyebrow>{x.title}</Eyebrow> : null}
@@ -236,7 +235,7 @@ export function SearchResults({ data, query, loading, actions }: { data: SearchR
           </Card>
         </View>
       ))}
-      {!teamsFirst ? teamSection : null}
+      {!first ? teamSection : null}
       {data.partial.length > 0 ? <Text style={[t.tiny, t.muted]}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</Text> : null}
       {data.researchable
         ? <ResearchOffer query={data.query} research={data.research} full={nothing} actions={actions} />
