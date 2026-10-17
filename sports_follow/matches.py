@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Select, and_, delete, func, or_, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
 from . import sports, structured
@@ -101,13 +101,12 @@ def _over(known: Said) -> bool:
     return any(e.status == "final" for e in known.events) or (known.game or {}).get("status") == "final" or (not known.events and (known.big or {}).get("status") == "final")
 
 
-def follow(db: Session, fan: str, system: str, fixture: str, now: datetime | None = None) -> int:
+def follow(db: Session, fan: str, system: str, fixture: str) -> int:
     """Follow the game at an address (its source and a fixture's id, as its match page has it), making its event
     if none is here yet. Returns the event's id; raises Refused for a game no source has named here, one over,
     one no running source can poll, or a fan already following MAX games."""
     from . import match  # the match page's: what's known of a game (it reads Live now, which reads search)
 
-    now = now or datetime.now(timezone.utc)
     source = KNOWN.get(system)
     if source is None or not match.ID.fullmatch(fixture):
         raise Refused(404, "No such game.")
@@ -132,7 +131,8 @@ def follow(db: Session, fan: str, system: str, fixture: str, now: datetime | Non
         mine.until = None  # a lapsed follow of a game that's on again (postponed, then played)
         return mine.event_id
     event = next((e for e in known.events if (e.live_binding or {}).get("adapter") == binding["adapter"]), None) or _event(db, system, fixture, known, sport, binding)
-    db.execute(insert(MatchFollow).values(fan_id=fan, event_id=event.id, alert_rules={}, created_at=now).on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={"until": None}))
+    # From the database's clock, as its moments' times are: the activity list shows those since.
+    db.execute(insert(MatchFollow).values(fan_id=fan, event_id=event.id, alert_rules={}).on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={"until": None}))
     return event.id
 
 
@@ -167,7 +167,9 @@ def lapse(db: Session, now: datetime | None = None) -> None:
     over = select(Event.id).where(or_(Event.status == "final", and_(Event.status.in_(("scheduled", "postponed")), Event.start_utc < now - LAPSE_AFTER)))
     undated = select(Event.id).where(Event.start_utc.is_(None), Event.status.in_(("scheduled", "postponed")))
     done = update(MatchFollow).where(MatchFollow.until.is_(None), or_(MatchFollow.event_id.in_(over), and_(MatchFollow.event_id.in_(undated), MatchFollow.created_at < now - UNDATED)))
-    db.execute(done.values(until=now))
+    # Stamped by the database's clock as the statement runs, as a moment's time is by its poll's (its
+    # transaction's start): the result found by the poll that saw the game end is always before it.
+    db.execute(done.values(until=func.clock_timestamp()))
 
 
 def board(event: Event, status: str, score: str | None, clock: str | None, state: dict[str, Any], source_url: str | None, as_of: datetime) -> dict[str, Any]:
@@ -200,7 +202,7 @@ def mine(db: Session, fan: str) -> list[dict[str, Any]]:
     rows = db.execute(select(MatchFollow.alert_rules, Event).join(Event, Event.id == MatchFollow.event_id)
                       .where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None)).order_by(Event.start_utc.asc().nulls_last(), Event.id)).all()
     ids = [event.id for _, event in rows]
-    latest = {s.event_id: s for s in db.scalars(select(EventState).where(EventState.event_id.in_(ids)).distinct(EventState.event_id).order_by(EventState.event_id, EventState.as_of.desc()))} if ids else {}
+    latest = {s.event_id: s for s in db.scalars(select(EventState).where(EventState.event_id.in_(ids)).ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))} if ids else {}
     out = []
     for rules_, event in rows:
         s = latest.get(event.id)
