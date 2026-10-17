@@ -261,10 +261,11 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     names = {p["athlete_id"]: (p["name"], p.get("team") or "") for p in [*roster, *((game or {}).get("bench") or [])]}
     state = (board or {}).get("state") or {}
     page = rules.match_page(state, game_events, (game or {}).get("lines") or {}, names)
-    # Who won, over a finished game's board; before its first read, the league's line ("Arsenal beat Chelsea").
+    # Who won, over a finished game's board; before its first read, what the league's card says ("Arsenal beat
+    # Chelsea", or the score).
     verdict = ""
     if status == "final":
-        verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or ""
+        verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or (big or {}).get("word") or ""
     adapter = reader(system)
     # A read that found the game over, or found nothing (a source that hasn't got it), is settled: the next
     # comes when Redis has dropped it.

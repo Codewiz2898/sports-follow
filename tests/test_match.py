@@ -383,8 +383,10 @@ def test_a_big_result_is_named_by_the_league_and_a_crowd_opening_it_costs_one_re
     over = NOW - timedelta(days=1)
     league_game = {"key": "pitch:300", "sport": "football", "title": "Arsenal vs Chelsea", "competition": "Premier League", "detail": "Matchday 8",
                    "start_utc": over.isoformat(), "status": "final", "rank": 80, "word": "3–2", "line": "Arsenal beat Chelsea", "why": "1st v 2nd", "group": ""}
-    redis.set("league:games:pitch", json.dumps({"as_of": (NOW - timedelta(hours=1)).isoformat(), "games": [league_game]}))
+    draw = {**league_game, "key": "pitch:302", "word": "1–1", "line": ""}  # a sport whose card says the score alone
+    redis.set("league:games:pitch", json.dumps({"as_of": (NOW - timedelta(hours=1)).isoformat(), "games": [league_game, draw]}))
     assert match.view(db, "fan", "pitch", "301", NOW) == (None, False)  # not the league's, nor anyone's: no read
+    assert match.view(db, "fan", "pitch", "302", NOW)[0]["verdict"] == "1–1"
 
     page, ask = match.view(db, "fan", "pitch", "300", NOW)
     assert ask  # never read: the first look asks for one
