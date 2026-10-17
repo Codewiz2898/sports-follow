@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAccount } from '../account'
+import { APP_NAME } from '../app'
 import { useActivity } from '../activity'
 import { api, subscribe, type Card, type StreamEvent } from '../api'
 import { useNow } from '../clock'
@@ -8,7 +9,10 @@ import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboa
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
-import { ahead, day, outcome, parseDate, playedOn, relative, shortName } from '../format'
+import { ShareButton } from '../components/Share'
+import { day, outcome, playedOn, relative, shortName } from '../format'
+import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
+import { sharePlayer } from '../share'
 import { sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
@@ -123,6 +127,7 @@ export function PlayerPage() {
         back={<Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>}
         actions={
           <>
+            <ShareButton {...sharePlayer(playerId, p.name, APP_NAME)} />
             {isFollowing && (
               <button type="button" className="btn icon" aria-label={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} aria-expanded={alertsOpen} onClick={() => setAlertsOpen((o) => !o)}>
                 <BellIcon width={20} height={20} />
@@ -182,27 +187,12 @@ export function PlayerPage() {
 
           <p className="tiny muted">
             {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
-            {card.built_at && `Page built ${relative(card.built_at, now)} from ${card.sources?.length ?? 0} sources. `}{card.live.source === 'Liquipedia' ? "Lobby results appear as Liquipedia's editors record them, often several minutes after each match." : card.live.source === 'PUBG' ? 'PUBG lobbies update after each match ends.' : 'Live data can lag the game by a minute or two.'} <Link to="/credits" className="link">Credits</Link>
+            {card.built_at && `Page built ${relative(card.built_at, now)} from ${card.sources?.length ?? 0} sources. `}{liveLag(card)} <Link to="/credits" className="link">Credits</Link>
           </p>
         </>
       )}
     </>
   )
-}
-
-/** The next game that hasn't started (a fixture with no date yet counts; one with a day but no time, all that day). */
-function nextGame(card: Card, now: number) {
-  return (card.upcoming ?? []).find((u) => !parseDate(u.start_utc) || ahead(u.start_utc, now))
-}
-
-/**
- * When the page last looked for a game: for a player bound to a source, the newest of its schedule
- * read (every half hour) and its live polls; otherwise the agent's live check.
- */
-function lastChecked(card: Card): string | null {
-  const f = card.freshness ?? {}
-  const stamps = (card.provenance ? [f.live, f.fixtures, card.provenance.upcoming?.at] : [f.live]).filter((at): at is string => Boolean(parseDate(at)))
-  return stamps.sort((a, b) => parseDate(b)!.getTime() - parseDate(a)!.getTime())[0] ?? null
 }
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
@@ -221,7 +211,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
   const word = last && highlight(p.sport, last.player_contribution)
   const { muted, setMuted } = useActivity()
   // "Won 133–128" is a score once the badge says won; "West Indies won by 5 wkts" stays a sentence.
-  const score = last && /^(Won|Lost|Drew)\s+/.test(last.result) ? last.result.replace(/^(Won|Lost|Drew)\s+/, '') : null
+  const score = last && bareScore(last.result)
 
   return (
     <>
@@ -235,7 +225,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
             </span>
           )}
           <span className="row tiny muted">
-            <span>{card.live.source === 'Liquipedia' ? 'Standings update from Liquipedia every few minutes as results are recorded.' : card.live.source === 'PUBG' ? 'Standings update from PUBG after each match.' : card.provenance ? `Scores update live from ${card.provenance.upcoming?.source ?? 'the source'} while the game is on.` : 'Live games refresh on their own about every minute.'}</span>
+            <span>{liveUpdates(card)}</span>
             <RefreshButton card={card} style={{ flexShrink: 0 }} />
           </span>
         </>

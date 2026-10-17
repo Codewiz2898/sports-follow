@@ -37,6 +37,8 @@ log = logging.getLogger("sports_follow.sportmonks")
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
+# Every match of the plan's competitions on some days (schedule): enough for the result and the stage.
+SCHEDULE_INCLUDE = "localteam,visitorteam,league,stage,runs"
 MATCH_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup,manofmatch,bowling,batting.result,batting.bowler,batting.catchstump,batting.runoutby"
 # The relations MATCH_INCLUDE adds to a match: Sportmonks sends each one, empty ([] or null) if there's nothing yet.
 _INCLUDED = frozenset(name.split(".")[0] for name in MATCH_INCLUDE.split(","))
@@ -105,6 +107,8 @@ def born(value: str | None) -> str | None:
 
 
 def parse_fixture(x: dict[str, Any]) -> Fixture:
+    """A fixture -> ours, with what the sport ranks a league match by (sports.cricket): whether it's between
+    nations, and whether a super over decided it."""
     home, away = _team(x, "localteam"), _team(x, "visitorteam")
     status = _status(x.get("status"))
     runs = x.get("runs") or []
@@ -127,6 +131,7 @@ def parse_fixture(x: dict[str, Any]) -> Fixture:
         locator={"fixture": str(x["id"])},
         detail=x.get("round") or None,
         result=result,
+        facts={k: True for k, v in (("national", bool(home.get("national_team") and away.get("national_team"))), ("super_over", bool(x.get("super_over")))) if v},
     )
 
 
@@ -278,6 +283,15 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
     )
 
 
+def _elevens(x: dict[str, Any], f: Fixture, system: str, substitutes: bool = False) -> list[list[PlayerRef]]:
+    """Each side's playing eleven, in the line-up's order, named as it names them (an impact player waiting to
+    come in isn't one of them); or, with substitutes, those named apart from the eleven."""
+    teams = dict(zip(f.team_ids, f.team_names))
+    named = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and bool((p.get("lineup") or {}).get("substitution")) == substitutes]
+    return [[PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
+             for p in named if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+
+
 def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
     """Livescores -> the matches on now, each with its playing elevens, named as the line-up names them."""
     out = []
@@ -286,14 +300,21 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
         snap = parse_match(x)
         if snap.status != "live":
             continue
-        teams = dict(zip(f.team_ids, f.team_names))
-        playing = [p for p in x.get("lineup") or [] if p.get("id") and p.get("fullname") and not (p.get("lineup") or {}).get("substitution")]
-        sides = [[p for p in playing if str((p.get("lineup") or {}).get("team_id") or "") == team] for team in f.team_ids]
+        sides = _elevens(x, f, system)
         # The sides in turn, each in the line-up's order: a game's best known come from both.
-        players = [PlayerRef(system=system, athlete_id=str(p["id"]), name=p["fullname"], team_ids=[team], team_names=[teams.get(team, "")])
-                   for i in range(max((len(s) for s in sides), default=0)) for team, side in zip(f.team_ids, sides) if i < len(side) for p in [side[i]]]
+        players = [side[i] for i in range(max((len(s) for s in sides), default=0)) for side in sides if i < len(side)]
         out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, players=players, teams=f.team_names))
     return out
+
+
+def parse_game(x: dict[str, Any], system: str) -> LiveGame:
+    """A match with its scorecard (MATCH_INCLUDE) -> the game for its match page: its snapshot, with every
+    player's line, and the home side's eleven, then the visitors', to follow; and its substitutes, by name, for
+    the scorecard (an impact player who bats or bowls)."""
+    f = parse_fixture(x)
+    players = [p for side in _elevens(x, f, system) for p in side]
+    bench = [p for side in _elevens(x, f, system, substitutes=True) for p in side]
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names, bench=bench)
 
 
 def _season_year(name: str) -> int:
@@ -458,10 +479,23 @@ class SportmonksCricket(Adapter):
         one = PlayerRef(**{**ref.__dict__, "team_ids": [page["team"]]})
         return [f for f in self._matches(one, date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600) if f.status == "final"]
 
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """Every match of the plan's competitions between two days, whoever plays it: one request on the
+        "Cricket fixtures" endpoint (a page holds 100, about three weeks of the plan's)."""
+        rows = sportmonks.get_all(f"{API}/fixtures", ttl=1800, **{"filter[starts_between]": f"{start.isoformat()},{end.isoformat()}", "include": SCHEDULE_INCLUDE})
+        return [parse_fixture(x) for x in rows]
+
     def live_now(self) -> list[LiveGame]:
         """Every match in the plan's competitions on now, with its playing elevens: one request (livescores)."""
         rows = sportmonks.get_json(f"{API}/livescores", ttl=30, include=LIST_INCLUDE).get("data") or []
         return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One match by its id, whoever follows it, for its match page: its scorecard and both elevens. One
+        request, the one a match read on its own makes (snapshot, or the lane's for a match livescores leaves
+        out), cached half a minute."""
+        x = sportmonks.get_json(f"{API}/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
+        return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
 
     def _match(self, fixture: str, ttl: float) -> dict[str, Any]:
         data = sportmonks.get_json(f"{API}/fixtures/{fixture}", ttl=ttl, include=MATCH_INCLUDE)

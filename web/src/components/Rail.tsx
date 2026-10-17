@@ -13,17 +13,18 @@ function motion(): ScrollBehavior {
  * A section whose cards run sideways in one row, out to the page's edge, so it can hold every game without
  * making the page taller: each card snaps to the page padding with the next one peeking in, the arrows page
  * it on a desktop, and with `all` (what the end card says) an "All N" card at the end lays them all out at
- * once. Its children are the cards, each a fixed width (styles.css, "rails"). A `head` takes the place of
+ * once; with `max` too, the row holds that many and the "All N" card the rest. Its children are the cards, each a fixed width (styles.css, "rails"). A `head` takes the place of
  * the title row, and of its arrows with it (Today's players strip, which a desktop doesn't show).
  */
-export function Rail({ title, note, all, head, className, children }: { title: string; note?: string; all?: string; head?: ReactNode; className?: string; children: ReactNode }) {
+export function Rail({ title, note, all, max, head, className, children }: { title: string; note?: string; all?: string; max?: number; head?: ReactNode; className?: string; children: ReactNode }) {
   const id = useId()
   const section = useRef<HTMLElement>(null)
   const row = useRef<HTMLDivElement>(null)
   const [edges, setEdges] = useState({ start: true, end: true })
   const [open, setOpen] = useState(false)
   const closing = useRef(false)
-  const count = Children.count(children)
+  const cards = Children.toArray(children)
+  const count = cards.length
 
   // Where the row is scrolled to: the arrows can't go past either end.
   const measure = useCallback(() => {
@@ -77,7 +78,7 @@ export function Rail({ title, note, all, head, className, children }: { title: s
         </span>
       </SectionHead>}
       <div ref={row} id={id} className={`rail${open ? ' open' : ''}`}>
-        {children}
+        {open || !all || max == null ? cards : cards.slice(0, max)}
         {all && count >= ALL_FROM && (
           <button type="button" className="rail-all" aria-expanded={open} aria-controls={id} onClick={toggle}>
             <span className="dsp">{open ? 'Fewer' : `All ${count}`}</span>

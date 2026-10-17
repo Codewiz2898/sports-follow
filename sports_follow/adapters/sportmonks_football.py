@@ -18,13 +18,20 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import sportmonks
-from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
+from .base import Absence, Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
+# Every match of the plan's leagues on some days (schedule): enough for the score and the stage.
+SCHEDULE_INCLUDE = "participants;scores;state;league;round"
+SCHEDULE_PAGE = 50  # rows a page of it, Sportmonks' most: a week of the five leagues is about one
 MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.details.type;events.type;metadata"
 # Every match in play, league-wide: enough for its score, clock, scorers and the players in it.
 LIVE_INCLUDE = "participants;scores;state;periods;league;lineups;events.type"
 PLAYER_INCLUDE = "teams.team;nationality"
+# The plan's leagues with their seasons on now (sidelined): whose teams are read.
+LEAGUES_INCLUDE = "currentSeason"
+# A season's teams, each with every player of theirs out now: the spell, its type ("Back Injury"), the player.
+SIDELINED_INCLUDE = "sidelined.player;sidelined.type"
 
 # Match states (…/football/states): everything else is "scheduled".
 _LIVE = {"INPLAY_1ST_HALF", "HT", "BREAK", "INPLAY_2ND_HALF", "INPLAY_ET", "EXTRA_TIME_BREAK", "INPLAY_ET_SECOND_HALF", "PEN_BREAK", "INPLAY_PENALTIES", "AWAITING_UPDATES"}
@@ -90,13 +97,22 @@ def _detail(x: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------- parsers (pure)
 
 
+def _place(side: dict[str, Any]) -> int | None:
+    """A side's place in its league table, as Sportmonks sends it with the side (meta.position), if it does."""
+    place = (side.get("meta") or {}).get("position")
+    return place if isinstance(place, int) and place > 0 else None
+
+
 def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
-    """Fixtures (…/fixtures/between/…/{team}) -> fixtures, with the result for finished ones."""
+    """Fixtures (…/fixtures/between/…, a team's or every one) -> fixtures, with the result for finished
+    ones, and both sides' places in their table where Sportmonks sends them (the sport ranks league games
+    by them: sports.football)."""
     out = []
     for x in rows:
         home, away = _sides(x)
         if not home.get("id") or not away.get("id"):
             continue
+        places = [_place(home), _place(away)]
         status = _status(x.get("state"), _start(x))
         goals = _goals(x)
         result = None
@@ -114,6 +130,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             locator={"fixture": str(x["id"])},
             detail=_detail(x),
             result=result,
+            facts={"table": places} if any(places) else {},
         ))
     return out
 
@@ -261,6 +278,22 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
     return out
 
 
+def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
+    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page: its snapshot, and each side's
+    starting eleven once the clubs have published them, attackers first, the home side's then the away side's."""
+    fixtures = parse_fixtures([x])
+    if not fixtures:
+        return None
+    f = fixtures[0]
+    teams = dict(zip(f.team_ids, f.team_names))
+    starters = [] if _predicted(x) else [r for r in x.get("lineups") or [] if r.get("type_id") == _STARTER and r.get("player_id") and r.get("player_name")]
+    players = [
+        PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[team], team_names=[teams.get(team, "")])
+        for team in f.team_ids for r in sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2))
+    ]
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
+
+
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
     """The team sheet, published about an hour before kick-off: who starts and who's on the bench. Until
     then Sportmonks fills the line-ups with its own prediction (eleven starters a side, days ahead), marked
@@ -290,7 +323,8 @@ def parse_player(p: dict[str, Any], today: date | None = None) -> PlayerRef:
     return PlayerRef(
         system="sportmonks_football",
         athlete_id=str(p["id"]),
-        name=p.get("display_name") or p.get("common_name") or p.get("name") or "",
+        # Names come padded, with a no-break space at times ("Lautaro Martínez\u00a0"): strip() takes both.
+        name=str(p.get("display_name") or p.get("common_name") or p.get("name") or "").strip(),
         team_ids=[tid for _, tid, _ in current],
         team_names=[name for _, _, name in current],
         born=p.get("date_of_birth"),
@@ -320,6 +354,50 @@ def parse_season_stats(p: dict[str, Any], team_ids: list[str]) -> tuple[list[dic
     season = next(((r.get("season") or {}).get("name") for r in rows if r.get("season")), "") or ""
     note = f"{leagues[0]} {season}".strip() if len(leagues) == 1 else f"{season} season, all competitions".strip()
     return stats, note
+
+
+def _day(text: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(text)[:10]) if text else None
+    except ValueError:
+        return None
+
+
+# Spells Sportmonks files as "suspended" that aren't bans: a player not registered for the competition, or away
+# with their country. Their types' developer names, which are their names in capitals ("No Eligibility").
+_NOT_BANS = {"NO_ELIGIBILITY", "CALLED_UP_TO_NATIONAL_TEAM"}
+
+
+def _out_for(spell: dict[str, Any]) -> str:
+    """A spell's kind, as football's sources share them: Sportmonks' "injury"; a ban, any "suspended" spell
+    but those that aren't one (_NOT_BANS: a red card, five yellows, a sports court's); or "other"."""
+    category = spell.get("category")
+    if category == "injury":
+        return "injury"
+    kind = spell.get("type") or {}
+    named = str(kind.get("developer_name") or re.sub(r"\W+", "_", str(kind.get("name") or "")).strip("_").upper())
+    return "suspension" if category == "suspended" and named not in _NOT_BANS else "other"
+
+
+def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_football") -> dict[str, list[Absence]]:
+    """A season's teams with sidelined (with player and type) -> each team, by id, with its players out; a
+    team whose answer has no sidelined list is left out, not taken for one with nobody out. Sportmonks lists
+    a spell until it's over (completed), and its end date is when the player is expected back."""
+    out: dict[str, list[Absence]] = {}
+    for team in teams:
+        if not team.get("id") or "sidelined" not in team:
+            continue  # an answer without the list says nothing of who's out: as if the team weren't read
+        listed = out.setdefault(str(team["id"]), [])
+        for spell in team.get("sidelined") or []:
+            player = spell.get("player") or {}
+            if not spell.get("id") or not player.get("id") or spell.get("completed"):
+                continue
+            name = str(player.get("display_name") or player.get("common_name") or player.get("name") or "").strip()
+            ref = PlayerRef(system=system, athlete_id=str(player["id"]), name=name, team_ids=[str(team["id"])], team_names=[team.get("name") or ""],
+                            born=player.get("date_of_birth"))
+            listed.append(Absence(source_id=str(spell["id"]), ref=ref, kind=_out_for(spell), what=str((spell.get("type") or {}).get("name") or "").strip(),
+                                  since=_day(spell.get("start_date")), until=_day(spell.get("end_date"))))
+    return out
 
 
 # ---------------------------------------------------------------- the adapter
@@ -400,11 +478,37 @@ class SportmonksFootball(Adapter):
             raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
         return parse_match(data["data"])
 
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """Every match of the plan's leagues between two days, whoever plays it (fixtures/between with no
+        team): the top five leagues' 50 or so a week, SCHEDULE_PAGE a request, up to sportmonks.MAX_PAGES.
+        Counted against the Fixture entity, as every list of fixtures is."""
+        rows = sportmonks.get_all(f"/football/fixtures/between/{start.isoformat()}/{end.isoformat()}", ttl=1800, include=SCHEDULE_INCLUDE, per_page=SCHEDULE_PAGE)
+        return parse_fixtures(rows)
+
     def live_now(self) -> list[LiveGame]:
         """Every match in the plan's leagues in play now, with its starting elevens: one request (livescores/inplay,
         which Sportmonks counts as Fixture requests)."""
         rows = sportmonks.get_json("/football/livescores/inplay", ttl=30, include=LIVE_INCLUDE).get("data") or []
         return parse_live([rows] if isinstance(rows, dict) else rows, self.system)
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One match by its id, whoever follows it, for its match page: the timeline, every player's line and
+        both starting elevens. One Fixture request."""
+        x = sportmonks.get_json(f"/football/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
+        return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
+
+    def sidelined(self) -> dict[str, list[Absence]]:
+        """Every team of the plan's leagues, with who of theirs is out now: the leagues with their current
+        seasons (one League request, kept a day), then each season's teams with who's out (one Team request
+        a league: the plan's five leagues' 96 teams in five). Uncached: each read is compared with the last."""
+        leagues = sportmonks.get_all("/football/leagues", ttl=24 * 3600, include=LEAGUES_INCLUDE, per_page=50)
+        seasons = sorted({str(season["id"]) for league in leagues if (season := league.get("currentseason") or league.get("currentSeason")) and season.get("id")})
+        out: dict[str, list[Absence]] = {}
+        for season in seasons:
+            rows = sportmonks.get_json(f"/football/teams/seasons/{season}", ttl=0, include=SIDELINED_INCLUDE).get("data") or []
+            for team_id, listed in parse_sidelined([rows] if isinstance(rows, dict) else rows, self.system).items():
+                out.setdefault(team_id, []).extend(listed)
+        return out
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many matches at once, MULTI_MAX to a request (fixtures/multi): the live lane's one fetch a

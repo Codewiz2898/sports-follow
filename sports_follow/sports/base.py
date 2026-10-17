@@ -17,10 +17,18 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..adapters.base import Snapshot
+    from ..adapters.base import Fixture, Snapshot
     from ..models import Athlete
 
 ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+
+
+def ordinal(n: int | None) -> str:
+    """ "1st", "12th", "23rd"; "?" for no place."""
+    if not n:
+        return "?"
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 Line = dict[str, Any]  # {"headline": "38 PTS · 16 REB · 2 AST", "stats": [{"label", "value"}]}
 
 
@@ -61,11 +69,71 @@ class Found:
 class Poster:
     """A player's game this week as Today's "This week" rail draws it (week.py): a word or two in big type
     ("Hundred", "Hat-trick"), a short line under the player's name ("112 (98) v Australia"), and the moment
-    it was read from, which dates it."""
+    it was read from, which dates it. One read off a finished game's line instead (Sport.finished_poster)
+    has no moment, and says how big it is: the priority its moment would have had."""
 
     word: str
     line: str = ""
     of: Found | None = field(default=None, compare=False)
+    priority: int = field(default=0, compare=False)
+
+
+@dataclass
+class Notable:
+    """A game no fan's player need be in, as big as its sport rates it (Sport.notable), for Today's "Big
+    results" and "Big games coming up" (league.py): how big, on one scale for every sport, so the biggest of
+    all of them come first; and what its card says."""
+
+    rank: int  # 1 to 100: 90 a final, 75 a semi-final or a top-of-the-table game, 40 a game of a big league
+    word: str = ""  # a finished game's big word: its score ("4–1"), its margin ("By 6 wickets"), its winner
+    line: str = ""  # under it, who played and how it went: "Arsenal beat Chelsea"; the game's title if ""
+    why: str = ""  # what makes it big, in a word or two: "Final", "1st v 2nd", "Last ball"
+    # The part of its sport the game is in, which takes its own turn among the sport's games (league.py), so
+    # one part never fills the sport's turns: an esports title ("Valorant"); "" for a sport of one part.
+    group: str = ""
+
+
+@dataclass
+class Fact:
+    """Something a source says about a player that the Wire tells (week.py, from sidelined.py): a tag ("Out",
+    "Back") and a line ("William Saliba · back injury · until 11 Dec"), in the player's sport's words."""
+
+    tag: str
+    line: str
+
+
+# How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
+# final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
+# those are read first.
+_STAGES = (
+    (re.compile(r"\bgrand[ -]?finals?\b", re.I), 3, "Grand final"),
+    (re.compile(r"\b(?:upper|lower|winners'?|losers'?)[ -]bracket[ -]finals?\b", re.I), 2, "Bracket final"),
+    (re.compile(r"\bsemi[ -]?finals?\b|\bsemis\b", re.I), 2, "Semi-final"),
+    (re.compile(r"\bquarter[ -]?finals?\b", re.I), 1, "Quarter-final"),
+    (re.compile(r"\bfinals?\b", re.I), 3, "Final"),
+    (re.compile(r"\bplay-?offs?\b|\bknock-?outs?\b|\beliminator\b|\bqualifier \d\b|\bround of (?:16|32)\b|\blast (?:16|8)\b", re.I), 1, "Playoffs"),
+)
+
+
+def stage(*texts: str | None) -> tuple[int, str]:
+    """How late in its competition a game is, from what its source calls its stage or round (several
+    texts: the first that says wins): 3 a final, 2 a semi-final (or a bracket's final), 1 another knockout
+    round, 0 a league or group game; and the word for it on a card ("Final", "Semi-final")."""
+    for text in texts:
+        for pattern, level, word in _STAGES:
+            if text and pattern.search(text):
+                return level, word
+    return 0, ""
+
+
+# What a source names a side it hasn't decided yet (a final's, before the semi-finals): "TBC", "TBA", "TBD", "".
+_UNDECIDED = re.compile(r"\s*(?:tb[acd]|to be (?:confirmed|announced|decided|determined))?\s*", re.I)
+
+
+def undecided(sides: list[str]) -> bool:
+    """Whether a source lists a game's sides and names none of them yet ("TBC v TBC"): a sport may leave such
+    a game out of the big games until it has them. False when the source lists no sides."""
+    return bool(sides) and all(_UNDECIDED.fullmatch(s or "") for s in sides)
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
@@ -140,9 +208,8 @@ class Sport:
     # ---- how the app shows it (GET /api/sports, /api/sports.css)
 
     # Its colour, as CSS custom properties on [data-sport]: the block colour, text on it, softer text on
-    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A player's photo
-    # is recoloured from "deep" (its darks) to the block colour (its lights); without "deep", from the text
-    # on it, which must then be the darker.
+    # it, and the colour itself as text on the dark ink. A sport without one wears ink. A link preview's
+    # picture is the block colour with the text on it (share.py).
     colour: dict[str, str] = {}
     # Which free-text sport names it is (a page's "Women's football", the agent's "T20 cricket"): a
     # regular expression over the lower-case name, and one that rules a name out ("american football").
@@ -192,6 +259,26 @@ class Sport:
             return age is None or age <= self.retire_age
         current = teams and ((latest_start is not None and latest_start.year >= today.year - 10) or (age is not None and age <= 38))
         return current or (age is not None and age <= 30)
+
+    # ---- the registry, for a sport whose athletes come from its sources' lists (roster): who on Wikidata
+    # is one of its people, so each athlete's Wikidata person, and their photo, can be found (roster_wikidata.py)
+
+    people_ids: tuple[str, ...] = ()  # anyone with any of these ids
+    people_occupations: tuple[str, ...] = ()  # or any of these occupations
+    team_filler: frozenset[str] = frozenset({"team", "club"})  # words of its team names that don't tell teams apart
+
+    def known_as(self, ids: dict[str, list[str]]) -> list[str]:
+        """Names a person on Wikidata goes by, from their ids (by property), beside their labels and aliases."""
+        return []
+
+    def plays(self, ids: dict[str, list[str]], disciplines: list[str]) -> set[str]:
+        """What a person on Wikidata plays, as game_key writes it, from their ids (by property) and the
+        disciplines they compete in."""
+        return set()
+
+    def game_key(self, game: str | None) -> str:
+        """A game however it's written, as one key; "" for none."""
+        return ""
 
     # ---- search: a registry athlete as a result
 
@@ -265,6 +352,46 @@ class Sport:
         wrote it with: the title says what the kind can't (a cricketer's "takes 5 wickets" is a "Five-for").
         None for a set, a yellow card, a line-up, being out, the news. A sport no module knows has none."""
         return None
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """A player's finished game as a poster when no moment found in it makes one (week.py), read off the
+        line it left them ({"headline": "112 (98)", "stats": […]}) and its result from their side ("Won
+        2–1"), in the words high() has for the same high, with the priority its moment would have had.
+        Moments are found only while a game is polled live, so a game first seen after it ended has none;
+        where they're there they say more ("Late equaliser", "Upset") and win. None for a game without a
+        high, and for a sport no module knows."""
+        return None
+
+    # ---- league-wide games: Today's big results and big games coming up (league.py)
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """How big a game its sources list league-wide is (Adapter.schedule), from what the source says of
+        it: its tier and facts, its stage (detail) and, once it's over, its result. None leaves it out. A
+        sport whose sources list no schedule has none."""
+        return None
+
+    # ---- who's out: injuries and bans its sources list league-wide, on Today's Wire (sidelined.py)
+
+    def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
+        """A player out of their team's games as the Wire tells it: of a kind its sources share ("injury",
+        "suspension", "other": Absence.kind), as the source says what ("Back Injury"), until when they're
+        expected back. None for a kind the sport doesn't tell, and for a sport whose sources list nobody out."""
+        return None
+
+    def back_fact(self, who: str, kind: str) -> Fact | None:
+        """A player of this sport back from a spell of this kind (out_fact), as the Wire tells it; None for a
+        kind it doesn't tell."""
+        return None
+
+    # ---- a game's match page (match.py)
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """What a game's match page shows under its board, as sections its sport's web view draws by name
+        (web/src/sports/<sport>.tsx, Match), from its scoreboard (Snapshot.state), the source's key events,
+        newest first (Snapshot.moments), every player's line the source gave, by their id there, and who those
+        are ({id: (name, team)}). By default the key events as they come, which the page lists for any sport
+        ({"events": [{"clock", "kind", "text"}]}); a sport whose board says it all (chess) has nothing more."""
+        return {"events": [{k: e.get(k) for k in ("clock", "kind", "text")} for e in events]} if events else {}
 
     # ---- live games and cards (structured.py)
 

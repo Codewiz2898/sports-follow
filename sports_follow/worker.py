@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, db, engine, history, live, logs, metrics, notify, photos, pipeline, registry, retention, shutdown, starters, structured, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -41,7 +41,7 @@ LATE = 50
 logs.setup()
 tracing.setup("sports-follow-worker")
 # A job's arguments its log lines are tagged with.
-FIELDS = ("player_id", "event_id", "system")
+FIELDS = ("player_id", "event_id", "system", "game")
 # A quiet job's closing line (the tick's, every minute) is logged only past this many seconds, or on failure.
 QUIET_UNDER = 10
 # How long a stopping worker gives its jobs to end and free their own locks before it frees the rest
@@ -212,6 +212,37 @@ async def read_live(ctx, system: str) -> None:
     await in_lane('refresh', live.read, system)
 
 
+async def read_match(ctx, system: str, game: str) -> None:
+    """One game from its source, for its match page (match.read): queued by the API while a fan has the page
+    open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
+    the allowance kept for followed players' live games."""
+    await in_lane('refresh', match.read, system, game)
+
+
+async def read_league(ctx, system: str) -> None:
+    """A source's competitions' games, three days back and a fortnight on, for Today's big results and big games
+    coming up (league.read): queued by the API when a fan looks and the last read is a few hours old. In the
+    refresh lane: no fan waits on it, so it stops short of the allowance kept for live games."""
+    await in_lane('refresh', league.read, system)
+
+
+async def refresh_campaigns(ctx) -> None:
+    """Each campaign page's teams' rosters, read again from their sources (campaigns.refresh): once a day, so
+    a change of line-up reaches the page's whole-team follow. A few requests a campaign, in the refresh lane."""
+    if await _missed(ctx, "refresh_campaigns"):
+        return
+    await in_lane('refresh', campaigns.refresh)
+
+
+async def read_sidelined(ctx) -> None:
+    """Who's out of the running sources' competitions, injured or suspended, for the Wire's facts
+    (sidelined.read_all): twice a day, whoever is looking, as each read is told against the last. In the
+    refresh lane: it stops short of the allowance kept for live games."""
+    if await _missed(ctx, "read_sidelined"):
+        return
+    await in_lane('refresh', sidelined.read_all)
+
+
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
     ended = await asyncio.to_thread(accounts.purge_expired)
@@ -221,7 +252,7 @@ async def purge_sessions(ctx) -> None:
 
 async def import_registry(ctx) -> None:
     """The weekly player-registry refresh from Wikidata, one query at a time, then the esports pros from
-    PandaScore; about two hours."""
+    their sources and each one's Wikidata person, for their photo (roster_wikidata.py); about two hours."""
     await in_lane('import', _import_registry)
 
 
@@ -312,7 +343,7 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
@@ -322,6 +353,9 @@ class WorkerSettings:
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
         cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
+        # Before Europe's matchdays get going, and after most of the day's news is in.
+        cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
+        cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

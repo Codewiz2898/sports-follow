@@ -26,7 +26,7 @@ import hashlib
 import re
 from collections import Counter
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .. import naming
@@ -45,6 +45,9 @@ LEAGUES = {
     "pgc": "PUBG Global Championship", "pgs": "PUBG Global Series", "pnc": "PUBG Nations Cup", "pcs": "PUBG Continental Series",
     "pec": "PUBG Europe Championship", "pas": "PUBG Americas Series", "pws": "PUBG Weekly Series",
 }
+# How big each circuit's events are, as Fixture tiers (LiveGame's scale): the world events, then the
+# continental series. The weekly series, and an event no code decodes, aren't among the big results.
+TIERS = {"pgc": 3, "pgs": 3, "pnc": 3, "pcs": 2, "pec": 2, "pas": 2}
 REGIONS = {
     "eu": "Europe", "as": "Asia", "kr": "Korea", "sea": "Southeast Asia", "am": "Americas", "na": "North America", "cn": "China",
     "tw": "Taiwan", "sa": "South America", "jp": "Japan", "ap": "Asia Pacific", "oc": "Oceania", "th": "Thailand", "hk": "Hong Kong",
@@ -84,6 +87,12 @@ def pro_id(team: str, name: str) -> str | None:
 def pro_of(player: dict[str, Any], team: str) -> str | None:
     """Who a roster's player is (pro_id), from their in-game name ("FLC_TGLTN") and the roster's tag."""
     return pro_id(team, display_name(player.get("name") or "", team))
+
+
+def event_tier(tournament: str) -> int:
+    """ "as-pgsc4t" -> 3, a PUBG Global Series; 0 for a circuit not in TIERS."""
+    code = tournament.replace("_", "-").partition("-")[2].lower()
+    return next((tier for key, tier in TIERS.items() if key in code), 0)
 
 
 def event_name(tournament: str) -> str:
@@ -208,6 +217,7 @@ def parse_fixture(lobby: dict[str, Any], now: datetime | None = None) -> Fixture
         locator={"tournament": lobby["tournament"], "day": lobby["day"], "n": lobby["n"]},
         detail=None,
         result={"teams": len(table), "standings": [{k: r[k] for k in ("id", "name", "place", "points", "kills", "wins")} for r in table]} if status == "final" else None,
+        facts={"game": GAME},
     )
 
 
@@ -318,6 +328,8 @@ class PubgEsports(Adapter):
     sport = "esports"
     games = ("pubg",)  # covers PUBG beside the other esports sources: players never move between them
     live_cadence = 120  # a match takes half an hour; a new one is in the list soon after it ends
+    live_note = "Standings update from PUBG after each match."
+    lag_note = "PUBG lobbies update after each match ends."
     INDEX_AGE = 3600  # how old a tournament's match list may be when finding a player's lobbies
     LIVE_AGE = 90  # …and when polling a live lobby
 
@@ -461,6 +473,18 @@ class PubgEsports(Adapter):
             lobby = next((lb for lb in by_tournament[loc["tournament"]] if lb["day"] == loc["day"] and lb["n"] == loc["n"]), None)
             if lobby:
                 out[key] = parse_lobby(lobby)
+        return out
+
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """The lobbies that started between two days, each with its circuit's tier (event_tier), from the
+        index warm() keeps: no requests of their own. PUBG lists a match only once it's over, so none are
+        to come."""
+        out = []
+        for lobby in self.lobbies():
+            f = parse_fixture(lobby)
+            if f.start_utc and start <= f.start_utc.date() <= end:
+                f.tier = event_tier(lobby["tournament"])
+                out.append(f)
         return out
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:

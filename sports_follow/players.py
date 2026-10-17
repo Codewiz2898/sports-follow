@@ -6,6 +6,9 @@
     .venv/bin/python -m sports_follow.players remove 17                    # a player's page, by its id
     .venv/bin/python -m sports_follow.players remove Q1234                 # or a registry id, or a source id (espn_cricket:253802)
     .venv/bin/python -m sports_follow.players restore Q1234                # take the decision back
+    .venv/bin/python -m sports_follow.players unmatch pandascore:20401     # a pro's Wikidata match and photo taken back, never matched again
+    .venv/bin/python -m sports_follow.players unmatch 17 Q113450352        # or never again to that person
+    .venv/bin/python -m sports_follow.players rematch pandascore:20401     # take the unmatch back
     .venv/bin/python -m sports_follow.players starter add Q1234            # pin them for new fans (starters.py)
     .venv/bin/python -m sports_follow.players starter remove Q1234
     .venv/bin/python -m sports_follow.players starter list                 # the pins, and each sport's top players
@@ -20,15 +23,22 @@ in Redis, deletes their registry rows and blocks them: imports never write them 
 following leave out their ids in the sources. A name typed for research isn't blocked; the agent decides
 who that is. Removing shows what it will delete and asks first, unless given --yes.
 
+Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
+(roster_wikidata.py): it takes the match and photo back at once, off every card showing it and the
+Credits page too, and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
+removing: a kept pro can be unmatched, and removing one leaves it, so restoring them doesn't bring the face
+back. Rematching takes it back; the next weekly run (or roster_wikidata by hand) may match them again.
+
 Starters are the athletes a new fan is offered in each sport (starters.py): who's playing now, the most
 followed, and the best known, found by themselves; pinned starters come first, in the order they were
 added. Pinning one keeps them in the registry too, so no import drops them; removing the athlete takes their
-starter row with them.
+starter row with them, and takes them off every campaign page (campaigns.py).
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import secrets
 import sys
 from dataclasses import dataclass, field
@@ -39,10 +49,12 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, logs, registry, search, sports, starters
+from . import bus, campaigns, logs, photos, registry, roster_wikidata, search, sports, starters
 from .adapters import KNOWN, AdapterError
 from .db import session
-from .models import Athlete, AthleteOverride, EventPlayer, Follow, Moment, Player, PlayerIdentity
+from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
+
+QID = re.compile(r"Q[1-9][0-9]*")  # a Wikidata person
 
 
 class Refused(ValueError):
@@ -126,6 +138,7 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
         _decide(db, a.qid, a.sport, "remove", a.name, ids, note)
         db.execute(delete(Athlete).where(Athlete.id == a.id))
     starters.remove(db, found.athletes)
+    campaigns.forget(db, found.athletes)
     for p in found.players:
         if p.id not in covered:
             # A page no registry row stands for (an agent-built one): its source ids are still blocked.
@@ -194,6 +207,56 @@ def restore(db: Session, ref: str, sport: str | None = None) -> list[AthleteOver
         raise Refused(f"nothing was decided about {ref}")
     db.execute(delete(AthleteOverride).where(*where))
     return rows
+
+
+def unmatch(db: Session, found: Found, person: str | None = None, note: str | None = None) -> list[tuple[Athlete, bool, str | None]]:
+    """Say the athletes a reference found aren't this Wikidata person, or with none anyone, so no run
+    matches them again (roster_wikidata.py), and take back a match to them now: their Wikidata id and photo.
+    Returns each athlete, whether a match was taken back, and the photo file taken back with it."""
+    if person is not None and not QID.fullmatch(person):
+        raise Refused(f"{person!r} isn't a Wikidata id, like Q1234")
+    if not found.athletes:
+        raise Refused("only a registry athlete is matched to a Wikidata person, and no registry athlete has that id")
+    athletes = [a for a in found.athletes if (kind := sports.BY_KEY.get(a.sport)) is not None and roster_wikidata.matches(kind)]
+    if not athletes:
+        names = ", ".join(f"{a.name} ({a.sport}, {a.qid})" for a in found.athletes)
+        raise Refused(f"{names} came from Wikidata itself, not a source's own list, so isn't matched to anyone here")
+    out = []
+    for a in athletes:
+        # The decision first: a weekly run writing its matches holds it back until that run is done, so what
+        # it wrote is taken back below.
+        stmt = insert(AthleteUnmatch).values(qid=a.qid, sport=a.sport, person=person, name=a.name[:200], note=note)
+        db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport", "person"], set_={"name": a.name[:200], "note": note, "created_at": func.now()}))
+        image = a.image
+        taken = bool(roster_wikidata.forget(db, a.sport, [a.qid], person))
+        out.append((a, taken, image if taken else None))
+    return out
+
+
+def rematch(db: Session, ref: str, sport: str | None = None, person: str | None = None) -> list[AthleteUnmatch]:
+    """Take unmatches back: of the athletes a reference finds, or of the registry id itself (an athlete since
+    removed); given a person, only that one. The next run may match them again."""
+    keys = {(a.qid, a.sport) for a in find(db, ref, sport).athletes}
+    which = or_(AthleteUnmatch.qid == ref.strip(), *[(AthleteUnmatch.qid == q) & (AthleteUnmatch.sport == s) for q, s in keys])
+    where = [which, *([AthleteUnmatch.sport == sport] if sport else []), *([AthleteUnmatch.person == person] if person else [])]
+    rows = list(db.scalars(select(AthleteUnmatch).where(*where)))
+    if not rows:
+        raise Refused(f"no match of {ref}{f' to {person}' if person else ''} was taken back")
+    db.execute(delete(AthleteUnmatch).where(AthleteUnmatch.id.in_([u.id for u in rows])))
+    return rows
+
+
+def unmatches(db: Session) -> list[AthleteUnmatch]:
+    return list(db.scalars(select(AthleteUnmatch).order_by(AthleteUnmatch.created_at.desc())))
+
+
+def take_photos_off(files: list[str]) -> int:
+    """Take photos taken back off the Credits page, unless an athlete's is the same file, and off every card
+    that shows one its athlete no longer has, followed or not: now, not at the photos job's next run.
+    Returns how many cards changed."""
+    with session() as db:
+        photos.forget(db, files)
+        return photos.stamp(db)
 
 
 def starter_athletes(found: Found, sport: str | None = None) -> list[Athlete]:
@@ -280,6 +343,15 @@ def main(argv: list[str], ask: Any = input) -> int:
     b = sub.add_parser("restore", help="take back what was decided about a registry id")
     b.add_argument("ref")
     b.add_argument("--sport")
+    u = sub.add_parser("unmatch", help="take back a pro's Wikidata match and photo, and never match them again (or to that person)")
+    u.add_argument("ref", help=f"a player id, registry id ({', '.join(prefixes)}) or system:id")
+    u.add_argument("person", nargs="?", help="the Wikidata person they aren't, Q1234 (default: anyone)")
+    u.add_argument("--sport")
+    u.add_argument("--note")
+    m = sub.add_parser("rematch", help="take back an unmatch: the next weekly run may match them again")
+    m.add_argument("ref")
+    m.add_argument("person", nargs="?", help="only the unmatch from this Wikidata person")
+    m.add_argument("--sport")
     s = sub.add_parser("starter", help="the athletes a new fan is offered in each sport").add_subparsers(dest="action", required=True)
     s.add_parser("list", help="the pinned starters, by sport and order, and each sport's top players")
     s.add_parser("refresh", help="find each sport's top players and their next games now (the worker does it daily)")
@@ -294,8 +366,11 @@ def main(argv: list[str], ask: Any = input) -> int:
                 rows = decisions(db)
                 for o in rows:
                     print(f"{o.action:6}  {o.sport:10}  {o.qid:20}  {o.name}{f'  {o.ids}' if o.ids else ''}{f'  ({o.note})' if o.note else ''}  {o.created_at:%Y-%m-%d}")
-                if not rows:
-                    print("Nothing added or removed yet.")
+                unmatched = unmatches(db)
+                if not rows and not unmatched:
+                    print("Nothing added, removed or unmatched yet.")
+                for u in unmatched:
+                    print(f"{'unmatch':7} {u.sport:10}  {u.qid:20}  {u.name}  not {u.person or 'anyone'}{f'  ({u.note})' if u.note else ''}  {u.created_at:%Y-%m-%d}")
         elif args.command == "add":
             with session() as db:
                 if args.qid:
@@ -323,6 +398,19 @@ def main(argv: list[str], ask: Any = input) -> int:
             with session() as db:
                 for o in restore(db, args.ref, args.sport):
                     print(f"No longer {'removed' if o.action == 'remove' else 'kept'}: {o.name} ({o.sport}, {o.qid}).")
+        elif args.command == "unmatch":
+            with session() as db:
+                done = unmatch(db, find(db, args.ref, args.sport), args.person, args.note)
+            cards = take_photos_off([image for _, _, image in done if image]) if any(now for _, now, _ in done) else 0
+            for a, now, _ in done:
+                print(f"{'Took back' if now else 'Nothing to take back now for'} {a.name} ({a.sport}, {a.qid}){f' (not matched to {args.person})' if args.person and not now else ''}; "
+                      f"no run matches them to {args.person or 'anyone'} again.")
+            if cards:
+                print(f"Took the photo off {cards} card(s).")
+        elif args.command == "rematch":
+            with session() as db:
+                for u in rematch(db, args.ref, args.sport, args.person):
+                    print(f"No longer unmatched from {u.person or 'anyone'}: {u.name} ({u.sport}, {u.qid}); the next weekly run may match them again.")
         elif args.command == "starter" and args.action == "list":
             with session() as db:
                 rows = starters.listed(db)

@@ -5,30 +5,13 @@ import { APP_NAME } from './app'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
 import { sportInfo } from './sports'
+import { DEVICE, LEVELS, levelText as sportLevelText, quietSaid, testSaid, wanted } from './alerts'
 
-export const LEVELS: { value: AlertLevel; label: string; short: string }[] = [
-  { value: 'key', label: 'Key moments', short: 'Key' },
-  { value: 'everything', label: 'Everything', short: 'All' },
-  { value: 'results', label: 'Results only', short: 'Results' },
-  { value: 'off', label: 'Off', short: 'Off' },
-]
+export { LEVELS, wanted }
 
-/** A level in a line (`brief`) and in full (`hint`), for a player of this sport: what key moments are, and
- * what everything adds, as the sport says (its alerts, from GET /api/sports; sports_follow/sports/). */
+/** A level in a line and in full, for a player of this sport (alerts.ts). */
 export function levelText(level: AlertLevel, sport?: string | null): { brief: string; hint: string } {
-  const { key, more } = sportInfo(sport).alerts
-  if (level === 'key') return { brief: key[0], hint: key[1] }
-  if (level === 'everything') return { brief: `Plus ${more[0]}, without sound`, hint: `Key moments, plus ${more[1]}. Those arrive without sound` }
-  if (level === 'results') return { brief: 'Just the final result', hint: 'Just the final result' }
-  return { brief: 'Nothing for this player', hint: 'No notifications for this player' }
-}
-
-/** Whether a fan who chose `level` for a player hears about a moment (moments.wanted on the server). */
-export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | 'kind'>): boolean {
-  if (level === 'everything') return true
-  if (level === 'results') return moment.kind === 'final'
-  if (level === 'off') return false
-  return moment.level === 'key'
+  return sportLevelText(level, sportInfo(sport))
 }
 
 const QUIET = 'sf-quiet-hours'
@@ -76,7 +59,7 @@ export function usePush() {
       : !supported
         ? "This browser can't show notifications."
         : serverOn === false
-          ? "Notifications aren't set up on this server yet."
+          ? DEVICE.noServer
           : null
 
   const run = useCallback(async (work: () => Promise<void>) => {
@@ -99,7 +82,7 @@ export function usePush() {
       return
     }
     const { public_key } = await api.pushInfo()
-    if (!public_key) throw new Error("Notifications aren't set up on this server yet.")
+    if (!public_key) throw new Error(DEVICE.noServer)
     const reg = await navigator.serviceWorker.ready
     const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) as BufferSource })
     await api.pushSubscribe(sub.toJSON(), quiet)
@@ -117,12 +100,12 @@ export function usePush() {
     setQuiet(next)
     try { localStorage.setItem(QUIET, JSON.stringify(next)) } catch { /* storage blocked */ }
     if (subscription) await api.pushSubscribe(subscription.toJSON(), next)
-    setMessage(next.start && next.end ? `Quiet from ${next.start} to ${next.end}: notifications arrive without sound.` : 'Quiet hours off.')
+    setMessage(quietSaid(next.start, next.end))
   })
 
   const test = () => run(async () => {
     const { sent } = await api.pushTest()
-    setMessage(sent ? 'Sent. It should arrive in a few seconds.' : 'No device took it. Turn notifications off and on again here.')
+    setMessage(testSaid(sent))
   })
 
   return { unavailable, on: Boolean(subscription), permission, quiet, busy, message, enable, disable, saveQuiet, test }

@@ -10,12 +10,14 @@ label), so nothing in this package imports a source at load time.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from functools import lru_cache
-from typing import Any
+from typing import Any, overload
 
+from .. import controls
 from ..config import SPORTS
 from . import basketball, chess, cricket, esports, football, tennis
-from .base import Found, Seen, Sport
+from .base import Fact, Found, Notable, Seen, Sport
 
 # In the order the app lists them.
 ALL: tuple[Sport, ...] = (football.SPORT, cricket.SPORT, basketball.SPORT, tennis.SPORT, chess.SPORT, esports.SPORT)
@@ -28,8 +30,39 @@ def pick(every: tuple[Sport, ...], keys: set[str]) -> tuple[Sport, ...]:
     return tuple(s for s in every if not keys or s.key in keys)
 
 
-# The sports this build runs.
-ENABLED: tuple[Sport, ...] = pick(ALL, SPORTS)
+# The sports this build may run (SPORTS_FOLLOW_SPORTS): the admin panel turns them off and on within these.
+ALLOWED: tuple[Sport, ...] = pick(ALL, SPORTS)
+
+
+class Running(Sequence[Sport]):
+    """The sports that run now (ENABLED): those this build may run, less those the admin panel has turned
+    off (controls.py). Read again on each use, so turning one off or on needs no restart."""
+
+    def now(self) -> tuple[Sport, ...]:
+        off = controls.current().sports_off
+        return tuple(s for s in ALLOWED if s.key not in off)
+
+    @overload
+    def __getitem__(self, i: int) -> Sport: ...
+    @overload
+    def __getitem__(self, i: slice) -> tuple[Sport, ...]: ...
+    def __getitem__(self, i: int | slice) -> Sport | tuple[Sport, ...]:
+        return self.now()[i]
+
+    def __len__(self) -> int:
+        return len(self.now())
+
+    def __iter__(self) -> Iterator[Sport]:
+        return iter(self.now())
+
+    def __contains__(self, sport: object) -> bool:
+        return sport in self.now()
+
+    def __repr__(self) -> str:
+        return f"Running{self.now()!r}"
+
+
+ENABLED: Sequence[Sport] = Running()
 
 
 def on(name: str | None) -> bool:
@@ -85,7 +118,9 @@ def label(name: str | None) -> str:
 
 def shown(sport: Sport, live: bool) -> dict[str, Any]:
     """A sport as the app knows it (GET /api/sports): what it's called, which free-text names are it, what
-    its alert levels say, and whether this build runs it and has live scores for it."""
+    its alert levels say, whether this build runs it and has live scores for it, and its colours for an
+    app that doesn't read /api/sports.css (the Android app): the block, text on it, softer text on it and
+    the colour as text on ink, or None for a sport that wears ink."""
     return {
         "key": sport.key or "other",
         "label": sport.label,
@@ -97,33 +132,18 @@ def shown(sport: Sport, live: bool) -> dict[str, Any]:
         "stats_title": sport.stats_title,
         "team_results": sport.team_moments,
         "keeps_names": sport.keeps_names,
+        "colour": {k: v for k, v in sport.colour.items() if k in ("sport", "on", "on_soft", "ink")} or None,
     }
-
-
-def _rgb(colour: str) -> tuple[float, ...]:
-    """ "#1f5bef" -> (0.12, 0.36, 0.94)."""
-    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
-
-
-def photo_tones(sport: Sport) -> tuple[str, str]:
-    """The two CSS colours a player's photo is recoloured with (web/src/styles.css, .duo): its darks become
-    the sport's deep colour D, its lights the block colour L. The page multiplies the grey photo by the
-    second colour and screens D over it, D + grey × L' × (1 − D), so L' = (L − D) / (1 − D) makes it exactly
-    D + grey × (L − D)."""
-    light, dark = sport.colour["sport"], sport.colour.get("deep") or sport.colour["on"]
-    pre = [(lc - dc) / (1 - dc) if dc < 1 else 0 for lc, dc in zip(_rgb(light), _rgb(dark))]
-    return dark, "#" + "".join(f"{round(max(0.0, min(1.0, c)) * 255):02x}" for c in pre)
 
 
 def css() -> str:
     """Each sport's colour on [data-sport] (GET /api/sports.css): the block, text on it, softer text on it,
-    the colour as text on ink, and the two a photo is recoloured with."""
+    and the colour as text on ink."""
     names = {"sport": "--sport", "on": "--on-sport", "on_soft": "--on-sport-soft", "ink": "--sport-on-ink"}
     rules = []
     for sport in ALL:
         if sport.colour:
-            dark, light = photo_tones(sport)
-            props = "; ".join([*(f"{names[k]}: {v}" for k, v in sport.colour.items() if k in names), f"--photo-dark: {dark}", f"--photo-light: {light}"])
+            props = "; ".join(f"{names[k]}: {v}" for k, v in sport.colour.items() if k in names)
             rules.append(f"[data-sport='{sport.key}'] {{ {props}; }}")
     return "\n".join(rules) + "\n"
 
@@ -133,4 +153,4 @@ def names_of(sport: Sport) -> list[str]:
     return sorted(n for n, s in _names().items() if s is sport)
 
 
-__all__ = ["ALL", "BY_KEY", "ENABLED", "OTHER", "Found", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "photo_tones", "pick", "shown"]
+__all__ = ["ALL", "ALLOWED", "BY_KEY", "ENABLED", "OTHER", "Fact", "Found", "Notable", "Seen", "Sport", "css", "family", "get", "label", "names_of", "of", "of_state", "on", "pick", "shown"]

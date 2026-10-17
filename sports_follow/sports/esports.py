@@ -12,18 +12,29 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Found, Line, Poster, Seen, Sport, joined
+from .base import Found, Line, Notable, Poster, Seen, Sport, joined, ordinal, stage
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
     from ..models import Athlete
 
 
-def ordinal(n: int | None) -> str:
-    if not n:
-        return "?"
-    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
+# A league game's size (notable): its event's tier, as its source rates it (Fixture.tier: 3 a world event, 2
+# a top league), and how late in the event it is; smaller events' games aren't big ones.
+SERIES_RANK = {3: 60, 2: 40}
+LOBBY_RANK = {3: 55, 2: 35}
+STAGE_BONUS = {3: 30, 2: 15, 1: 5}  # a grand final of a world event is 90
+TIERS = {3: "Tier S", 2: "Tier A"}
+DISAMBIGUATED = re.compile(r"_?\(.*\)$")  # a Liquipedia page's "_(Korean_player)"
+# A game as one key, however a source, a Liquipedia wiki or Wikidata writes it: its name run together
+# ("Dota 2", "dota2"), or as here where the names differ.
+GAME_KEYS = {
+    "counterstrike": "cs2", "counterstrike2": "cs2", "counterstrikeglobaloffensive": "cs2", "csgo": "cs2",
+    "rainbowsix": "rainbowsixsiege", "tomclancysrainbowsixsiege": "rainbowsixsiege", "r6siege": "rainbowsixsiege",
+    "honorofkings": "kingofglory", "mobilelegendsbangbang": "mobilelegends", "leagueoflegendswildrift": "wildrift",
+    "overwatch2": "overwatch", "playerunknownsbattlegrounds": "pubg", "pubgbattlegrounds": "pubg",
+    "bgmi": "pubgmobile", "battlegroundsmobileindia": "pubgmobile", "freefiremax": "freefire",
+}
 
 
 def points(value: Any) -> str:
@@ -148,6 +159,11 @@ def _lobby_final(who: str, now: Seen) -> Found:
     return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
 
 
+def _series_won(won: int, lost: int) -> str:
+    """A series won as a poster's word: "Sweep 2–0" when the other side took no map (of more than one), else "Win 2–1"."""
+    return f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}"
+
+
 # ---------------------------------------------------------------- form
 
 
@@ -193,6 +209,31 @@ class Esports(Sport):
     def search_detail(self, athlete: Athlete) -> list[str]:
         return [*list(athlete.teams or [])[:1], athlete.country or ""]  # the game is the result's sport
 
+    # ---- the registry: a pro's Wikidata person, for their photo (roster_wikidata.py)
+
+    # Pros on Wikidata: anyone with a Liquipedia id (P10918, "valorant/TenZ"), an HLTV one (P8878) or an
+    # Esports Earnings one (P10803), or a professional gamer (Q4379701) by occupation.
+    people_ids = ("P10918", "P8878", "P10803")
+    people_occupations = ("Q4379701",)
+    team_filler = frozenset({"team", "club", "esports", "esport", "e", "sports", "gaming", "gg"})  # "Gen.G Esports" is Gen.G
+
+    def known_as(self, ids: dict[str, list[str]]) -> list[str]:
+        """The handles in a pro's ids: their Liquipedia page ("valorant/TenZ", "dota2/Collapse_(Russian_player)")
+        and their HLTV name ("11893/zywoo")."""
+        pages = [DISAMBIGUATED.sub("", v.split("/", 1)[-1]).replace("_", " ") for v in ids.get("P10918", [])]
+        return pages + [v.rsplit("/", 1)[-1] for v in ids.get("P8878", [])]
+
+    def plays(self, ids: dict[str, list[str]], disciplines: list[str]) -> set[str]:
+        """The games a pro on Wikidata plays: the wiki their Liquipedia page is on ("valorant/TenZ"),
+        Counter-Strike for an HLTV id, and the disciplines they compete in ("League of Legends")."""
+        games = [v.split("/", 1)[0] for v in ids.get("P10918", [])] + (["cs2"] if ids.get("P8878") else []) + list(disciplines)
+        return {key for key in map(self.game_key, games) if key}
+
+    def game_key(self, game: str | None) -> str:
+        """"Counter-Strike 2", "CS2" and the counterstrike wiki are "cs2"; "Dota 2" is "dota2"."""
+        key = re.sub(r"[^a-z0-9]", "", (game or "").lower())
+        return GAME_KEYS.get(key, key)
+
     def starts_unlisted(self, now: Seen) -> bool:
         # A series starts for the whole team (a Dota player OpenDota can't name has no line), and so
         # does a lobby nobody listed players for.
@@ -213,12 +254,32 @@ class Esports(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
+        Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
+        won each of its matches."""
+        if state.get("kind") == "battle_royale":
+            teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
+            return {
+                "standings": [{k: t.get(k) for k in ("place", "name", "points", "kills", "wins")} for t in state.get("standings") or []],
+                "games": [{"n": g.get("n"), "map": g.get("map"), "winner": teams.get(g.get("winner"))} for g in state.get("games") or []],
+            }
+        teams = {t.get("id"): t.get("name") for t in state.get("teams") or []}
+        dota = {m.get("n"): m.get("players") or {} for m in (state.get("dota") or {}).get("maps") or []}
+        maps = []
+        for m in state.get("maps") or []:
+            numbers = dota.get(m.get("n")) or {}
+            best = max(numbers.items(), key=lambda p: (p[1].get("kills") or 0, -(p[1].get("deaths") or 0)), default=None)
+            who = best and names.get(best[0], ("", ""))[0]
+            maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
+                         "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
+        return {"maps": maps} if maps else {}
+
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
         lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""
         if m := re.search(r" win (\d+)–(\d+)$", f.title):
-            won, lost = int(m[1]), int(m[2])
-            return Poster(f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}", f.body.split(" · ", 1)[0])  # "v GenOne"
+            return Poster(_series_won(int(m[1]), int(m[2])), f.body.split(" · ", 1)[0])  # "v GenOne"
         if m := re.search(r": (.+) win the lobby · ([\d.]+ pts)$", f.title):
             return Poster("Lobby won", joined(m[1], m[2]))
         if f.kind == "dinner":
@@ -226,6 +287,52 @@ class Esports(Sport):
             game = re.search(r"Match \d+", f.body)
             return Poster(word, joined(team, game[0].lower() if game else None))
         return None
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The player's team winning, off a finished series' or lobby's result from their side, as high()
+        words its moment: "Won 2–1" is a "Win 2–1" v the other side, "Won 2–0" a "Sweep 2–0"; "1st of 16 ·
+        87 pts" is "Lobby won" (the result doesn't name the team: "87 pts · 16 teams"). Not a forfeit."""
+        if m := re.fullmatch(r"Won (\d+)–(\d+)", result):
+            return Poster(_series_won(int(m[1]), int(m[2])), versus, priority=80)  # a result's (moments.PRIORITY)
+        if (placed := _placed(result)) and placed[0] == 1:
+            return Poster("Lobby won", f"{points(placed[2])} pts · {placed[1]} teams", priority=90)  # as _lobby_final's
+        return None
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """A series or lobby of a big event (Fixture.tier S or A), as big as its tier and, for a series, how
+        late in the event it is (its stage, as its detail says: "Grand final · Bo5"), 8 more once it's over
+        if it went the distance. A forfeit isn't one. Its word is the series score, the winner's first, or a
+        lobby's winner. Its group is its game, as its source names it (facts["game"]: "Valorant"), so each
+        game takes its turn among the sport's and one game's season never fills Today."""
+        r = fixture.result or {}
+        group = str(fixture.facts.get("game") or "")
+        if "standings" in r or (fixture.status != "final" and len(fixture.team_ids) > 2):
+            rank = LOBBY_RANK.get(fixture.tier)
+            if rank is None:
+                return None
+            table = r.get("standings") or []
+            if fixture.status != "final" or not table:
+                return Notable(rank, why=TIERS[fixture.tier], group=group)
+            top = table[0]
+            return Notable(rank, word=str(top.get("name") or ""), line=f"Won the lobby · {points(top.get('points'))} pts · {r.get('teams')} teams", why=TIERS[fixture.tier], group=group)
+        if fixture.tier not in SERIES_RANK or r.get("forfeit"):
+            return None
+        level, said = stage(fixture.detail)
+        rank = SERIES_RANK[fixture.tier] + STAGE_BONUS.get(level, 0)
+        why = said or TIERS[fixture.tier]
+        sides = r.get("teams") or []
+        if fixture.status != "final" or len(sides) != 2:
+            return Notable(rank, why=why, group=group)
+        scores = sorted((int(t.get("score") or 0) for t in sides), reverse=True)
+        best_of = re.search(r"\bBo(\d+)\b", fixture.detail or "")
+        distance = scores[1] > 0 and (scores[0] - scores[1] == 1) and (not best_of or scores[0] + scores[1] == int(best_of[1]))
+        winner = next((t for t in sides if t.get("winner")), None)
+        loser = next((t for t in sides if t is not winner), None) if winner else None
+        # The winner's score first, as the line under it says it: "3–2", "EDward Gaming beat AG Super Play".
+        first, second = (winner, loser) if winner and loser else sides
+        line = f"{winner['name']} beat {loser['name']}" if winner and loser else ""
+        return Notable(min(100, rank + (8 if distance else 0)), word=f"{first.get('score')}–{second.get('score')}", line=line,
+                       why=why if said or not distance else "Decider", group=group)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         """Battle royale: placings and points from the lobby results ("3rd of 16 · 87 pts"). Team series:

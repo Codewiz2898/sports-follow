@@ -32,7 +32,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Respo
 from fastapi import Path as InPath
 from fastapi.routing import APIRoute
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, bus, credits as credits_page, google_signin, live, logs, mail, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, FanSource, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -221,7 +221,7 @@ COOKIE_DAYS = 5 * 365
 # Chrome caps any cookie at).
 REFRESH_DAYS = 7
 NEW_ID = re.compile(r"[A-Za-z0-9_-]{32}")  # what secrets.token_urlsafe(24) mints: never taken unsigned
-SESSION_CACHE = 600  # seconds a signed-in session's lookup is kept in Redis; ending a session deletes it at once
+SESSION_CACHE = 600  # seconds a signed-in session's lookup is kept in Redis; ending a session overwrites it at once
 
 
 @lru_cache(maxsize=1)
@@ -342,7 +342,8 @@ async def account_of(request: Request) -> accounts.Signed | None:
     if cached is not None:
         return accounts.Signed(**json.loads(cached)) if cached else None
     signed = await in_db(accounts.session_for, accounts.token_hash(token))
-    await state["redis"].set(key, json.dumps(signed.__dict__) if signed else "", ex=SESSION_CACHE)
+    # Only into an empty key: a session that ended while this looked it up has left "" there (_forget_sessions).
+    await state["redis"].set(key, json.dumps(signed.__dict__) if signed else "", ex=SESSION_CACHE, nx=True)
     return signed
 
 
@@ -457,6 +458,51 @@ async def player_photo(name: str) -> Response:
     return Response(data, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
 
 
+# ---------------------------------------------------------------- link previews (share.py)
+
+
+async def _preview(player_id: int, game: int | None) -> share.Preview | None:
+    """The preview of a player's page, or of a game of theirs (a This week poster's link); None for no such
+    player. A game with no poster (not theirs, nothing to show yet) previews their page."""
+    card = await read_card(player_id)
+    if card is None:
+        return None
+    poster = await in_db(week.game, player_id, game) if game is not None else None
+    return (share.of_game(card, poster) if poster else None) or share.of_card(card)
+
+
+# Pictures are drawn one at a time per process (tens of milliseconds each): anyone may ask for one, and a
+# script asking for many new ones would otherwise take the threads every database call waits for.
+DRAWING = asyncio.Semaphore(1)
+
+
+async def _picture(picture: share.Picture) -> Response:
+    """A preview's picture, from those drawn lately or drawn now. Its address carries a digest of what it
+    shows, so a crawler sees a new address once it changes; a few minutes' cache is for the crawlers that
+    ask again at once."""
+    data = share.drawn(picture)
+    if data is None:
+        async with DRAWING:
+            data = await run_in_threadpool(share.png, picture)
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/players/{player_id}/share.png")
+async def player_picture(player_id: RowId, g: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None) -> Response:
+    """The picture a link to the player's page shows in WhatsApp, X and the rest: who they are and what
+    they're doing now; with ?g=<event id>, that game's big moment."""
+    preview = await _preview(player_id, g)
+    if preview is None:
+        raise HTTPException(404, "No such player.")
+    return await _picture(preview.picture)
+
+
+@app.get("/api/share.png")
+async def app_picture() -> Response:
+    """The picture a link to any other page shows: the app's own."""
+    return await _picture(share.APP)
+
+
 async def _following(fan: str) -> list[dict[str, Any]]:
     """The fan's players as the app lists them: each card's summary and the fan's alert level."""
     rows = await in_db(lambda db: db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all())
@@ -490,11 +536,160 @@ async def live_now(fan: str = Depends(fan_id)) -> dict[str, Any]:
     return {"sports": games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the minute
 
 
+@app.get("/api/match/{system}/{game}")
+async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """One game's match page (match.py): its board, key moments and both sides' players this fan can follow,
+    by its source and the id a fixture of it has there. Served from what's stored and last read; a read
+    over a minute old queues another for the worker, so "refreshing" says a newer one may come in a moment.
+    A game no source has named here, or of a sport turned off, is a 404: an address made up asks nothing of a
+    source."""
+    if system not in KNOWN or not match.ID.fullmatch(game):
+        raise HTTPException(404, "No such game.")
+    page, ask = await in_db(match.view, fan, system, game)
+    if ask:
+        try:
+            # One read a minute of a game, whether the last one came or failed, and at most match.READS a
+            # minute of a source's allowance (Sportmonks' football and cricket share one), whichever games
+            # fans have open.
+            if await state["redis"].set(f"match:asked:{system}:{game}", "1", nx=True, ex=match.FRESH):
+                spent = f"match:reads:{match.allowance(system)}:{int(time.time() // 60)}"
+                if await state["redis"].incr(spent) <= match.READS:
+                    await enqueue("read_match", system, game, _job_id=f"read_match:{system}:{game}")
+                await state["redis"].expire(spent, 120, nx=True)
+        except Exception:
+            log.warning("match: couldn't ask for %s:%s", system, game, exc_info=True)
+    if page is None:
+        raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
+    return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
+
+
+@app.get("/api/league")
+async def league_games(response: Response, tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0) -> dict[str, Any]:
+    """Today's big results (since yesterday, else the latest day that had some: days where the fan is, tz
+    minutes east of UTC) and big games coming up (the next fortnight) in the competitions the running
+    sources cover, whoever follows them, ranked by each sport, the sports taking turns (league.py). The same
+    for every fan in a time zone, so no cookie and a public cache. Served from the last reads; a source's
+    read a few hours old queues another for the worker, so "refreshing" says new games may come in a moment."""
+    games, stale = await in_db(league.cached, tz)
+    for system in stale:
+        try:
+            # One read asked for an hour, whether the last one came or failed: a source that's down isn't
+            # asked again on every look.
+            if await state["redis"].set(f"league:asked:{system}", "1", nx=True, ex=league.ASK):
+                await enqueue("read_league", system, _job_id=f"read_league:{system}")
+        except Exception:
+            log.warning("league: couldn't ask for %s's games", system, exc_info=True)
+    # While a read is due, the app looks again in a moment: nothing in between may keep this answer.
+    response.headers["cache-control"] = "no-cache" if stale else f"public, max-age={league.CACHE}"
+    return {**games, "refreshing": bool(stale)}  # a read is on its way, or was asked for within the hour
+
+
 @app.get("/api/starters")
 async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Who a new fan is offered to follow, by sport (starters.py): the welcome's picker, an empty Today's,
     and search's "Try" names. Rows are search results, so following one is the same call."""
     return {"sports": await in_db(starters.offer, fan)}
+
+
+# ---------------------------------------------------------------- campaign pages (campaigns.py)
+
+
+def _campaign_slug(slug: str) -> str:
+    if not campaigns.SLUG.fullmatch(slug):
+        raise HTTPException(404, "No such page.")
+    return slug
+
+
+@app.get("/api/campaigns/{slug}")
+async def campaign(slug: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """A campaign page (/<slug>): its words, its players and its teams' players as result rows (whether this
+    fan follows each), and its games."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    return shown
+
+
+CAMPAIGN_FOLLOWS_AT_ONCE = 3  # a whole team's follows, a few at a time: each may ask its source and take a pooled connection
+
+
+async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns: asyncio.Semaphore) -> int | None:
+    """Follow one of a campaign's rows as the app would (key alerts, the default); None if it couldn't be, for
+    whatever reason, so one player's failure never fails the rest."""
+    target = campaigns.to_follow(row)
+    if target is None:
+        return None
+    async with turns:
+        try:
+            if "player_id" in target:
+                # On Sports Follow with a card that isn't failed (search._ours offers no other): the follow row, and
+                # the build again for a card still building, as /api/follows does, in case its job was lost.
+                def save(db: Session) -> str | None:
+                    db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing())
+                    return db.scalar(select(PlayerCard.status).where(PlayerCard.player_id == target["player_id"]))
+
+                if await in_db(save) == "building":
+                    await enqueue("build_card", target["player_id"])
+                return target["player_id"]
+            return await _follow_athlete(target, fan, address)
+        except HTTPException as exc:
+            log.info("campaign follow of %s: %s", row.get("key"), exc.detail)
+        except Exception:
+            log.warning("campaign follow of %s failed", row.get("key"), exc_info=True)
+        return None
+
+
+@app.post("/api/campaigns/{slug}/follow")
+async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
+    own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
+    has, so none is an AI research. Returns the players now followed and how many couldn't be."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    if isinstance(body.get("team"), str):
+        rows = next((t["players"] for t in shown["teams"] if t["team_id"] == body["team"]), None)
+        if rows is None:
+            raise HTTPException(404, "That team isn't on this page.")
+    elif body.get("players") is True:
+        rows = shown["players"]
+    else:
+        raise HTTPException(400, "Say which: a team, or the players.")
+    address = client_address(request)
+    already = [r["player_id"] for r in rows if r.get("following") and r.get("player_id")]
+    turns = asyncio.Semaphore(CAMPAIGN_FOLLOWS_AT_ONCE)
+    done = await asyncio.gather(*(_follow_row(r, fan, address, turns) for r in rows if not (r.get("following") and r.get("player_id"))))
+    followed = already + [pid for pid in done if pid is not None]
+    return {"player_ids": list(dict.fromkeys(followed)), "failed": sum(pid is None for pid in done)}
+
+
+@app.get("/api/campaigns/{slug}/share.png")
+async def campaign_picture(slug: str) -> Response:
+    """The picture a link to a campaign page shows: its title on its sport's colour, its next game."""
+    shown = await in_db(campaigns.page, _campaign_slug(slug), None)
+    if shown is None:
+        raise HTTPException(404, "No such page.")
+    return await _picture(share.of_campaign(shown).picture)
+
+
+# ---------------------------------------------------------------- where fans come from
+
+TAG = re.compile(r"[A-Za-z0-9._~-]{1,60}")  # s=share, utm_source=whatsapp: a link's tags, as a post writes them
+
+
+@app.post("/api/me/source")
+def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
+    utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
+    left out, and a visit with none isn't kept."""
+    tags = {key: value for key in ("s", "utm_source", "utm_medium", "utm_campaign") if isinstance(value := body.get(key), str) and TAG.fullmatch(value)}
+    landing = body.get("path")
+    if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
+        return {"ok": True}
+    row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
+    db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
+    db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- AI research allowance
@@ -784,6 +979,7 @@ CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public addre
 CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
 FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
+BLOCKED = "This account has been blocked."  # by an admin (admin.py)
 
 
 async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
@@ -801,8 +997,13 @@ def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
 
 
 async def _forget_sessions(token_hashes: list[str]) -> None:
+    """Ended sessions are signed out at once: their cached copies say so ("") rather than going, since a
+    request that looked one up just before it ended would cache it again for SESSION_CACHE otherwise."""
     if token_hashes:
-        await state["redis"].delete(*[f"session:{h}" for h in token_hashes])
+        async with state["redis"].pipeline() as ended:  # one round trip, and all of them or none (MULTI)
+            for h in token_hashes:
+                ended.set(f"session:{h}", "", ex=SESSION_CACHE)
+            await ended.execute()
 
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
@@ -871,6 +1072,10 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
+    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
+    if await in_db(accounts.blocked, email):
+        await state["redis"].delete(f"auth-wait:{who}")
+        raise HTTPException(403, BLOCKED)
     code = f"{secrets.randbelow(10**6):06d}"
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
     await state["redis"].delete(f"auth-tries:{who}")
@@ -907,6 +1112,8 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
     await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
+    if await in_db(accounts.blocked, email):
+        raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
 
@@ -945,6 +1152,8 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
     account_id = await in_db(accounts.find_or_create_google, sub, email)
     if account_id is None:
         return back("/account?error=google_linked")
+    if await in_db(accounts.blocked, None, account_id):
+        return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
     response.headers["location"] = f"/account?welcome={done['players_added']}"
@@ -970,12 +1179,209 @@ async def delete_account(request: Request, response: Response, body: dict = Body
         raise HTTPException(401, "Sign in to delete your account.")
     if body.get("confirm") is not True:
         raise HTTPException(400, "Confirm to delete your account.")
-    gone = await in_db(accounts.delete_account, signed.account_id)
+    await _forget_account(await in_db(accounts.delete_account, signed.account_id))
+    _clear_cookies_for_anonymous(request, response)
+    return {"deleted": True}
+
+
+async def _forget_account(gone: accounts.Deleted | None) -> None:
+    """What Redis kept of a deleted account: its sessions' cached copies, its research count, its codes."""
     if gone is not None:
         await _forget_sessions(gone.token_hashes)
         who = accounts.email_key(gone.email)
         await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
-    _clear_cookies_for_anonymous(request, response)
+
+
+# ---------------------------------------------------------------- the admin panel (admin.py)
+
+admin_log = logging.getLogger("sports_follow.admin")
+
+
+async def _admin_keys() -> admin.Keys:
+    """The admin's password hash and authenticator key; with none set the panel isn't there (404)."""
+    keys = await asyncio.to_thread(admin.stored)
+    if keys is None:
+        raise HTTPException(404, "Not Found")
+    return keys
+
+
+async def require_admin(request: Request) -> admin.Keys:
+    """An admin signed in to the panel. With no admin password set the panel isn't there (404); without a
+    session, or with one opened under a password or code since changed, sign in (401)."""
+    keys = await _admin_keys()
+    token = request.cookies.get(admin.COOKIE) or ""
+    held = await state["redis"].get(admin.session_key(token)) if token else None
+    if held is None or not hmac.compare_digest(held, admin.fingerprint(keys)):
+        raise HTTPException(401, "Sign in to the admin panel.")
+    return keys
+
+
+AdminOnly = [Depends(require_admin)]
+
+
+def _switch(body: dict, field: str) -> bool:
+    value = body.get(field)
+    if not isinstance(value, bool):
+        raise HTTPException(400, f'Say {{"{field}": true}} or {{"{field}": false}}.')
+    return value
+
+
+@app.post("/api/admin/login")
+async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
+    """Sign in to the admin panel with its password and, once one is set, a code from the authenticator
+    app; each code works once. Tries are limited from each client address, and wrong ones from everyone
+    together, so neither can be guessed at speed. Every sign-in is counted (metrics.admin_sign_in), and
+    one that works is emailed (app-rules.json)."""
+    keys = await _admin_keys()
+    now = time.time()
+    await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
+    failed = f"admin-fails:{int(now // 3600)}"
+    if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
+        raise HTTPException(429, "Too many wrong tries this hour. Try again in an hour.")
+    # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
+    await state["redis"].incr(failed)
+    await state["redis"].expire(failed, 7200)
+    password = body.get("password")
+    right = isinstance(password, str) and 0 < len(password) <= 1000 and await asyncio.to_thread(admin.try_password, password, keys.password)
+    if right and keys.totp:
+        step = admin.code_step(keys.totp, body.get("code"), now)
+        # A code works once: one seen over someone's shoulder, or sent twice, is refused.
+        right = step is not None and bool(await state["redis"].set(f"admin-code-used:{step}", "1", nx=True, ex=(admin.CODE_DRIFT * 2 + 2) * admin.CODE_STEP))
+    if not right:
+        metrics.admin_sign_in("wrong")
+        admin_log.warning("admin panel: a wrong password or code")
+        raise HTTPException(401, "That password or code isn't right." if keys.totp else "That isn't the admin password.")
+    await state["redis"].decr(failed)
+    token = secrets.token_urlsafe(32)
+    await state["redis"].set(admin.session_key(token), admin.fingerprint(keys), ex=admin.SESSION_LIFE)
+    response.set_cookie(admin.COOKIE, token, max_age=admin.SESSION_LIFE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))
+    metrics.admin_sign_in("ok")
+    admin_log.warning("admin panel: signed in%s", "" if keys.totp else " with the password alone (no authenticator code set)")
+    return {"admin": True}
+
+
+@app.post("/api/admin/logout")
+async def admin_logout(request: Request, response: Response) -> dict[str, Any]:
+    token = request.cookies.get(admin.COOKIE)
+    if token:
+        await state["redis"].delete(admin.session_key(token))
+    response.delete_cookie(admin.COOKIE, path=admin.COOKIE_PATH, httponly=True, samesite="strict", secure=_secure(request))
+    return {"admin": False}
+
+
+@app.get("/api/admin/me")
+async def admin_me(keys: admin.Keys = Depends(require_admin)) -> dict[str, Any]:
+    """Signed in; and whether sign-in asks for an authenticator code (the panel says so when it doesn't)."""
+    return {"admin": True, "code": keys.totp is not None}
+
+
+@app.get("/api/admin/sports", dependencies=AdminOnly)
+def admin_sports() -> dict[str, Any]:
+    return {"sports": admin.sports_view()}
+
+
+@app.put("/api/admin/sports/{key}", dependencies=AdminOnly)
+def admin_set_sport(key: str, body: dict = Body(...)) -> dict[str, Any]:
+    """Turn a sport off or on, within what the server's settings allow: off, it isn't searched,
+    imported or polled, and its players' pages stay as they are."""
+    on = _switch(body, "on")
+    try:
+        admin.set_sport(key, on)
+    except LookupError:
+        raise HTTPException(404, "There's no such sport.") from None
+    admin_log.info("admin panel: sport %s turned %s", key, "on" if on else "off")
+    return {"sports": admin.sports_view()}
+
+
+@app.get("/api/admin/sources", dependencies=AdminOnly)
+def admin_sources() -> dict[str, Any]:
+    return admin.sources_view()
+
+
+@app.put("/api/admin/sources/{system}", dependencies=AdminOnly)
+def admin_set_source(system: str, body: dict = Body(...)) -> dict[str, Any]:
+    """Turn a source off or on, within what the server's settings allow. Its players move to the sport's
+    next running source on their next refresh, if there is one; without one their pages stop updating."""
+    on = _switch(body, "on")
+    try:
+        admin.set_source(system, on)
+    except LookupError:
+        raise HTTPException(404, "There's no such source.") from None
+    admin_log.info("admin panel: source %s turned %s", system, "on" if on else "off")
+    return admin.sources_view()
+
+
+@app.put("/api/admin/budgets/{name}", dependencies=AdminOnly)
+def admin_set_budget(name: str, body: dict = Body(...)) -> dict[str, Any]:
+    """What a source may spend (admin.checked_limits): its allowance a minute, an hour or a day, the
+    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429."""
+    try:
+        admin.set_limits(name, body)
+    except LookupError:
+        raise HTTPException(404, "There's no such allowance.") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: allowance %s set to %s", name, json.dumps(body, sort_keys=True))
+    return admin.sources_view()
+
+
+@app.delete("/api/admin/budgets/{name}", dependencies=AdminOnly)
+def admin_reset_budget(name: str) -> dict[str, Any]:
+    """Back to what the source declares."""
+    try:
+        admin.set_limits(name, None)
+    except LookupError:
+        raise HTTPException(404, "There's no such allowance.") from None
+    admin_log.info("admin panel: allowance %s back to its source's own", name)
+    return admin.sources_view()
+
+
+@app.get("/api/admin/users", dependencies=AdminOnly)
+def admin_users(q: Annotated[str, Query(max_length=254)] = "", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"overview": admin.overview(db), **admin.account_page(db, q, offset)}
+
+
+@app.get("/api/admin/users/{account_id}", dependencies=AdminOnly)
+def admin_user(account_id: RowId, db: Session = Depends(get_db)) -> dict[str, Any]:
+    found = admin.account(db, account_id)
+    if found is None:
+        raise HTTPException(404, "There's no such account.")
+    return found
+
+
+@app.post("/api/admin/users/{account_id}/signout", dependencies=AdminOnly)
+async def admin_sign_out(account_id: RowId) -> dict[str, Any]:
+    """Sign every device out of the account; their alerts stop."""
+    ended = await in_db(admin.sign_out, account_id)
+    if ended is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_sessions(ended)
+    admin_log.info("admin panel: account %s signed out everywhere", account_id)
+    return {"signed_out": len(ended)}
+
+
+@app.put("/api/admin/users/{account_id}/block", dependencies=AdminOnly)
+async def admin_block(account_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """Block an account (it can't sign in, and is signed out everywhere) or let it back in."""
+    blocked = _switch(body, "blocked")
+    ended = await in_db(admin.block, account_id, blocked)
+    if ended is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_sessions(ended)
+    admin_log.info("admin panel: account %s %s", account_id, "blocked" if blocked else "unblocked")
+    return {"blocked": blocked, "signed_out": len(ended)}
+
+
+@app.delete("/api/admin/users/{account_id}", dependencies=AdminOnly)
+async def admin_delete_user(account_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """Delete an account and everything kept under it, as its fan can (DELETE /api/me/account)."""
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Confirm to delete the account.")
+    gone = await in_db(accounts.delete_account, account_id)
+    if gone is None:
+        raise HTTPException(404, "There's no such account.")
+    await _forget_account(gone)
+    admin_log.info("admin panel: account %s deleted", account_id)
     return {"deleted": True}
 
 
@@ -995,8 +1401,9 @@ def _push_host_ok(endpoint: str) -> bool:
 
 @app.get("/api/push")
 def push_info() -> dict[str, Any]:
+    """What this server can push by: Web Push with its public key (`enabled`), and FCM for the Android app (`fcm`)."""
     key = notify.public_key()
-    return {"enabled": key is not None, "public_key": key}
+    return {"enabled": key is not None, "public_key": key, "fcm": fcm.enabled()}
 
 
 def _sent_text(value: Any, longest: int) -> str | None:
@@ -1014,16 +1421,7 @@ def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), signed: accoun
     p256dh, auth = (_sent_text(keys.get("p256dh"), 199), _sent_text(keys.get("auth"), 99)) if isinstance(keys, dict) else (None, None)
     if not (endpoint and p256dh and auth and _push_host_ok(endpoint)):
         raise HTTPException(400, "That isn't a push subscription this server can deliver to.")
-    tz = str(body.get("timezone") or "UTC")[:64]
-    try:
-        from zoneinfo import ZoneInfo
-
-        ZoneInfo(tz)
-    except Exception:
-        tz = "UTC"
-    start, end = body.get("quiet_start"), body.get("quiet_end")
-    start = start if isinstance(start, str) and TIME.match(start) else None
-    end = end if isinstance(end, str) and TIME.match(end) else None
+    tz, start, end = _device_settings(body)
     previous = _sent_text(body.get("previous_endpoint"), 999)
     if "quiet_start" not in body and previous:
         # The browser replaced this device's subscription: keep its quiet hours.
@@ -1055,14 +1453,75 @@ def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session 
     endpoint = _sent_text(body.get("endpoint"), 999)
     if endpoint is None:
         raise HTTPException(400, "That isn't a push subscription.")
-    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == endpoint))
+    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == endpoint, PushSubscription.transport == "webpush"))
+    db.commit()
+    return {"ok": True}
+
+
+def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
+    """A device's timezone (UTC unless it's a real one) and its quiet hours ("22:00" to "07:00", or none)."""
+    tz = str(body.get("timezone") or "UTC")[:64]
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(tz)
+    except Exception:
+        tz = "UTC"
+    start, end = body.get("quiet_start"), body.get("quiet_end")
+    start = start if isinstance(start, str) and TIME.match(start) else None
+    end = end if isinstance(end, str) and TIME.match(end) else None
+    return tz, start, end
+
+
+@app.post("/api/push/fcm")
+def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The Android app turns notifications on for this device with its FCM token (or updates its quiet
+    hours), as a browser does with its subscription. Signed in, the device belongs to this session.
+
+    The token is the device's alone (no other app, page or person is shown it, and this server never logs
+    it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
+    whoever it is now, after a sign-in or a lost cookie, and the device moves with it."""
+    if not fcm.enabled():
+        raise HTTPException(503, "Notifications aren't set up on this server yet.")
+    token = body.get("token")
+    if not fcm.valid_token(token):
+        raise HTTPException(400, "That isn't an FCM token.")
+    tz, start, end = _device_settings(body)
+    previous = body.get("previous_token")
+    if fcm.valid_token(previous) and previous != token:
+        # FCM gave the app a new token: the old one goes, and its quiet hours carry over unless new ones came.
+        old = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == previous, PushSubscription.transport == "fcm"))
+        if old is not None:
+            if "quiet_start" not in body:
+                start, end = old.quiet_start, old.quiet_end
+            db.delete(old)
+    session_id = signed.session_id if signed else None
+    stmt = insert(PushSubscription).values(fan_id=fan, transport="fcm", endpoint=token, p256dh=None, auth=None, timezone=tz, quiet_start=start, quiet_end=end, session_id=session_id)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["endpoint"],
+        set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id},
+        where=PushSubscription.transport == "fcm",
+    )
+    if db.execute(stmt.returning(PushSubscription.id)).first() is None:
+        raise HTTPException(409, "That device's notifications belong to someone else.")  # a Web Push endpoint by that name: never a token
+    notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
+    db.commit()
+    return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
+
+
+@app.delete("/api/push/fcm")
+def unregister_fcm(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    token = body.get("token")
+    if not fcm.valid_token(token):
+        raise HTTPException(400, "That isn't an FCM token.")
+    db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == token, PushSubscription.transport == "fcm"))
     db.commit()
     return {"ok": True}
 
 
 @app.post("/api/push/test")
 async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
-    if notify.public_key() is None:
+    if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     return {"sent": await asyncio.to_thread(notify.send_test, fan)}
 
@@ -1136,7 +1595,9 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
 @app.get("/api/me/week")
 def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Today's "This week" and the Wire (week.py): the big moments of the fan's players over the last seven
-    days, as each sport words them for a poster, biggest first; and their line-ups and news, newest first."""
+    days, as each sport words them for a poster, biggest first; and the Wire: their players' facts (who's out,
+    who's back), line-ups and news, newest first, then facts about a few of the best-known players they don't
+    follow, which a fan who follows nobody gets too."""
     return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
 
 
@@ -1382,9 +1843,9 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
 
 @app.get("/.well-known/assetlinks.json")
 def assetlinks() -> list[dict[str, Any]]:
-    """Digital Asset Links: proves this site belongs to the Android app (a Trusted Web Activity), so
-    Android opens it full screen with no browser bar. Empty until the app's package and signing
-    certificate are configured."""
+    """Digital Asset Links: proves this site belongs to the Android app, so Android opens the app for a
+    stann.in link to a page it has (App Links, mobile/app.config.ts). Empty until the app's package and
+    signing certificates are configured."""
     if not ANDROID_PACKAGE or not ANDROID_CERT_SHA256:
         return []
     return [{
@@ -1427,15 +1888,67 @@ def _route_of(method: str, path: str) -> str | None:
 NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest"}
 MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png"}
 
+# A player's page, and a game of theirs (?g=<event id>): served with their own link preview.
+PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
+GAME = re.compile(r"[0-9]{1,10}")
+
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
-    @app.get("/{path:path}")
-    def spa(path: str) -> FileResponse:
-        """Files the build puts at the root (service worker, manifest, icons); every other path is the app."""
-        root = WEB_DIST.resolve()
-        file = (root / path).resolve()
-        if not (path and file.is_file() and root in file.parents):
-            file = root / "index.html"
-        cache = "no-cache" if file.name in NO_CACHE else "public, max-age=86400"
-        return FileResponse(file, media_type=MEDIA.get(file.suffix), headers={"Cache-Control": cache})
+
+def _site(request: Request) -> str:
+    """The app's public address, for a preview's links: SPORTS_FOLLOW_SITE_URL, else this request's."""
+    return SITE_URL or f"{request.url.scheme}://{request.url.netloc}"
+
+
+async def _page_preview(path: str, request: Request) -> share.Preview | None:
+    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, or None for the app's own."""
+    if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
+        try:
+            shown = await in_db(campaigns.page, path.rstrip("/"), None)
+        except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+            log.warning("link preview of /%s", path, exc_info=True)
+            return None
+        return share.of_campaign(shown) if shown else None
+    m = PLAYER_PAGE.fullmatch(path)
+    if not m or int(m[1]) > MAX_ID:
+        return None
+    game = request.query_params.get("g", "")
+    try:
+        return await _preview(int(m[1]), int(game) if GAME.fullmatch(game) and 0 < int(game) <= MAX_ID else None)
+    except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+        log.warning("link preview of /%s", path, exc_info=True)
+        return None
+
+
+def _built(path: str) -> Path | str | None:
+    """What the build has at `path`: a file it puts at the root (service worker, manifest, icons), else the
+    app's page (its text); None without a build."""
+    root = WEB_DIST.resolve()
+    index = root / "index.html"
+    file = (root / path).resolve()
+    if path and file.is_file() and root in file.parents and file != index:
+        return file
+    return index.read_text(encoding="utf-8") if index.is_file() else None
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def spa(path: str, request: Request) -> Response:
+    """Files the build puts at the root; every other path is the app, with the page's link preview in its
+    head (share.py), since the crawlers that read those run no JavaScript. Never under /api/: an API path
+    that isn't one is a JSON 404, not the app. Nothing here without a build (`npm run build` in web/)."""
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(404, "Not Found")
+    found = await run_in_threadpool(_built, path)
+    if found is None:
+        raise HTTPException(404, "Not Found")
+    if isinstance(found, Path):
+        cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
+        return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
+    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+
+
+def _not_indexed(path: str) -> dict[str, str]:
+    """The admin panel's page tells search engines not to list it. Not robots.txt, which anyone can read
+    to find it."""
+    return {"X-Robots-Tag": "noindex, nofollow"} if path == "admin" or path.startswith("admin/") else {}

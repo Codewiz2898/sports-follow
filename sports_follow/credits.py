@@ -9,6 +9,7 @@ with its author and licence (photos.py): the licences fans may see them under al
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from . import engine
@@ -37,6 +38,7 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "python-dotenv", "url": "https://github.com/theskumar/python-dotenv", "licence": "BSD-3-Clause", "package": "python-dotenv"},
     {"name": "OpenTelemetry", "url": "https://opentelemetry.io", "licence": "Apache-2.0", "package": "opentelemetry-sdk"},
     {"name": "OpenCV", "url": "https://opencv.org", "licence": "Apache 2.0", "package": "opencv-python-headless"},
+    {"name": "Pillow", "url": "https://python-pillow.github.io", "licence": "MIT-CMU", "package": "pillow"},
     {"name": "NumPy", "url": "https://numpy.org", "licence": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0", "package": "numpy"},
     {"name": "YuNet face detector by Shiqi Yu", "url": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet", "licence": "MIT"},
     {"name": "PostgreSQL", "url": "https://www.postgresql.org", "licence": "PostgreSQL"},
@@ -46,6 +48,7 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "Vite", "url": "https://vite.dev", "licence": "MIT"},
     {"name": "Anton font by Vernon Adams", "url": "https://fonts.google.com/specimen/Anton", "licence": "OFL-1.1"},
     {"name": "Manrope font by Mikhail Sharanda", "url": "https://fonts.google.com/specimen/Manrope", "licence": "OFL-1.1"},
+    {"name": "Fredoka font by Milena Brandão", "url": "https://fonts.google.com/specimen/Fredoka", "licence": "OFL-1.1"},
 ]
 
 NOTICES = [
@@ -69,12 +72,12 @@ def _model() -> str:
 
 
 PHOTO_NOTICES = [
-    "Player photos come from Wikimedia Commons, under the licences listed with each. We recolour them in each sport's colour and crop them; a recoloured photo keeps its licence.",
+    "Player photos come from Wikimedia Commons, under the licences listed with each. We show each in its own colours, cropped to fit the page around the player's face and faded into it at one edge; its credit links to the whole photo.",
     "A photo shows who a player is. It doesn't mean the player endorses us.",
 ]
 
 
-def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The Credits page for this build: the data providers it runs, the rest it relies on, the software,
     and every player photo shown (photos.used). Each source describes its provider and what it covers
     (adapters.base.Provider); licensed ones come first. The AI model and the news it summarises only when
@@ -101,7 +104,7 @@ def credits(running: dict[str, Any] | None = None, stockfish: bool | None = None
         also.append({
             "name": "Wikimedia Commons",
             "url": "https://commons.wikimedia.org",
-            "what": "Player photos, recoloured in each sport's colour. Each one's author and licence are under Photos.",
+            "what": "Player photos, on each player's page. Each one's author and licence are under Photos.",
         })
     for adapter in adapters.values():
         also += adapter.credits_also()

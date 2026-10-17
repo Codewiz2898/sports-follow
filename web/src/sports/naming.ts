@@ -1,0 +1,50 @@
+// Which sport a free-text sport name is, and how to write it, by what GET /api/sports says. Shared by the web
+// app (catalog.ts) and the Android app (mobile/), so it touches nothing of the browser's.
+
+import type { SportCatalog, SportInfo } from '../types'
+
+export interface Sports {
+  catalog: SportCatalog
+  /** The sport a free-text sport name is ("Women's football", "CS2"), or "other". Where two match, the one
+   * matching earliest in the name wins: "eFootball" is esports, "American football" is ruled out of football. */
+  info(name?: string | null): SportInfo
+  /** Models report the sport in whatever case they like ("cricket", "CRICKET"); show it one way. A game's
+   * own name stays as written ("CS2", "League of Legends", "PUBG Mobile"). */
+  name(sport?: string | null): string
+  /** The sports this build runs, in the order the app lists them: the search filters. */
+  running(): SportInfo[]
+}
+
+export function sportsOf(catalog: SportCatalog): Sports {
+  const matchers = catalog.sports
+    .filter((s) => s.pattern)
+    .map((info) => ({ info, pattern: new RegExp(info.pattern), exclude: info.exclude ? new RegExp(info.exclude) : null }))
+
+  const info = (name?: string | null): SportInfo => {
+    const s = (name ?? '').toLowerCase()
+    let best: { info: SportInfo; at: number; length: number } | null = null
+    for (const { info, pattern, exclude } of matchers) {
+      const m = pattern.exec(s)
+      if (!m || exclude?.test(s)) continue
+      if (!best || m.index < best.at || (m.index === best.at && m[0].length > best.length)) best = { info, at: m.index, length: m[0].length }
+    }
+    return best?.info ?? catalog.other
+  }
+
+  const name = (sport?: string | null): string => {
+    if (!sport) return ''
+    if (info(sport).keeps_names && /[A-Z]/.test(sport) && sport.toLowerCase() !== info(sport).key) return sport
+    return sport.replace(/\S+/g, (w) => (w === w.toUpperCase() && w.length <= 4 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+  }
+
+  return { catalog, info, name, running: () => catalog.sports.filter((s) => s.on) }
+}
+
+/** Before the server has answered: no sports, and any name is "other". */
+export const NO_SPORTS: SportCatalog = {
+  sports: [],
+  other: {
+    key: 'other', label: '', on: true, live: false, pattern: '', exclude: '', stats_title: 'Season', team_results: false, keeps_names: false, colour: null,
+    alerts: { key: ['Big news', 'Injuries, transfers and retirements, from the news'], more: ['milestones', 'milestones in the news'] },
+  },
+}

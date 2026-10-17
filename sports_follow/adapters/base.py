@@ -62,6 +62,14 @@ class Fixture:
     team_names: list[str] = field(default_factory=list)  # in the same order as team_ids
     detail: str | None = None  # "2nd ODI", "Matchday 7"
     result: dict[str, Any] | None = None  # scores and winner for finished events
+    # How big the source rates the game's event, where it rates them (an esports tournament's tier), on
+    # LiveGame.tier's scale: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated. A league-wide
+    # schedule's games are ranked by their sport (Sport.notable), which reads it.
+    tier: int = 0
+    # What else the source knows that its sport ranks a game by (Sport.notable), in the shape the sport's
+    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}, esports'
+    # {"game": "Valorant"}.
+    facts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -102,6 +110,41 @@ class LiveGame:
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
     league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+    # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
+    # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
+    fixtures: list[str] = field(default_factory=list)
+    # How big the source rates the game's event, where it rates them (an esports tournament's tier): a bigger
+    # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
+    # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
+    tier: int = 0
+    # The rest of its line-ups (substitutes, an impact player), by the source's ids, where a source's match()
+    # names them: whose lines its match page names (a scorecard's), though only `players` are offered to follow.
+    bench: list[PlayerRef] = field(default_factory=list)
+
+
+@dataclass
+class SourceTeam:
+    """A team as a source knows it, with its roster today (an adapter's team() and find_teams()): a campaign
+    page follows every player on it in one tap (campaigns.py)."""
+
+    system: str  # the source's system, as PlayerRef.system
+    team_id: str  # the source's id for the team
+    name: str  # "T1"
+    game: str | None = None  # where a sport's sources cover several games (esports), its game as fans name it ("League of Legends")
+    players: list[PlayerRef] = field(default_factory=list)  # who plays for it now, followable by the source's own ids
+
+
+@dataclass
+class Absence:
+    """A player out of their team's games, injured or suspended, as a source lists them (an adapter's
+    sidelined()): one spell, by the source's own id for it, whoever follows the player."""
+
+    source_id: str  # the source's id for the spell: one player may have two (an injury and a ban)
+    ref: PlayerRef  # who, by the source's id for them, with their team and birth date as it has them
+    kind: str  # "injury", "suspension", or "other" (not available for another reason): its sport words it
+    what: str  # as the source says it: "Back Injury", "Red Card Suspension"
+    since: date | None = None
+    until: date | None = None  # when they're expected back, if the source says
 
 
 @dataclass
@@ -202,7 +245,9 @@ class Adapter:
     list is read more often than the weekly import; and for a source that has changed how it names its
     athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
-    the old ids, and the registry drops its rows holding one."""
+    the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
+    team(team_id) -> SourceTeam | None and find_teams(name) -> [SourceTeam], with team_id_pattern the shape
+    of its team ids: a campaign page follows a whole team through them (campaigns.py)."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
     sport: str  # the sport it serves (sports.Sport.key): "cricket"
@@ -211,12 +256,25 @@ class Adapter:
     provider: Provider
     covers: str  # what it covers, on the Credits page: "Cricket (ESPNcricinfo)"
     id_pattern: re.Pattern[str] = DIGITS  # the shape of its athlete ids
+    fixture_pattern: re.Pattern[str] = DIGITS  # and of its games' (Fixture.source_id), for match(): refused before anything is sent
     preview_fixtures = True  # False: a preview before following shows stats only (fixtures take many reads)
+    # How a player's page words this source's live scores, where the app's general sentences don't fit (a
+    # source whose standings come after each match): live_note under the live board, lag_note at the page's
+    # foot. Sent in the card's live block; None leaves the app's own.
+    live_note: str | None = None
+    lag_note: str | None = None
+    # The Wikidata property that holds its athlete ids, where Wikidata keeps them (Liquipedia's pages,
+    # P10918): a pro from its roster is then matched to their Wikidata person by id (roster_wikidata.py).
+    wikidata_property: str | None = None
 
     @classmethod
     def available(cls) -> bool:
         """Whether this build can run it: a licensed source needs its token."""
         return True
+
+    def wikidata_id(self, athlete_id: str) -> str:
+        """One of its athlete ids as Wikidata writes it, under wikidata_property."""
+        return athlete_id
 
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py): its provider's, and any other source's it reads."""
@@ -253,6 +311,35 @@ class Adapter:
     #   def live_now(self) -> list[LiveGame]
     # the games in play now, whoever follows them, each game's players in the order the source would put
     # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
+    # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
+    # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
+    # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
+    # out the small ones and set each game's tier, so the biggest come first.
+    #
+    # Optional, for a source that can read one game by its id in a request or two:
+    #   def match(self, source_id: str) -> LiveGame | None
+    # the game a fixture of it names (Fixture.source_id, of the shape fixture_pattern says), whoever follows
+    # it, live, to come or over, as live_now() gives one: its snapshot with every player's line the source
+    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py). None:
+    # the source has no such game. Asked at most once a minute a game, only while someone has its page open,
+    # and only for a game a source named first (on Live now, or a followed player's).
+    #
+    # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
+    # requests:
+    #   def schedule(self, start: date, end: date) -> list[Fixture]
+    # every game it covers that starts on those days (UTC, both included), finished or to come, whoever
+    # follows it, as fixtures() gives a player's: Today's big results and big games coming up for every fan
+    # (league.py), each ranked by its sport (Sport.notable) from its tier, facts, stage and result. Asked a
+    # few times a day at most, and only while fans are looking. Where the source rates its events, leave out
+    # the small ones and set each game's tier.
+    #
+    # Optional, for a source that lists every player out of its competitions' games, injured or suspended,
+    # in a few requests:
+    #   def sidelined(self) -> dict[str, list[Absence]]
+    # each team it covers, by its id, with every spell the source has a player of it out for now (a team
+    # with nobody out has an empty list): Today's Wire tells who's out and who's back (sidelined.py), each
+    # read compared with the last, so a spell missing from a team listed here is over. Raise rather than
+    # leave a team out: a read that fails changes nothing. Asked twice a day.
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         """A finished fixture's result from the player's side: "Won 2–1", "India won by 57 runs"."""

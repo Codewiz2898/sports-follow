@@ -210,7 +210,7 @@ server:
 
 | | Where |
 |---|---|
-| The API tokens (Sportmonks, Lichess, Resend, Google, …) | `~/.config/sports-follow` on the Mac, sent by `push-secrets.sh` |
+| The API tokens (Sportmonks, Lichess, Resend, Google, …) and the admin password's hash | `~/.config/sports-follow` on the Mac, sent by `push-secrets.sh` |
 | The database password, gateway token, push key and fan cookie key | made by the server, once |
 | All of the above, sealed | `/var/backups/sports-follow/secrets.age` on the server, and a copy in the password manager (`backup-secrets.sh`); next to the off-site dumps once they exist |
 | The age secret key that opens it | the password manager only |
@@ -228,6 +228,28 @@ deploy/push-secrets.sh deploy@<server-ip>
 ```
 After that, the Mac's development key can be revoked without taking the app down.
 
+**The admin panel** (you, once): `https://<domain>/admin` turns sports and sources off and on, sets what
+each source may spend, and looks after accounts, on the running app. It opens with a password of its own
+and a 6-digit code from an authenticator app (Google Authenticator, 1Password, Authy…). Only the
+password's hash goes to the server, with the app's key; without a password the panel isn't there, and
+without a key it asks for the password alone and says so on every page. Make both on the Mac, from a
+checkout at the latest main (keep the password in the password manager; `code` prints a key to add to
+the app, and keeps it once the app's code matches), then send them. No restart: the API reads them on
+each sign-in, and a new password or key signs every admin out.
+```bash
+.venv/bin/python -m sports_follow.admin password     # writes ~/.config/sports-follow/admin-password
+.venv/bin/python -m sports_follow.admin code         # adds the authenticator app's key to it
+deploy/push-secrets.sh deploy@<server-ip>
+```
+A sign-in that works is emailed ("Someone signed in to the admin panel", with how many in the last 5
+minutes; another within those 5 minutes sends no email of its own), and so are 10 wrong ones in an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
+If a sign-in wasn't you, make a new password and key at once, and send them: that signs every admin out.
+The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
+--force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
+everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
+sooner, clear the count:
+`docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
+
 **Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
 only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and
 `pubg-token` (PandaScore's free plan is enough; PUBG's at developer.pubg.com), then send them and restart:
@@ -240,6 +262,13 @@ every six hours, the first time within ten minutes of starting. PandaScore's com
 (Mondays), or now, in an hour or two (paced, so live series keep their share of the hourly 1,000):
 `c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
 `/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
+
+**Android notifications** (you, once): the Android app's pushes go through Firebase Cloud Messaging with
+a service-account key of the app's Firebase project (README.md, "Android app", says how to make it). Save
+it on the Mac as `~/.config/sports-follow/fcm-service-account.json` (`chmod 600`), then send it and
+restart the API and the worker, as for the esports tokens above. `https://<domain>/api/push` then answers
+`"fcm": true`. Without it the app's notifications are off and nothing else changes. To rotate it, make a
+new key in the Firebase console, send it, restart, then delete the old key there.
 
 **Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
 the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
@@ -443,6 +472,8 @@ first failures after a deploy count:
 | Pushes aren't going out | for 5 minutes, a moment found over 3 minutes ago hasn't been sent |
 | Pushes are failing | over 20% of the last 30 minutes' pushes failed (unsubscribed devices aside), at least 3 |
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
+| Someone signed in to the admin panel | a sign-in to `/admin` worked in the last 5 minutes (it says how many): if it wasn't you, see "The admin panel" |
+| Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
 
 **Setting it up** (you, once):
 1. **Sign up** at grafana.com (free) and create a stack.
@@ -610,7 +641,8 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
 | Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
-| Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`: see the README) |
+| Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
+| A campaign page (stann.in/gukesh) | `c exec worker python -m sports_follow.campaigns list` (`set`, `show`, `player add`, `team find`, `team add`, `game add`, `remove`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |
 | Restore a backup | `c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists < /var/backups/sports-follow/<file>.dump && c run --rm migrate && c start api worker` (off-site ones: [Off-site backups](#off-site-backups)) |
 | Off-site backups | `deploy/offsite-backup.sh list`; run now: `sudo systemctl start sports-follow-offsite`; log: `sudo journalctl -u sports-follow-offsite` |

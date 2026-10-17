@@ -837,15 +837,17 @@ def due_work(now: datetime | None = None) -> Due:
         ).all()
         # Closed without a final poll (the source stopped returning the game): its cards stop saying LIVE.
         unstuck = structured.close_live(db, list(closed))
-        # Each followed player's fixtures binding (structured.binding()'s pick: highest priority, newest).
+        # Each followed player's fixtures binding (structured.binding()'s pick: highest priority, newest),
+        # of the sources running as this tick began: the admin panel may turn one off while it runs.
+        running = dict(structured.ADAPTERS.items())
         bindings: dict[int, tuple[str, dict[str, Any] | None]] = {}
         for pid, adapter, health in db.execute(
             select(SourceBinding.player_id, SourceBinding.adapter, SourceBinding.health)
-            .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(structured.ADAPTERS)), SourceBinding.player_id.in_(followed))
+            .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(running)), SourceBinding.player_id.in_(followed))
             .order_by(SourceBinding.priority.desc(), SourceBinding.id.desc())
         ).all():
             bindings.setdefault(pid, (adapter, health))
-        room = {name: structured.spare(structured.ADAPTERS[name]) for name, _ in bindings.values()}
+        room = {name: structured.spare(running[name]) for name, _ in bindings.values()}
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
         sport_of = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):

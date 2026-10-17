@@ -4,10 +4,13 @@ named by the side that won, and form over a run of matches."""
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Poster, Seen, Sport, crossed, joined, number, spaced, stat
+from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stage, stat, undecided, values
+
+if TYPE_CHECKING:
+    from ..adapters.base import Fixture
 
 
 def _int(value: Any) -> int:
@@ -16,6 +19,12 @@ def _int(value: Any) -> int:
     except (TypeError, ValueError):
         return 0
 
+
+# A league game's size (notable): by its stage, else by who plays it; a finish this close is one to see.
+STAGE_RANK = {3: 95, 2: 85, 1: 70}
+NATIONS, LEAGUE = 55, 40  # an international, any other game the sources list
+CLOSE_RUNS, CLOSE_WICKETS, CLOSE_BALLS = 5, 2, 3
+_MARGIN = re.compile(r"\bwon by (\d+) (runs?|wickets?)(?:.*?\bwith (\d+) balls? remaining)?", re.I)
 
 _BAT = re.compile(r"(\d+)(\*?) \((\d+)\)")
 _BOWL = re.compile(r"(\d+)/(\d+) \(([\d.]+) ov\)")
@@ -83,6 +92,14 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 # A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
 _RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
+MARKS = (50, 100, 150, 200)  # the batting milestones told
+# Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
+_RUNS_PRIORITY = {50: 70, 100: 90}
+
+
+def _haul(wickets: int) -> int:
+    """A wicket haul's priority: a five-for is near a hundred."""
+    return 90 if wickets >= 5 else 75 if wickets == 4 else 70
 
 
 def _another(was: list[Any], now: list[Any]) -> bool:
@@ -124,7 +141,7 @@ class Cricket(Sport):
     nation_first = True  # India before Royal Challengers Bengaluru
     games = ("match", "matches")
     draws = True
-    colour = {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff", "deep": "#0d2a7a"}
+    colour = {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
     pattern = r"cricket"
     alerts = {
         "key": ("Line-ups, fifties, wickets and results", "In the XI, fifties and hundreds, getting out, three wickets or more, the start, the result, injuries and transfers"),
@@ -134,6 +151,31 @@ class Cricket(Sport):
 
     def lineup_title(self, who: str, starting: bool) -> str:
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,
+        strike rate, how they were out) and who bowled at it, in the order the source lists them. From each
+        player's line, whose stats are their latest innings (a Test's earlier ones are only in its headline)."""
+        sides = [t.get("name") or "" for t in state.get("teams") or []]
+        if len(sides) != 2 or not all(sides):
+            return {}
+        batting: dict[str, list[dict[str, str]]] = {s: [] for s in sides}
+        bowling: dict[str, list[dict[str, str]]] = {s: [] for s in sides}
+        for athlete_id, line in lines.items():
+            name, team = names.get(athlete_id, ("", ""))
+            if not name or team not in batting:
+                continue
+            v = values(line)
+            if "Runs" in v:
+                batting[team].append({"name": name, "runs": v["Runs"], "balls": v.get("Balls", ""), "fours": v.get("4s", ""), "sixes": v.get("6s", ""),
+                                      "strike_rate": v.get("Strike rate", ""), "out": v.get("Out", "")})
+            if "Wickets" in v:
+                bowling[sides[1 - sides.index(team)]].append({"name": name, "overs": v.get("Overs", ""), "runs": v.get("Runs conceded", ""), "wickets": v["Wickets"],
+                                                              "economy": v.get("Economy", "")})
+        scores = {t.get("name"): t.get("score") or "" for t in state.get("teams") or []}
+        batted = [s for s in dict.fromkeys([*(i.get("team") for i in state.get("innings") or []), *sides]) if s in batting]
+        card = [{"team": s, "score": scores.get(s, ""), "batting": batting[s], "bowling": bowling[s]} for s in batted if batting[s] or bowling[s]]
+        return {"scorecard": card} if card else {}
 
     def result_text(self, score: str, clock: str) -> str:
         return clock  # "India won by 57 runs"
@@ -155,7 +197,7 @@ class Cricket(Sport):
             balls = stat(now.line, "Balls")
             batting = f"{runs_now} ({balls})" if balls else runs_now
             pre, nth = _nth(len(bats_now))
-            for mark in crossed(number(runs_was), number(runs_now), (50, 100, 150, 200)):
+            for mark in crossed(number(runs_was), number(runs_now), MARKS):
                 found.append(Found("hundred" if mark >= 100 else "fifty", "key", f"{who} reaches {mark}", joined(batting, nth, now.score), f"{pre}{mark}", 95 if mark >= 150 else 0))
             out_now = not runs_now.endswith("*") and stat(now.line, "Out") is not None
             out_was = runs_was is not None and not runs_was.endswith("*") and stat(was_line, "Out") is not None
@@ -168,7 +210,7 @@ class Cricket(Sport):
         pre, nth = _nth(len(bowls_now))
         for mark in crossed(wickets_was, wickets_now, (3, 4, 5, 6, 7, 8, 9, 10)):
             figures = f"{wickets_now}/{stat(now.line, 'Runs conceded') or '?'} ({stat(now.line, 'Overs') or '?'} ov)"
-            found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", 90 if mark >= 5 else 75 if mark == 4 else 70))
+            found.append(Found("wickets", "key", f"{who} takes {mark} wickets", joined(figures, nth, now.score), f"{pre}w{mark}", _haul(mark)))
         return found
 
     def high(self, f: Found, versus: str) -> Poster | None:
@@ -183,9 +225,54 @@ class Cricket(Sport):
             return None
         return Poster(word, spaced(figures, versus))
 
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The match's best innings, from the headline's ("103 (152) & 48* (60) · 5/23 (4 ov)"): fifty or more
+        ("Hundred", "112 (98) v Australia"), or three wickets or more ("Five-for", "5/23 (4 ov) v
+        Australia"), as high() words their moments; of a batting and a bowling high, the bigger."""
+        made: list[tuple[tuple[int, ...], Poster]] = []  # each by how big: priority, batting first, then more runs or wickets, fewer conceded
+        for part in re.split(r" & | · ", line.get("headline") or ""):
+            if (m := _BAT.fullmatch(part)) and (marks := [k for k in MARKS if k <= int(m[1])]):
+                poster = Poster(_RUNS.get(marks[-1], str(marks[-1])), spaced(part, versus), priority=_RUNS_PRIORITY.get(marks[-1], 95))
+                made.append(((poster.priority, 1, int(m[1]), 0), poster))
+            elif (m := _BOWL.fullmatch(part)) and int(m[1]) >= 3:
+                poster = Poster(f"{_HAUL.get(int(m[1]), m[1])}-for", spaced(part, versus), priority=_haul(int(m[1])))
+                made.append(((poster.priority, 0, int(m[1]), -int(m[2])), poster))
+        return max(made, key=lambda x: x[0], default=(None, None))[1]
+
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.
         return winner_outcome(result, teams)
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """Every match its sources list is one, as big as its stage (a final 95, a semi-final 85, a playoff
+        70, by the round's name: "Final", "Qualifier 1") or who plays it (an international 55, any other 40). Once it's over, 15 more for a close finish: a tie or a super over, CLOSE_RUNS runs or fewer,
+        CLOSE_WICKETS wickets or fewer, or CLOSE_BALLS balls to spare. Its word is the margin ("By 6
+        wickets"), under it who beat whom. A match to come whose sides are both still to be decided ("TBC v
+        TBC", a final before its semi-finals) isn't one until they are: there's nobody to watch yet."""
+        level, why = stage(fixture.detail)  # not the competition's: a "… Finals Series" is every round of it
+        rank = STAGE_RANK.get(level) or (NATIONS if fixture.facts.get("national") else LEAGUE)
+        r = fixture.result
+        if fixture.status != "final" or not r:
+            return None if undecided(fixture.team_names) else Notable(rank, why=why)
+        summary = str(r.get("summary") or "")
+        teams = r.get("teams") or []
+        winner = next((t for t in teams if t.get("winner")), None)
+        loser = next((t for t in teams if t is not winner), None) if winner else None
+        line = f"{winner['name']} beat {loser['name']}" if winner and loser and winner.get("name") and loser.get("name") else ""
+        margin = _MARGIN.search(summary)
+        if fixture.facts.get("super_over") or re.search(r"super over", summary, re.I):
+            word, close = "Super over", "Super over"
+        elif re.search(r"\btied?\b", summary, re.I):
+            word, close = "Tied", "Tied"
+        elif margin:
+            n, unit, balls = int(margin[1]), margin[2].lower(), margin[3]
+            word = f"By {n} {unit}"
+            close = "Last over" if balls is not None and int(balls) <= CLOSE_BALLS else "Thriller" if n <= (CLOSE_RUNS if unit.startswith("run") else CLOSE_WICKETS) else ""
+        elif re.search(r"no result|abandoned", summary, re.I):
+            return None  # nothing to see
+        else:
+            word, close = (winner or {}).get("name") or summary, ""
+        return Notable(min(100, rank + (15 if close else 0)), word=word, line=line, why=why or close)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         return batting_bowling(lines)

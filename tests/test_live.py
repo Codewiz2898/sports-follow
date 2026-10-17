@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import live, registry, sports
 from sports_follow.adapters import ADAPTERS, LiveGame, PlayerRef, Snapshot
-from sports_follow.models import AthleteOverride, Follow, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import AthleteOverride, Event, Follow, Player, PlayerCard, PlayerIdentity
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -27,7 +27,7 @@ NOW = datetime(2026, 10, 15, 14, tzinfo=timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter, event RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -131,14 +131,69 @@ def test_a_game_naming_only_its_teams_offers_its_titles_pros_the_registry_knows(
     assert [(p["name"], p["athlete_id"], p["league"]) for p in esports["games"][0]["players"]] == [("Yatoro", "11", "dota-2"), ("Collapse", "12", "dota-2")]
 
 
+def test_the_biggest_events_games_come_first_however_followed_or_known(db, redis, sources):
+    # A source that rates its events (an esports tournament's tier): a bigger tier's game comes first, though a
+    # smaller one's pro is better known and followed here; among equals, the source's order.
+    db.add(Player(id=6, slug="yatoro", name="Yatoro", sport="Esports"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=6, status="ready", card={}), PlayerIdentity(player_id=6, system="arena", external_id="11", confidence=1.0),
+                Follow(fan_id="fan", player_id=6, alert_rules={})])
+    registry.upsert(db, [athlete("pandascore:1", "esports", "Yatoro", {"arena": "11"}, teams=["Team Spirit"], sitelinks=9, league="dota-2")])
+    db.commit()
+
+    def on(source_id: str, title: str, tier: int) -> LiveGame:
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier)
+
+    sources.arena = [on("1", "Team Spirit vs Tundra", 1), on("2", "T1 vs Gen.G", 3), on("3", "Cloud9 vs Karmine Corp", 2), on("4", "FURIA vs Legacy", 2)]
+    live.read("arena", NOW)
+    [esports] = live.offer(db, "fan", NOW)[0]
+    assert [g["title"] for g in esports["games"]] == ["T1 vs Gen.G", "Cloud9 vs Karmine Corp", "FURIA vs Legacy", "Team Spirit vs Tundra"]
+    assert [(p["name"], p["following"]) for p in esports["games"][3]["players"]] == [("Yatoro", True)]
+
+
+def test_a_big_events_game_outlasts_the_cuts_however_little_known(db, redis, sources, monkeypatch):
+    # A busy day: smaller events' games with better known pros outnumber what a read keeps, and what the API
+    # ranks; the big event's game, with no pro the registry knows, is kept by both.
+    registry.upsert(db, [athlete(f"pandascore:{i}", "esports", f"Pro {i}", {"arena": str(i)}, teams=[f"Team {i}"], sitelinks=10 - i, league="dota-2") for i in (1, 2, 3)])
+    db.commit()
+
+    def on(source_id: str, title: str, tier: int) -> LiveGame:
+        return LiveGame(source_id=source_id, title=title, competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"), teams=title.split(" vs "), league="dota-2", tier=tier)
+
+    sources.arena = [on("1", "Team 1 vs A", 1), on("2", "Team 2 vs B", 1), on("3", "Team 3 vs C", 1), on("4", "T1 vs Gen.G", 3)]
+    monkeypatch.setattr(live, "GAMES", 1)  # the API ranks GAMES * 2 of a sport's games
+    live.read("arena", NOW)
+    assert [g["title"] for g in live.offer(db, None, NOW)[0][0]["games"]] == ["T1 vs Gen.G"]
+    monkeypatch.setattr(live, "READ_GAMES", 3)
+    live.read("arena", NOW)
+    assert [g["title"] for g in live.last_read("arena")["games"]] == ["T1 vs Gen.G", "Team 1 vs A", "Team 2 vs B"]
+
+
 def test_a_read_is_served_for_a_minute_asked_for_again_then_dropped(db, redis, sources, monkeypatch):
     sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"))]
     live.read("pitch", NOW)
     live.read("arena", NOW)
     assert live.offer(db, None, NOW + timedelta(seconds=30)) == ([{"key": "football", "label": "Football", "games": [
-        {"key": "pitch:100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": []}]}], [])
+        {"key": "pitch:100", "match": "pitch/100", "title": "A vs B", "competition": "Cup", "start_utc": None, "live": live.last_read("pitch")["games"][0]["live"], "players": [], "event_ids": []}]}], [])
     games, stale = live.offer(db, None, NOW + timedelta(seconds=90))
     assert stale == ["pitch", "arena"] and games  # a minute on: still served, and a read asked for
     assert live.offer(db, None, NOW + timedelta(seconds=live.SERVE + 1))[0] == []  # too old to call live
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "football"))
     assert live.offer(db, None, NOW)[0] == []
+
+
+def test_a_game_names_the_events_it_is_here_by_the_sources_fixture_ids(db, redis, sources):
+    # A followed player's card names its live game by event id: an event's key is "system:fixture id". A chess
+    # board is a fixture of each of its players; a game no one here follows is no event.
+    db.add_all([Event(key="pitch:100", sport="football", title="A vs B"), Event(key="pitch:r5-7", sport="football", title="C v D"),
+                Event(key="pitch:r5-8", sport="football", title="C v D"), Event(key="other:101", sport="football", title="E vs F")])
+    db.commit()
+    ids = {key: event_id for key, event_id in db.execute(text("SELECT key, id FROM event"))}
+    sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0")),
+                     LiveGame(source_id="r5:g1", title="C v D", competition="Cup", start_utc=None, snapshot=snapshot("0 – 0"), fixtures=["r5-7", "r5-8"]),
+                     LiveGame(source_id="101", title="E vs F", competition="Cup", start_utc=None, snapshot=snapshot("2 – 2"))]
+    live.read("pitch", NOW)
+    games = {g["title"]: g["event_ids"] for g in live.offer(db, None, NOW)[0][0]["games"]}
+    assert games == {"A vs B": [ids["pitch:100"]], "C v D": sorted([ids["pitch:r5-7"], ids["pitch:r5-8"]]), "E vs F": []}  # another source's 101 isn't this one
+    # Each opens its match page (match.py), a board by the first of its players' fixtures.
+    assert [g["match"] for g in live.offer(db, None, NOW)[0][0]["games"]] == ["pitch/100", "pitch/r5-7", "pitch/101"]

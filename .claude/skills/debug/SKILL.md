@@ -34,7 +34,7 @@ Ask Bharath first, saying what it will do:
 - Anything that spends a source's quota or the model's budget: a refresh, a registry import,
   `players starter add`, deleting `budget:*` or `buildretry:*` keys.
 - Anything that reaches a person: a test push (`notify.send_test`, `POST /api/push/test`), a sign-in email.
-- `players add/remove/restore`, `retention` without `--count`, `notify keys`, and any `deploy/*.sh`
+- `players add/remove/restore/unmatch/rematch`, `retention` without `--count`, `notify keys`, and any `deploy/*.sh`
   other than `status`.
 
 Never print or copy secrets (`/etc/sports-follow`, `~/.config/sports-follow`, `deploy/.env`). Never put

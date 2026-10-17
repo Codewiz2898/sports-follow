@@ -9,5 +9,11 @@
 .chessboard .moved.dark { background: #c9b34a; }
 .chessboard .piece.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
 .chessboard .piece.b { color: #141414; }
-.chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: #26272a; color: var(--muted); }
+.chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
+/* On Today's outlined card for a game the fan doesn't follow (Also live): a small board with the players beside
+   it, by name and clock, so the card stays near its row's height. */
+.live-other .chessboard.sm { width: 100px; }
+.live-other .chessboard.sm .sq { font-size: 11px; }
+.live-other .chess .tiny { display: none; }
+.live-other .chess-clock { font-size: 18px; padding: 2px 6px; }

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from . import notify
 from .db import session
-from .models import Account, AccountSession, Follow, Notification, NotificationMute, PushSubscription
+from .models import Account, AccountSession, FanSource, Follow, Notification, NotificationMute, PushSubscription
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 SESSION_COOKIE = "sf_session"
@@ -84,6 +84,12 @@ def find_or_create_google(db: Session, sub: str, email: str) -> int | None:
     return None
 
 
+def blocked(db: Session, email: str | None = None, account_id: int | None = None) -> bool:
+    """Whether an admin blocked this account (admin.py): it can't sign in."""
+    where = Account.email == email if account_id is None else Account.id == account_id
+    return db.scalar(select(Account.blocked_at).where(where)) is not None
+
+
 def describe(db: Session, account_id: int) -> dict | None:
     account = db.get(Account, account_id)
     if account is None:
@@ -98,7 +104,7 @@ def session_for(db: Session, token_hash: str) -> Signed | None:
     row = db.execute(
         select(AccountSession.id, Account.id, Account.fan_id)
         .join(Account, Account.id == AccountSession.account_id)
-        .where(AccountSession.token_hash == token_hash, AccountSession.expires_at > func.now())
+        .where(AccountSession.token_hash == token_hash, AccountSession.expires_at > func.now(), Account.blocked_at.is_(None))
     ).first()
     return Signed(account_id=row[1], fan_id=row[2], session_id=row[0]) if row else None
 
@@ -189,6 +195,13 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
     )
     db.execute(muted.on_conflict_do_nothing())
     db.execute(delete(NotificationMute).where(NotificationMute.fan_id == anon))
+    # Where the fan first came from, unless the account already says (an earlier device's first link).
+    came = insert(FanSource).from_select(
+        ["fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing", "created_at"],
+        select(literal(fan), FanSource.tag, FanSource.utm_source, FanSource.utm_medium, FanSource.utm_campaign, FanSource.landing, FanSource.created_at).where(FanSource.fan_id == anon),
+    )
+    db.execute(came.on_conflict_do_nothing(index_elements=["fan_id"]))
+    db.execute(delete(FanSource).where(FanSource.fan_id == anon))
     # The push log the noise rules read (how often this phone buzzed, the game's story so far).
     db.execute(update(Notification).where(Notification.fan_id == anon).values(fan_id=fan))
     # This device's alerts: now the account's, and this session's. The account's oldest devices make room.
@@ -223,7 +236,7 @@ def delete_account(db: Session, account_id: int) -> Deleted | None:
     if account is None:
         return None
     hashes = list(db.scalars(select(AccountSession.token_hash).where(AccountSession.account_id == account_id)))
-    for model in (Follow, NotificationMute, Notification, PushSubscription):
+    for model in (Follow, NotificationMute, Notification, PushSubscription, FanSource):
         db.execute(delete(model).where(model.fan_id == account.fan_id))
     db.execute(delete(Account).where(Account.id == account_id))  # its sessions go with it
     return Deleted(fan_id=account.fan_id, email=account.email, token_hashes=hashes)

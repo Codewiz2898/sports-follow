@@ -67,6 +67,16 @@ def _api_errors() -> Any:
     return _instrument("counter", "sports_follow.api.errors", "{request}", "API requests answered with a server error (5xx)")
 
 
+def admin_sign_in(result: str) -> None:
+    """One try at the admin panel's sign-in (server.admin_login): ok, or wrong (a wrong password or code).
+    app-rules.json emails on every one that's ok, and on many wrong ones."""
+    _admin_sign_ins().add(1, {"result": result})
+
+
+def _admin_sign_ins() -> Any:
+    return _instrument("counter", "sports_follow.admin.sign_ins", "{sign_in}", "Tries at the admin panel's sign-in, by result")
+
+
 # The push services nearly every browser uses (Chrome and Edge, Safari, Firefox): seed() starts their counts at 0.
 PUSH_SERVICES = ("fcm.googleapis.com", "web.push.apple.com", "updates.push.services.mozilla.com")
 
@@ -77,6 +87,8 @@ def seed() -> None:
     process's series are new (its own service.instance.id): without these, the first failures after a
     deploy would go unseen. At startup, in the API and the worker."""
     _api_errors().add(0)
+    for result in ("ok", "wrong"):
+        _admin_sign_ins().add(0, {"result": result})
     for step in ("build", "refresh"):
         for result in ("ok", "failed"):
             card(step, result, by=0)

@@ -166,6 +166,30 @@ export function shortName(name: string): string {
 // Letters Unicode doesn't decompose into a base letter plus an accent (espn._LETTERS on the server).
 const LETTERS: Record<string, string> = { ø: 'o', Ø: 'O', æ: 'ae', Æ: 'Ae', œ: 'oe', Œ: 'Oe', ß: 'ss', đ: 'd', Đ: 'D', ł: 'l', Ł: 'L', þ: 'th', Þ: 'Th', ð: 'd', ı: 'i' }
 
+// Each capital's width in the display face, in ems: Anton's own advance widths (Anton_400Regular.ttf). The
+// Android app's slanted copy sets the letters of a word the same, with up to 0.13 em more at its ends for
+// the lean (mobile/scripts/slant_font.py): LEAN holds that. SPACING is .dsp's letter spacing. A letter the
+// table doesn't have counts as the widest.
+const ANTON: Record<string, number> = {
+  A: 0.485, B: 0.479, C: 0.474, D: 0.493, E: 0.412, F: 0.399, G: 0.485, H: 0.499, I: 0.227, J: 0.466, K: 0.472, L: 0.397, M: 0.746,
+  N: 0.498, O: 0.486, P: 0.472, Q: 0.494, R: 0.477, S: 0.461, T: 0.396, U: 0.474, V: 0.469, W: 0.712, X: 0.484, Y: 0.446, Z: 0.41,
+  0: 0.494, 1: 0.331, 2: 0.494, 3: 0.494, 4: 0.494, 5: 0.494, 6: 0.494, 7: 0.494, 8: 0.494, 9: 0.494, '-': 0.311, "'": 0.214, '.': 0.229,
+}
+const WIDEST = 0.746
+const LEAN = 0.15
+const SPACING = 0.005
+
+/**
+ * How wide a name's longest word is in the display face, in ems. A player's band sets their name at the size
+ * that fits it on a line (PlayerBand in both apps: their room divided by this, up to the band's own size),
+ * so the name breaks between words, never inside one. A hyphen ends a word, as a line may break after it.
+ */
+export function longestWordEms(name: string): number {
+  const plain = name.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c]).normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase()
+  const ems = (word: string) => [...word].reduce((sum, c) => sum + (ANTON[c] ?? WIDEST) + SPACING, LEAN)
+  return Math.max(1, ...plain.split(/(?<=-)|\s+/).filter(Boolean).map(ems))
+}
+
 /** A team name reduced for exact comparison, as the server's espn.team_key: "Australia 'A'" is "australia a". */
 function teamKey(name: string): string {
   return name

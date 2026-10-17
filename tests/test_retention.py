@@ -163,13 +163,13 @@ def test_a_finished_games_timeline_is_cut_to_what_is_read(monkeypatch):
     before = view()
     would = retention.run(count=True)
     done = retention.run()
-    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "card_keys": 0}
+    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "sidelined": 0, "card_keys": 0}
     assert view() == before
     with engine.connect() as c:
         kept = c.execute(text("SELECT event_id, score_label FROM event_state ORDER BY event_id, id")).all()
         assert [(e, s) for e, s in kept if e in (1, 4)] == [(1, "1:9"), (4, "4:9"), (4, "late")]  # final, and the latest
         assert c.scalar(text("SELECT count(*) FROM event_state WHERE event_id IN (2, 3)")) == 20  # recent, and live: untouched
         assert sorted(c.scalars(text("SELECT key FROM moment"))) == ["new-2", "old-live"]
-    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "card_keys": 0}
+    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "sidelined": 0, "card_keys": 0}
     with engine.begin() as c:
         c.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))

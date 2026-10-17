@@ -7,7 +7,7 @@ resolver and adapters that come next, so the schema does not have to change for 
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
@@ -136,6 +136,25 @@ class AthleteOverride(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class AthleteUnmatch(Base):
+    """An operator's word that a registry athlete isn't the Wikidata person roster_wikidata.py matched them
+    to for their photo (players unmatch): no run matches them to that person again, or to anyone (person
+    None). Apart from athlete_override, whose one decision per athlete is keep or remove: a kept athlete can
+    be unmatched too, and removing an athlete leaves this, so restoring them doesn't bring the face back.
+    """
+
+    __tablename__ = "athlete_unmatch"
+    __table_args__ = (UniqueConstraint("qid", "sport", "person", postgresql_nulls_not_distinct=True),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id: "pandascore:20401"
+    sport: Mapped[str] = mapped_column(String(20))
+    person: Mapped[str | None] = mapped_column(String(20))  # the Wikidata person they aren't: "Q113450352"; None: anyone
+    name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+
+
 class Starter(Base):
     """A registry athlete offered to a new fan, who follows nobody yet, in their sport's starter picker
     (starters.py; the operator sets them with `players starter`). Removing the athlete takes the row too."""
@@ -147,6 +166,45 @@ class Starter(Base):
     qid: Mapped[str] = mapped_column(String(20))  # the athlete's registry id
     sport: Mapped[str] = mapped_column(String(20))
     position: Mapped[int] = mapped_column(Integer)  # the order within the sport, first shown first
+    created_at: Mapped[datetime] = _now()
+
+
+class Campaign(Base):
+    """A campaign page at /<slug> (stann.in/gukesh): a big event's players, or whole teams, to follow in one tap,
+    its games and a few lines of copy (campaigns.py; the operator sets them with `python -m
+    sports_follow.campaigns`). A campaign is a row, never code: a new event is a new row."""
+
+    __tablename__ = "campaign"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(40), unique=True)  # its address: "gukesh" is stann.in/gukesh
+    sport: Mapped[str] = mapped_column(String(20))  # the registry's sport key: its players', and its colour
+    title: Mapped[str] = mapped_column(String(80))  # "Gukesh v Sindarov", in big type
+    event: Mapped[str | None] = mapped_column(String(120))  # "World Chess Championship", above it
+    lines: Mapped[list] = mapped_column(JSONB, default=list)  # a few lines of copy, in order
+    players: Mapped[list] = mapped_column(JSONB, default=list)  # registry ids (Athlete.qid) of its sport, in order
+    # Whole teams, each as its source lists it and its roster as last read: {"system", "team_id", "name",
+    # "game", "players": [{"athlete_id", "name", "league"}], "read_at"}.
+    teams: Mapped[list] = mapped_column(JSONB, default=list)
+    games: Mapped[list] = mapped_column(JSONB, default=list)  # its schedule: {"start_utc", "label"}, in order
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class FanSource(Base):
+    """Where a fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
+    utm_campaign) and the page it led to, kept with their fan id (server.visit_source), and moved to their
+    account when they sign in. What BHA-239's launch numbers count by."""
+
+    __tablename__ = "fan_source"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), unique=True)
+    tag: Mapped[str | None] = mapped_column(String(60))  # s=: "share", or a post's own
+    utm_source: Mapped[str | None] = mapped_column(String(60))
+    utm_medium: Mapped[str | None] = mapped_column(String(60))
+    utm_campaign: Mapped[str | None] = mapped_column(String(60))
+    landing: Mapped[str] = mapped_column(String(200))  # the page's path: "/gukesh"
     created_at: Mapped[datetime] = _now()
 
 
@@ -169,6 +227,7 @@ class Photo(Base):
     digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the thumbnail: its address
     media_type: Mapped[str | None] = mapped_column(String(30))
     data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # the WIDTH-pixel thumbnail
+    asked_width: Mapped[int | None] = mapped_column(Integer)  # the WIDTH it was asked at: another is fetched again
     # Its size in pixels once the job has looked for the face in it (faces.py; 0 if it didn't decode), and
     # the face's box, {x, y, w, h} as fractions of the width and height; None when it found none.
     width: Mapped[int | None] = mapped_column(Integer)
@@ -301,6 +360,36 @@ class NewsPlayer(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True)
 
 
+class Sidelined(Base):
+    """A spell a player is out of their team's games, injured or suspended, as a source listed it at its
+    reads (sidelined.py), whoever follows them: by the source's ids, for the spell and the player, never a
+    player row, so a fan's player is found by the identity they're bound by (PlayerIdentity). When a read
+    found it news that they're out, and that they're back, are the Wire's facts (week.py). A row no read has
+    listed for a fortnight goes (retention.py)."""
+
+    __tablename__ = "sidelined"
+    __table_args__ = (UniqueConstraint("system", "source_id"), Index("ix_sidelined_athlete", "system", "athlete_id"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system: Mapped[str] = mapped_column(String(60))  # the source: "sportmonks_football"
+    source_id: Mapped[str] = mapped_column(String(60))  # its id for the spell
+    athlete_id: Mapped[str] = mapped_column(String(60))  # its id for the player (PlayerIdentity.external_id)
+    team_id: Mapped[str] = mapped_column(String(60))  # and for their team, whose list it's on
+    sport: Mapped[str] = mapped_column(String(20))  # football
+    name: Mapped[str] = mapped_column(String(200))  # the player, as the source names them
+    team: Mapped[str] = mapped_column(String(200), default="")
+    kind: Mapped[str] = mapped_column(String(20))  # injury | suspension | other (Absence.kind)
+    what: Mapped[str] = mapped_column(String(200), default="")  # "Back Injury", as the source says it
+    since: Mapped[date | None] = mapped_column(Date)
+    until: Mapped[date | None] = mapped_column(Date)  # when they're expected back, if the source says
+    fame: Mapped[int] = mapped_column(Integer, default=0)  # the registry's Wikipedia editions for them, at the last read
+    out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # told they're out: a read found it new
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # found over: off the list, or past its end
+    back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # told they're back
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # the last read that listed it
+    created_at: Mapped[datetime] = _now()
+
+
 class Follow(Base):
     """The only fan-specific row in the pipeline."""
 
@@ -389,15 +478,18 @@ class NotificationMute(Base):
 
 
 class PushSubscription(Base):
-    """One device a fan turned notifications on for (Web Push), with its quiet hours."""
+    """One device a fan turned notifications on for, with its quiet hours: a browser or installed web app
+    (Web Push), or the Android app (FCM, fcm.py)."""
 
     __tablename__ = "push_subscription"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     fan_id: Mapped[str] = mapped_column(String(64), index=True)
+    transport: Mapped[str] = mapped_column(String(16), default="webpush", server_default="webpush")  # "webpush" or "fcm"
+    # Where its pushes go: a Web Push endpoint (a push service's URL), or the Android app's FCM token.
     endpoint: Mapped[str] = mapped_column(Text, unique=True)
-    p256dh: Mapped[str] = mapped_column(String(200))
-    auth: Mapped[str] = mapped_column(String(100))
+    p256dh: Mapped[str | None] = mapped_column(String(200))  # Web Push's keys; an FCM token has none
+    auth: Mapped[str | None] = mapped_column(String(100))
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     quiet_start: Mapped[str | None] = mapped_column(String(5))  # "22:00", in the device's timezone
     quiet_end: Mapped[str | None] = mapped_column(String(5))  # "07:00"
@@ -420,6 +512,8 @@ class Account(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     created_at: Mapped[datetime] = _now()
     last_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When an admin blocked it (admin.py): it can't sign in, and its sessions ended then.
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AccountSession(Base):
@@ -433,3 +527,14 @@ class AccountSession(Base):
     created_at: Mapped[datetime] = _now()
     last_seen_at: Mapped[datetime] = _now()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class Control(Base):
+    """One thing the admin panel changed on the running app (controls.py): the sports and sources turned
+    off, a source's allowance. Every process reads them, so a change needs no restart."""
+
+    __tablename__ = "control"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)  # "sports_off", "sources_off", "budget:sportmonks"
+    value: Mapped[dict | list] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = _now()

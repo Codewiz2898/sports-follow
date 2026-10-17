@@ -1,7 +1,6 @@
-import type { BoardProps, SportView } from './view'
-
-export interface FootballSide { id: string; name: string; abbr?: string | null; score: string; scorers: string[] }
-export interface FootballState { kind: 'football'; home: FootballSide; away: FootballSide; detail?: string | null }
+import { football as facts, type FootballPage, type FootballSide, type FootballState } from './facts/football'
+import { MatchSection } from './section'
+import type { BoardProps, MatchProps, SportView } from './view'
 
 function FootballBoard({ state, clock, compact }: BoardProps<FootballState>) {
   const side = (s: FootballSide, align: 'left' | 'right') => (
@@ -22,25 +21,25 @@ function FootballBoard({ state, clock, compact }: BoardProps<FootballState>) {
   )
 }
 
-export const football: SportView = {
-  key: 'football',
-  kinds: ['football'],
-  Board: FootballBoard as SportView['Board'],
-  // A pitch's markings, 105 by 68 metres: halfway line, centre circle, both boxes with their arcs, corners.
-  backdrop: (
-    <svg x="0" y="17.6" width="100" height="64.8" viewBox="0 0 105 68">
-      <rect x="1" y="1" width="103" height="66" />
-      <path d="M52.5 1v66M17.5 26.69a9.15 9.15 0 0 1 0 14.62M87.5 26.69a9.15 9.15 0 0 0 0 14.62M1 2a1 1 0 0 0 1-1M103 1a1 1 0 0 0 1 1M104 66a1 1 0 0 0-1 1M2 67a1 1 0 0 0-1-1" />
-      <circle cx="52.5" cy="34" r="9.15" />
-      <rect x="1" y="13.85" width="16.5" height="40.3" />
-      <rect x="1" y="24.85" width="5.5" height="18.3" />
-      <rect x="87.5" y="13.85" width="16.5" height="40.3" />
-      <rect x="98.5" y="24.85" width="5.5" height="18.3" />
-      <path d="M12 34h.01M52.5 34h.01M93 34h.01" strokeWidth={3} />
-    </svg>
-  ),
-  noLine: "isn't in the matchday squad",
-  inHeadline: ['Goals', 'Assists'],
-  // The score as the board has it, home first, and the minute: "1–0 · 67'".
-  short: (state: FootballState, live) => [`${state.home.score}–${state.away.score}`, live.clock].filter(Boolean).join(' · '),
+const KINDS: Record<string, string> = { GOAL: 'Goal', DISALLOWED: 'No goal', YELLOW: 'Yellow', RED: 'Red' }
+
+/** A match page's timeline: each goal and card at its minute, newest first, the home side's on the left and
+ * the away side's on the right. */
+function FootballMatch({ page }: MatchProps<FootballPage>) {
+  if (!page.timeline?.length) return null
+  return (
+    <MatchSection title="Timeline">
+      <ol className="card list timeline">
+        {page.timeline.map((e, i) => (
+          <li key={`${e.clock}-${e.kind}-${i}`} className={e.side === 1 ? 'away' : undefined}>
+            <span className="num">{e.clock}</span>
+            <span className={`moment-kind ${e.kind.toLowerCase()}`}>{KINDS[e.kind] ?? e.kind.toLowerCase()}</span>
+            <span className="small">{e.text}</span>
+          </li>
+        ))}
+      </ol>
+    </MatchSection>
+  )
 }
+
+export const football: SportView = { ...facts, Board: FootballBoard as SportView['Board'], Match: FootballMatch as SportView['Match'] }

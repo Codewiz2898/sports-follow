@@ -7,8 +7,6 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 from sports_follow import adapters, moments, registry, search, sports
 from sports_follow.adapters import ALL, KNOWN, pick
 
@@ -117,40 +115,26 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
     assert body["other"]["key"] == "other" and body["other"]["alerts"]["key"][0] == "Big news"
     esports = next(s for s in body["sports"] if s["key"] == "esports")
     assert esports["team_results"] and esports["keeps_names"] and esports["stats_title"] == "Overview"
+    # The Android app can't read /api/sports.css: each sport brings its colours here too, "other" none.
+    cricket = next(s for s in body["sports"] if s["key"] == "cricket")
+    assert cricket["colour"] == {"sport": "#1f5bef", "on": "#ffffff", "on_soft": "#ffffff", "ink": "#7aa2ff"}
+    assert all(s["colour"] for s in body["sports"]) and body["other"]["colour"] is None
 
 
 def test_each_sport_brings_its_colour(api):
     res = api.call("GET", "/api/sports.css")
     assert res.headers["content-type"].startswith("text/css")
-    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; --photo-dark: #0d2a7a; --photo-light: #133be0; }" in res.text
+    assert "[data-sport='cricket'] { --sport: #1f5bef; --on-sport: #ffffff; --on-sport-soft: #ffffff; --sport-on-ink: #7aa2ff; }" in res.text
     assert all(f"[data-sport='{s.key}']" in res.text for s in sports.ALL)
-
-
-def _rgb(colour: str) -> tuple[float, ...]:
-    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
-
-
-@pytest.mark.parametrize("sport", [s for s in sports.ALL if s.colour], ids=lambda s: s.key)
-def test_a_photo_is_recoloured_from_the_sports_deep_colour_to_its_block_colour(sport):
-    """The page multiplies the grey photo by --photo-light and screens --photo-dark over it (styles.css,
-    .duo): black must come out as the deep colour, white as the block colour, and grey in between."""
-    dark, light = sports.photo_tones(sport)
-    d, pre, block = _rgb(dark), _rgb(light), _rgb(sport.colour["sport"])
-    assert all(dc < bc for dc, bc in zip(d, block)) or sum(d) < sum(block), "the photo's darks must be the darker"
-
-    def shown(grey: float) -> tuple[float, ...]:
-        return tuple(1 - (1 - grey * p) * (1 - dc) for p, dc in zip(pre, d))
-
-    assert shown(0) == pytest.approx(d)
-    assert shown(1) == pytest.approx(block, abs=1 / 255)
-    assert shown(0.5) == pytest.approx(tuple((dc + bc) / 2 for dc, bc in zip(d, block)), abs=1 / 255)
 
 
 WEB = PACKAGE.parent / "web" / "src"
 
 
-def test_every_web_view_is_of_a_sport_the_server_knows():
-    views = {m.group(1): p.name for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
+def test_every_apps_sport_facts_are_of_a_sport_the_server_knows():
+    """web/src/sports/facts/ holds what both apps draw a sport by (its scoreboard kinds, its line art)."""
+    facts = list((WEB / "sports" / "facts").glob("*.ts"))
+    views = {m.group(1): p.name for p in facts for m in re.finditer(r"^  key: '(\w+)',$", p.read_text(), re.M)}
     assert views and set(views) <= set(sports.BY_KEY), views
-    kinds = {k for p in (WEB / "sports").glob("*.tsx") for m in re.finditer(r"^  kinds: \[(.*)\],$", p.read_text(), re.M) for k in re.findall(r"'(\w+)'", m.group(1))}
+    kinds = {k for p in facts for m in re.finditer(r"^  kinds: \[(.*)\],$", p.read_text(), re.M) for k in re.findall(r"'(\w+)'", m.group(1))}
     assert kinds <= {k for s in sports.ALL for k in s.kinds}

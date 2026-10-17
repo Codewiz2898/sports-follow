@@ -447,3 +447,28 @@ def test_local_search_filters_with_what_the_trigram_index_answers():
     assert "similarity" not in where
     assert "player_alias.alias %% 'kohly'" in where and "'kohly' <%% player_alias.alias" in where
     assert any(f"'pg_trgm.similarity_threshold', '{search.LIKENESS}'" in s and f"'pg_trgm.word_similarity_threshold', '{search.LIKENESS}'" in s for s in sql)
+
+
+class _NoFixturesInPreview:
+    """A source whose games take many reads (as chess broadcasts do): its preview shows stats only."""
+
+    sport = "chess"
+    preview_fixtures = False
+
+    def player(self, athlete_id, league):
+        from sports_follow.adapters.base import PlayerRef
+        return PlayerRef(system="test_source", athlete_id=athlete_id, name="Test Player", team_ids=[], team_names=[])
+
+    def fixtures(self, ref):
+        raise AssertionError("a preview of this source mustn't read its games")
+
+    def stats(self, ref, recent):
+        return [], ""
+
+
+def test_a_preview_says_when_it_doesnt_read_the_athletes_games(monkeypatch):
+    """Both apps hide Next and Last game on `fixtures: false` (AthletePage.tsx, mobile's athlete page)."""
+    monkeypatch.setitem(search.ADAPTERS, "test_source", _NoFixturesInPreview())
+    search._previews.clear()
+    out = search.preview("test_source", "p1", None)
+    assert out is not None and out["fixtures"] is False and out["next"] is None and out["last"] is None

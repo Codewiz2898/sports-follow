@@ -32,8 +32,8 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, live, logs, notify, pipeline, registry, server, starters, structured, web_errors
-from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef
+from sports_follow import alerts, bus, db as db_module, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
 PUBLIC = "81.2.69.142"
@@ -108,6 +108,29 @@ class Redis:
 
     async def ttl(self, key):
         return 42 if key in self.data else -2
+
+    def pipeline(self, transaction=True):
+        return Pipeline(self)
+
+
+class Pipeline:
+    """Commands queued, then run in order by execute."""
+
+    def __init__(self, redis: Redis):
+        self.redis, self.queued = redis, []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def set(self, *args, **kwargs):
+        self.queued.append(lambda: self.redis.set(*args, **kwargs))
+        return self
+
+    async def execute(self):
+        return [await command() for command in self.queued]
 
 
 class Queue:
@@ -584,7 +607,7 @@ class PlanDb:
 
 def test_a_push_goes_to_a_fans_newest_devices_however_many_are_stored():
     def device(i, fan):
-        return SimpleNamespace(id=i, fan_id=fan, endpoint=f"https://fcm.googleapis.com/fcm/send/{i}", p256dh="k", auth="a", timezone="UTC", quiet_start=None, quiet_end=None)
+        return SimpleNamespace(id=i, fan_id=fan, transport="webpush", endpoint=f"https://fcm.googleapis.com/fcm/send/{i}", p256dh="k", auth="a", timezone="UTC", quiet_start=None, quiet_end=None)
 
     devices = sorted([device(i, "big") for i in range(1, 61)] + [device(61, "small")], key=lambda d: -d.id)
     now = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
@@ -922,6 +945,22 @@ def test_the_cookie_key_comes_from_the_environment_first_and_is_never_made_up(tm
         server.cookie_key.cache_clear()
 
 
+# ---------------------------------------------------------------- a source's own notes (BHA-249)
+
+
+def test_the_card_sends_the_live_sources_own_notes(api):
+    # The player page words how a source's scores come in from these, not from the source's name.
+    adapter = KNOWN["liquipedia_esports"]
+    card = {"player_id": 1, "version": 3, "status": "ready", "live": {"is_live": False, "player_stats": []}, "upcoming": [], "recent_results": [], "freshness": {}}
+    event = Event(id=5, title="BGIS 2026 · Grand Finals", notes=None, competition="BGIS", start_utc=datetime(2026, 10, 16, 12, tzinfo=timezone.utc), status="live")
+    snap = Snapshot(status="live", score_label="Lobby 3 of 6", clock_label="", state={"kind": "battle_royale"})
+    structured._apply_snapshot(card, event, snap, None, adapter, datetime(2026, 10, 16, 13, tzinfo=timezone.utc))
+    api.redis.data[bus.card_key(1)] = json.dumps(card)
+    live = api.call("GET", "/api/players/1/card", fan="fan").json()["live"]
+    assert (live["source"], live["live_note"], live["lag_note"]) == ("Liquipedia", adapter.live_note, adapter.lag_note)
+    assert live["live_note"] and live["lag_note"]
+
+
 # ---------------------------------------------------------------- the card is the fan's own (BUG-038)
 
 
@@ -1206,3 +1245,130 @@ def test_live_games_are_served_and_a_stale_source_is_read_again(api, monkeypatch
     # The read failed, or hasn't come yet: the next looks within a minute don't ask again, but still say one's coming.
     assert api.call("GET", "/api/live", fan="other").json()["refreshing"] is True
     assert [j for j in api.queue.jobs if j[0] == "read_live"] == [("read_live", "pitch")]
+
+
+def test_a_match_page_is_served_and_its_game_read_at_most_once_a_minute(api, monkeypatch):
+    """GET /api/match/<source>/<game> answers from match.view at once, and asks one read a minute of a game
+    whose last read is over a minute old, and at most match.READS a minute of one source (tests/test_match.py
+    holds what's shown). A source or game id of the wrong shape, or a game no source has named, is a 404."""
+    asked: list[tuple[str, str, str]] = []
+    page = {"key": "lichess_chess:abcd1234-5", "title": "A v B", "sides": []}
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: asked.append((fan, system, game)) or (page, True))
+    answer = api.call("GET", "/api/match/lichess_chess/abcd1234-5", fan="fan")
+    assert answer.status_code == 200 and answer.json() == {**page, "refreshing": True}
+    assert asked == [("fan", "lichess_chess", "abcd1234-5")]
+    assert api.queue.jobs[-1] == ("read_match", "lichess_chess", "abcd1234-5") and api.queue.options["_job_id"] == "read_match:lichess_chess:abcd1234-5"
+    # Within the minute, another fan's look asks nothing more of the source, but still says a read is coming.
+    assert api.call("GET", "/api/match/lichess_chess/abcd1234-5", fan="other").json()["refreshing"] is True
+    assert [j for j in api.queue.jobs if j[0] == "read_match"] == [("read_match", "lichess_chess", "abcd1234-5")]
+    # Other games of one source share its READS a minute.
+    monkeypatch.setattr(match, "READS", 2)
+    for game in ("abcd1234-6", "abcd1234-7"):
+        api.call("GET", f"/api/match/lichess_chess/{game}", fan="fan")
+    assert [j[2] for j in api.queue.jobs if j[0] == "read_match"] == ["abcd1234-5", "abcd1234-6"]
+    # Counted by the source's allowance: Sportmonks' football and cricket share one.
+    monkeypatch.setattr(match, "READS", 1)
+    for system in ("sportmonks_football", "sportmonks_cricket"):
+        api.call("GET", f"/api/match/{system}/123", fan="fan")
+    assert [j[1] for j in api.queue.jobs if j[0] == "read_match"][-1] == "sportmonks_football" and ("read_match", "sportmonks_cricket", "123") not in api.queue.jobs
+
+    for path in ("/api/match/nowhere/1", "/api/match/lichess_chess/..", "/api/match/lichess_chess/a%2Fb", f"/api/match/lichess_chess/{'1' * 65}"):
+        assert api.call("GET", path, fan="fan").status_code == 404, path
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: (None, False))
+    answer = api.call("GET", "/api/match/lichess_chess/abcd1234-9", fan="fan")
+    assert answer.status_code == 404 and answer.json() == {"detail": "This game isn't here: it may have ended before anyone opened it."}
+
+
+def test_league_games_are_the_same_for_every_fan_and_a_stale_source_is_read_again(api, monkeypatch):
+    """GET /api/league answers from league.offer at once, sets no cookie, and asks one read an hour of each
+    source whose last read is a few hours old; while one is due the answer isn't kept anywhere, and once
+    none is, a public cache may keep it a minute (tests/test_league.py holds what's offered)."""
+    games = {"results": {"day": None, "games": [{"key": "pitch:100", "title": "A vs B", "event_ids": []}]}, "coming": {"games": []}}
+    stale = ["pitch"]
+    zones = []
+    monkeypatch.setattr(league, "cached", lambda db, tz: zones.append(tz) or (games, stale))
+    answer = api.call("GET", "/api/league?tz=330")
+    assert answer.status_code == 200 and answer.json() == {**games, "refreshing": True}
+    assert "set-cookie" not in answer.headers and answer.headers["cache-control"] == "no-cache"
+    assert api.queue.jobs[-1] == ("read_league", "pitch") and api.queue.options["_job_id"] == "read_league:pitch"
+    assert api.call("GET", "/api/league").json()["refreshing"] is True
+    assert [j for j in api.queue.jobs if j[0] == "read_league"] == [("read_league", "pitch")]
+    stale.clear()
+    answer = api.call("GET", "/api/league")
+    assert answer.json()["refreshing"] is False and answer.headers["cache-control"] == "public, max-age=60"
+    assert zones == [330, 0, 0]  # the fan's UTC offset in minutes, for their days; none is UTC's
+    assert api.call("GET", "/api/league?tz=9999").status_code == 422
+
+
+# ---------------------------------------------------------------- campaign pages (campaigns.py)
+
+
+def _row(key: str, name: str, player_id: int | None = None, following: bool = False) -> dict:
+    system, _, athlete_id = key.partition(":")
+    return {"key": key, "name": name, "sport": "Esports", "detail": "", "system": system, "athlete_id": athlete_id, "league": "league-of-legends",
+            "player_id": player_id, "following": following, "qid": None}
+
+
+WORLDS = {"slug": "worlds", "sport": "esports", "title": "Worlds final", "event": None, "lines": [], "games": [], "zone": {"name": "Asia/Kolkata", "label": "IST"},
+          "players": [], "teams": [{"team_id": "126061", "name": "T1", "game": "League of Legends", "players": [
+              _row("pandascore_esports:585", "Faker", 3, True), _row("pandascore_esports:9", "Zeus", 4), _row("pandascore_esports:10", "Oner"),
+              _row("pandascore_esports:11", "Gone"), _row("pandascore_esports:12", "Broken")]}]}
+
+
+def test_a_campaign_page_is_its_rows_for_this_fan_and_none_at_an_address_that_isnt_one(api, monkeypatch):
+    from sports_follow import campaigns
+
+    asked = []
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: asked.append((slug, fan)) or (WORLDS if slug == "worlds" else None))
+    got = api.call("GET", "/api/campaigns/worlds", fan="fan")
+    assert got.status_code == 200 and got.json() == WORLDS
+    assert api.call("GET", "/api/campaigns/nope", fan="fan").status_code == 404
+    assert api.call("GET", "/api/campaigns/NOT..ONE", fan="fan").status_code == 404
+    assert asked == [("worlds", "fan"), ("nope", "fan")]
+
+
+def test_following_a_whole_team_follows_each_player_on_its_roster_with_key_alerts(api, monkeypatch):
+    from sports_follow import campaigns
+
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: WORLDS if slug == "worlds" else None)
+    picked = []
+
+    async def follow_athlete(body, fan, address):
+        picked.append((body, fan))
+        if body["athlete_id"] == "11":
+            raise server.HTTPException(404, "That athlete isn't in the source any more.")
+        if body["athlete_id"] == "12":
+            raise TimeoutError("no pooled connection")  # not the API's own refusal: still one player's failure only
+        return 20 + len(picked)
+
+    monkeypatch.setattr(server, "_follow_athlete", follow_athlete)
+    # Zeus's card is still building: following him asks for the build again, as /api/follows does.
+    real = Db.scalar
+    monkeypatch.setattr(Db, "scalar", lambda self, stmt: "building" if stmt.column_descriptions[0]["expr"] is PlayerCard.status else real(self, stmt))
+    got = api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "126061"})
+    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 21], "failed": 2}
+    # Faker was followed already; Zeus is on Sports Follow, so one follow row with the default (key) alerts;
+    # the rest through their source, by its ids, never by name.
+    inserts = [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow"]
+    assert [(_param(s, "fan_id"), _param(s, "player_id"), _param(s, "alert_rules")) for s in inserts] == [("fan", 4, {})]
+    assert ("build_card", 4) in api.queue.jobs
+    assert [b["athlete_id"] for b, _ in picked] == ["10", "11", "12"]
+    assert picked[0][0] == {"system": "pandascore_esports", "athlete_id": "10", "league": "league-of-legends", "qid": None}
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": "999"}).status_code == 404
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"team": 126061}).status_code == 400
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={}).status_code == 400
+    assert api.call("POST", "/api/campaigns/nope/follow", fan="fan", body={"players": True}).status_code == 404
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"players": True}).json() == {"player_ids": [], "failed": 0}  # no players of its own
+
+
+def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
+    def kept() -> list[dict]:
+        return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
+
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "<b>", "path": "/gukesh"}).json() == {"ok": True}
+    assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
+    insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
+    assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
+    for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
+        assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
+    assert len(kept()) == 1

@@ -901,6 +901,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
         card["live"] = {
             "is_live": True,
             "event_id": event.id,
+            "match": event.key.replace(":", "/", 1) if event.key else None,  # its match page's address (match.path)
             "event": title,
             "competition": event.competition,
             "score": snap.score_label,
@@ -910,6 +911,8 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "state": snap.state,
             "moments": snap.moments[:10],
             "source": adapter.credit(snap),
+            "live_note": adapter.live_note,
+            "lag_note": adapter.lag_note,
             "source_url": snap.source_url,
             "as_of": stamp,
         }

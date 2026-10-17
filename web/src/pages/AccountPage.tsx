@@ -30,6 +30,7 @@ const GOOGLE_ERRORS: Record<string, string> = {
   google: "Couldn't sign in with Google. Try again, or get a code by email.",
   google_linked: "This email address's account is linked to a different Google account. Sign in with a code by email instead.",
   google_off: "Signing in with Google isn't set up on this server yet.",
+  blocked: 'This account has been blocked.',
 }
 
 /** An iPhone home-screen app: Google's sign-in leaves it for a browser sheet, not yet tried there. */

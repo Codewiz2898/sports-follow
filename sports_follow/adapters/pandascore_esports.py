@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from .. import bus, naming
 from . import budget, dota, opendota, pandascore
-from .base import Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot
+from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -44,6 +44,16 @@ GAME_IDS = {"league-of-legends": 1, "cs-go": 3, "dota-2": 4, "ow": 14, "rl": 22,
 IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", ",".join(GAMES)).split(",") if g in GAME_IDS]
 
 _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "canceled": "postponed", "postponed": "postponed"}
+
+# The tournament tiers whose series are among the big games on now (live_now), as LiveGame tiers, biggest
+# first. PandaScore rates a tournament S > A > B > C > D, or "unranked", by its organiser, teams and prize
+# pool: S is Worlds, The International, a Major; A a top regional league (LCK, VCT EMEA); B a smaller
+# region's league or the qualifier for an S event (CBLOL, The International's). Most closed qualifiers are
+# C or D, a second division (ESEA Advanced) D: left out, so on a quiet day esports shows nothing.
+LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
+# And whose series are among the big results and big games coming up (schedule): world events and top leagues.
+SCHEDULE_TIERS = ("s", "a")
+SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
 
 # Nationalities come as ISO 3166 codes; the countries most pros play for, by name. Others show as the code.
 COUNTRIES = {
@@ -165,6 +175,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             locator={"match": str(m["id"])},
             detail=" · ".join(x for x in (_stage(m), _format(m)) if x) or None,
             result=result,
+            facts={"game": game} if (game := game_name((m.get("videogame") or {}).get("slug"))) else {},
         ))
     return out
 
@@ -241,6 +252,22 @@ def parse_player(p: dict[str, Any]) -> PlayerRef:
         born=p.get("birthday"),
         game=game_name((p.get("current_videogame") or {}).get("slug")),
     )
+
+
+def parse_team(t: dict[str, Any]) -> SourceTeam | None:
+    """A team and the players on it today (pure): a team title's, with its game as each player's league. None
+    for a team with no id or name, or of a title this source's pros aren't from (GAMES)."""
+    slug = (t.get("current_videogame") or {}).get("slug")
+    if not t.get("id") or not (t.get("name") or "").strip() or slug not in GAMES:
+        return None
+    team_id, name = str(t["id"]), t["name"].strip()
+    players = [
+        PlayerRef(system="pandascore_esports", athlete_id=str(p["id"]), name=p["name"].strip(), team_ids=[team_id], team_names=[name], league=slug,
+                  born=p.get("birthday"), game=game_name(slug))
+        for p in t.get("players") or []
+        if p.get("id") and naming.words(p.get("name") or "") and p.get("active") is not False
+    ]
+    return SourceTeam(system="pandascore_esports", team_id=team_id, name=name, game=game_name(slug), players=players)
 
 
 def full_name(p: dict[str, Any]) -> str:
@@ -407,6 +434,22 @@ class PandascoreEsports(Adapter):
             return None
         return parse_player(data) if isinstance(data, dict) and data.get("id") else None
 
+    team_id_pattern = DIGITS
+
+    def team(self, team_id: str) -> SourceTeam | None:
+        """A team and who's on it now (a campaign's whole-team follow), read at most every 6 hours."""
+        try:
+            data = pandascore.get_json(f"/teams/{team_id}", ttl=6 * 3600)
+        except pandascore.NotFound:
+            return None
+        return parse_team(data) if isinstance(data, dict) else None
+
+    def find_teams(self, name: str) -> list[SourceTeam]:
+        """Teams by name in the team titles, for an operator picking a campaign's team by its id."""
+        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        rows = pandascore.get_json("/teams", ttl=3600, **{"search[name]": name, "filter[videogame_id]": games, "page[size]": 20})
+        return [t for t in (parse_team(r) for r in rows if isinstance(r, dict)) if t] if isinstance(rows, list) else []
+
     def _between(self, team_id: str, start: date, end: date, ttl: float) -> list[Fixture]:
         span = f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z"
         rows = pandascore.get_all("/matches", ttl=ttl, pages=2, **{"filter[opponent_id]": team_id, "range[scheduled_at]": span, "sort": "scheduled_at"})
@@ -505,19 +548,65 @@ class PandascoreEsports(Adapter):
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
 
     def live_now(self) -> list[LiveGame]:
-        """Every series on now in the plan's games (matches/running): one request. Its teams, not its players:
-        a match names no players, and the registry knows the teams' pros."""
+        """The big series on now in the plan's games (matches/running, one request): those of a tournament in
+        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order. Its teams, not its players: a
+        match names no players, and the registry knows the teams' pros."""
         games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame_id]": games, "page[size]": 50})
+        # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
+        # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
+        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
         out = []
         for f in parse_fixtures(rows):
             m = by_id[f.source_id]
+            tier = LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0)  # "unranked", or none yet: 0
             snap = parse_match(m)
-            if snap.status == "live":
+            if tier and snap.status == "live":
                 out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
-                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug")))
+                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier))
+        return sorted(out, key=lambda g: -g.tier)
+
+    def match(self, source_id: str) -> LiveGame | None:
+        """One series by its id, whoever follows it, for its match page: map by map, and inside a Dota 2 map what
+        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request; a
+        Dota 2 series on now or just over costs what a live poll's does besides (_dota): its two teams' rosters
+        (kept a day) and OpenDota's live games, pro matches and each finished map, most of them kept a while."""
+        try:
+            m = pandascore.get_json(f"/matches/{source_id}", ttl=30)
+        except pandascore.NotFound:
+            return None
+        found = parse_fixtures(self._keep([m])) if isinstance(m, dict) and m.get("id") else []
+        if not found:
+            return None
+        f, snap = found[0], parse_match(m)
+        self._dota(m, snap)
+        return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
+                        teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0))
+
+    def schedule(self, start: date, end: date) -> list[Fixture]:
+        """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its
+        event's tier. PandaScore lists series by tournament but can't filter them by tier, and only about
+        one in eight is S or A, so the S and A tournaments come first (on now, starting in the window, ended
+        in it: a request each), then their series in the window, a page of 100 a request."""
+        span = f"{start.isoformat()}T00:00:00Z,{end.isoformat()}T23:59:59Z"
+        games = ",".join(str(GAME_IDS[g]) for g in GAMES if g in GAME_IDS)
+        # Tournaments filter by game as "videogame_id", and by tier.
+        which = {"filter[videogame_id]": games, "filter[tier]": ",".join(SCHEDULE_TIERS), "page[size]": pandascore.PAGE}
+        tiers: dict[str, int] = {}
+        for path, window in (("/tournaments/running", {}), ("/tournaments/upcoming", {"range[begin_at]": span}), ("/tournaments/past", {"range[end_at]": span})):
+            found = pandascore.get_json(path, ttl=1800, **which, **window)
+            for t in found if isinstance(found, list) else []:
+                if t.get("id") and t.get("tier") in SCHEDULE_TIERS:
+                    tiers[str(t["id"])] = LIVE_TIERS[t["tier"]]
+        if not tiers:
+            return []
+        rows = pandascore.get_all("/matches", ttl=1800, pages=SCHEDULE_PAGES, **{"filter[tournament_id]": ",".join(sorted(tiers)), "range[scheduled_at]": span, "sort": "scheduled_at"})
+        tier_of = {str(m.get("id")): tiers.get(str(m.get("tournament_id") or (m.get("tournament") or {}).get("id")), 0) for m in rows}
+        out = []
+        for f in parse_fixtures(self._keep(rows)):
+            f.tier = tier_of.get(f.source_id, 0)
+            out.append(f)
         return out
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:

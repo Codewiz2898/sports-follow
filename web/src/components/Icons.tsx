@@ -35,3 +35,9 @@ export const BellIcon = (p: SVGProps<SVGSVGElement>) => (
 export const CloseIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} strokeWidth={2.6} {...p}><path d="M6 6l12 12M18 6 6 18" /></svg>
 )
+export const ShareIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><circle cx="18" cy="5" r="2.6" /><circle cx="6" cy="12" r="2.6" /><circle cx="18" cy="19" r="2.6" /><path d="m8.4 13.3 7.2 4.3M15.6 6.4l-7.2 4.3" /></svg>
+)
+export const LiveIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><circle cx="12" cy="12" r="2" /><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8" /></svg>
+)

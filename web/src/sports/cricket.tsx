@@ -1,14 +1,6 @@
-import type { BoardProps, SportView } from './view'
-
-export interface CricketInnings { team: string; abbr?: string | null; period?: number | null; runs: number; wickets: number; overs?: number | string | null; batting: boolean; target?: number | null; declared?: boolean }
-export interface CricketState {
-  kind: 'cricket'
-  teams: { id: string; name: string; abbr?: string | null; score: string; winner?: boolean | null }[]
-  innings: CricketInnings[]
-  summary?: string
-  format?: string | null
-  player_of_match?: string | null
-}
+import { cricket as facts, inningsScore, type CricketPage, type CricketState } from './facts/cricket'
+import { MatchSection } from './section'
+import type { BoardProps, MatchProps, SportView } from './view'
 
 function CricketBoard({ state, clock, compact }: BoardProps<CricketState>) {
   if (!state.innings.length) {
@@ -29,7 +21,7 @@ function CricketBoard({ state, clock, compact }: BoardProps<CricketState>) {
           </span>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span className={i.batting ? 'num score' : 'num'} style={i.batting ? undefined : { fontSize: 26, color: 'var(--muted)' }}>
-              {i.runs}{i.wickets < 10 ? `/${i.wickets}` : ''}{i.declared ? 'd' : ''}
+              {inningsScore(i)}
             </span>
             {i.overs != null && <span className="small muted">{i.overs} ov</span>}
           </span>
@@ -40,28 +32,43 @@ function CricketBoard({ state, clock, compact }: BoardProps<CricketState>) {
   )
 }
 
-export const cricket: SportView = {
-  key: 'cricket',
-  kinds: ['cricket'],
-  Board: CricketBoard as SportView['Board'],
-  // The ground from above: the boundary, the 30-yard circle, and the pitch with its creases and stumps.
-  backdrop: (
+/** A match page's scorecard: each side in the order they batted, who batted for it and how they were out, and
+ * who bowled at it. */
+function CricketMatch({ page }: MatchProps<CricketPage>) {
+  if (!page.scorecard?.length) return null
+  return (
     <>
-      <ellipse cx="50" cy="50" rx="48" ry="44" />
-      <ellipse cx="50" cy="50" rx="30" ry="27" strokeDasharray="2 2" />
-      <rect x="46.5" y="38" width="7" height="24" />
-      <path d="M44 41.5h12M44 58.5h12M47 40v-4M47 64v-4M53 40v-4M53 64v-4M48 39.5h4M48 60.5h4M49 39.5h.01M50 39.5h.01M51 39.5h.01M49 60.5h.01M50 60.5h.01M51 60.5h.01" />
+      {page.scorecard.map((side) => (
+        <MatchSection key={side.team} title={side.team} note={side.score}>
+          <div className="card card-pad stack" style={{ gap: 14 }}>
+            {side.batting.length > 0 && (
+              <table className="linescore scorecard">
+                <thead><tr><th>Batting</th><th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th></tr></thead>
+                <tbody>
+                  {side.batting.map((b) => (
+                    <tr key={b.name}>
+                      <td className="who"><span className="title">{b.name}</span><span className="tiny muted">{b.out || 'not out'}</span></td>
+                      <td className="total">{b.runs}</td><td>{b.balls}</td><td>{b.fours}</td><td>{b.sixes}</td><td>{b.strike_rate}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {side.bowling.length > 0 && (
+              <table className="linescore scorecard">
+                <thead><tr><th>Bowling</th><th>O</th><th>R</th><th>W</th><th>Econ</th></tr></thead>
+                <tbody>
+                  {side.bowling.map((w) => (
+                    <tr key={w.name}><td className="who"><span className="title">{w.name}</span></td><td>{w.overs}</td><td>{w.runs}</td><td className="total">{w.wickets}</td><td>{w.economy}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </MatchSection>
+      ))}
     </>
-  ),
-  highlight: (line) => {
-    const runs = Math.max(0, ...[...(line ?? '').matchAll(/(?:^|&\s*)(\d+)\*?\s*\(/g)].map((m) => Number(m[1])))
-    return runs >= 100 ? 'Hundred' : runs >= 50 ? 'Fifty' : null
-  },
-  noLine: "hasn't batted or bowled yet",
-  inHeadline: ['Runs', 'Balls', 'Wickets', 'Overs', 'Runs conceded'],
-  // The player's own line ("61* (44)"), else the batting side's score as the board has it ("IND 189/5").
-  short: (state: CricketState, live) => {
-    const i = state.innings.find((x) => x.batting)
-    return live.headline || (i ? `${i.abbr || i.team} ${i.runs}${i.wickets < 10 ? `/${i.wickets}` : ''}` : null)
-  },
+  )
 }
+
+export const cricket: SportView = { ...facts, Board: CricketBoard as SportView['Board'], Match: CricketMatch as SportView['Match'] }

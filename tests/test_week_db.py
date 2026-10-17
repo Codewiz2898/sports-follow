@@ -1,7 +1,8 @@
 """Today's "This week" and the Wire (week.py, GET /api/me/week) against Postgres: the fan's players' big
-moments of the last seven days, one poster per player and game, biggest first; and their line-ups and
-news, newest first. Skipped without a throwaway database at alembic head (tests/test_corrections_db.py
-says how to make one). Every test empties the tables first.
+moments of the last seven days, one poster per player and game, biggest first, and their games that ended
+with no moment that makes one, read off their results; and their facts (who's out, who's back), line-ups and
+news, newest first, then facts about the best-known players they don't follow. Skipped without a throwaway
+database at alembic head (tests/test_corrections_db.py says how to make one). Every test empties the tables first.
 """
 
 from __future__ import annotations
@@ -13,8 +14,8 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import notify, pipeline, server
-from sports_follow.models import Event, Follow, Moment, Player
+from sports_follow import notify, pipeline, server, week
+from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined
 from sports_follow.moments import Found, Seen, detect
 
 from .test_moments import goal, line, scored
@@ -29,7 +30,7 @@ NOW = datetime.now(timezone.utc)
 def db():
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE player, event, follow, moment, news_item, news_player RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE player, event, follow, moment, news_item, news_player, sidelined, athlete_override RESTART IDENTITY CASCADE"))
     s = sessionmaker(bind=engine, expire_on_commit=False)()
     s.add_all([
         Player(id=1, slug="mohamed-salah", name="Mohamed Salah", sport="Football", teams=["Egypt"]),
@@ -86,6 +87,97 @@ def test_only_the_fans_players_this_week_and_never_a_goal_ruled_out(db):
     assert server.this_week("fan", db)["posters"] == []
     assert [p["word"] for p in server.this_week("other", db)["posters"]] == ["Hundred"]
     assert server.this_week("nobody", db)["posters"] == []
+
+
+def finished(db, player: int, event: int, contribution: str | None, result: str = "", ago: timedelta = timedelta(days=1)) -> None:
+    """The player's result in a game that started `ago`, as the results refresh stores it for a game first
+    seen after it ended (structured.result_item): their line in a few words and the result, no moments."""
+    game = db.get(Event, event)
+    game.start_utc = NOW - ago
+    db.add(EventPlayer(event_id=event, player_id=player, result={"title": game.title, "result": result, "player_contribution": contribution}))
+    db.flush()
+
+
+def test_a_game_first_seen_after_it_ended_is_read_off_its_result(db):
+    finished(db, 2, 20, "112 (98)", "India won by 40 runs", ago=timedelta(days=2))
+    finished(db, 1, 10, "2 goals", "Won 2–0")
+    finished(db, 1, 11, "Started", "Drew 0–0")  # nothing a poster says
+    posters = server.this_week("fan", db)["posters"]
+    assert [(p["id"], p["word"], p["line"]) for p in posters] == [(None, "Hundred", "112 (98) v Australia"), (None, "Brace", "v South Africa")]
+    assert datetime.fromisoformat(posters[0]["at"]) == NOW - timedelta(days=2)  # the game's start dates it
+    assert posters[0] | {"at": None} == {
+        "id": None, "player_id": 2, "player": "Smriti Mandhana", "sport": "Cricket", "event_id": 20,
+        "word": "Hundred", "line": "112 (98) v Australia", "url": "/player/2", "at": None,
+    }
+
+
+def test_moments_win_and_a_game_whose_moments_make_no_poster_is_read_off_its_result(db):
+    # Polled live: the moment says what the goal did, which the line can't.
+    moment(db, 1, 1, 10, "goal", "Late equaliser: Mohamed Salah", "Egypt 1 – 1 South Africa · 88' · assist Trezeguet", 95)
+    finished(db, 1, 10, "1 goal", "Drew 1–1")
+    # Polled live too, from the start, and only the result was told: the line makes the poster.
+    moment(db, 2, 2, 20, "start", "Smriti Mandhana's game has started", "", 40, ago=timedelta(days=2))
+    moment(db, 3, 2, 20, "final", "Smriti Mandhana: India won by 40 runs", "", 80)
+    finished(db, 2, 20, "112 (98)", "India won by 40 runs")
+    assert [(p["id"], p["word"], p["line"]) for p in server.this_week("fan", db)["posters"]] == [
+        (1, "Late equaliser", "88' v South Africa"),
+        (None, "Hundred", "112 (98) v Australia"),
+    ]
+
+
+def test_only_the_fans_players_games_that_ended_this_week(db):
+    finished(db, 1, 10, "2 goals", "Won 2–0", ago=timedelta(days=8))  # last week
+    finished(db, 2, 21, "103 (90)")  # its game isn't over
+    finished(db, 3, 20, "100 (80)", "India won by 40 runs")  # another fan's player
+    db.get(Event, 11).start_utc = NOW - timedelta(days=1)
+    db.add(EventPlayer(event_id=11, player_id=1))  # no result stored for them yet
+    db.flush()
+    assert server.this_week("fan", db)["posters"] == []
+    assert [p["word"] for p in server.this_week("other", db)["posters"]] == ["Hundred"]
+
+
+def test_two_players_in_a_game_are_a_poster_each_and_a_result_without_a_line_has_the_one_stored(db):
+    db.add(Follow(fan_id="fan", player_id=3))
+    finished(db, 2, 20, "57 (40)", "India won by 40 runs")
+    finished(db, 3, 20, None, "India won by 40 runs")  # read before its scorecard: the line stored for him has it
+    db.add_all([
+        PlayerLine(event_id=20, player_id=3, as_of=NOW - timedelta(hours=30), stats={"headline": "38* (30)", "stats": []}),
+        PlayerLine(event_id=20, player_id=3, as_of=NOW - timedelta(hours=26), stats={"headline": "38 (31) · 4/30 (10 ov)", "stats": []}),
+    ])
+    db.flush()
+    assert [(p["player"], p["word"], p["line"]) for p in server.this_week("fan", db)["posters"]] == [
+        ("Virat Kohli", "Four-for", "4/30 (10 ov) v Australia"),  # a four-for's moment outranks a fifty's
+        ("Smriti Mandhana", "Fifty", "57 (40) v Australia"),
+    ]
+
+
+def test_posters_read_off_results_count_toward_the_limit_the_newest_first(db):
+    db.add_all(Event(id=100 + n, key=f"g{n}", sport="football", title="Egypt v Ghana", status="final") for n in range(week.LIMIT + 5))
+    db.flush()
+    for n in range(week.LIMIT + 5):
+        finished(db, 1, 100 + n, "1 goal", "Won 1–0", ago=timedelta(hours=n + 1))
+    posters = server.this_week("fan", db)["posters"]
+    assert [p["event_id"] for p in posters] == [100 + n for n in range(week.LIMIT)]
+    assert len(posters) == 12  # Today shows every one the server sends (BHA-226)
+
+
+def test_a_shared_game_is_its_poster_whenever_it_was_and_whoever_follows(db):
+    # A link to a game (share.py) previews the poster This week makes of it, long after the week, for anyone.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 10'", 85, ago=timedelta(days=40))
+    moment(db, 2, 1, 10, "goal", "Goal: Mohamed Salah (2)", "Egypt 2 – 0 South Africa · 60'", 85, ago=timedelta(days=40))
+    game = week.game(db, 1, 10)
+    assert game is not None and (game["word"], game["line"], game["title"], game["competition"]) == ("Brace", "v South Africa", "Egypt v South Africa", None)
+    # No moment makes one: read off the result.
+    finished(db, 2, 20, "112 (98)", "India won by 40 runs", ago=timedelta(days=30))
+    game = week.game(db, 2, 20)
+    assert game is not None and (game["id"], game["word"], game["line"]) == (None, "Hundred", "112 (98) v Australia")
+    # A goal VAR ruled out makes none, nor does a game the player isn't in, or one with nothing to show.
+    moment(db, 3, 1, 11, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 Ghana · 33'", 85)
+    moment(db, 4, 1, 11, "correction", "Goal ruled out: Mohamed Salah", "Egypt 0 – 0 Ghana · 35'", 85, corrects=3)
+    assert week.game(db, 1, 11) is None
+    assert week.game(db, 3, 10) is None and week.game(db, 1, 20) is None
+    finished(db, 1, 11, "Started", "Drew 0–0")
+    assert week.game(db, 1, 11) is None
 
 
 def story(db, player_id: int, headline: str, kind: str | None, breaking: bool = True, hours: int = 2, source: str = "Sportstar") -> None:
@@ -152,3 +244,74 @@ def test_the_wire_tells_a_late_team_sheet_change_and_each_story_once(db):
         ("Injury", "Salah and Mandhana both out injured"),
         ("Line-up", "Smriti Mandhana is named a substitute v England"),
     ]
+
+
+SM = "sportmonks_football"
+
+
+@pytest.fixture
+def facts(db, monkeypatch):
+    """Sportmonks football runs (without a token here), and the fan's Salah is bound to it by id."""
+    monkeypatch.setattr(week, "ADAPTERS", {SM: object()})
+    db.add(PlayerIdentity(player_id=1, system=SM, external_id="173896"))
+    db.flush()
+    return db
+
+
+def out(db, athlete_id: str, name: str, hours: float, fame: int = 0, what: str = "Hamstring Injury", until=None, kind: str = "injury", back: float | None = None, system: str = SM) -> None:
+    """A spell a read found news (sidelined.py): out that many hours ago, and back some hours ago."""
+    n = db.scalar(text("SELECT count(*) FROM sidelined")) + 1
+    db.add(Sidelined(system=system, source_id=f"s{n}", athlete_id=athlete_id, team_id="1", sport="football", name=name, team="", kind=kind, what=what, until=until, fame=fame,
+                     out_at=NOW - timedelta(hours=hours), back_at=NOW - timedelta(hours=back) if back is not None else None,
+                     ended_at=NOW - timedelta(hours=back) if back is not None else None, seen_at=NOW))
+    db.flush()
+
+
+def test_the_wire_tells_the_fans_players_facts_first_then_their_news_then_the_best_known_others(facts):
+    db = facts
+    out(db, "173896", "M. Salah", hours=6, what="Back Injury", until=datetime(2026, 12, 11).date())
+    notify.record(db, 2, 21, [Found("lineup", "key", "Smriti Mandhana is in the XI", "India v England · line-ups are out", "starting", 50)])
+    out(db, "9001", "Kai Havertz", hours=1, fame=66)
+    out(db, "9002", "Mohamed Salah", hours=2, fame=50)  # a namesake: not the fan's, who is bound by id
+    out(db, "9003", "William Saliba", hours=30, fame=52, back=3)  # back since: his newest fact
+    out(db, "9004", "Phil Foden", hours=4, fame=40, what="Red Card Suspension", kind="suspension")  # a fourth: no room
+    out(db, "9005", "Nobody Known", hours=1, fame=12)  # not well known enough
+    out(db, "9006", "Bukayo Saka", hours=50, fame=70)  # two days ago: off the Wire
+    out(db, "9007", "Wataru Endo", hours=1, fame=45, what="No Eligibility", kind="other")  # not news, football says
+    rows = server.this_week("fan", db)["wire"]
+    assert [(r["tag"], r["text"], r["source"], r["yours"]) for r in rows] == [
+        ("Out", "Mohamed Salah · back injury · until 11 Dec", "Sportmonks", True),  # named as his page names him
+        ("Line-up", "Smriti Mandhana is in the XI v England", None, True),
+        ("Out", "Kai Havertz · hamstring injury", "Sportmonks", False),
+        ("Back", "William Saliba is fit again", "Sportmonks", False),
+        ("Out", "Mohamed Salah · hamstring injury", "Sportmonks", False),
+    ]
+    assert [r["url"] for r in rows if r["tag"] != "Line-up"] == ["/player/1", f"/athlete/{SM}/9001", f"/athlete/{SM}/9003", f"/athlete/{SM}/9002"]
+    assert rows[0]["player_id"] == 1 and rows[2]["player_id"] is None and rows[0]["sport"] == "Football"
+    assert datetime.fromisoformat(rows[3]["at"]) == NOW - timedelta(hours=3)
+    # The fan's own rows fill the Wire first: the others only fill what's left of it.
+    for n in range(4):
+        out(db, f"7{n}", f"Player {n}", hours=1)
+        db.add(PlayerIdentity(player_id=10 + n, system=SM, external_id=f"7{n}"))
+        db.add(Player(id=10 + n, slug=f"p{n}", name=f"Player {n}", sport="Football"))
+        db.flush()
+        db.add(Follow(fan_id="fan", player_id=10 + n))
+    db.flush()
+    rows = server.this_week("fan", db)["wire"]
+    assert [r["yours"] for r in rows] == [True] * 6 and len(rows) == week.WIRE_LIMIT
+
+
+def test_a_fan_who_follows_nobody_gets_the_best_known_facts(facts, monkeypatch):
+    db = facts
+    out(db, "173896", "M. Salah", hours=6, fame=55)  # someone's player, but not this fan's: his page opens
+    out(db, "9001", "Kai Havertz", hours=1, fame=66)
+    out(db, "9002", "Removed Player", hours=1, fame=80)
+    db.add(AthleteOverride(qid="Q9", sport="football", action="remove", name="Removed Player", ids={SM: "9002"}))
+    out(db, "9003", "Other Source", hours=1, fame=90, system="espn_soccer")  # a source that doesn't run
+    db.flush()
+    rows = server.this_week("nobody", db)
+    assert rows["posters"] == []
+    assert [(r["text"], r["url"], r["yours"]) for r in rows["wire"]] == [
+        ("Kai Havertz · hamstring injury", f"/athlete/{SM}/9001", False), ("Mohamed Salah · hamstring injury", "/player/1", False)]
+    monkeypatch.setattr(week, "ADAPTERS", {})  # football turned off: no facts
+    assert server.this_week("nobody", db)["wire"] == []

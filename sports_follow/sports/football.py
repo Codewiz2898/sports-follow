@@ -6,9 +6,10 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Poster, Seen, Sport, joined, num, number, spaced, stat, values
+from .base import Fact, Found, Line, Notable, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -19,6 +20,17 @@ UNDER_WAY = 10  # minutes on the clock: a game first seen live this late was mis
 # "Hat-trick" alone is the one of three that still stands after VAR took two back: a goal.
 HIGHS = {"Late equaliser": "Late equaliser", "Equaliser": "Equaliser", "Late goal": "Late goal", "Goal": "Goal", "Hat-trick": "Goal", "Assist": "Assist"}
 MANY_GOALS = {2: "Brace", 3: "Hat-trick"}
+# A league game's size (notable): by its stage, else by where its sides are in their table.
+STAGE_RANK = {3: 95, 2: 85, 1: 70}
+TOP, NEAR_TOP = 4, 7  # two of the top four meeting is a top-of-the-table game; two of the top seven, nearly
+UPSET_PLACES = 8  # a winner this many places below the side it beat
+ROUT, GOALS = 3, 6  # a win by this many goals, or this many in the game
+# Who's out, on the Wire (out_fact): an injury and a ban are news; being ineligible (not registered for the
+# competition) isn't. How each is over, said of the player.
+BACK = {"injury": "is fit again", "suspension": "is back from suspension"}
+# The few of the sources' words for what's wrong that don't read as one on the Wire, lower case.
+SAID = {"unknown injury": "injury", "fitness": "lacking fitness", "ill": "illness", "indirect card suspension": "yellow card suspension",
+        "suspension through sports court": "banned by a sports court"}
 
 
 def pens(a: int | None, b: int | None) -> str:
@@ -156,6 +168,18 @@ class Football(Sport):
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """A timeline: each goal (one VAR ruled out, marked) and card at its minute, newest first, on the side
+        it counts for (0 home, 1 away; an own goal the other side's)."""
+        ids = [str((state.get(side) or {}).get("id")) for side in ("home", "away")]
+        timeline = []
+        for e in events:
+            side = ids.index(str(e.get("team_id"))) if str(e.get("team_id")) in ids else None
+            if side is not None and e.get("own_goal"):
+                side = 1 - side
+            timeline.append({"clock": e.get("clock"), "kind": e.get("kind"), "text": e.get("text"), "side": side})
+        return {"timeline": timeline} if timeline else {}
+
     def left_out(self, now: Seen) -> bool:
         # A national team game shows up for every player of that country, called up or not.
         return now.lineups and now.line is None
@@ -236,6 +260,62 @@ class Football(Sport):
             return None  # a card, a goal ruled out
         minute = re.search(r"\b\d+(?:\+\d+)?'", f.body)
         return Poster(word, spaced(minute[0] if minute else None, versus))
+
+    def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
+        """The goals a finished game's line counts ("2 goals, 1 assist"), else its assists, as poster() words
+        them: "Brace", "Hat-trick", "4 goals", one "Goal"; "2 assists", one "Assist". No minute: the
+        line doesn't say when, nor what a goal did."""
+        for kind, one, many in (("goal", HIGHS["Goal"], MANY_GOALS), ("assist", HIGHS["Assist"], {})):
+            if said := re.search(rf"\b(\d+) {kind}s?\b", line.get("headline") or ""):
+                n = int(said[1])
+                priority = (95 if n >= 3 else 85) if kind == "goal" else 65  # a hat-trick's moment's, a goal's, an assist's
+                return Poster(many.get(n, f"{n} {kind}s") if n > 1 else one, versus, priority=priority)
+        return None
+
+    def notable(self, fixture: Fixture) -> Notable | None:
+        """Every game of the leagues its sources cover is one, as big as its stage (a final 95, a semi-final
+        85, another knockout round 70) or its sides' places in their table (two of the top four 80, two of
+        the top seven 65, the leaders' 55, any other 40). Once it's over, 15 more for an upset (the winner
+        UPSET_PLACES or more below), 10 for a shootout, a rout or a goal-fest. Its word is the score."""
+        level, why = stage(fixture.detail)
+        places = [p if isinstance(p, int) and p > 0 else None for p in (fixture.facts.get("table") or [])[:2]]
+        rank = STAGE_RANK.get(level, 40)
+        if not level and len(places) == 2 and None not in places:
+            high, low = sorted(p for p in places if p)
+            if low <= TOP or (low <= NEAR_TOP and high <= NEAR_TOP):
+                rank, why = (80 if low <= TOP else 65), f"{ordinal(places[0])} v {ordinal(places[1])}"
+            elif high == 1:
+                rank, why = 55, "Leaders"
+        r = fixture.result
+        if fixture.status != "final" or not r:
+            return Notable(rank, why=why)
+        home, away = r.get("home") or {}, r.get("away") or {}
+        sides = [_tally(home), _tally(away)]
+        bonus, said = 0, ""
+        if sides[0] and sides[1]:
+            goals = (sides[0][0], sides[1][0])
+            won = 0 if home.get("winner") or sides[0] > sides[1] else 1 if away.get("winner") or sides[1] > sides[0] else None
+            winner, loser = (places[won], places[1 - won]) if won is not None and len(places) == 2 else (None, None)
+            if winner and loser and winner - loser >= UPSET_PLACES:
+                bonus, said = 15, "Upset"
+            elif home.get("pens") is not None:
+                bonus, said = 10, "Penalties"
+            elif abs(goals[0] - goals[1]) >= ROUT or sum(goals) >= GOALS:
+                bonus, said = 10, f"{sum(goals)} goals"
+        return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", why=why or said)
+
+    def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
+        """ "Out", then who, what ("back injury", "red card suspension"; SAID rewords a few) and until when, if
+        the source says: "William Saliba · back injury · until 11 Dec"."""
+        if kind not in BACK:
+            return None
+        what = what.strip().lower()
+        what = SAID.get(what, what) or kind
+        return Fact("Out", joined(who, what, f"until {until.day} {until:%b}" if until else None))
+
+    def back_fact(self, who: str, kind: str) -> Fact | None:
+        """ "Back": "William Saliba is fit again", "Phil Foden is back from suspension"."""
+        return Fact("Back", f"{who} {BACK[kind]}") if kind in BACK else None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if ln.get("headline") not in (None, "On the bench")]

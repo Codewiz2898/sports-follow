@@ -9,7 +9,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from sports_follow import bus, shutdown, tracing
+from sports_follow import bus, controls, registry, shutdown, tracing
 from sports_follow.adapters import budget
 
 
@@ -23,6 +23,16 @@ def source_budgets(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def admin_controls():
+    """What the admin panel turned off or changed (controls.py) is kept in memory, empty for each test: no
+    test reads the database for it, or sees another's changes."""
+    store = controls.MemoryStore()
+    controls.reset(store)
+    yield store
+    controls.reset(controls.MemoryStore())
+
+
+@pytest.fixture(autouse=True)
 def stopping(monkeypatch):
     """The worker's stop flag (shutdown.py) and the locks it frees (bus.release_held), fresh for each
     test: a test that sets the flag, as the worker's shutdown hook does, never stops another test's
@@ -31,6 +41,17 @@ def stopping(monkeypatch):
     monkeypatch.setattr(shutdown, "stopping", event)
     monkeypatch.setattr(bus, "_held", {})
     return event
+
+
+@pytest.fixture(autouse=True)
+def no_wikidata(monkeypatch):
+    """No test reaches the Wikidata query service (registry.sparql): a test that needs its answers gives
+    them, so a run never loads the service or writes what it says into a real database."""
+
+    def sparql(query: str) -> list[dict[str, str]]:
+        raise RuntimeError("tests don't query Wikidata")
+
+    monkeypatch.setattr(registry, "sparql", sparql)
 
 
 @pytest.fixture

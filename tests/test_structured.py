@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from sports_follow import bus, moments, structured
-from sports_follow.adapters import ADAPTERS, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn_cricket, espn_soccer
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn_cricket, espn_soccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
 from sports_follow.models import Event, EventState, Player, PlayerCard, PlayerLine, SourceBinding
@@ -46,6 +46,29 @@ def test_live_snapshot_fills_the_live_block_with_state_and_line():
     assert live["source"] == "ESPNcricinfo"
     assert c["upcoming"][0]["status"] == "live"
     assert c["freshness"]["live"] == NOW.isoformat()
+
+
+@pytest.mark.parametrize(("system", "live_note", "lag_note"), [
+    ("liquipedia_esports", "Standings update from Liquipedia every few minutes as results are recorded.",
+     "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."),
+    ("pubg_esports", "Standings update from PUBG after each match.", "PUBG lobbies update after each match ends."),
+    ("espn_cricket", None, None),  # the app's own sentences
+])
+def test_the_live_block_carries_the_sources_own_notes(system, live_note, lag_note):
+    # The app words a player page's notes from these, never by the source's name (BHA-249).
+    snap = Snapshot(status="live", score_label="Lobby 3 of 6", clock_label="", state={"kind": "battle_royale"})
+    event = Event(id=5, title="BGIS 2026 · Grand Finals", notes=None, competition="BGIS", start_utc=NOW, status="live")
+    c = card()
+    structured._apply_snapshot(c, event, snap, None, KNOWN[system], NOW)
+    assert (c["live"]["live_note"], c["live"]["lag_note"]) == (live_note, lag_note)
+
+
+def test_a_live_card_names_its_games_match_page():
+    snap = Snapshot(status="live", score_label="Arsenal 1 – 0 Chelsea", clock_label="12'", state={"kind": "football"})
+    event = Event(id=5, key="sportmonks_football:555", title="Arsenal vs Chelsea", notes=None, competition="Premier League", start_utc=NOW, status="live")
+    c = card()
+    structured._apply_snapshot(c, event, snap, None, KNOWN["sportmonks_football"], NOW)
+    assert c["live"]["match"] == "sportmonks_football/555"  # /match/<source>/<its fixture id> (match.py)
 
 
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():

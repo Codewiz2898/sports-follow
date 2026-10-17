@@ -103,6 +103,7 @@ def test_a_lobby_on_now_and_over_later():
     assert (over.status, over.score_label, over.clock_label) == ("final", "DNS win · 27 pts", "Final standings")
     f = pe.parse_fixture(lobby, T0 + timedelta(hours=5))
     assert (f.source_id, f.title, f.competition, f.status, f.locator) == ("as-pgsc4t:2026-10-13:1", "PUBG Global Series · Day 1", "PUBG Global Series", "final", {"tournament": "as-pgsc4t", "day": "2026-10-13", "n": 1})
+    assert f.facts == {"game": "PUBG"}  # its group among the big esports games (Sport.notable)
     assert pe.PubgEsports().result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
     assert len(f"pubg_esports:{f.source_id}") <= 64
 
@@ -296,3 +297,15 @@ def test_the_minute_is_shared_a_gone_match_is_remembered_and_a_spent_minute_read
     assert pubg.tournaments(max_age=0) == [{"id": "as-pgsc4t", "createdAt": "2026-10-09T07:04:22Z"}]  # spent: the kept list
     with pytest.raises(pubg.RateLimited):
         pubg.tournament_matches("never-read", max_age=0)
+
+
+def test_a_circuits_events_are_rated_the_weekly_series_and_unknown_codes_arent():
+    assert [pe.event_tier(t) for t in ("as-pgsc4t", "eu-pgc2026", "eu-pecff2", "kr-26pws2f", "sea-xyz")] == [3, 3, 2, 0, 0]
+
+
+def test_the_schedule_is_the_lobbies_that_started_on_those_days_from_the_index(index):
+    adapter, calls = index
+    today = datetime.now(timezone.utc).date()
+    [lobby] = adapter.schedule(today - timedelta(days=7), today + timedelta(days=14))
+    assert (lobby.status, lobby.tier, lobby.competition) == ("live", 3, "PUBG Global Series")
+    assert adapter.schedule(today + timedelta(days=1), today + timedelta(days=14)) == []
