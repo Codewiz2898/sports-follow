@@ -281,8 +281,8 @@ class Esports(Sport):
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
         lobby ("GodLike Esports won the lobby")."""
         if state.get("kind") == "battle_royale":
-            top = next((t for t in state.get("standings") or [] if t.get("place") == 1), None)
-            return f"{top['name']} won the lobby" if top and top.get("name") else ""
+            top = [t for t in state.get("standings") or [] if t.get("place") == 1]
+            return f"{top[0]['name']} won the lobby" if len(top) == 1 and top[0].get("name") else ""  # level on points: nobody's alone
         teams = state.get("teams") or []
         winner = next((t for t in teams if t.get("winner")), None)
         loser = next((t for t in teams if t is not winner), None)

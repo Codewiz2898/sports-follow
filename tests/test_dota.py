@@ -159,6 +159,33 @@ def test_other_games_and_an_unreachable_opendota_leave_the_series_as_it_was(open
     assert (snap.clock_label, snap.lines) == before and "dota" not in snap.state
 
 
+def test_a_finished_series_match_page_waits_for_opendota_to_parse_its_maps(opendota_up, monkeypatch):
+    """A Dota 2 series just over whose maps OpenDota hasn't all got, or can't be reached: its match page's read
+    is partial, to be read again. Hours on, a map OpenDota hasn't got isn't coming: whole as it is."""
+    def series(ended: datetime) -> dict:
+        return {**_series("finished", [("finished", SPIRIT), ("finished", LIQUID)]), "end_at": ended.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "tournament": {"id": 3, "name": "Playoffs", "tier": "s"}, "league": {"id": 1, "name": "The International"}}
+
+    m = series(datetime.now(timezone.utc) - timedelta(minutes=20))
+    rosters = {f"/teams/{SPIRIT}": {"players": ROSTER[:2]}, f"/teams/{LIQUID}": {"players": ROSTER[2:]}}
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: m if path == "/matches/777" else rosters[path])
+    adapter = ps.PandascoreEsports()
+    game = adapter.match("777")
+    assert game is not None and game.snapshot.status == "final" and not game.partial  # both maps' numbers in
+    assert [mp["n"] for mp in game.snapshot.state["dota"]["maps"]] == [1, 2]
+
+    monkeypatch.setattr(opendota, "match", lambda mid: {9001: _details(True)}.get(mid))  # map 2 not in OpenDota yet
+    assert adapter.match("777").partial
+
+    def down():
+        raise AdapterError("OpenDota unreachable")
+
+    monkeypatch.setattr(opendota, "pro_matches", down)
+    assert adapter.match("777").partial
+    m = series(datetime.now(timezone.utc) - timedelta(seconds=ps.DOTA_WAIT + 60))
+    assert not adapter.match("777").partial  # long over: what OpenDota hasn't got isn't coming
+
+
 def test_each_maps_numbers_are_an_alert_once():
     def seen(maps):
         return moments.Seen("live", {"kind": "esports", "teams": [], "maps": [], "dota": {"maps": maps}}, None, "", "", teams=[str(SPIRIT)])

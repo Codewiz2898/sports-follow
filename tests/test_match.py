@@ -94,8 +94,11 @@ def test_a_sport_without_sections_lists_the_key_events_and_a_chess_board_says_it
 
 
 def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
-    state = {"kind": "chess", "moves": ["d4", "Nf6", "c4", "e6", "Nf3"], "opening": "Queen's Gambit Declined", "ending": "resigned", "match": {"games": 8, "score": "6–2"}}
+    state = {"kind": "chess", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", None]], "opening": "Queen's Gambit Declined", "ending": "resigned",
+             "match": {"games": 8, "score": "6–2"}}
     assert sports.get("chess").match_page(state, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6", "3. Nf3"], "opening": "Queen's Gambit Declined", "ending": "resigned", "game": 8}
+    black_first = {"kind": "chess", "moves": [[12, None, "e5"], [13, "Nf3", "Nc6"], "junk", [14, None, None]]}  # a game set up with Black to move
+    assert sports.get("chess").match_page(black_first, [], {}, {})["moves"] == ["12... e5", "13. Nf3 Nc6"]
 
 
 @pytest.mark.parametrize(("sport", "state", "clock", "said"), [
@@ -103,10 +106,13 @@ def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
     ("football", {**FOOTBALL, "away": {**FOOTBALL["away"], "score": "2"}}, "FT", "Draw"),
     ("football", {**FOOTBALL, "away": {**FOOTBALL["away"], "score": "2"}, "detail": "Full Time After Penalties"}, "FT_PEN", ""),  # the board's goals don't say who
     ("cricket", {"kind": "cricket"}, "India won by 57 runs", "India won by 57 runs"),
+    ("cricket", {"kind": "cricket"}, "Match tied (India won the Super Over)", "Match tied (India won the Super Over)"),
+    ("cricket", {"kind": "cricket"}, "Result", ""),  # the source's summary still to come: the league's line says it, or nothing
     ("chess", {"kind": "chess"}, "Magnus Carlsen won the match (8 games)", "Magnus Carlsen won the match (8 games)"),
     ("Valorant", {"kind": "esports", "teams": [{"id": "1", "name": "Sentinels", "score": 2, "winner": True}, {"id": "2", "name": "NRG", "score": 1, "winner": False}]}, "Final", "Sentinels won 2–1"),
     ("Valorant", {"kind": "esports", "forfeit": True, "teams": [{"id": "1", "name": "Sentinels", "score": 0}, {"id": "2", "name": "NRG", "score": 0, "winner": True}]}, "Forfeit", "NRG won by forfeit"),
     ("BGMI", {"kind": "battle_royale", "standings": [{"name": "Soul", "place": 2}, {"name": "GodLike", "place": 1}]}, "", "GodLike won the lobby"),
+    ("BGMI", {"kind": "battle_royale", "standings": [{"name": "Soul", "place": 1}, {"name": "GodLike", "place": 1}]}, "", ""),  # level at the top: nobody won it alone
     ("tennis", {"kind": "tennis", "players": [{"name": "Sinner"}, {"name": "Alcaraz", "winner": True}]}, "", "Alcaraz won"),
     ("basketball", {"kind": "basketball", "home": {"name": "Celtics", "score": "101"}, "away": {"name": "Knicks", "score": "99"}}, "Final", "Celtics won"),
     ("golf", {}, "", ""),  # a sport no module knows: the board says it
@@ -213,11 +219,15 @@ def test_a_game_nobody_follows_is_live_nows_until_its_own_read_comes(db, redis, 
         ("Arsenal", [("Bukayo Saka", "pitch", "7"), ("Harry Kane", "pitch", "9")]), ("Chelsea", [("Cole Palmer", "pitch", "20")])]
     assert match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=10 + match.FRESH + 1))[1]  # a minute on: asked again
 
-    # Over: the read that says so is the last.
+    # Over: the read that says so is read once more, CONFIRM on, and that's the last.
+    over = NOW + timedelta(hours=2)
     source.game = game("Arsenal 3 – 2 Chelsea", status="final")
-    match.read("pitch", "100", NOW + timedelta(hours=2))
-    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=3))
+    match.read("pitch", "100", over)
+    page, ask = match.view(db, "fan", "pitch", "100", over + timedelta(minutes=10))
     assert (page["status"], page["live"]["is_live"], page["live"]["score"], ask) == ("final", False, "Arsenal 3 – 2 Chelsea", False)
+    assert match.view(db, "fan", "pitch", "100", over + timedelta(seconds=match.CONFIRM + 1))[1]
+    match.read("pitch", "100", over + timedelta(seconds=match.CONFIRM + 1))
+    assert not match.view(db, "fan", "pitch", "100", over + timedelta(days=3))[1]
 
 
 @needs_db
@@ -379,7 +389,7 @@ def test_a_finished_game_is_its_final_state(db, redis, source, monkeypatch):
 
 
 @needs_db
-def test_a_big_result_is_named_by_the_league_and_a_crowd_opening_it_costs_one_read(db, redis, source):
+def test_a_big_result_is_named_by_the_league_and_a_crowd_opening_it_costs_two_reads(db, redis, source):
     over = NOW - timedelta(days=1)
     league_game = {"key": "pitch:300", "sport": "football", "title": "Arsenal vs Chelsea", "competition": "Premier League", "detail": "Matchday 8",
                    "start_utc": over.isoformat(), "status": "final", "rank": 80, "word": "3–2", "line": "Arsenal beat Chelsea", "why": "1st v 2nd", "group": ""}
@@ -396,11 +406,16 @@ def test_a_big_result_is_named_by_the_league_and_a_crowd_opening_it_costs_one_re
     source.game = game("Arsenal 3 – 2 Chelsea", status="final", players=ELEVENS, moments=[GOAL])
     source.game.snapshot.state = {**FOOTBALL, "home": {**FOOTBALL["home"], "score": "3"}, "away": {**FOOTBALL["away"], "score": "2"}}
     assert match.read("pitch", "300", NOW + timedelta(seconds=5))
-    assert redis.ttl["match:pitch:300"] == match.FINAL_KEEP  # a finished game is kept a week, not KEEP's hours
+    assert redis.ttl["match:pitch:300"] == match.KEEP  # the first read that finds it over isn't the last word yet
+    assert not match.view(db, None, "pitch", "300", NOW + timedelta(minutes=10))[1]  # nor read every minute till then
+    confirm = NOW + timedelta(seconds=5 + match.CONFIRM + 1)
+    assert match.view(db, None, "pitch", "300", confirm)[1]
+    assert match.read("pitch", "300", confirm)  # still over: settled
+    assert redis.ttl["match:pitch:300"] == match.FINAL_KEEP  # kept a week, not KEEP's hours
     for later in (timedelta(minutes=1), timedelta(hours=7), timedelta(days=6)):  # the crowd, all week
-        page, ask = match.view(db, None, "pitch", "300", NOW + later)
+        page, ask = match.view(db, None, "pitch", "300", confirm + later)
         assert not ask
-    assert source.read == ["300"]
+    assert source.read == ["300", "300"]
     assert (page["status"], page["live"]["score"], page["verdict"], page["yours"]) == ("final", "Arsenal 3 – 2 Chelsea", "Arsenal won", [])
     assert page["page"] == {"timeline": [{"clock": "62'", "kind": "GOAL", "text": "Palmer (Chelsea)", "side": 1}]}
 
@@ -425,6 +440,19 @@ def test_a_game_to_come_is_read_every_half_hour_till_its_line_ups_are_near(db, r
 
 
 @needs_db
+def test_a_game_called_off_is_read_every_half_hour_whenever_it_was_due(db, redis, source):
+    followed(db)  # its event started at NOW
+    db.execute(Event.__table__.update().where(Event.id == 40).values(status="postponed"))
+    db.execute(EventState.__table__.delete())
+    db.execute(PlayerCard.__table__.update().values(is_live=False))
+    db.commit()
+    source.game = game("Arsenal vs Chelsea", status="postponed")
+    match.read("pitch", "100", NOW + timedelta(hours=3))
+    assert not match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=3, minutes=5))[1]  # abandoned, its start long gone: not every minute
+    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=3, minutes=31))[1]
+
+
+@needs_db
 def test_a_fans_players_in_a_game_with_their_lines_and_results(db, redis, source):
     followed(db)
     db.add(PlayerLine(event_id=40, player_id=5, as_of=NOW, stats={"headline": "1 goal", "stats": [{"label": "Goals", "value": "1"}]}))
@@ -443,13 +471,47 @@ def test_a_fans_players_in_a_game_with_their_lines_and_results(db, redis, source
 
 
 @needs_db
-def test_a_finished_games_own_read_is_its_board_over_the_state_stored_after_it(db, redis, source):
+def test_a_read_at_full_time_is_confirmed_before_it_beats_newer_boards(db, redis, source):
+    """A football source read right at the whistle: no lines yet, a goal it hasn't corrected. The state a poll
+    stored after it shows, the read is asked for again CONFIRM on, and the read then, with its lines, is the
+    page's for good, over the state stored before it."""
     followed(db)
-    chess = {"kind": "chess", "moves": ["e4", "e5"], "white": {"id": "7", "name": "A"}, "black": {"id": "9", "name": "B"}}
-    source.game = game("A 1–0 B", status="final", players=ELEVENS[:2])
-    source.game.snapshot.state = chess
+    source.game = game("Arsenal 3 – 2 Chelsea", status="final", players=ELEVENS, moments=[GOAL, {**GOAL, "clock": "88'"}])
     match.read("pitch", "100", NOW)
-    db.add(EventState(event_id=40, as_of=NOW + timedelta(minutes=5), status="final", score_label="A 1–0 B", clock_label="A won", state={**chess, "moves": []}))
+    db.add(EventState(event_id=40, as_of=NOW + timedelta(minutes=5), status="final", score_label="Arsenal 3 – 1 Chelsea", clock_label="Full time", state=FOOTBALL))
+    db.execute(PlayerCard.__table__.update().values(is_live=False))
     db.commit()
-    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
-    assert (page["status"], page["live"]["source"], page["page"]["moves"]) == ("final", "Pitch", ["1. e4 e5"])
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
+    assert (page["live"]["score"], ask) == ("Arsenal 3 – 1 Chelsea", False)  # the newer stored board; the read is due at CONFIRM
+    assert redis.ttl["match:pitch:100"] == match.KEEP
+
+    later = NOW + timedelta(seconds=match.CONFIRM + 1)
+    assert match.view(db, "fan", "pitch", "100", later)[1]
+    source.game = game("Arsenal 3 – 1 Chelsea", status="final", players=ELEVENS, moments=[GOAL], lines={"7": Line(headline="2 goals", stats=[])})
+    match.read("pitch", "100", later)
+    page, ask = match.view(db, "fan", "pitch", "100", later + timedelta(days=1))
+    assert (page["live"]["source"], [e["clock"] for e in page["page"]["timeline"]], ask) == ("Pitch", ["62'"], False)  # the settled read's: 88' taken back
+    assert redis.ttl["match:pitch:100"] == match.FINAL_KEEP
+
+
+@needs_db
+def test_a_partial_read_of_a_finished_game_is_read_again_till_its_whole(db, redis, source):
+    """A chess board decided while its round goes on (a mini-match's next game may follow), or whose moves
+    couldn't be read: its read is partial, so it isn't settled, and is asked for again every CONFIRM."""
+    followed(db)
+    chess = {"kind": "chess", "white": {"id": "7", "name": "A"}, "black": {"id": "9", "name": "B"}, "result": "1-0"}
+    source.game = game("A 1–0 B", status="final", players=ELEVENS[:2])
+    source.game.snapshot.state, source.game.partial = chess, True
+    match.read("pitch", "100", NOW)
+    match.read("pitch", "100", NOW + timedelta(hours=1))  # still partial an hour on
+    assert redis.ttl["match:pitch:100"] == match.KEEP
+    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=1, seconds=match.CONFIRM + 1))[1]
+
+    # The round over, the moves read: settled at once (it was first found over long enough ago), and its board the page's.
+    source.game.snapshot.state, source.game.partial = {**chess, "moves": [[1, "e4", "e5"]]}, False
+    match.read("pitch", "100", NOW + timedelta(hours=2))
+    assert redis.ttl["match:pitch:100"] == match.FINAL_KEEP
+    db.add(EventState(event_id=40, as_of=NOW + timedelta(hours=3), status="final", score_label="A 1–0 B", clock_label="A won", state=chess))
+    db.commit()
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(days=2))
+    assert (page["status"], page["live"]["source"], page["page"]["moves"], ask) == ("final", "Pitch", ["1. e4 e5"], False)

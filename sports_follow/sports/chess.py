@@ -165,13 +165,17 @@ class Chess(Sport):
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
-        """The board says the game; once it's over, the moves that led there, in pairs ("1. d4 Nf6"), its
-        opening and how it ended, where its source's read of the finished game brought them. Of a mini-match,
-        the last game's, the one on the board (game: its number)."""
-        moves = [str(m) for m in state.get("moves") or []]
-        if not moves:
+        """The board says the game; once it's over, the moves that led there, a move number's pair to a line
+        ("1. d4 Nf6", "1... e5" where Black moved first), its opening and how it ended, where its source's read
+        of the finished game brought them (state["moves"]: [n, White's, Black's] each). Of a mini-match, the last
+        game's, the one on the board (game: its number)."""
+        pairs = []
+        for row in state.get("moves") or []:
+            if isinstance(row, list) and len(row) == 3 and (row[1] or row[2]):
+                n, white, black = row
+                pairs.append(f"{n}. {white} {black or ''}".rstrip() if white else f"{n}... {black}")
+        if not pairs:
             return {}
-        pairs = [f"{n // 2 + 1}. {' '.join(moves[n:n + 2])}" for n in range(0, len(moves), 2)]
         return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": (state.get("match") or {}).get("games")}
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
