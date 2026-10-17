@@ -46,6 +46,10 @@ class Tennis(Sport):
         head = (now.line or {}).get("headline") or ""
         return Found("final", "key", f"{who}: {head or 'result'}", now.score)
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
+        return f"{winner['name']} won" if winner and winner.get("name") else ""
+
     def after_final(self, who: str, athlete_id: str, now: Seen) -> list[Found]:
         """A win over a better-seeded player (or any seed, for an unseeded one), in a match played to the
         end: a walkover or a retirement isn't an upset."""

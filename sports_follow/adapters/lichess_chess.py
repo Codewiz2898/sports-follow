@@ -15,6 +15,7 @@ own, a 429 there pauses only them, and FIDE records are read through FIDE search
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -31,6 +32,8 @@ from .. import bus, naming
 from ..config import USER_AGENT
 from . import budget
 from .base import Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
+
+log = logging.getLogger(__name__)
 
 # With the slash: the budgets below match requests by this prefix, so every address is API + path.
 API = "https://lichess.org/api/"
@@ -256,6 +259,25 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
         players = [_pgn_player(tags, "White"), _pgn_player(tags, "Black")]
         rounds.setdefault(round_id, []).append({"id": game_id, "players": players, "status": tags.get("Result", "*"), "fen": ""})
     return rounds
+
+
+# A move as PGN writes it: a piece's ("Nbd7", "Qh4xe1"), a pawn's ("exd8=Q"), castling; check, mate, and the
+# annotator's marks ("Kf8??") kept.
+_SAN = re.compile(r"(?:[KQRBN][a-h]?[1-8]?x?[a-h][1-8]|[a-h](?:x[a-h])?[1-8](?:=[QRBN])?|O-O(?:-O)?)[+#]?[!?]{0,2}")
+_ENDINGS = {"normal", "unterminated", ""}  # Termination tags that say nothing more than the result
+
+
+def parse_pgn_game(pgn: str) -> dict[str, Any]:
+    """One game's PGN -> its moves in order ("d4", "Nf6", …), its opening ("Queen's Gambit Declined: Ragozin
+    Defense") and how it ended where that says more than the result ("resigned", "Time forfeit"). Comments,
+    side lines, move numbers and the result are left out."""
+    tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, pgn)}
+    body = re.sub(r"\{[^}]*\}|;[^\n]*", " ", re.sub(_TAG, " ", pgn))
+    while (bare := re.sub(r"\([^()]*\)", " ", body)) != body:  # side lines nest: the innermost go first
+        body = bare
+    moves = [m for m in (re.sub(r"^\d+\.+", "", t) for t in body.split()) if _SAN.fullmatch(m)]
+    ending = tags.get("Termination") or ""
+    return {"moves": moves, "opening": tags.get("Opening") or None, "ending": None if ending.lower() in _ENDINGS else ending}
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
@@ -755,10 +777,21 @@ class LichessChess(Adapter):
     def match(self, source_id: str) -> LiveGame | None:
         """One board by a fixture of it ("<round id>-<FIDE id>", one player's game or mini-match in a round),
         whoever follows it, for its match page: its position, clocks and match score, and both players. One
-        round request, the one Live now and a followed player's live poll make."""
+        round request, the one Live now and a followed player's live poll make; and once the game on the board
+        is over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter), which
+        match.py asks for once a week at most."""
         round_id, _, fide = source_id.partition("-")
         data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
-        return parse_game(data, fide, self.system)
+        game = parse_game(data, fide, self.system)
+        state = game.snapshot.state if game else {}
+        if game and game.snapshot.status == "final" and state.get("game_id"):
+            try:
+                state.update(parse_pgn_game(get_json(f"{API}study/{round_id}/{state['game_id']}.pgn", ttl=24 * 3600, text=True)))
+            except RateLimited:
+                raise  # the read fails, and is asked for again: a finished game's read is kept a week
+            except AdapterError as exc:
+                log.info("lichess: no moves for %s: %s", source_id, exc)  # the board and its result say it
+        return game
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)

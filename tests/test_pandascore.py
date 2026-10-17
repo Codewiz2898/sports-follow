@@ -399,3 +399,13 @@ def test_a_match_page_reads_one_series_by_its_teams(monkeypatch):
 
     monkeypatch.setattr(pandascore, "get_json", missing)
     assert ps.PandascoreEsports().match("1") is None
+
+
+def test_a_match_page_reads_a_finished_series_map_by_map_and_who_won(monkeypatch):
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: FINAL)  # a made-up series, over
+    game = ps.PandascoreEsports().match("777")
+    assert game is not None and (game.snapshot.status, game.snapshot.score_label) == ("final", "Sentinels 2 – 1 NRG")
+    esports = sports.get("Valorant")
+    state = game.snapshot.state
+    assert esports.verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Sentinels won 2–1"
+    assert [(m["n"], m["winner"]) for m in esports.match_page(state, [], {}, {})["maps"]] == [(1, "Sentinels"), (2, "NRG"), (3, "Sentinels")]

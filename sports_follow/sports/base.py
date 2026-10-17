@@ -393,6 +393,12 @@ class Sport:
         ({"events": [{"clock", "kind", "text"}]}); a sport whose board says it all (chess) has nothing more."""
         return {"events": [{k: e.get(k) for k in ("clock", "kind", "text")} for e in events]} if events else {}
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """Who won a finished game, in a few words, for the head of its match page above the final board:
+        "Arsenal won", "Draw", "India won by 57 runs". From its final scoreboard (Snapshot.state) and its score
+        and clock lines. "" where the board says it all, or for a sport no module knows."""
+        return ""
+
     # ---- live games and cards (structured.py)
 
     def result_text(self, score: str, clock: str) -> str:

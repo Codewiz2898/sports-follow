@@ -180,6 +180,9 @@ class Cricket(Sport):
     def result_text(self, score: str, clock: str) -> str:
         return clock  # "India won by 57 runs"
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        return clock  # the source's summary: "India won by 57 runs", "Match tied (India won the Super Over)"
+
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """Fifties, hundreds, out and wicket hauls in the player's latest innings: a line's stats are its
         latest batting and bowling innings, and its headline lists every innings ("103 (152) & 48* (60)").

@@ -180,6 +180,17 @@ class Football(Sport):
             timeline.append({"clock": e.get("clock"), "kind": e.get("kind"), "text": e.get("text"), "side": side})
         return {"timeline": timeline} if timeline else {}
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """The side with more goals won; level is a draw, but for a game settled on penalties, which the
+        board's goals don't say: then nothing, and the clock line says how it ended."""
+        home, away = state.get("home") or {}, state.get("away") or {}
+        goals = [str(side.get("score") or "") for side in (home, away)]
+        if not all(g.isdigit() for g in goals):
+            return ""
+        if goals[0] != goals[1]:
+            return f"{(home if int(goals[0]) > int(goals[1]) else away).get('name') or 'They'} won"
+        return "" if re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I) else "Draw"
+
     def left_out(self, now: Seen) -> bool:
         # A national team game shows up for every player of that country, called up or not.
         return now.lineups and now.line is None

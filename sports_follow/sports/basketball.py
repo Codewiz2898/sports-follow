@@ -60,6 +60,14 @@ class Basketball(Sport):
     def search_detail(self, athlete: Athlete) -> list[str]:
         return [*list(athlete.teams or [])[:1], (athlete.league or "").upper() if athlete.current else ""]
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """The side the source marks the winner, else the one with more points."""
+        sides = [state.get("home") or {}, state.get("away") or {}]
+        winner = next((s for s in sides if s.get("winner")), None)
+        if winner is None and all(str(s.get("score") or "").isdigit() for s in sides) and sides[0]["score"] != sides[1]["score"]:
+            winner = max(sides, key=lambda s: int(s["score"]))
+        return f"{winner['name']} won" if winner and winner.get("name") else ""
+
     def left_out(self, now: Seen) -> bool:
         return now.lineups and now.line is None
 
