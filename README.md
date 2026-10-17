@@ -190,6 +190,25 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   down to its live reserve, so followed players' games keep it: the page and Today say its alerts are paused,
   and the late-games metric doesn't count it. `PUT`/`DELETE /api/match/<source>/<game id>/follow`,
   `DELETE /api/me/matches/<event id>`.
+- **Following a team** (`sports_follow/teams.py`, BHA-77): Arsenal, the Lakers, India's cricket side or T1,
+  not only its players, in the sports whose teams can be followed (`Sport.follow_teams`: football, cricket,
+  basketball, the esports team titles; not tennis or chess). The team registry (`team`) is one row per
+  source's team, by the source's id for it, imported weekly (and on a fresh server's first start) from each
+  running source's list (`teams()`, below), from the sport's first source with one (every one, for esports,
+  whose sources sit side by side); search finds its teams by name or code beside players (`teams` in
+  `GET /api/search`), from the registry alone. A follow is a row (`team_follow`: the fan, the team, their
+  level). A followed team's games are read from its source as often as a followed player's
+  (`team_fixtures()`, the tick) and linked to it (`event_team`), and each is then followed as a game followed
+  by itself: armed by its sport's lead, polled in the live lane by the same allowances, its own moments from
+  both sides reaching the team's fans by their level, and its result told from the team's side
+  (`Sport.side_final`: "Arsenal won 2–1 v Chelsea", "Chelsea lost 1–2 v Arsenal") in place of the game's own,
+  once even for a fan who follows both sides; a fan who follows a player in it hears each moment once, and
+  one who mutes a game of it hears nothing more of that game. The refresh keeps each result from the team's
+  side and its page (`GET /api/teams/<id>`): its game on now, its next games, its last five results and form,
+  and its squad (the source's `team()`, read daily), each player followable as a search result is. A page
+  whose games are stale asks for them at most every ten minutes, so a team nobody follows is shown too. A fan
+  follows at most 30 teams; one whose source isn't running can't be followed. `PUT`/`DELETE
+  /api/teams/<id>/follow`, `PUT /api/teams/<id>/alerts`, and `teams` in `GET /api/me/following`.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -318,6 +337,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   can be, where the app's general sentences don't fit (Liquipedia's and PUBG's standings after each match),
   `team` and `find_teams` for a source that lists teams' rosters (a campaign page's whole-team follow, with
   `team_id_pattern` the shape of its team ids; PandaScore's `/teams`),
+  `teams` and `team_fixtures` for a source fans can follow teams from (every team it covers in its sports that
+  run, read weekly for the team registry in a few requests, and one team's games, finished and to come, over
+  the window `fixtures` reads for a player; `sports_follow/teams.py`; its `team` gives the team page its squad,
+  and its `result_label` says each result from the team's side),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
@@ -338,7 +361,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   source's spend this hour and today, by lane.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
-  kinds, whether it's a team sport, its Wikidata ids and registry rules, its moments (start, result,
+  kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
+  side in its words: `side_final`), its Wikidata ids and registry rules, its moments (start, result,
   line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
@@ -416,6 +440,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `rematch <ref> [Q…]` takes that back, and the next weekly run may match them again. Unmatches are rows
   in `athlete_unmatch`, apart from the keep and remove decisions: a kept pro can be unmatched, and a
   removed one stays unmatched, so restoring them doesn't bring the face back.
+- **Adding or removing a team** is a command too, `python -m sports_follow.teams` (`sports_follow/teams.py`).
+  `import [system]` reads the running sources' lists now (the worker does it weekly); `list [name]` shows the
+  registry's teams with their ids, and what's been decided. `add <system> <team id>` reads a team the lists
+  don't have from its source and keeps it, so no import drops it; `remove <id or system:team id>` takes a team
+  out with everything that hangs off it (its follows, its games' links and results; the games stay, they're
+  everyone's) and keeps it out; `restore <system> <team id>` takes a decision back. Decisions are rows in
+  `team_override`, which every import respects. A team no import has listed for three weeks that nobody
+  follows goes by itself; a followed one stays.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the

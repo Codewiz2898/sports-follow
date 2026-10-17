@@ -23,13 +23,16 @@ from typing import Any
 from .. import naming
 from ..sports import cricket
 from . import sportmonks
-from .base import Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
+from .base import DIGITS, Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot, SourceTeam
 
 API = sportmonks.CRICKET
 LIST_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup"
 # Every match of the plan's competitions on some days (schedule): enough for the result and the stage.
 SCHEDULE_INCLUDE = "localteam,visitorteam,league,stage,runs"
 MATCH_INCLUDE = "localteam,visitorteam,league,stage,venue,runs,lineup,manofmatch,bowling,batting.result,batting.bowler,batting.catchstump,batting.runoutby"
+# What a national side plays in, on the team registry: every international series and cup alike.
+INTERNATIONAL = "International"
+SQUAD_BACK = 365  # days back a team's latest season is looked for (team): a franchise's league is a few weeks a year
 
 _FINAL = {"Finished"}
 _OFF = {"Cancl.", "Postp.", "Aban."}
@@ -345,6 +348,52 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
     return cricket.batting_bowling(lines), f"Last {len(lines)} match{'es' if len(lines) != 1 else ''}{f' ({kinds})' if kinds else ''}, from Sportmonks scorecards"
 
 
+def _plays_in(team: dict[str, Any], league: dict[str, Any] | None) -> str:
+    """What a team plays in, for the team registry: a national side internationals (INTERNATIONAL), whichever
+    series or cup it is; any other side its league ("Indian Premier League")."""
+    return INTERNATIONAL if team.get("national_team") else str((league or {}).get("name") or "")
+
+
+def parse_teams(season: dict[str, Any], league: dict[str, Any], system: str = "sportmonks_cricket") -> list[SourceTeam]:
+    """A season with its teams (…/seasons/{id}?include=teams) -> the team registry's rows of them, in its league."""
+    out = []
+    for t in season.get("teams") or []:
+        name = str(t.get("name") or "").strip()
+        if t.get("id") and name:
+            out.append(SourceTeam(system=system, team_id=str(t["id"]), name=name, short=str(t.get("code") or ""), competition=_plays_in(t, league)))
+    return out
+
+
+def parse_squad(team: dict[str, Any], league: dict[str, Any] | None = None, system: str = "sportmonks_cricket") -> SourceTeam | None:
+    """A team with its squad for a season (…/teams/{id}/squad/{season}) -> it with those players, each followable by
+    their Sportmonks id as a search result is; a team read without a squad has none. None without an id or a name."""
+    name = str(team.get("name") or "").strip()
+    if not team.get("id") or not name:
+        return None
+    team_id = str(team["id"])
+    players: dict[str, PlayerRef] = {}
+    for p in team.get("squad") or []:
+        who = str(p.get("fullname") or "").strip()
+        if p.get("id") and who:
+            players.setdefault(str(p["id"]), PlayerRef(system, str(p["id"]), who, [team_id], [name], born=born(p.get("dateofbirth"))))
+    return SourceTeam(system=system, team_id=team_id, name=name, players=list(players.values()), short=str(team.get("code") or ""), competition=_plays_in(team, league))
+
+
+def squad_match(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, Any] | None:
+    """Of a team's matches, the one whose season its squad now is: the next it plays (or the one on now), else the
+    last it played. None without either: a match of a season Sportmonks doesn't name is neither."""
+    now = now or datetime.now(timezone.utc)
+
+    def start(x: dict[str, Any]) -> datetime:
+        return _time(x.get("starting_at")) or datetime.max.replace(tzinfo=timezone.utc)
+
+    seasoned = [x for x in rows if x.get("season_id")]
+    # A match a day past its start that still says it's to come was never played: no one's next.
+    ahead = sorted((x for x in seasoned if _status(x.get("status")) in ("scheduled", "live") and start(x) > now - timedelta(days=1)), key=start)
+    behind = sorted((x for x in seasoned if _status(x.get("status")) == "final"), key=start, reverse=True)
+    return next(iter(ahead or behind), None)
+
+
 # ---------------------------------------------------------------- the adapter
 
 
@@ -394,21 +443,33 @@ class SportmonksCricket(Adapter):
             return None
         return self._ref(data["data"]) if (data.get("data") or {}).get("id") else None
 
+    def _squad_of(self, team_id: str, season_id: Any) -> dict[str, Any]:
+        """A team with its squad for one season: one request, kept 12 hours."""
+        return sportmonks.get_json(f"{API}/teams/{team_id}/squad/{season_id}", ttl=12 * 3600).get("data") or {}
+
     def _squad(self, team_id: str, season_id: Any) -> set[str]:
         try:
-            data = sportmonks.get_json(f"{API}/teams/{team_id}/squad/{season_id}", ttl=12 * 3600).get("data") or {}
+            data = self._squad_of(team_id, season_id)
         except AdapterError:
             return set()
         return {str(p.get("id")) for p in data.get("squad") or []}
+
+    def _team_rows(self, team_id: str, start: date, end: date, ttl: float) -> list[dict[str, Any]]:
+        """A team's matches between two dates as Sportmonks sends them (LIST_INCLUDE): at home, then away, a
+        request each (a page holds 100, a year of a nation's)."""
+        rows: dict[Any, dict[str, Any]] = {}
+        for side in ("localteam_id", "visitorteam_id"):
+            params = {f"filter[{side}]": team_id, "filter[starts_between]": f"{start.isoformat()},{end.isoformat()}", "include": LIST_INCLUDE}
+            for x in sportmonks.get_all(f"{API}/fixtures", ttl=ttl, **params):
+                rows.setdefault(x["id"], x)
+        return list(rows.values())
 
     def _matches(self, ref: PlayerRef, start: date, end: date, ttl: float) -> list[Fixture]:
         """The player's matches between two dates: their teams' matches, minus XIs and squads that leave them out."""
         rows: dict[Any, dict[str, Any]] = {}
         for team_id in ref.team_ids:
-            for side in ("localteam_id", "visitorteam_id"):
-                params = {f"filter[{side}]": team_id, "filter[starts_between]": f"{start.isoformat()},{end.isoformat()}", "include": LIST_INCLUDE}
-                for x in sportmonks.get_all(f"{API}/fixtures", ttl=ttl, **params):
-                    rows.setdefault(x["id"], x)
+            for x in self._team_rows(team_id, start, end, ttl):
+                rows.setdefault(x["id"], x)
         out = []
         for x in rows.values():
             f = parse_fixture(x)
@@ -426,6 +487,51 @@ class SportmonksCricket(Adapter):
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
         today = datetime.now(timezone.utc).date()
         return self._matches(ref, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800)
+
+    team_id_pattern = DIGITS
+
+    def team_fixtures(self, team_id: str) -> list[Fixture]:
+        """One team's matches over the refresh window, finished, to come and called off: every one, where fixtures()
+        keeps a player's (their XI, their squad). The two requests fixtures() makes for the team, kept as long, so
+        a followed team and a followed player of it share them."""
+        today = datetime.now(timezone.utc).date()
+        rows = self._team_rows(team_id, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800)
+        return sorted((parse_fixture(x) for x in rows), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def teams(self) -> list[SourceTeam]:
+        """Every team of the plan's competitions' seasons on now, for the team registry: the competitions (one
+        request, kept a day; each names its season on now), then each season with its teams (one request a
+        competition, kept a day: the plan's 27 in 27). Each season's, not each window's: a franchise is listed
+        between its league's seasons too. A nation in several (its T20Is, a World Cup) is listed under each,
+        as International (teams.py makes it one). A season the plan can't read (Sportmonks lists competitions it
+        doesn't cover, and says "not accessible from your subscription") is left out, not the whole list; the
+        hourly limit stops it."""
+        leagues = sportmonks.get_json(f"{API}/leagues", ttl=24 * 3600).get("data") or []
+        out = []
+        for league in leagues if isinstance(leagues, list) else []:
+            if not league.get("season_id"):
+                continue  # a competition without a season on now
+            try:
+                season = sportmonks.get_json(f"{API}/seasons/{league['season_id']}", ttl=24 * 3600, include="teams").get("data")
+            except sportmonks.RateLimited:
+                raise
+            except AdapterError:
+                continue
+            out += parse_teams(season if isinstance(season, dict) else {}, league, self.system)
+        return out
+
+    def team(self, team_id: str) -> SourceTeam | None:
+        """A team with its squad now, for its page: _squad's read, for the season of its next match, or else of its
+        last in SQUAD_BACK days (a franchise between seasons has last season's), found from its matches (two
+        requests, kept 12 hours). A team without one, or whose squad for it Sportmonks doesn't have, is read without
+        its squad (one request, for its name). None for a team Sportmonks doesn't have."""
+        today = datetime.now(timezone.utc).date()
+        match = squad_match(self._team_rows(team_id, today - timedelta(days=SQUAD_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=12 * 3600))
+        league = match.get("league") if match else None
+        if match is not None and (found := parse_squad(self._squad_of(team_id, match["season_id"]), league, self.system)):
+            return found
+        data = sportmonks.get_json(f"{API}/teams/{team_id}", ttl=24 * 3600).get("data")
+        return parse_squad(data, league, self.system) if isinstance(data, dict) else None
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
         """Before the refresh window, 90 days at a time for each team, back HISTORY_DAYS."""

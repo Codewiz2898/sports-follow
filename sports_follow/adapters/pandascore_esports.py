@@ -56,6 +56,10 @@ LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
 SCHEDULE_TIERS = ("s", "a")
 DOTA_WAIT = 6 * 3600  # how long after a Dota 2 series ends its match page waits for OpenDota to parse its maps
 SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
+# The tournaments whose teams the team registry lists (teams): those the app rates (LIVE_TIERS). A team only in
+# closed qualifiers and second divisions isn't, as there are thousands; an operator adds one by hand (teams.py).
+TEAM_TIERS = tuple(LIVE_TIERS)
+TEAM_PAGES = 2  # pages of 100 tournaments a list (on now, starting, ended), as a team's series are read (_between)
 
 # Nationalities come as ISO 3166 codes; the countries most pros play for, by name. Others show as the code.
 COUNTRIES = {
@@ -275,7 +279,30 @@ def parse_team(t: dict[str, Any]) -> SourceTeam | None:
         for p in t.get("players") or []
         if p.get("id") and naming.words(p.get("name") or "") and p.get("active") is not False
     ]
-    return SourceTeam(system="pandascore_esports", team_id=team_id, name=name, game=game_name(slug), players=players)
+    # Its sport too, as teams() gives it: a team an operator adds by hand is of its own game, not the source's first.
+    return SourceTeam(system="pandascore_esports", team_id=team_id, name=name, game=game_name(slug), players=players, sport=GAMES[slug],
+                      short=(t.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(t.get("location")) or "")
+
+
+def parse_teams(tournaments: list[dict[str, Any]], slugs: list[str]) -> list[SourceTeam]:
+    """Tournaments (each with its teams) -> the team registry's rows of their teams, of these titles only: each with
+    its game as its sport, its game's name as what it plays in, where it's from, and the best tier of the tournaments
+    it's in here (LIVE_TIERS' scale). A team in several is listed once."""
+    out: dict[str, SourceTeam] = {}
+    for t in tournaments:
+        slug = (t.get("videogame") or {}).get("slug")
+        if slug not in GAMES or slug not in slugs:
+            continue
+        tier = LIVE_TIERS.get(t.get("tier") or "", 0)
+        for team in t.get("teams") or []:
+            name = (team.get("name") or "").strip()
+            if not team.get("id") or not name:
+                continue
+            listed = out.setdefault(str(team["id"]), SourceTeam(
+                system="pandascore_esports", team_id=str(team["id"]), name=name, game=game_name(slug), sport=GAMES[slug],
+                short=(team.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(team.get("location")) or ""))
+            listed.tier = max(listed.tier, tier)
+    return list(out.values())
 
 
 def full_name(p: dict[str, Any]) -> str:
@@ -473,12 +500,37 @@ class PandascoreEsports(Adapter):
         return parse_fixtures(self._keep(rows))
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
-        today = datetime.now(timezone.utc).date()
         seen: dict[str, Fixture] = {}
         for team_id in ref.team_ids:
-            for f in self._between(team_id, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800):
+            for f in self.team_fixtures(team_id):
                 seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def team_fixtures(self, team_id: str) -> list[Fixture]:
+        """One team's series over the refresh window, finished and to come, as fixtures() reads a player's (whose
+        team's are these): a page or two of 100 (_between)."""
+        today = datetime.now(timezone.utc).date()
+        once: dict[str, Fixture] = {}
+        for f in self._between(team_id, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800):
+            once.setdefault(f.source_id, f)  # a series both pages held (the list moved between them), once
+        return sorted(once.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def teams(self) -> list[SourceTeam]:
+        """The teams in the running titles' rated events over the refresh window, for the team registry: the
+        TEAM_TIERS tournaments on now, starting in the window and ended in it (as schedule() finds its own), TEAM_PAGES
+        pages of 100 a list, each tournament with its teams; so the teams playing those series, each with the best
+        tier of its tournaments. Three to six requests, kept a day. None of its games running: not one."""
+        games = game_ids(self._on())
+        if not games:
+            return []
+        today = datetime.now(timezone.utc).date()
+        back = f"{(today - timedelta(days=self.WINDOW_BACK)).isoformat()}T00:00:00Z,{today.isoformat()}T23:59:59Z"
+        ahead = f"{today.isoformat()}T00:00:00Z,{(today + timedelta(days=self.WINDOW_AHEAD)).isoformat()}T23:59:59Z"
+        which = {"filter[videogame_id]": games, "filter[tier]": ",".join(TEAM_TIERS)}
+        rows: list[dict[str, Any]] = []
+        for path, window in (("/tournaments/running", {}), ("/tournaments/upcoming", {"range[begin_at]": ahead}), ("/tournaments/past", {"range[end_at]": back})):
+            rows += pandascore.get_all(path, ttl=24 * 3600, pages=TEAM_PAGES, **which, **window)
+        return parse_teams(rows, self._on())
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
         """Before the refresh window, 90 days at a time for each team, back HISTORY_DAYS."""

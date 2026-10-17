@@ -214,9 +214,9 @@ def test_every_job_and_cron_run_is_logged():
     assert {j.name for j in worker.WorkerSettings.cron_jobs} >= {"cron:tick", "cron:prune"}  # arq still names them after the job
 
 
-def test_a_worker_starting_without_a_recent_starters_refresh_queues_one():
-    """A fresh server, or one whose last refresh failed, needn't wait for 04:40; a deploy's restart after a
-    refresh doesn't spend the sources again."""
+def test_a_worker_starting_without_a_recent_starters_refresh_or_team_import_queues_one():
+    """A fresh server, or one whose last refresh or import failed, needn't wait for 04:40 or Monday; a deploy's
+    restart after them doesn't spend the sources again."""
     queued = []
 
     class Redis:
@@ -231,4 +231,4 @@ def test_a_worker_starting_without_a_recent_starters_refresh_queues_one():
 
     asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=False)}))
     asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=True)}))
-    assert queued == [("refresh_starters", "refresh_starters:startup")]
+    assert queued == [("refresh_starters", "refresh_starters:startup"), ("import_teams", "import_teams:startup")]

@@ -40,6 +40,7 @@ class Basketball(Sport):
     label = "Basketball"
     kinds = ("basketball",)
     team = True
+    follow_teams = True
     wikidata = {"espn_basketball": "P3685", "nba": "P3647", "wnba": "P3588", "bref_nba": "P2685", "bref_wnba": "P4561"}
     athletes = 9_612
     no_line = "Not on the game's roster"

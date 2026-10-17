@@ -19,7 +19,7 @@ from urllib.parse import quote
 from .. import naming
 from ..sports import football
 from . import budget, sportmonks
-from .base import Absence, Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot
+from .base import DIGITS, Absence, Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot, SourceTeam
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
 # Every match of the plan's leagues on some days (schedule): enough for the score and the stage.
@@ -38,6 +38,10 @@ PLAYER_TTL = 3 * 3600  # this season's numbers are three hours old at most; the 
 LEAGUES_INCLUDE = "currentSeason"
 # A season's teams, each with every player of theirs out now: the spell, its type ("Back Injury"), the player.
 SIDELINED_INCLUDE = "sidelined.player;sidelined.type"
+# A season's teams for the team registry (teams): where each is from.
+TEAMS_INCLUDE = "country"
+# One team with who plays for it now (team): each contract's player, and where the team is from.
+SQUAD_INCLUDE = "players.player;country"
 
 # Match states (…/football/states): everything else is "scheduled".
 _LIVE = {"INPLAY_1ST_HALF", "HT", "BREAK", "INPLAY_2ND_HALF", "INPLAY_ET", "EXTRA_TIME_BREAK", "INPLAY_ET_SECOND_HALF", "PEN_BREAK", "INPLAY_PENALTIES", "AWAITING_UPDATES"}
@@ -410,6 +414,40 @@ def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_footb
     return out
 
 
+def _named(t: dict[str, Any]) -> str:
+    return str(t.get("name") or "").strip()
+
+
+def parse_teams(rows: list[dict[str, Any]], league: dict[str, Any], system: str = "sportmonks_football") -> list[SourceTeam]:
+    """A season's teams (…/teams/seasons/{id}, with country) -> the team registry's rows of them, each as playing in
+    the season's league. A placeholder ("Winner Group A", a bracket's slot before it's decided) isn't a team."""
+    competition = _competition({"league": league})
+    return [
+        SourceTeam(system=system, team_id=str(t["id"]), name=_named(t), short=str(t.get("short_code") or ""), competition=competition,
+                   country=str((t.get("country") or {}).get("name") or ""))
+        for t in rows if t.get("id") and _named(t) and not t.get("placeholder")
+    ]
+
+
+def parse_team(t: dict[str, Any], today: date | None = None, system: str = "sportmonks_football") -> SourceTeam | None:
+    """A team with players.player (and country) -> it with who plays for it now, each followable by their Sportmonks
+    id, as a search result is. A contract that has ended, or a row without its player, is nobody's now."""
+    if not t.get("id") or not _named(t):
+        return None
+    today = today or datetime.now(timezone.utc).date()
+    team_id, name = str(t["id"]), _named(t)
+    players: dict[str, PlayerRef] = {}
+    for row in t.get("players") or []:
+        p = row.get("player") or {}
+        end = row.get("end")
+        who = str(p.get("display_name") or p.get("common_name") or p.get("name") or "").strip()
+        if not p.get("id") or not who or (end and str(end)[:10] < today.isoformat()):
+            continue
+        players.setdefault(str(p["id"]), PlayerRef(system=system, athlete_id=str(p["id"]), name=who, team_ids=[team_id], team_names=[name], born=p.get("date_of_birth")))
+    return SourceTeam(system=system, team_id=team_id, name=name, players=list(players.values()), short=str(t.get("short_code") or ""),
+                      country=str((t.get("country") or {}).get("name") or ""))
+
+
 # ---------------------------------------------------------------- the adapter
 
 
@@ -457,11 +495,9 @@ class SportmonksFootball(Adapter):
         return parse_fixtures(rows)
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
-        today = datetime.now(timezone.utc).date()
-
-        def team(team_id: str) -> list[Fixture]:
+        def read(team_id: str) -> list[Fixture]:
             try:
-                return self._between(team_id, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800)
+                return self.team_fixtures(team_id)
             except sportmonks.RateLimited:
                 raise
             except AdapterError:
@@ -471,10 +507,45 @@ class SportmonksFootball(Adapter):
         # (a national team outside the plan answers with nothing, as slowly).
         seen: dict[str, Fixture] = {}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for found in pool.map(budget.carry(team), ref.team_ids):
+            for found in pool.map(budget.carry(read), ref.team_ids):
                 for f in found:
                     seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    team_id_pattern = DIGITS
+
+    def team_fixtures(self, team_id: str) -> list[Fixture]:
+        """One team's matches over the refresh window, finished and to come, as fixtures() reads a player's (whose
+        teams' are these): a Fixture request a page of 25, two or three for the window."""
+        today = datetime.now(timezone.utc).date()
+        once: dict[str, Fixture] = {}
+        for f in self._between(team_id, today - timedelta(days=self.WINDOW_BACK), today + timedelta(days=self.WINDOW_AHEAD), ttl=1800):
+            once.setdefault(f.source_id, f)  # a match two pages both held (the list moved between them), once
+        return sorted(once.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
+
+    def _current_seasons(self) -> dict[str, dict[str, Any]]:
+        """The plan's leagues' seasons on now, by id, each with its league: one League request, kept a day."""
+        leagues = sportmonks.get_all("/football/leagues", ttl=24 * 3600, include=LEAGUES_INCLUDE, per_page=50)
+        seasons = {str(season["id"]): league for league in leagues if (season := league.get("currentseason") or league.get("currentSeason")) and season.get("id")}
+        return dict(sorted(seasons.items()))
+
+    def teams(self) -> list[SourceTeam]:
+        """Every team of the plan's leagues' seasons on now, for the team registry: the leagues (the League request
+        sidelined() makes, kept a day), then each season's teams with where they're from (one Team request a
+        league: the plan's five leagues' 96 teams in five), kept a day. Six requests in all. A club in two of the
+        plan's leagues is listed under each (teams.py makes it one), its domestic league's first: what it plays in."""
+        out = []
+        for season, league in sorted(self._current_seasons().items(), key=lambda kv: kv[1].get("sub_type") != "domestic"):
+            rows = sportmonks.get_json(f"/football/teams/seasons/{season}", ttl=24 * 3600, include=TEAMS_INCLUDE).get("data") or []
+            out += parse_teams([rows] if isinstance(rows, dict) else rows, league, self.system)
+        return out
+
+    def team(self, team_id: str) -> SourceTeam | None:
+        """A team and who plays for it now, for its page: one Team request (teams/{id} with players.player, which
+        names the team as well as its players; squads/teams/{id} would need a second for the name), kept 6 hours.
+        None for a team Sportmonks doesn't have."""
+        data = sportmonks.get_json(f"/football/teams/{team_id}", ttl=6 * 3600, include=SQUAD_INCLUDE).get("data")
+        return parse_team(data, system=self.system) if isinstance(data, dict) else None
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
         """Before the refresh window, 90 days at a time for each team, back HISTORY_DAYS."""
@@ -525,10 +596,8 @@ class SportmonksFootball(Adapter):
         """Every team of the plan's leagues, with who of theirs is out now: the leagues with their current
         seasons (one League request, kept a day), then each season's teams with who's out (one Team request
         a league: the plan's five leagues' 96 teams in five). Uncached: each read is compared with the last."""
-        leagues = sportmonks.get_all("/football/leagues", ttl=24 * 3600, include=LEAGUES_INCLUDE, per_page=50)
-        seasons = sorted({str(season["id"]) for league in leagues if (season := league.get("currentseason") or league.get("currentSeason")) and season.get("id")})
         out: dict[str, list[Absence]] = {}
-        for season in seasons:
+        for season in self._current_seasons():
             rows = sportmonks.get_json(f"/football/teams/seasons/{season}", ttl=0, include=SIDELINED_INCLUDE).get("data") or []
             for team_id, listed in parse_sidelined([rows] if isinstance(rows, dict) else rows, self.system).items():
                 out.setdefault(team_id, []).extend(listed)
