@@ -19,7 +19,7 @@ says later. Downgrading moves them all back to "esports" (a pro in two games kee
 turned off back to "esports"; players keep their game's name, which the app before this read as esports.
 
 Revision ID: d85acb8b68e0
-Revises: c3f81a5d0e27
+Revises: 723d839b685f
 Create Date: 2026-10-16
 """
 
@@ -31,7 +31,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "d85acb8b68e0"
-down_revision = "c3f81a5d0e27"
+down_revision = "723d839b685f"
 branch_labels = None
 depends_on = None
 

@@ -590,17 +590,19 @@ class PandascoreEsports(Adapter):
         OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request; a
         Dota 2 series on now or just over costs what a live poll's does besides (_dota): its two teams' rosters
         (kept a day) and OpenDota's live games, pro matches and each finished map, most of them kept a while."""
+        if not self._on():
+            return None  # none of its games runs: not a request
         try:
             m = pandascore.get_json(f"/matches/{source_id}", ttl=30)
         except pandascore.NotFound:
             return None
         found = parse_fixtures(self._keep([m])) if isinstance(m, dict) and m.get("id") else []
-        if not found:
-            return None
+        if not found or (m.get("videogame") or {}).get("slug") not in self._on():
+            return None  # a game turned off (or one it doesn't cover) has no page, as its series aren't polled
         f, snap = found[0], parse_match(m)
         self._dota(m, snap)
-        return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
-                        teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0))
+        return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names,
+                        league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0), sport=f.sport)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its

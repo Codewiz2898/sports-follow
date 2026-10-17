@@ -345,9 +345,10 @@ class Adapter:
     #   def match(self, source_id: str) -> LiveGame | None
     # the game a fixture of it names (Fixture.source_id, of the shape fixture_pattern says), whoever follows
     # it, live, to come or over, as live_now() gives one: its snapshot with every player's line the source
-    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py). None:
-    # the source has no such game. Asked at most once a minute a game, only while someone has its page open,
-    # and only for a game a source named first (on Live now, or a followed player's).
+    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py);
+    # a source of several sports says the game's (LiveGame.sport). None: the source has no such game, or it's of
+    # a sport turned off. Asked at most once a minute a game, only while someone has its page open, and only for
+    # a game a source named first (on Live now, or a followed player's).
     #
     # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
     # requests:

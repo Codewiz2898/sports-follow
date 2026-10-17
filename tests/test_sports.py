@@ -196,6 +196,10 @@ def test_every_apps_sport_facts_are_of_a_sport_the_server_knows():
     assert kinds <= {k for s in (*sports.ALL, *sports.GROUPS) for k in s.kinds}
 
 
+def _rgb(colour: str) -> tuple[float, ...]:
+    return tuple(int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4))
+
+
 def _luminance(colour: str) -> float:
     linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in _rgb(colour)]
     return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
