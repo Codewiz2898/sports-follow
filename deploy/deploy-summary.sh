@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# What a deploy waiting for your approval brings: the changes since the live commit, the BHA issues they
-# close, whether CI passed, and the link to approve it. GitHub Actions runs it (gh with GH_TOKEN, jq, curl,
-# and this repo with its history); it works from a checkout too.
+# What a deploy waiting for your approval brings: what to look at before approving (a database migration,
+# server changes, a step by hand, Android changes it doesn't ship), the changes since the live commit with
+# what each touches, the BHA issues they close, whether CI passed, and the link to approve it. GitHub
+# Actions runs it (gh with GH_TOKEN, jq, curl, and this repo with its history); it works from a checkout too.
 #   deploy-summary.sh [--send] [<commit> <run-url>]
 # prints it as Markdown, for the deploy waiting now or for that Deploy run, and with --send also sends it:
 # by email through Resend (RESEND_KEY, DEPLOY_SUMMARY_TO) and as a push to an ntfy topic
@@ -21,6 +22,43 @@ MAX_CHANGES=25
 usage() { echo "usage: deploy-summary.sh [--send] [<commit> <run-url>]" >&2; exit 2; }
 api() { local path=$1; shift; gh api "repos/$REPO/$path" "$@"; }
 when() { date -u -d "$1" '+%-d %b %H:%M UTC' 2>/dev/null || echo "$1"; }   # GNU date; macOS's shows it as it is
+joined() { paste -sd, - | sed 's/,/, /g'; }
+
+# What a change touches, from its files (one a line), in words a review can go by. Tests, docs and tooling
+# aren't named.
+touches() {
+  local path area seen=""
+  while IFS= read -r path; do
+    case $path in
+      *.md | tests/* | docs/* | .claude/*) continue ;;
+      web/src/admin/* | sports_follow/admin.py) area="admin panel" ;;
+      web/*) area=website ;;
+      sports_follow/adapters/*) area="data sources" ;;
+      sports_follow/*) area="API and worker" ;;
+      migrations/*) area=database ;;
+      mobile/* | android/*) area="Android app" ;;
+      .github/* | deploy/deploy-summary.sh) area="CI and deploys" ;;
+      deploy/grafana/*) area=Grafana ;;
+      Dockerfile | .dockerignore | requirements.txt | deploy/*) area="server setup" ;;
+      *) continue ;;
+    esac
+    case "|$seen|" in *"|$area|"*) ;; *) seen="${seen:+$seen|}$area" ;; esac
+  done
+  echo "${seen//|/, }"
+}
+
+# What a deploy doesn't do for the files (one a line) that need it: the step to run by hand after it.
+by_hand() {
+  local path
+  while IFS= read -r path; do
+    case $path in
+      deploy/grafana/dashboards/* | deploy/grafana/apply-dashboards.sh) echo deploy/grafana/apply-dashboards.sh ;;
+      deploy/grafana/*) echo deploy/grafana/apply-alerts.sh ;;
+      deploy/systemd/* | deploy/server-setup.sh) echo "deploy/server-setup.sh on the server" ;;
+    esac
+  done | sort -u
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -74,25 +112,45 @@ else
     range_note="It's older than what's live (${live:0:7}): approving it takes the site back."
   fi
 
-  # Each change on main: its pull request's title, or the commit's own subject. The issues come from the
-  # pull requests' descriptions and every commit's message ("Fixes BHA-n", as CLAUDE.md asks).
-  changes="$tmp/changes" texts="$tmp/texts"
-  : >"$changes"; : >"$texts"
+  # Each change on main: its pull request's title, or the commit's own subject, and what it touches. The
+  # issues come from the pull requests' descriptions and every commit's message ("Fixes BHA-n", as
+  # CLAUDE.md asks). Only file names are read: the checkout has no file contents (blob:none).
+  changes="$tmp/changes" texts="$tmp/texts" android="$tmp/android" checks="$tmp/checks"
+  : >"$changes"; : >"$texts"; : >"$android"; : >"$checks"
   if [ -n "$range" ]; then
     while IFS=$'\x1f' read -r sha subject; do
+      area=$(git diff --no-renames --name-only "$sha^" "$sha" | touches)
       pr=$(sed -nE 's/^Merge pull request #([0-9]+) .*/\1/p; s/.*\(#([0-9]+)\)$/\1/p' <<<"$subject" | head -1)
       if [ -n "$pr" ] && api "pulls/$pr" >"$tmp/pr.json" 2>/dev/null; then
-        echo "- #$pr $(jq -r .title "$tmp/pr.json")" >>"$changes"
+        ref="#$pr" change="$(jq -r .title "$tmp/pr.json")"
         jq -r '.body // ""' "$tmp/pr.json" >>"$texts"
       else
-        echo "- ${sha:0:7} $subject" >>"$changes"
+        ref="${sha:0:7}" change="$subject"
       fi
+      echo "- $ref $change${area:+ ($area)}" >>"$changes"
+      case "$area" in *"Android app"*) echo "$ref" >>"$android" ;; esac
     done < <(git log --first-parent --format='%H%x1f%s' "$range")
     git log --format=%B "$range" >>"$texts"
+
+    # What to look at before approving, from every file the deploy changes (deploy.sh, deploy/README.md).
+    files="$tmp/files"
+    git diff --no-renames --name-only "$live" "$want" >"$files"
+    migrations=$(git diff --no-renames --name-only --diff-filter=A "$live" "$want" -- migrations/versions |
+      sed -E 's|.*/||; s|\.py$||; s|^[0-9a-f]+_||' | joined)
+    server=$(grep -E '^(Dockerfile|requirements\.txt|deploy/(compose\.yaml|Caddyfile|settings\.env|deploy\.sh|gateway/|alloy/))' "$files" | joined) || true
+    steps=$(by_hand <"$files" | joined)
+    apps=$(joined <"$android")
+    {
+      [ -z "$migrations" ] || echo "- Database migration: $migrations. It runs before the new version starts, and a rollback leaves it in place."
+      [ -z "$server" ] || echo "- Server changes this deploy applies: $server."
+      [ -z "$steps" ] || echo "- Not done by the deploy; run after it: $steps."
+      [ -z "$apps" ] || echo "- Android app changes ($apps) reach phones with the next app build, not with this deploy."
+    } >"$checks"
+    [ -s "$checks" ] || echo "- Nothing unusual: no database migration, no server changes, nothing to run by hand." >"$checks"
   fi
   count=$(wc -l <"$changes" | tr -d ' ')
   issues=$(grep -oiE '(^|[^a-z])(fix(e[sd])?|close[sd]?|resolve[sd]?) +BHA-[0-9]+((,| and|, and) +BHA-[0-9]+)*' "$texts" | grep -oE 'BHA-[0-9]+' |
-    sort -t- -k2,2n -u | paste -sd, - | sed 's/,/, /g') || true
+    sort -t- -k2,2n -u | joined) || true
 
   # Whether CI passed for it, and for main's newest commit if that isn't it.
   ci() { api "actions/workflows/ci.yml/runs?head_sha=$1&event=push&per_page=1" \
@@ -112,17 +170,21 @@ else
 
   if [ "$count" -gt 0 ]; then title="$APP_NAME: a deploy is waiting for you ($count change$([ "$count" = 1 ] || echo s))"
   else title="$APP_NAME: a deploy is waiting for you"; fi
+  # Markdown that reads as plain text too: a line ending in two spaces breaks there on the run's page.
   {
-    echo "Waiting: ${want:0:7}, ${ci_said}${ci_url:+ ($ci_url)}"
-    echo "Live now: ${live:+${live:0:7}, }${live_how:-unknown}"
+    echo "Waiting: ${want:0:7}, ${ci_said}${ci_url:+ ($ci_url)}  "
+    echo "Live now: ${live:+${live:0:7}, }${live_how:-unknown}  "
     [ -z "$since" ] || echo "Waiting since $(when "$since"). Leave it, and ${site:-the site} stays as it is."
     echo
     if [ "$count" -gt 0 ]; then
+      echo "Before you approve:"
+      cat "$checks"
+      echo
       echo "What it brings:"
       head -n "$MAX_CHANGES" "$changes"
       [ "$count" -le "$MAX_CHANGES" ] || echo "- and $((count - MAX_CHANGES)) more"
       echo
-      echo "Closes: ${issues:-no BHA issue named}"
+      echo "Closes: ${issues:-no BHA issue named}  "
       echo "Every commit: $GITHUB/compare/${live:0:12}...${want:0:12}"
     else
       echo "$range_note"
@@ -133,8 +195,11 @@ else
   } >"$body"
 fi
 
-# Here, and on the run's page when GitHub Actions runs it.
-{ echo "### $title"; echo; cat "$body"; } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+# Here, and on the run's page when GitHub Actions runs it, where each pull request is a link.
+{ echo "### $title"; echo; cat "$body"; }
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  { echo "### $title"; echo; sed -E "s|^- #([0-9]+) |- [#\1]($GITHUB/pull/\1) |" "$body"; } >>"$GITHUB_STEP_SUMMARY"
+fi
 [ "$send" = 1 ] || exit 0
 
 sent=0

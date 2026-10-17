@@ -397,11 +397,16 @@ the site.
   deploys everything merged so far. A run for a commit a newer one has replaced (an old CI run re-run)
   stops before it waits. A deploy that's running is never stopped: the next run waits behind it, then for
   approval.
-- **What it brings** is on the run's page, above the approval button: the changes since the live commit,
-  the BHA issues they close, whether CI passed (`deploy-summary.sh`). The first deploy to wait since the
-  last one went out is also sent to you at once, and every morning at 09:00 (India) whatever is waiting
-  then is (`deploy-summary.yml`; Actions → Deploy summary → Run workflow sends it now). Several merges in
-  a day make one waiting deploy, one message when it starts and the morning's.
+- **What it brings** is on the run's page, above the approval button (`deploy-summary.sh`). It starts
+  with what to look at before approving: a database migration (a rollback leaves it in place), server
+  changes the deploy applies (`compose.yaml`, `Caddyfile`, `settings.env`, the image), a step the deploy
+  doesn't take (`apply-alerts.sh`, `server-setup.sh`), and Android changes, which reach phones with the
+  next app build instead. Then the changes since the live commit, each linked and with what it touches
+  (website, API and worker, data sources, database, …), the BHA issues they close, and whether CI
+  passed. The first deploy to wait since the last one went out is also sent to you at once, and every
+  morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`; Actions → Deploy summary →
+  Run workflow sends it now). Several merges in a day make one waiting deploy, one message when it
+  starts and the morning's.
 - **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
 
 **From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
