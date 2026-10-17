@@ -45,7 +45,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!following) return
-    if (!who) { setItems([]); setNext(null); setLoaded(true); return }
+    // Asked even when the fan follows nothing now: a game they followed by itself has lapsed since it ended, and
+    // its moments stay in the list (30 days), as a player's do.
     let stale = false
     api.activity().then((r) => {
       if (stale) return
