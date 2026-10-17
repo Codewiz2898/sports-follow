@@ -16,6 +16,7 @@ import copy
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -25,7 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
-from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -362,14 +363,19 @@ def _refresh(player_id: int) -> None:
     # (it was between sessions, or the source's live feed was failing): finish gives it a last poll.
     with session() as db:
         unfinished = {key: event_id for event_id, key in db.execute(select(Event.id, Event.key).where(Event.key.in_([f"{adapter.system}:{f.source_id}" for f in finals_all]), Event.status.in_(("armed", "live")))).all()}
-    recent: list[tuple[Fixture, Snapshot | None]] = []
-    for f in finals:
+
+    def scorecard(f: Fixture) -> tuple[Fixture, Snapshot | None]:
         try:
             # A final read may come from the cache, which for an unfinished game holds the last live poll.
-            recent.append((f, adapter.snapshot(f.locator, final=f"{adapter.system}:{f.source_id}" not in unfinished)))
+            return f, adapter.snapshot(f.locator, final=f"{adapter.system}:{f.source_id}" not in unfinished)
         except AdapterError as exc:
             log.warning("refresh %s: no scorecard for %s: %s", player_id, f.source_id, exc)
-            recent.append((f, None))
+            return f, None
+
+    # The scorecards are read side by side, in this refresh's lane: each is about a second from the server,
+    # and a new follower's first card waits on them all.
+    with ThreadPoolExecutor(max_workers=RECENT_LIMIT, thread_name_prefix="scorecard") as pool:
+        recent = list(pool.map(budget.carry(scorecard), finals))
     stats, note = adapter.stats(ref, [(f, s) for f, s in recent if s])
     snaps = {f.source_id: snap for f, snap in recent if snap}
     finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})

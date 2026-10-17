@@ -1,9 +1,11 @@
 """How one snapshot changes a player's card (structured._apply_snapshot), on recorded ESPN data, how a
 lane polls all of a source's games together (structured.lane_round), what a poll's moments are found
-against (structured.baseline), and games the schedule finishes before the poller does."""
+against (structured.baseline), games the schedule finishes before the poller does, and how a refresh
+reads a player's recent results."""
 
 from __future__ import annotations
 
+import threading
 import time
 from contextlib import nullcontext
 from dataclasses import replace
@@ -14,7 +16,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from sports_follow import bus, moments, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Snapshot, espn_cricket, espn_soccer
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, espn_cricket, espn_soccer
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
 from sports_follow.models import Event, EventState, Player, PlayerCard, PlayerLine, SourceBinding
@@ -436,6 +438,90 @@ def test_a_game_finished_without_a_scorecard_leaves_live(monkeypatch, redis):
     assert polls == [] and event.status == "final"
     assert card_row.card["live"] == {"is_live": False, "player_stats": []} and not card_row.is_live
     assert card_row.card["upcoming"] == []
+
+
+# ---------------------------------------------------------------- a refresh's recent results
+
+
+class FiveFinalsSource:
+    """A source with five finished games of the player's (game 5 the latest). Each scorecard read waits till all
+    five are under way, so reads one after another never get past the first; then the oldest answers last.
+    Game 3's read fails."""
+
+    system = "fake_source"
+    sport = "hurling"
+    live_cadence = 15
+
+    def __init__(self):
+        self.together = threading.Barrier(structured.RECENT_LIMIT, timeout=5)
+        self.reads: list[tuple[int, bool, str]] = []  # (game, final, lane)
+        self.stats_from: list[str] = []
+
+    def sport_of(self, ref):
+        return self.sport
+
+    def fixtures(self, ref):
+        return [Fixture(source_id=str(n), title=f"A vs B, game {n}", competition="L", start_utc=NOW - timedelta(days=10 - n), venue=None, status="final",
+                        team_ids=["T1", "T2"], locator={"id": n}, team_names=["A", "B"]) for n in range(1, 6)]
+
+    def snapshot(self, locator, final=False):
+        n = locator["id"]
+        self.reads.append((n, final, budget.lane()))
+        self.together.wait()
+        time.sleep(0.01 * (5 - n))
+        if n == 3:
+            raise AdapterError("Fake returned HTTP 502 for /summary")
+        return Snapshot(status="final", score_label=f"A {n} – 0 B", clock_label="FT", state={"kind": "football"}, lines={"A1": Line(f"Scored in game {n}", [])})
+
+    def result_label(self, fixture, team_ids):
+        return f"Won game {fixture.source_id}"
+
+    def stats(self, ref, recent):
+        self.stats_from = [f.source_id for f, _ in recent]
+        return [], ""
+
+
+def five_finals(monkeypatch) -> tuple[FiveFinalsSource, PlayerCard, list]:
+    """Player 1 (A1) bound to FiveFinalsSource, their card ready; game 5 still live here (the poller didn't see
+    it finish). Returns the source, the card and the final polls applied."""
+    source = FiveFinalsSource()
+    player = Player(id=1, slug="p1", name="P1", sport="Hurling", status="active", teams=["A"])
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
+                        locator={"system": source.system, "athlete_id": "A1", "name": "P1", "team_ids": ["T1"], "team_names": ["A"]})
+    events = {str(n): Event(id=10 + n, key=f"fake_source:{n}", sport="Hurling", title=f"A vs B, game {n}", status="live" if n == 5 else "final") for n in range(1, 6)}
+    card_row = PlayerCard(player_id=1, status="ready", version=5, is_live=False, card={**card(), "status": "ready"})
+    db = FakeDb(player, row, card_row, answers={"SourceBinding": row, "Player.sport": "Hurling", "Event.id": [(15, "fake_source:5")]})
+    polls = []
+    monkeypatch.setitem(structured.ADAPTERS, source.system, source)
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured, "upsert_event", lambda db, adapter, player, f: events[f.source_id])
+    monkeypatch.setattr(structured, "_watching", lambda event_id: ({"adapter": source.system, "locator": {"id": 5}, "cadence": 15}, source, [(1, "A1")]))
+    monkeypatch.setattr(structured, "apply_poll", lambda event_id, live_binding, adapter, watchers, snap: polls.append((event_id, snap.status, snap.score_label)))
+    return source, card_row, polls
+
+
+def test_a_refresh_reads_its_recent_results_together(monkeypatch, redis):
+    # BHA-283: a new follower's first card waited on five scorecard reads one after another, about 1.2 s each
+    # from the server. Now they're one round, each in the lane of the refresh that asked (counted against
+    # its budget: a background one stops at the live reserve).
+    source, card_row, polls = five_finals(monkeypatch)
+    with budget.in_lane("history"):  # any lane but the default, to see it carried into the reads
+        structured.refresh(1)
+    assert sorted(source.reads) == [(1, True, "history"), (2, True, "history"), (3, True, "history"), (4, True, "history"),
+                                    (5, False, "history")]  # game 5 read afresh: the cache may hold a live poll
+    assert card_row.version == 6
+
+
+def test_recent_results_keep_their_order_and_a_failed_read_only_its_scorecard(monkeypatch, redis):
+    # BHA-283: answers coming back in any order still make the card newest first; a read that failed leaves
+    # that game's result without the player's line, and the others stand.
+    source, card_row, polls = five_finals(monkeypatch)
+    structured.refresh(1)
+    results = card_row.card["recent_results"]
+    assert [r["result"] for r in results] == ["Won game 5", "Won game 4", "Won game 3", "Won game 2", "Won game 1"]
+    assert [r["player_contribution"] for r in results] == ["Scored in game 5", "Scored in game 4", None, "Scored in game 2", "Scored in game 1"]
+    assert source.stats_from == ["1", "2", "4", "5"]
+    assert polls == [(15, "final", "A 5 – 0 B")]  # game 5, which the poller didn't see finish, gets its final poll
 
 
 class RenamingSource:
