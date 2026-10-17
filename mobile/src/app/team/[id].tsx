@@ -5,7 +5,7 @@
 
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, teamLevelText } from '../../../../web/src/alerts'
@@ -25,7 +25,7 @@ import { ShareButton } from '../../share'
 import { colour, t } from '../../theme'
 import { FollowPills } from '../../today/live'
 import { useFollowToggle } from '../../today/starters'
-import { Btn, Card, ErrorBox, Eyebrow, SectionHead, Spinner } from '../../ui'
+import { Btn, Card, ErrorBoundary, ErrorBox, Eyebrow, SectionHead, Spinner } from '../../ui'
 
 const APP = Constants.expoConfig?.name ?? ''
 
@@ -44,6 +44,12 @@ export default function TeamScreen() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [asked, setAsked] = useState(0)
+  // As the web's: a followed team's games read anew reach Following too (its tile). Once a read: Following's own
+  // functions change with every list it loads, so they're read through a ref.
+  const read = team?.fetched_at
+  const followingNow = useRef(following)
+  followingNow.current = following
+  useEffect(() => { if (read && followingNow.current.isFollowingTeam(teamId)) void followingNow.current.reload() }, [read, teamId])
 
   // The page, and again while it's in front: soon while its games are being read, else every 30 s (match.ts). A
   // team the server doesn't have isn't asked about again.
@@ -137,6 +143,7 @@ export default function TeamScreen() {
       {!team.can_follow && team.note ? <Text style={[t.small, t.muted]}>{team.note}</Text> : null}
       {error ? <Text style={[t.small, t.muted]}>Couldn't update this team: {error}</Text> : null}
 
+      <ErrorBoundary resetKey={team}>
       {/* The board links to its match page and its source itself, as the web's. */}
       {live ? <LiveScoreboard live={live} playerName="" sport={team.sport} /> : null}
 
@@ -174,6 +181,7 @@ export default function TeamScreen() {
           {follow.error ? <ErrorBox>{follow.error}</ErrorBox> : null}
         </View>
       ) : null}
+      </ErrorBoundary>
 
       <Text style={[t.tiny, t.muted]}>
         {team.fetched_at ? `${sports.name(team.sport) || 'Games'} from ${team.source}, read ${relative(team.fetched_at, now)}. ` : `From ${team.source}. `}

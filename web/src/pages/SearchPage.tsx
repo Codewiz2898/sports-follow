@@ -5,7 +5,7 @@ import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
 import { starterNames, useStarters } from '../components/Starters'
-import { fold } from '../search'
+import { enterTeam } from '../search'
 
 /** Follow a player or a team: search every source as you type, pick the exact athlete or the team, or hand a name
  * to the research agent. */
@@ -31,8 +31,7 @@ export function SearchPage() {
     // Still showing the previous query's results: they aren't what was asked for.
     if (!fresh) return
     const first = data && sections(data)[0]?.items[0]
-    // "Arsenal", or "lakers" with no athlete called that: the team, first in the results.
-    const team = data?.teams?.find((t) => fold(t.name) === fold(data.query)) ?? (data && !data.results.length && data.teams?.length === 1 ? data.teams[0] : undefined)
+    const team = data && enterTeam(data)  // "Arsenal", or "lakers" with no athlete called that: first in the results
     if (team) actions.openTeam(team)
     else if (first && (first.exact || data.results.length === 1)) actions.open(first)
   }

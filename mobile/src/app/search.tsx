@@ -5,7 +5,7 @@ import { useLocalSearchParams } from 'expo-router'
 import { useState } from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
 import Constants from 'expo-constants'
-import { sections, starterNames } from '../../../web/src/search'
+import { enterTeam, sections, starterNames } from '../../../web/src/search'
 import { useAccount } from '../account'
 import { SearchIcon } from '../icons'
 import { SearchResults, SportChips, useSearch, useSearchActions } from '../search'
@@ -29,7 +29,9 @@ export default function SearchScreen() {
     // Still showing the previous query's results: they aren't what was asked for.
     if (!fresh || !data) return
     const first = sections(data, APP)[0]?.items[0]
-    if (first && (first.exact || data.results.length === 1)) actions.open(first)
+    const team = enterTeam(data) // "Arsenal", or "lakers" with no athlete called that: first in the results, as the web's
+    if (team) actions.openTeam(team)
+    else if (first && (first.exact || data.results.length === 1)) actions.open(first)
   }
 
   return (

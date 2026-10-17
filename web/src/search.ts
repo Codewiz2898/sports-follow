@@ -60,6 +60,13 @@ export function teamsFirst(data: SearchResponse): boolean {
   return teams.some((t) => fold(t.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
 }
 
+/** The team Enter (or the keyboard's search key) opens, if any: one called just what was typed ("Arsenal"), or the
+ * only team when no athlete has the name ("lakers"). */
+export function enterTeam(data: SearchResponse): TeamSummary | undefined {
+  const teams = data.teams ?? []
+  return teams.find((t) => fold(t.name) === fold(data.query)) ?? (!data.results.length && teams.length === 1 ? teams[0] : undefined)
+}
+
 /** The line under a result: its page being set up, its game on now, or its next game. */
 export function nextLine(r: SearchResult): { text: string; live: boolean } | null {
   if (r.status === 'building') return { text: 'Page being set up…', live: false }

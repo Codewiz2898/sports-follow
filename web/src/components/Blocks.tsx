@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, FollowedTeam, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
-import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, WON, wordSize, type GameResult } from '../lines'
+import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -438,12 +438,6 @@ export function BuildProgress({ card, messages, onRetry, research = true }: { ca
       {messages.length > 0 && <ol className="progress-log">{messages.map((m, i) => <li key={i}>{m}</li>)}</ol>}
     </div>
   )
-}
-
-/** A team tile's name size: the tile's 30 px, smaller as its longest word grows past what fits a phone's half width. */
-function teamNameSize(name: string): number {
-  const longest = Math.max(...name.split(/\s+/).map((w) => w.length))
-  return longest <= 9 ? 30 : longest <= 12 ? 24 : 19
 }
 
 /** One followed team on the Following page: a block of its sport's colour, as a player's tile (lines.teamLine). */

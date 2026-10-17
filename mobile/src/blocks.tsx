@@ -8,7 +8,7 @@ import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type L
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
-import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, wordSize, type GameResult } from '../../web/src/lines'
+import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
 import { Backdrop } from './art'
@@ -199,7 +199,7 @@ export function TeamTile({ team }: { team: FollowedTeam }) {
     <Pressable onPress={go(`/team/${team.team_id}`)} style={[b.tile, { backgroundColor: tone.sport }]}>
       <Text style={[b.tileSport, { color: tone.onSoft }]}>{sports.name(team.sport) || 'Team'} · Team</Text>
       <View style={b.corner}>{team.live?.is_live ? <LiveBadge /> : null}</View>
-      <Dsp size={30} color={tone.on}>{team.name}</Dsp>
+      <Dsp size={teamNameSize(team.name)} color={tone.on}>{team.name}</Dsp>
       <Text style={[b.tileStatus, { color: tone.on }]} numberOfLines={2}>{teamLine(team, now)}</Text>
     </Pressable>
   )
