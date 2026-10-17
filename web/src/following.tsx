@@ -21,7 +21,7 @@ interface FollowingState {
   // the list has come; following one, or stopping, by its address after /match/; its level.
   matches: FollowedMatch[]
   matchesLoaded: boolean
-  followMatch: (address: string, on: boolean) => Promise<void>
+  followMatch: (address: string, on: boolean, eventId?: number | null) => Promise<void>  // stopped by its event where known
   setMatchAlerts: (eventId: number, level: AlertLevel) => Promise<void>
 }
 
@@ -115,8 +115,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       if (e.matches) { setMatches(e.matches); setMatchesLoaded(true) }
       setHeard((n) => n + 1)
     } else if (e.type === 'match') {
-      // A followed game's board, as its poll found it; the fan's level for it stays as this app has it.
-      setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, ...e.match, alerts: m.alerts } : m)))
+      // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
+      setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, live: e.match.live, status: e.match.status } : m)))
     } else if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
@@ -157,9 +157,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     return subscribe('/api/me/stream', apply)
   }, [idsKey, gamesKey, apply])
 
-  const followMatch = useCallback(async (address: string, on: boolean) => {
+  const followMatch = useCallback(async (address: string, on: boolean, eventId?: number | null) => {
     const at = address.indexOf('/')
-    await api.followMatch(address.slice(0, at), address.slice(at + 1), on)
+    // Stopping goes by the event the follow is on where that's known: it may be the game's other address.
+    if (!on && eventId != null) await api.unfollowMatch(eventId)
+    else await api.followMatch(address.slice(0, at), address.slice(at + 1), on)
     await reloadMatches()
   }, [reloadMatches])
 

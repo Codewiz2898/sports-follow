@@ -304,9 +304,10 @@ export interface CampaignGame {
 /** Something found for a player followed in a game (moments.py): a goal, a fifty, a map won. */
 export interface MatchMoment { id: number; at: string; kind: string; level: 'key' | 'minor'; title: string; body: string; player_id: number }
 
-/** A match page's Follow button (sports_follow/matches.py): whether this fan follows the game by itself, and
- * whether its moments can reach them at all; if not, why (its source can't poll it, it's over). */
-export interface MatchFollowState { following: boolean; alerts: boolean; note: string | null }
+/** A match page's Follow button (sports_follow/matches.py): whether this fan follows the game by itself and on
+ * which event (a chess board's other address, maybe: stop it by that), whether its moments can reach them at
+ * all, whether its alerts are paused for now (its source busy with followed players' games), and why. */
+export interface MatchFollowState { following: boolean; event_id?: number | null; alerts: boolean; held?: boolean; note: string | null }
 
 /** A game the fan follows by itself (GET /api/me/matches): its address, when, where it's at, and its board as
  * last polled, a live block like a card's (null before its first poll). Today shows it with the fan's games. */
@@ -314,6 +315,8 @@ export interface FollowedMatch {
   event_id: number
   key: string
   match: string  // its address after /match/
+  addresses?: string[]  // every address it has (a chess board is one per player): a card's live game at any is this one
+  held?: boolean  // its alerts are paused for now: its source is busy with followed players' games
   sport: string  // a sport's key
   title: string
   competition: string

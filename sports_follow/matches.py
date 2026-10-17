@@ -46,6 +46,8 @@ LAPSE_AFTER = timedelta(days=1)  # a game to come that never started lapses this
 UNDATED = timedelta(days=14)  # and one with no date, this long after it was followed
 NO_ALERTS = "Alerts aren't available for this game: its source can't be followed live here."
 OVER = "This game is over."
+HELD = "Live alerts for this game are paused: its source is busy with games fans follow players in. They resume when it has room."
+NOT_STARTED = ("scheduled", "armed", "postponed")  # a game that hasn't started: armed, it's polled, and its source still says it's to come
 
 
 class Refused(Exception):
@@ -85,16 +87,34 @@ def poller(system: str, fixture: str, events: list[Event]) -> dict[str, Any] | N
     return {"adapter": system, "locator": locator, "cadence": adapter.live_cadence} if adapter is not None and locator else None
 
 
+def _of_game(fan: str, event_ids: list[int], key: str) -> Any:
+    """A fan's follows of a game: of one of its events, or made at any of its addresses (a chess board's other one)."""
+    return and_(MatchFollow.fan_id == fan, or_(MatchFollow.event_id.in_(event_ids), MatchFollow.keys.contains([key])))
+
+
+def held(db: Session, event: Event) -> bool:
+    """Whether a followed game under way isn't being polled for now: nobody follows a player in it, and its source,
+    polled a request a game, is down to what its live games need (structured.holds_back)."""
+    adapter = ADAPTERS.get((event.live_binding or {}).get("adapter", ""))
+    if event.status not in ("armed", "live") or adapter is None or not structured.holds_back(adapter):
+        return False
+    return db.scalar(select(EventPlayer.event_id).join(Follow, Follow.player_id == EventPlayer.player_id).where(EventPlayer.event_id == event.id).limit(1)) is None
+
+
 def offer(db: Session, fan: str | None, system: str, fixture: str, page: dict[str, Any]) -> dict[str, Any]:
-    """What a match page's Follow button says (match.view's page): whether this fan follows the game, whether
-    its moments can reach them at all, and if not, why."""
+    """What a match page's Follow button says (match.view's page): whether this fan follows the game (at this
+    address or another of the game's), which event that follow is on (to stop it by), whether its moments can
+    reach them at all and if not why, and whether its alerts are paused for now (held)."""
     ids = page.get("event_ids") or []
-    following = bool(fan and ids and db.scalar(select(MatchFollow.id).where(MatchFollow.fan_id == fan, MatchFollow.event_id.in_(ids), MatchFollow.until.is_(None)).limit(1)))
+    mine = db.scalar(select(MatchFollow).where(_of_game(fan, ids, f"{system}:{fixture}"), MatchFollow.until.is_(None)).limit(1)) if fan else None
+    state = {"following": mine is not None, "event_id": mine.event_id if mine else None, "held": False}
     if page.get("status") == "final":
-        return {"following": following, "alerts": False, "note": OVER}
+        return {**state, "alerts": False, "note": OVER}
     events = list(db.scalars(select(Event).where(Event.id.in_(ids)).order_by(Event.id))) if ids else []
     can = poller(system, fixture, events) is not None
-    return {"following": following, "alerts": can, "note": None if can else NO_ALERTS}
+    followed = db.get(Event, mine.event_id) if mine else None
+    paused = followed is not None and held(db, followed)
+    return {**state, "alerts": can, "held": paused, "note": HELD if paused else None if can else NO_ALERTS}
 
 
 def _over(known: Said, now: datetime) -> bool:
@@ -102,7 +122,7 @@ def _over(known: Said, now: datetime) -> bool:
     it), or its own read found it over and settled (match.read: a chess mini-match can go on after a read called
     it over), or, with neither, the league's card says so."""
     read_over = (known.game or {}).get("status") == "final" and bool((known.read or {}).get("settled"))
-    gone = any(e.status in ("scheduled", "postponed") and e.start_utc is not None and e.start_utc < now - LAPSE_AFTER for e in known.events)
+    gone = any(e.status in NOT_STARTED and e.start_utc is not None and e.start_utc < now - LAPSE_AFTER for e in known.events)
     return any(e.status == "final" for e in known.events) or gone or read_over or (not known.events and not known.game and (known.big or {}).get("status") == "final")
 
 
@@ -127,13 +147,15 @@ def follow(db: Session, fan: str, system: str, fixture: str) -> int:
     # One follow at a time per fan, so two at once can't both pass the count.
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"match-follow:{fan}", 0))))
     ids = [e.id for e in known.events]
-    mine = db.scalar(select(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id.in_(ids)).limit(1)) if ids else None
+    keys = list(dict.fromkeys(f"{system}:{f}" for f in known.fixtures))
+    mine = db.scalar(select(MatchFollow).where(_of_game(fan, ids, f"{system}:{fixture}")).limit(1))
     if mine is None or mine.until is not None:
         count = db.scalar(select(func.count()).select_from(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))) or 0
         if count >= MAX:
             raise Refused(429, f"You follow {MAX} games already: unfollow one to follow this.")
     if mine is not None:
         mine.until = None  # a lapsed follow of a game that's on again (postponed, then played)
+        mine.keys = list(dict.fromkeys([*(mine.keys or []), *keys]))
         return mine.event_id
     # A game here as several events (a chess board is a fixture of each of its players) is followed as the one
     # of a player the fan follows in it: one notification for the game, its moments heard once, one board on Today.
@@ -142,7 +164,8 @@ def follow(db: Session, fan: str, system: str, fixture: str) -> int:
                             .where(EventPlayer.event_id.in_([e.id for e in polled])))) if len(polled) > 1 else set()
     event = next((e for e in polled if e.id in theirs), None) or (polled[0] if polled else None) or _event(db, system, fixture, known, sport, binding)
     # From the database's clock, as its moments' times are: the activity list shows those since.
-    db.execute(insert(MatchFollow).values(fan_id=fan, event_id=event.id, alert_rules={}).on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={"until": None}))
+    keys = list(dict.fromkeys([event.key, *keys]))
+    db.execute(insert(MatchFollow).values(fan_id=fan, event_id=event.id, alert_rules={}, keys=keys).on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={"until": None, "keys": keys}))
     return event.id
 
 
@@ -162,20 +185,48 @@ def _event(db: Session, system: str, fixture: str, known: Said, sport: str, bind
 
 
 def unfollow(db: Session, fan: str, system: str, fixture: str) -> None:
-    """Stop following the game at an address: nothing more of it is sent to this fan."""
+    """Stop following the game at an address: nothing more of it is sent to this fan. Its follow is found by any
+    of the game's addresses, whichever of its events it's on."""
     from . import match
 
-    keys = [f"{system}:{f}" for f in match.find(db, system, fixture).fixtures] if match.ID.fullmatch(fixture) else []
-    if keys:
-        db.execute(delete(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id.in_(select(Event.id).where(Event.key.in_(keys)))))
+    if not match.ID.fullmatch(fixture):
+        return
+    keys = [f"{system}:{f}" for f in match.find(db, system, fixture).fixtures]
+    ids = select(Event.id).where(Event.key.in_(keys))
+    db.execute(delete(MatchFollow).where(MatchFollow.fan_id == fan, or_(MatchFollow.event_id.in_(ids), MatchFollow.keys.contains([f"{system}:{fixture}"]))))
+
+
+def unfollow_event(db: Session, fan: str, event_id: int) -> None:
+    """Stop following a game by the event its follow is on (GET /api/me/matches, or the page's follow state)."""
+    db.execute(delete(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id == event_id))
+
+
+def settle(db: Session) -> None:
+    """A follow of a game here as several events (a chess board: one per player's fixture) moves to the one a
+    player the fan follows is in, once there is one (the tick, pipeline.due_work): one notification for the game,
+    each moment heard once (alerts.same), one board on Today. Following the board, then tapping a player on it, is
+    the natural order."""
+    for follow_id, fan, event_id, keys in db.execute(select(MatchFollow.id, MatchFollow.fan_id, MatchFollow.event_id, MatchFollow.keys)
+                                                     .where(MatchFollow.until.is_(None), func.jsonb_array_length(MatchFollow.keys) > 1)).all():
+        theirs = select(EventPlayer.event_id).join(Follow, and_(Follow.player_id == EventPlayer.player_id, Follow.fan_id == fan))
+        if db.scalar(select(EventPlayer.event_id).where(EventPlayer.event_id == event_id, EventPlayer.event_id.in_(theirs)).limit(1)) is not None:
+            continue  # on their player's already
+        to = db.scalar(select(Event.id).where(Event.key.in_(keys), Event.id != event_id, Event.live_binding.is_not(None), Event.id.in_(theirs)).order_by(Event.id).limit(1))
+        if to is None:
+            continue
+        if db.scalar(select(MatchFollow.id).where(MatchFollow.fan_id == fan, MatchFollow.event_id == to)) is not None:
+            db.execute(delete(MatchFollow).where(MatchFollow.id == follow_id))
+        else:
+            db.execute(update(MatchFollow).where(MatchFollow.id == follow_id).values(event_id=to))
 
 
 def lapse(db: Session, now: datetime | None = None) -> None:
-    """Follows of games that are over lapse now (the tick, pipeline.due_work): a game that ended, a game to come
-    a day past its start that never started, one with no date a fortnight after it was followed."""
+    """Follows of games that are over lapse now (the tick, pipeline.due_work): a game that ended, a game a day past
+    its start that never started (armed and polled, its source still saying it's to come), one with no date a
+    fortnight after it was followed."""
     now = now or datetime.now(timezone.utc)
-    over = select(Event.id).where(or_(Event.status == "final", and_(Event.status.in_(("scheduled", "postponed")), Event.start_utc < now - LAPSE_AFTER)))
-    undated = select(Event.id).where(Event.start_utc.is_(None), Event.status.in_(("scheduled", "postponed")))
+    over = select(Event.id).where(or_(Event.status == "final", and_(Event.status.in_(NOT_STARTED), Event.start_utc < now - LAPSE_AFTER)))
+    undated = select(Event.id).where(Event.start_utc.is_(None), Event.status.in_(NOT_STARTED))
     done = update(MatchFollow).where(MatchFollow.until.is_(None), or_(MatchFollow.event_id.in_(over), and_(MatchFollow.event_id.in_(undated), MatchFollow.created_at < now - UNDATED)))
     # Stamped by the database's clock as the statement runs, as a moment's time is by its poll's (its
     # transaction's start): the result found by the poll that saw the game end is always before it.
@@ -189,13 +240,16 @@ def board(event: Event, status: str, score: str | None, clock: str | None, state
             "clock": clock, "state": state, "source": source_name(system), "source_url": source_url, "as_of": as_of.isoformat(), "player_stats": []}
 
 
-def item(event: Event, live: dict[str, Any] | None, level: str = DEFAULT_LEVEL) -> dict[str, Any]:
-    """One game a fan follows, as the app lists it: its address, sport, when, where it's at, its board as last
-    polled (None before its first poll), and their level."""
+def item(event: Event, live: dict[str, Any] | None, level: str = DEFAULT_LEVEL, keys: list[str] | None = None, paused: bool = False) -> dict[str, Any]:
+    """One game a fan follows, as the app lists it: its address and every other it has (a chess board's), sport,
+    when, where it's at, its board as last polled (None before its first poll), their level, and whether its
+    alerts are paused for now (held)."""
     return {
         "event_id": event.id,
         "key": event.key,
         "match": structured.match_path(event.key),
+        "addresses": [a for a in (structured.match_path(str(k)) for k in dict.fromkeys([event.key, *(keys or [])])) if a],
+        "held": paused,
         "sport": sports.of(event.sport).key or "other",
         "title": event.title,
         "competition": event.competition,
@@ -209,15 +263,15 @@ def item(event: Event, live: dict[str, Any] | None, level: str = DEFAULT_LEVEL) 
 
 def mine(db: Session, fan: str) -> list[dict[str, Any]]:
     """The games this fan follows by themselves, none lapsed, soonest first, each with its board as last polled."""
-    rows = db.execute(select(MatchFollow.alert_rules, Event).join(Event, Event.id == MatchFollow.event_id)
+    rows = db.execute(select(MatchFollow.alert_rules, MatchFollow.keys, Event).join(Event, Event.id == MatchFollow.event_id)
                       .where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None)).order_by(Event.start_utc.asc().nulls_last(), Event.id)).all()
-    ids = [event.id for _, event in rows]
+    ids = [event.id for _, _, event in rows]
     latest = {s.event_id: s for s in db.scalars(select(EventState).where(EventState.event_id.in_(ids)).ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))} if ids else {}
     out = []
-    for rules_, event in rows:
+    for rules_, keys, event in rows:
         s = latest.get(event.id)
         live = board(event, s.status, s.score_label, s.clock_label, s.state or {}, s.source_url, s.as_of) if s is not None else None
-        out.append(item(event, live, (rules_ or {}).get("level", DEFAULT_LEVEL)))
+        out.append(item(event, live, (rules_ or {}).get("level", DEFAULT_LEVEL), keys, held(db, event)))
     return out
 
 

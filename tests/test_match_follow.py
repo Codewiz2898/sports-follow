@@ -17,8 +17,9 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, bus, live, match, matches, notify, pipeline, server, sports, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, Snapshot
+from sports_follow import accounts, bus, live, match, matches, metrics, notify, pipeline, server, sports, structured
+from sports_follow import db as db_module
+from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, Snapshot, budget, lichess_chess
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
 from sports_follow.models import Account, Event, EventPlayer, Follow, MatchFollow, Moment, Notification, Player, PlayerIdentity, PushSubscription
@@ -223,6 +224,9 @@ class Store(dict):
     def exists(self, key: str) -> int:
         return int(self.get(key) is not None)
 
+    def mget(self, keys: list[str]) -> list:
+        return [self.get(k) for k in keys]
+
 
 @pytest.fixture
 def redis(monkeypatch):
@@ -266,7 +270,7 @@ def test_following_a_game_nobody_follows_a_player_in_makes_it_polled(db, redis, 
     assert matches.follow(db, "fan", "pitch", "100") == event_id and db.scalar(select(func.count()).select_from(MatchFollow)) == 1  # once
     page, _ = match.view(db, "fan", "pitch", "100", NOW)
     assert page is not None
-    assert matches.offer(db, "fan", "pitch", "100", page) == {"following": True, "alerts": True, "note": None}
+    assert matches.offer(db, "fan", "pitch", "100", page) == {"following": True, "event_id": event_id, "alerts": True, "held": False, "note": None}
     assert matches.offer(db, "someone", "pitch", "100", page)["following"] is False
     # The tick polls it by itself, nobody's player in it, at its source's pace (one job a game: no lane).
     assert pipeline.due_work(NOW).polls == [event_id]
@@ -296,7 +300,7 @@ def test_a_made_up_address_a_game_over_or_one_no_source_polls_makes_no_follow(db
     named(source, "300")
     page, _ = match.view(db, "fan", "pitch", "300", NOW)
     assert page is not None
-    assert matches.offer(db, "fan", "pitch", "300", page) == {"following": False, "alerts": False, "note": matches.NO_ALERTS}
+    assert matches.offer(db, "fan", "pitch", "300", page) == {"following": False, "event_id": None, "alerts": False, "held": False, "note": matches.NO_ALERTS}
     with pytest.raises(matches.Refused) as cant:
         matches.follow(db, "fan", "pitch", "300")
     assert cant.value.status == 409
@@ -552,3 +556,117 @@ def test_an_accounts_followed_games_stay_within_max_when_a_device_brings_more(db
     accounts.adopt(db, "anon", 1, 0)
     db.commit()
     assert [m["key"] for m in matches.mine(db, "acct-1")] == ["pitch:2", "pitch:3"]  # the soonest that fit
+
+
+@needs_db
+def test_a_board_followed_then_a_player_on_it_followed_settles_on_the_players_event(db, redis, source, monkeypatch):
+    # Follow the board first (nobody's player of the fan's in it: the first event), then tap a player on it,
+    # whose fixture is the board's other event. The tick moves the follow there: one notification, each moment once.
+    pushed = listen(monkeypatch)
+    source.game = game("100", fixtures=["100", "101"])
+    match.read("pitch", "100", NOW)
+    binding = lambda f: {"adapter": "pitch", "locator": {"fixture": f}, "cadence": 15}  # noqa: E731
+    db.add_all([Event(id=1, key="pitch:100", sport="Football", title="A v B", status="live", live_binding=binding("100")),
+                Event(id=2, key="pitch:101", sport="Football", title="A v B", status="live", live_binding=binding("101")),
+                Player(id=6, slug="b", name="Bo", sport="Football")])
+    db.commit()
+    assert matches.follow(db, "fan", "pitch", "100") == 1
+    db.add_all([EventPlayer(event_id=2, player_id=6), PlayerIdentity(player_id=6, system="pitch", external_id="6", confidence=1.0), Follow(fan_id="fan", player_id=6, alert_rules={})])
+    db.commit()
+    phones(db, "fan")
+    pipeline.due_work(NOW)
+    assert db.scalar(select(MatchFollow.event_id)) == 2
+    # The page at either address says so, and stops it by its event.
+    for fixture in ("100", "101"):
+        page, _ = match.view(db, "fan", "pitch", fixture, NOW)
+        assert page is not None
+        assert matches.offer(db, "fan", "pitch", fixture, page)["following"] and matches.offer(db, "fan", "pitch", fixture, page)["event_id"] == 2
+    # Bo's result, and the game's own, at one poll of event 2: once, as theirs.
+    structured.apply_poll(2, binding("101"), source.fake, [(6, "6")], Snapshot("live", "A 0 – 0 B", "80'", football(0, 0), lines={"6": Line("Started", [])}))
+    structured.apply_poll(2, binding("101"), source.fake, [(6, "6")], Snapshot("final", "A 1 – 0 B", "FT", football(1, 0), lines={"6": Line("Started", [])}))
+    assert [fan for fan, _ in pushed] == ["fan"]
+    matches.unfollow_event(db, "fan", 2)
+    db.commit()
+    assert db.scalar(select(func.count()).select_from(MatchFollow)) == 0
+
+
+@needs_db
+def test_a_goal_is_told_once_though_its_minute_is_revised_or_its_scorers_line_comes_a_poll_later(db, redis, source, monkeypatch):
+    pushed = listen(monkeypatch)
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    matches.follow(db, "both", "pitch", "100")
+    db.commit()
+    saka_followed_by(db, event_id, "both")
+    phones(db, "fan", "both")
+    binding = {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}
+    poll = lambda s: structured.apply_poll(event_id, binding, source.fake, [(5, "7")], s)  # noqa: E731
+    poll(snap(0, 0, "44'", [], 0))
+    # The source's events have the goal (its play id 501) before Saka's line counts it.
+    poll(snap(1, 0, "45'", [goal("45'", "Saka", "7", id="501")], 0))
+    assert sorted(pushed) == [("both", "Arsenal v Chelsea: Saka puts Arsenal ahead"), ("fan", "Arsenal v Chelsea: Saka puts Arsenal ahead")]
+    pushed.clear()
+    # Then his line counts it, and the source revises its minute: the same play, told already.
+    poll(snap(1, 0, "46'", [goal("45+2'", "Saka", "7", id="501")], 1))
+    assert pushed == []
+
+
+@needs_db
+def test_a_game_armed_that_never_starts_lapses_a_day_past_its_start(db, redis, source):
+    start = datetime.now(timezone.utc) - timedelta(minutes=10)  # the database's clock decides whether it's over
+    named(source, start=start, status="scheduled")
+    matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    db.execute(text("UPDATE event SET status = 'armed'"))  # polled, and its source still says it's to come
+    db.commit()
+    pipeline.due_work(start + timedelta(minutes=10))
+    assert db.scalar(select(MatchFollow.until)) is None
+    pipeline.due_work(start + matches.LAPSE_AFTER + timedelta(minutes=1))
+    db.expire_all()
+    assert db.scalar(select(MatchFollow.until)) is not None
+    db.execute(text("UPDATE event SET start_utc = start_utc - interval '2 days'"))
+    db.commit()
+    with pytest.raises(matches.Refused):
+        matches.follow(db, "other", "pitch", "100")  # a game that never came can't be followed again either
+
+
+@needs_db
+def test_a_followed_game_held_back_isnt_late_and_its_fans_are_told(db, redis, source, monkeypatch):
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    source.fake.spare = lambda: False
+    monkeypatch.setattr(db_module, "session", structured.session)  # metrics.live's own session: the test database
+    behind = lambda: sum(n for n, _ in metrics.live()["behind"])  # noqa: E731
+    assert behind() == 0  # held back on purpose: not late
+    page, _ = match.view(db, "fan", "pitch", "100", NOW)
+    assert page is not None
+    assert matches.offer(db, "fan", "pitch", "100", page) | {} == {"following": True, "event_id": event_id, "alerts": True, "held": True, "note": matches.HELD}
+    assert matches.mine(db, "fan")[0]["held"] is True
+    source.fake.spare = lambda: True
+    assert behind() == 1 and matches.mine(db, "fan")[0]["held"] is False  # room again: polled, and late until it is
+
+
+@needs_db
+def test_a_polls_own_moments_are_kept_as_its_baseline_only_once_committed(db, redis, source, monkeypatch):
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+
+    def fails(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(notify, "record_game", fails)
+    with pytest.raises(RuntimeError):
+        structured.apply_poll(event_id, {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}, source.fake, [], snap(0, 0, "10'", [], None))
+    assert f"game:{event_id}" not in redis
+
+
+def test_lichess_keeps_a_reserve_for_followed_players_boards():
+    adapter = lichess_chess.LichessChess()
+    assert adapter.spare()
+    with budget.in_lane("live"):
+        for _ in range(10 - 1 - lichess_chess.BUDGET.reserve):
+            budget.take(lichess_chess.BUDGET)
+    assert not adapter.spare()  # what's left is the live boards': a board nobody follows a player in waits

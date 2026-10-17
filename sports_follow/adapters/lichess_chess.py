@@ -64,8 +64,11 @@ def token() -> str | None:
 
 
 # Every process's requests together, a minute: what the token allows, or what Lichess allows without one.
-# Lichess counts broadcast reads in three-minute windows, so after a 429 nothing asks for three minutes.
-BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,), pause=180)
+# Lichess counts broadcast reads in three-minute windows, so after a 429 nothing asks for three minutes. A
+# quarter of each minute is kept for followed players' live boards: background reads (refreshes, Live now, match
+# pages) stop short of it, and so does polling a board nobody follows a player in (matches.py, spare()).
+BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,), pause=180,
+                       reserve=30 if token() else 3)
 # Lichess's FIDE player pages and its player endpoint ignore the token: one limit, about 60 requests a
 # minute, holds every caller from a datacenter together, a server like ours included, so others can spend
 # it (lila: Fide.scala, Limiters.enumeration.fidePlayer). Requests there are counted apart and kept few,
@@ -780,6 +783,11 @@ class LichessChess(Adapter):
         for entry in on[:LIVE_TOURS]:
             out.extend(live_boards(get_json(f"{API}broadcast/-/-/{entry['round']['id']}", ttl=60), self.system, now))
         return out
+
+    def spare(self) -> bool:
+        """Whether a background read, or a board nobody follows a player in, leaves the minute's reserve for
+        followed players' live boards."""
+        return budget.spare(BUDGET)
 
     def locator(self, source_id: str) -> dict[str, Any] | None:
         """A board polled by its address alone ("<round id>-<FIDE id>"), as its player's fixture of it is (matches.py)."""

@@ -664,6 +664,13 @@ def poll_event(event_id: int) -> None:
         bus.release(lock, token)
 
 
+def holds_back(adapter: Adapter) -> bool:
+    """Whether a game nobody follows a player in, followed by itself (matches.py), waits to be polled: its source
+    is polled a request a game (not a lane, where it costs nothing more) and is down to what its live games need
+    (spare), which followed players' games keep."""
+    return not batched(adapter.system) and not spare(adapter)
+
+
 def batched(system: str | None) -> bool:
     """Whether a source's events are polled together by one lane: its adapter fetches many events in
     one request (snapshots). The rest get one poll_event job per event."""
@@ -855,6 +862,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     now = _now()
     published: list[tuple[int, dict[str, Any]]] = []
     published_game: dict[str, Any] | None = None
+    game_kept: tuple[str, str, int] | None = None  # the game's own poll, for Redis once this one is committed
     new_moments: list[int] = []
     with session() as db:
         event = db.get(Event, event_id)
@@ -909,11 +917,15 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             card_row.is_live = bool(card["live"].get("is_live"))
             published.append((player_id, card))
         if matches.followed(db, event_id):
-            new_moments += _game_moments(db, event, adapter, snap, latest, recent, people, watchers)
+            found, game_kept = _game_moments(db, event, adapter, snap, recent, people, watchers)
+            new_moments += found
             if changed:
                 live = matches.board(event, snap.status, snap.score_label, snap.clock_label, snap.state, snap.source_url, now)
                 live["source"] = adapter.credit(snap)
                 published_game = matches.item(event, live)
+    if game_kept is not None:
+        # Only now: a poll whose moments weren't committed must find them again, against the poll before it.
+        bus.sync_redis().set(game_kept[0], game_kept[1], ex=game_kept[2])
     for player_id, card in published:
         bus.store_card(player_id, card)
     if published_game is not None:
@@ -925,20 +937,20 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     return snap.status, wait, changed
 
 
-def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, latest: EventState | None, recent: bool,
-                  people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]]) -> list[int]:
+def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, recent: bool,
+                  people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]]) -> tuple[list[int], tuple[str, str, int]]:
     """The game's own moments since its last poll, for the fans following it by itself (matches.py), as its
     sport finds them (Sport.game_moments), against that poll as Redis kept it, for as long as a poll after it
     is recent (_polled's gap): a copy from before a gap (nobody followed the game a while, though its players'
     polls went on) would tell what happened meanwhile as new. A first look (no recent copy, or polling had a
-    gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids."""
+    gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids, and this
+    poll as Redis is to keep it (its key, value and seconds), which apply_poll writes once they're committed."""
     names = {**_roster_names(event), **snap.names, **{xid: people[pid][0] for pid, xid in watchers if pid in people}}
     now = sports.Played(snap.status, snap.state, snap.score_label, snap.clock_label, snap.moments,
                         {a: {"headline": ln.headline, "stats": ln.stats} for a, ln in snap.lines.items()}, names)
-    redis = bus.sync_redis()
     key = f"game:{event.id}"
     try:
-        kept = json.loads(cast(str, redis.get(key)) or "null")
+        kept = json.loads(cast(str, bus.sync_redis().get(key)) or "null")
     except Exception:
         kept = None
     before = sports.Played(**{**kept, "names": names}) if kept and recent else None
@@ -950,8 +962,8 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, l
     for f in found:
         f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
-    redis.set(key, json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str), ex=gap)
-    return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}")
+    value = json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str)
+    return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}"), (key, value, gap)
 
 
 def _roster_names(event: Event) -> dict[str, str]:

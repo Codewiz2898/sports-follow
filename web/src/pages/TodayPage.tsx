@@ -100,7 +100,7 @@ function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
       {matches.map((m) => m.live && (
         <Link key={m.event_id} to={`/match/${m.match}`} className="stack" style={{ gap: 8 }}>
           <LiveScoreboard live={m.live} playerName="" sport={m.sport} compact seed={`event:${m.event_id}`} />
-          <span className="tiny muted" style={{ fontWeight: 700 }}>Following this game</span>
+          <span className="tiny muted" style={{ fontWeight: 700 }}>{m.held ? 'Following this game · alerts paused for now' : 'Following this game'}</span>
         </Link>
       ))}
     </>

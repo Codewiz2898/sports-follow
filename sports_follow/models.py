@@ -415,6 +415,9 @@ class MatchFollow(Base):
     fan_id: Mapped[str] = mapped_column(String(64), index=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"), index=True)
     alert_rules: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"level": ...}, as a player follow's
+    # Every address the game has here, as event keys: a chess board is a fixture of each of its players, so a
+    # follow made at one is found at the other, and moves to the event of a player the fan follows (matches.settle).
+    keys: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = _now()
     until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when it lapsed: the game ended (or never came)
 

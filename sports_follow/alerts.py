@@ -11,7 +11,9 @@ phone, notifications should feel like one sports app, not a feed of every poll:
 - **A game followed by itself** sends its own moments (a goal whoever scores it, every result), each
   found until the game ended (Watch.until): what comes after the follow lapsed isn't theirs. A fan who
   follows the game and a player in it hears each moment once: one of the game's about a player whose
-  moment of the same kind reaches them (their goal, their wicket, the result) goes as their player's.
+  moment of the same kind reaches them (their goal, their wicket, the result) goes as their player's;
+  and one the other side already said in an earlier push of the game (a source's events and its players'
+  lines a poll apart) isn't said again, the same play by its detail.
 - **One notification per game.** Everything a fan hears from one game, whichever of their players
   it's about, lands on the same notification (tag "e{event}"): a new moment replaces it, with the
   story so far underneath, so the tray holds "Kohli reaches 100" over "Rohit out for 45", not a
@@ -73,6 +75,7 @@ class Item:
     # Whom it's about, by their ids in the game's source: a game's own moment's (Moment.about, "*" the whole
     # game), a player's own (their id there), so the two can be told to be the same moment.
     about: frozenset[str] = frozenset()
+    detail: str = ""  # what tells two moments of a kind apart (its key's: "goal@501", "50", "set2")
 
 
 @dataclass
@@ -132,17 +135,21 @@ def level_of(item: Item, levels: dict[int, str], games: dict[int, Watch]) -> str
     return watch.level
 
 
-def same(game: Item, player: Item) -> bool:
+def same(game: Item, player: Item, exact: bool = False) -> bool:
     """Whether a game's own moment is one of a player's: of one game, of a kind, about that player or the
-    whole game ("Kohli out for 82" from the game's side and from Kohli's, a result)."""
-    return game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))
+    whole game ("Kohli out for 82" from the game's side and from Kohli's, a result). Found at one poll, that's
+    enough; `exact`, for one found at another poll, the play too (its detail: "goal@501"), as a player may score
+    twice."""
+    return (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))
+            and (not exact or game.detail == player.detail))
 
 
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
-         games: dict[int, Watch] | None = None) -> list[Push]:
+         games: dict[int, Watch] | None = None, heard: list[Item] | None = None) -> list[Push]:
     """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
     moments corrections in these games have taken back, which leave the story (this batch's own
-    corrections count without it). `games` is the games the fan follows by themselves, by event."""
+    corrections count without it). `games` is the games the fan follows by themselves, by event; `heard`,
+    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about."""
     told = {m for s in sent for m in s.moment_ids}
     taken = (taken_back or set()) | {i.corrects for i in items if i.corrects is not None}
     kept: list[tuple[Item, str]] = []
@@ -158,11 +165,16 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
             # this fan was never sent.
             continue
         kept.append((item, how))
-    # A game's own moment that one of the fan's players' says too goes once, as their player's.
+    # A game's own moment that one of the fan's players' says too goes once, as their player's; and one the
+    # other side said in an earlier push isn't said again.
     theirs = [i for i, _ in kept if i.player_id is not None]
+    heard_theirs = [h for h in heard or [] if h.player_id is not None]
+    heard_games = [h for h in heard or [] if h.player_id is None]
     groups: dict[str, list[tuple[Item, bool]]] = {}
     for item, how in kept:
-        if item.player_id is None and any(same(item, p) for p in theirs):
+        if item.player_id is None and (any(same(item, p) for p in theirs) or any(same(item, p, exact=True) for p in heard_theirs)):
+            continue
+        if item.player_id is not None and any(same(g, item, exact=True) for g in heard_games):
             continue
         tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
         groups.setdefault(tag, []).append((item, how == "loud"))

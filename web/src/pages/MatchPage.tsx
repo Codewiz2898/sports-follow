@@ -104,13 +104,13 @@ function useFollowGame(match: Match | null) {
   useEffect(() => { setMine(null); setOpen(false); setError(null) }, [match?.key])
   useEffect(() => { if (mine && said && said.following === mine.following) setMine(null) }, [said, mine])
   const state = mine ?? said
-  const followed = match ? matches.find((m) => match.event_ids.includes(m.event_id)) : undefined
+  const followed = match ? matches.find((m) => match.event_ids.includes(m.event_id) || (m.addresses ?? []).includes(match.match) || m.event_id === state?.event_id) : undefined
   const attempt = (work: () => Promise<unknown>) => { setError(null); return work().catch((e: Error) => setError(e.message)) }
   const toggle = async () => {
     if (!match || !state) return
     setBusy(true)
     await attempt(async () => {
-      await followMatch(match.match, !state.following)
+      await followMatch(match.match, !state.following, state.event_id ?? followed?.event_id)
       setMine({ ...state, following: !state.following })
       if (state.following) setOpen(false)
     })
@@ -211,7 +211,7 @@ export function MatchPage() {
         {board?.as_of && <span className="tiny soft">Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</span>}
       </header>
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
-      {state && !state.following && !state.alerts && state.note && match.status !== 'final' && <p className="small muted">{state.note}</p>}
+      {state && (state.following ? state.held : !state.alerts) && state.note && match.status !== 'final' && <p className="small muted" role="status">{state.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
 
       {yours.length > 0 && (

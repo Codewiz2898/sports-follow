@@ -202,8 +202,8 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
             moving.append(follow_id)
             room -= 1 if counts else 0
     games = insert(MatchFollow).from_select(
-        ["fan_id", "event_id", "alert_rules", "created_at", "until"],
-        select(literal(fan), MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.created_at, MatchFollow.until).where(MatchFollow.id.in_(moving)),
+        ["fan_id", "event_id", "alert_rules", "keys", "created_at", "until"],
+        select(literal(fan), MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.keys, MatchFollow.created_at, MatchFollow.until).where(MatchFollow.id.in_(moving)),
     )
     db.execute(games.on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={
         "created_at": func.least(MatchFollow.created_at, games.excluded.created_at),

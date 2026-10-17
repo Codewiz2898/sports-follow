@@ -33,6 +33,7 @@ export function endpoints(request: Request) {
     followMatch: (source: string, game: string, on: boolean) =>
       request<{ following: boolean; event_id?: number }>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}/follow`, { method: on ? 'PUT' : 'DELETE' }),
     matches: () => request<{ matches: FollowedMatch[] }>('/api/me/matches'),
+    unfollowMatch: (eventId: number) => request<{ event_id: number; following: false }>(`/api/me/matches/${eventId}`, { method: 'DELETE' }),
     setMatchAlerts: (eventId: number, level: AlertLevel) => request<{ event_id: number; alerts: AlertLevel }>(`/api/me/matches/${eventId}/alerts`, json('PUT', { level })),
     // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.
     league: (fresh = false) => request<League>(`/api/league?tz=${-new Date().getTimezoneOffset()}`, fresh ? { cache: 'no-store' } : undefined),

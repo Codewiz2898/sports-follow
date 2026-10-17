@@ -70,10 +70,13 @@ export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = 
 }
 
 /** The games the fan follows by themselves that are on now, none their players are in (those are on Today as
- * their players' games already), in the order they were listed. */
+ * their players' games already: by event, or at any of the game's addresses, a chess board's other one), in the
+ * order they were listed. */
 export function followedLive(matches: FollowedMatch[], cards: Card[]): FollowedMatch[] {
-  const theirs = new Set(cards.flatMap((c) => (c.live.is_live && c.live.event_id != null ? [c.live.event_id] : [])))
-  return matches.filter((m) => m.live?.is_live && !theirs.has(m.event_id))
+  const live = cards.filter((c) => c.live.is_live)
+  const events = new Set(live.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
+  const addresses = new Set(live.flatMap((c) => (c.live.match ? [c.live.match] : [])))
+  return matches.filter((m) => m.live?.is_live && !events.has(m.event_id) && !(m.addresses ?? []).some((a) => addresses.has(a)))
 }
 
 /**

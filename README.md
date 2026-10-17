@@ -173,15 +173,23 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the game's own moments as its sport sees a whole game (`Sport.game_moments`: football's goals and cards
   whoever's, every named cricketer's wickets and fifties, a chess board turning, an esports series' maps or a
   lobby's matches, every result), titled with the game ("India v Australia: Kohli out for 82"), and says
-  whom each is about, so a fan who follows a player in it too hears each moment once, as their player's.
+  whom each is about, so a fan who follows a player in it too hears each moment once, as their player's,
+  and one the other side already said in an earlier push isn't said again (the same play, by the source's id
+  for it). A game here as two events (a chess board is a fixture of each player) is one follow, found at
+  either address; it settles on the event of a player the fan follows (the tick), so its moments come once
+  and its board shows once.
   They go by the fan's level for the game (key moments by default; the bell beside Follow, or Alerts'
   Settings), on the game's one notification, muted with it, and are in the Alerts list. Today shows the
   games followed this way that none of the fan's players is in, live with their own games and to come in
   Coming up (`GET /api/me/matches`, and the fan stream's game channels). When the game ends the follow
-  lapses within the minute (the tick), after the result is sent; a game that never starts lapses a day past
-  its start. A fan follows at most 20 games at once; a made-up address makes no follow and no poll, and a
-  game no running source can poll by itself (one only a followed player's fixtures bring) says No live
-  alerts rather than promise them. `PUT`/`DELETE /api/match/<source>/<game id>/follow`.
+  lapses within the minute (the tick), after the result is sent; a game that never starts (to come, or armed
+  with its source still saying so) lapses a day past its start. A fan follows at most 20 games at once; a
+  made-up address makes no follow and no poll, and a game no running source can poll by itself (one only a
+  followed player's fixtures bring) says No live alerts rather than promise them. A game nobody follows a
+  player in, from a source polled a request a game (Sportmonks cricket, Lichess), waits while that source is
+  down to its live reserve, so followed players' games keep it: the page and Today say its alerts are paused,
+  and the late-games metric doesn't count it. `PUT`/`DELETE /api/match/<source>/<game id>/follow`,
+  `DELETE /api/me/matches/<event id>`.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

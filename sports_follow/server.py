@@ -603,6 +603,15 @@ def my_matches(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dic
     return {"matches": matches.mine(db, fan)}
 
 
+@app.delete("/api/me/matches/{event_id}")
+def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Stop following a game by the event the follow is on (the match page's follow state, or /api/me/matches):
+    whichever of a game's addresses the follow was made at, or has moved to (a chess board's)."""
+    matches.unfollow_event(db, fan, event_id)
+    db.commit()
+    return {"event_id": event_id, "following": False}
+
+
 @app.put("/api/me/matches/{event_id}/alerts")
 def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of a followed game's own moments the fan is told about: everything, key, results or off, as for a player."""
@@ -1654,9 +1663,8 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
     rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + [(m, None, event, muted, sport) for m, event, muted, sport in db.execute(games)],
                   key=lambda r: -r[0].id)[:limit]
     # A game's moment that one of the fan's players' says too is listed once, as their player's.
-    athletes = notify._athletes(db, [r[0] for r in rows])
-    theirs = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects, athletes.get((m.player_id, m.event_id), frozenset()))
-              for m, *_ in rows if m.player_id is not None]
+    planned = {i.id: i for i in notify.with_athletes(db, notify.as_items([r[0] for r in rows]))}
+    theirs = [i for i in planned.values() if i.player_id is not None]
     items = [
         {
             "id": m.id, "kind": m.kind, "level": m.level, "priority": m.priority, "title": m.title, "body": m.body, "url": m.url,
@@ -1664,7 +1672,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
             **({"sport": sports.of(sport).key or "other"} if m.player_id is None else {}),  # a game's own: its sport, for its mark
         }
         for m, name, event, muted, sport in rows
-        if m.player_id is not None or not any(alerts.same(alerts.Item(m.id, None, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects, frozenset(m.about or ())), p) for p in theirs)
+        if m.player_id is not None or not any(alerts.same(planned[m.id], p) for p in theirs)
     ]
     return {"items": items, "next": rows[-1][0].id if len(rows) == limit else None}
 

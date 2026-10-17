@@ -229,7 +229,7 @@ def test_quiet_hours_in_the_devices_timezone():
 
 def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypatch, caplog):
     now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
-    goal = SimpleNamespace(id=1, player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3), corrects=None)
+    goal = SimpleNamespace(id=1, key="5:7:goal:goal1", player_id=7, event_id=5, kind="goal", level="key", priority=90, title="Goal", body="", url="/player/7", created_at=now - timedelta(seconds=3), corrects=None, about=None)
     answers = iter([[1], [goal], []])  # the claim, the claimed moments, then what corrections took back
 
     @contextmanager
