@@ -640,6 +640,10 @@ class PandascoreEsports(Adapter):
             out.append(f)
         return out
 
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A series polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"match": source_id} if self.fixture_pattern.fullmatch(source_id) else None
+
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many series at once, MULTI_MAX to a request: the live lane's one fetch a round. Keyed as
         given; a match PandaScore doesn't return is left out."""

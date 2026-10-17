@@ -31,12 +31,19 @@ class Rows(list):
 
 
 class Db:
-    """Answers the few queries the async routes make; the statements themselves aren't checked."""
+    """Answers the few queries the async routes make; the statements themselves aren't checked, but for the
+    games the fan follows by themselves, of which GAMES are."""
+
+    games: list[int] = []
 
     def execute(self, stmt):
+        if "match_follow" in str(stmt):
+            return Rows([])  # the followed games' rows: the stream's first frame lists none
         return Rows(FOLLOWS if stmt.get_final_froms() else [(1,)])  # the fan's follows, or health's select(1)
 
     def scalars(self, stmt):
+        if "match_follow" in str(stmt):
+            return Rows(self.games)
         return Rows(player_id for player_id, _ in FOLLOWS)
 
     def scalar(self, stmt):
@@ -130,9 +137,18 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     event, held = first_frame(response, api)
     assert event["type"] == "following"
     assert [(p["player_id"], p["version"], p["live"]["score"], p["alerts"]) for p in event["players"]] == [(1, 4, "1-0", "key"), (2, 9, "2-2", "off")]
-    assert held == 0 and api.opened == ["thread", "thread"]  # the follow ids, then the players: each closed at once
+    assert event["matches"] == []
+    assert held == 0 and api.opened == ["thread"] * 3  # the follow ids, the players, the followed games: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap.
     assert api.redis.log == ["subscribe player:1 player:2", "get card:1", "get card:2", "unsubscribe"]
+
+
+def test_the_fan_stream_carries_the_games_the_fan_follows_by_themselves(api, monkeypatch):
+    monkeypatch.setattr(Db, "games", [41, 42])
+    response = asyncio.run(server.my_stream(Request(), fan="fan"))
+    first_frame(response, api)
+    # Each followed game's channel: its board as it's polled, and its own moments (bus.match_channel).
+    assert api.redis.log[0] == "subscribe player:1 player:2 match:41 match:42"
 
 
 def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(api):

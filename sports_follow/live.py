@@ -28,7 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session
 
-from . import bus, registry, search, sports
+from . import bus, matches, registry, search, sports
 from .adapters import ADAPTERS, Adapter, LiveGame, PlayerRef
 from .db import session
 from .models import Athlete, Event
@@ -112,6 +112,7 @@ def read(system: str, now: datetime | None = None) -> int:
     with session() as db:
         blocked = registry.blocked(db)
         dumped = [_dump(g, sport, *_ranked(db, sport, system, g, blocked)) for g in games if (sport := g.sport or one)]
+        matches.learn(db, system, [g.fixtures for g in games])  # each board's every address, for its follows
     dumped.sort(key=lambda g: (-g["tier"], -g["fame"]))
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)

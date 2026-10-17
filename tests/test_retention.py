@@ -121,7 +121,7 @@ def test_moments_outlive_the_activity_list(monkeypatch):
 
 
 TEST_DB = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
-TABLES = "notification_mute, notification, moment, push_subscription, news_player, news_item, player_line, event_state, event_player, event, follow, player_card, player_identity, player_alias, source_binding, membership, team, player"
+TABLES = "match_follow, notification_mute, notification, moment, push_subscription, news_player, news_item, player_line, event_state, event_player, event, follow, player_card, player_identity, player_alias, source_binding, membership, team, player"
 
 
 @pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
@@ -149,6 +149,9 @@ def test_a_finished_games_timeline_is_cut_to_what_is_read(monkeypatch):
             x("INSERT INTO moment (key, player_id, event_id, kind, level, priority, title, body, url, created_at) VALUES (:k, 1, :e, 'fifty', 'key', 50, :k, '', '/', :a)", k=key, e=event, a=ago(age))
         for age in (100, 10):
             x("INSERT INTO notification (fan_id, player_id, moment_ids, kind, lines, loud, devices, delivered, created_at) VALUES ('fan', 1, '[]', 'fifty', '[]', true, 1, 1, :a)", a=ago(age))
+        # Games followed by themselves: one lapsed 40 days ago goes; one lapsed 3 days ago, and one still on, stay.
+        for event, lapsed in [(1, ago(40)), (2, ago(3)), (3, None)]:
+            x("INSERT INTO match_follow (fan_id, event_id, alert_rules, created_at, until) VALUES ('fan', :e, '{}', :c, :u)", e=event, c=ago(41), u=lapsed)
 
     def view():
         with db_module.session() as s:
@@ -163,13 +166,14 @@ def test_a_finished_games_timeline_is_cut_to_what_is_read(monkeypatch):
     before = view()
     would = retention.run(count=True)
     done = retention.run()
-    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "sidelined": 0, "card_keys": 0}
+    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "sidelined": 0, "match_follow": 1, "card_keys": 0}
     assert view() == before
     with engine.connect() as c:
         kept = c.execute(text("SELECT event_id, score_label FROM event_state ORDER BY event_id, id")).all()
         assert [(e, s) for e, s in kept if e in (1, 4)] == [(1, "1:9"), (4, "4:9"), (4, "late")]  # final, and the latest
         assert c.scalar(text("SELECT count(*) FROM event_state WHERE event_id IN (2, 3)")) == 20  # recent, and live: untouched
         assert sorted(c.scalars(text("SELECT key FROM moment"))) == ["new-2", "old-live"]
-    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "sidelined": 0, "card_keys": 0}
+        assert sorted(c.scalars(text("SELECT event_id FROM match_follow"))) == [2, 3]
+    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "sidelined": 0, "match_follow": 0, "card_keys": 0}
     with engine.begin() as c:
         c.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))

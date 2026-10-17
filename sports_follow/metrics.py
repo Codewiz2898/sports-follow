@@ -150,24 +150,26 @@ def behind_after(live_binding: dict[str, Any]) -> float:
 
 
 def live(now: float | None = None) -> dict[str, Reading]:
-    """The armed and live games with a followed player and a live binding to a source this build runs
-    (one it doesn't run never polls them, and they aren't late for it), by source and status; per
+    """The armed and live games with a followed player, or followed by themselves (matches.py) unless held back
+    for now (structured.holds_back: the poller waits on purpose, so they aren't late), and a live binding to a
+    source this build runs (one it doesn't run never polls them, and they aren't late for it), by source and
+    status; per
     source, how long since its least recently polled game was polled (structured._polled), and how
     many of its games weren't polled within behind_after (or ever)."""
     from sqlalchemy import select
 
-    from . import bus
+    from . import bus, structured
     from .adapters import ADAPTERS
     from .db import session
     from .models import Event, EventPlayer, Follow
 
     now = now or time.time()
     with session() as db:
-        followed = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
-        games = [(event_id, status, dict(binding or {})) for event_id, status, binding in db.execute(
-            select(Event.id, Event.status, Event.live_binding)
-            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))
-        ).all() if (binding or {}).get("adapter") in ADAPTERS]
+        theirs = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
+        games = [(event_id, status, dict(binding or {})) for event_id, status, binding, mine in db.execute(
+            select(Event.id, Event.status, Event.live_binding, Event.id.in_(theirs))
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(structured.watched()))
+        ).all() if (adapter := ADAPTERS.get(str((binding or {}).get("adapter")))) is not None and (mine or not structured.holds_back(adapter))]
     counts: Counter[tuple[str, str]] = Counter((binding["adapter"], status) for _, status, binding in games)
     redis: Any = bus.sync_redis()  # synchronous: its answers are values, whatever redis-py's types allow
     polled = redis.mget([f"polled_at:{event_id}" for event_id, _, _ in games]) if games else []

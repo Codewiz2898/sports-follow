@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import ORDINAL, Found, Line, Poster, Seen, Sport, num, number, stat, values
+from .base import ORDINAL, Found, Line, Played, Poster, Seen, Sport, num, number, stat, values
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -26,6 +26,10 @@ class Tennis(Sport):
     alerts = {
         "key": ("Matches, upsets and results", "The match starting, beating a higher seed, the result and injuries"),
         "more": ("every set", "each set and milestones"),
+    }
+    game_alerts = {
+        "key": ("The start and the result", "The match starting and the result"),
+        "more": ("every set", "each set"),
     }
     stats_title = "Overview"
     games = ("match", "matches")
@@ -69,6 +73,19 @@ class Tennis(Sport):
         return None
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
+        return self._sets(who, before, now, losses=True)
+
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """Each set, once, from the side that won it: "Sinner v Alcaraz: Sinner wins the 2nd set"."""
+        found = []
+        for athlete_id, who in now.names.items():
+            for f in self._sets(who, before.seen(athlete_id), now.seen(athlete_id), losses=False):
+                f.title, f.about = f"{name}: {f.title}", ("*",)
+                found.append(f)
+        return found
+
+    def _sets(self, who: str, before: Seen, now: Seen, losses: bool) -> list[Found]:
+        """The sets a player won (and lost, with losses) since the last poll."""
         if now.line is None:
             return []
 
@@ -82,7 +99,7 @@ class Tennis(Sport):
         found, n = [], won_was + lost_was
         # Polls come every ten seconds, so this is almost always one set; if two finished in between,
         # which came first isn't known and wins are listed first.
-        for won in [True] * max(0, won_now - won_was) + [False] * max(0, lost_now - lost_was):
+        for won in [True] * max(0, won_now - won_was) + ([False] * max(0, lost_now - lost_was) if losses else []):
             n += 1
             title = f"{who} {'wins' if won else 'loses'} the {ORDINAL.get(n, f'{n}th')} set"
             found.append(Found("set", "minor", title, f"Sets {won_now}–{lost_now} · {now.score}".strip(" ·"), f"set{n}"))

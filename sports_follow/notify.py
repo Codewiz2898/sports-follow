@@ -1,5 +1,6 @@
 """Telling fans about moments (moments.py): store each once, then push them to every follower who
-wants them, on every device they turned notifications on for, by the noise rules in alerts.py.
+wants them, on every device they turned notifications on for, by the noise rules in alerts.py. A game's
+own moments (Sport.game_moments) go the same way to the fans following the game itself (matches.py).
 
 A poll's (or a rebuild's) new moments go out together as one batch: claimed in the database so they
 are sent once, planned per fan (one push per game, sound rationed), logged as notification rows, then
@@ -21,7 +22,10 @@ import json
 import logging
 import os
 import sys
+from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -37,7 +41,7 @@ from . import alerts, bus, fcm, logs, metrics
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
-from .models import Follow, Moment, Notification, NotificationMute, PushSubscription
+from .models import Event, Follow, MatchFollow, Moment, Notification, NotificationMute, PlayerIdentity, PushSubscription
 
 log = logging.getLogger("sports_follow.notify")
 
@@ -131,6 +135,42 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
     return ids
 
 
+def record_game(db: Session, event_id: int, found: list[Found], url: str) -> list[int]:
+    """Store a game's own moments (Sport.game_moments), for the fans following the game itself; ones already
+    stored are skipped, and a correction is stored with the moment it takes back, or not at all. Returns the
+    new ids."""
+    ids = []
+    for f in found:
+        corrects = None
+        if f.kind == "correction":
+            corrects = db.scalar(select(Moment.id).where(Moment.key == _game_key(event_id, f.detail)))
+            if corrects is None:
+                continue
+        new_id = db.scalar(
+            insert(Moment)
+            .values(key=_game_key(event_id, f"{f.kind}:{f.detail}"), player_id=None, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50,
+                    title=f.title[:200], body=f.body, url=url, corrects=corrects, about=list(f.about or ("*",)))
+            .on_conflict_do_nothing()
+            .returning(Moment.id)
+        )
+        if new_id:
+            ids.append(new_id)
+            metrics.moment(f.kind)
+    return ids
+
+
+def told_game(db: Session, event_id: int) -> list[tuple[str, str]]:
+    """A game's own moments so far, oldest first, as each one's kind and detail: what it may take back."""
+    prefix = _game_key(event_id, "")
+    keys = db.scalars(select(Moment.key).where(Moment.event_id == event_id, Moment.player_id.is_(None)).order_by(Moment.id))
+    return [(kind, detail) for kind, _, detail in (key.removeprefix(prefix).partition(":") for key in keys)]
+
+
+def _game_key(event_id: int, kind_detail: str) -> str:
+    """A game's own moment's key: its game, "game" where a player's has their id, its kind and detail."""
+    return f"{event_id}:game:{kind_detail}"[:200]
+
+
 def told(db: Session, player_id: int, event_id: int) -> list[tuple[str, str]]:
     """The moments stored for a player in a game, oldest first, as each one's kind and detail (read back
     from its key): what the sport may take back (moments.detect)."""
@@ -178,16 +218,21 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         if not claimed:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
-        items = [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects) for m in rows]
+        items = as_items(rows)
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
         # A correction's toast follows its moment's: one sent in an earlier batch (not taken back before it went).
         corrects = {i.corrects for i in items if i.corrects is not None}
         toasted = set(db.scalars(select(Moment.id).where(Moment.id.in_(corrects), Moment.id.not_in(claimed), Moment.sent_at.is_not(None))).all()) if corrects else set()
-    # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself.
+    # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself. A game's
+    # own go to the fans following the game.
     for item in items:
         if item.id not in taken_back and (item.corrects is None or item.corrects in toasted) and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
-            bus.publish(item.player_id, {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}})
+            told_ = {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}}
+            if item.player_id is not None:
+                bus.publish(item.player_id, told_)
+            elif item.event_id is not None:
+                bus.publish_match(item.event_id, told_)
     if not jobs:
         return 0
     futures = [(notification_id, device, _wire.submit(logs.carried(deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
@@ -204,6 +249,37 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     return sent
 
 
+def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
+    """Moments as the planner sees them: a game's own with whom it's about, each with its detail, read back from
+    its key. A player's says whom it's about, and each its place among its kind, once for_games() has looked them up."""
+    return [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects,
+                        frozenset(m.about or ()) if m.player_id is None else frozenset(), (m.key.split(":", 3)[3:] or [""])[0]) for m in rows]
+
+
+def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
+    """What tells a game's own moment to be one of a player's (alerts.same), looked up only where it's needed (a
+    game someone follows by itself): each player moment's player by their id in its game's source, and each
+    moment's place among its game's of its kind about the same player (Item.nth: their first goal, the game's
+    first goal by them), for a play one side names by the source's id and the other only by its count."""
+    pairs = {(i.player_id, i.event_id) for i in items if i.player_id is not None and i.event_id is not None}
+    events = {i.event_id for i in items if i.event_id is not None}
+    if not events:
+        return items
+    systems = {e.id: (e.key or "").partition(":")[0] for e in db.scalars(select(Event).where(Event.id.in_(events)))}
+    ids: dict[tuple[int, str], set[str]] = {}
+    for player_id, system, external in db.execute(select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_({p for p, _ in pairs}))) if pairs else []:
+        ids.setdefault((player_id, system), set()).add(external)
+    counted: Counter[tuple[int | None, str, Any]] = Counter()
+    nth: dict[int, int] = {}
+    for moment_id, event_id, kind, player_id, about in db.execute(select(Moment.id, Moment.event_id, Moment.kind, Moment.player_id, Moment.about)
+                                                                  .where(Moment.event_id.in_(events), Moment.kind.in_({i.kind for i in items})).order_by(Moment.id)):
+        whose = player_id if player_id is not None else ("game", (about or ["*"])[0])
+        counted[(event_id, kind, whose)] += 1
+        nth[moment_id] = counted[(event_id, kind, whose)]
+    return [replace(i, about=frozenset(ids.get((i.player_id, systems.get(i.event_id, "")), ())) if i.player_id is not None and i.event_id is not None else i.about,
+                    nth=nth.get(i.id, 0)) for i in items]
+
+
 def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
     """The moments of a batch's games a correction has taken back (a goal VAR ruled out), the batch's
     own corrections among them: not sent if they haven't been, and out of the story underneath."""
@@ -214,13 +290,21 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
 def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
-    players = {i.player_id for i in items}
+    players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
     levels: dict[str, dict[int, str]] = {}
-    for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))):
+    for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
+    # The batch's games that fans follow by themselves, lapsed or not: plan() keeps a lapsed follow's moments
+    # found before it lapsed (the result), and a player's moment one of them already said isn't said again.
+    games: dict[str, dict[int, alerts.Watch]] = {}
+    for fan, event_id, rules, until in db.execute(select(MatchFollow.fan_id, MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.until).where(MatchFollow.event_id.in_(events))) if events else []:
+        games.setdefault(fan, {})[event_id] = alerts.Watch((rules or {}).get("level", DEFAULT_LEVEL), until)
+    fans = set(levels) | set(games)
+    if games:
+        items = for_games(db, items)  # whom each player moment is about, and where, to tell a game's own of the same
     devices: dict[str, list[PushSubscription]] = {}
-    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(levels), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())) if levels else []:
+    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(fans), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())) if fans else []:
         mine = devices.setdefault(d.fan_id, [])
         # However many are stored, one fan's fan-out can't fill the push threads every other fan waits on.
         if len(mine) < MAX_DEVICES:
@@ -235,9 +319,15 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     for n in db.scalars(earlier):
         sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
+    # What earlier pushes of these games sent the fans who follow one by itself: a moment one side said there
+    # isn't said again by the other (alerts.plan).
+    followed = {e for watches in games.values() for e in watches}
+    earlier_ids = {m for fan in games for s in sent.get(fan, []) if s.event_id in followed for m in s.moment_ids}
+    told = {i.id: i for i in for_games(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
     jobs = []
     for fan, fan_devices in devices.items():
-        for p in alerts.plan(items, levels[fan], muted.get(fan, set()), sent.get(fan, []), now, taken_back):
+        heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) for m in s.moment_ids if m in told]
+        for p in alerts.plan(items, levels.get(fan, {}), muted.get(fan, set()), sent.get(fan, []), now, taken_back, games.get(fan, {}), heard):
             row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
             db.add(row)
             db.flush()

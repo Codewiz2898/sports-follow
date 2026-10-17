@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, metrics, moments, notify, photos, shutdown, sports, structured
+from . import bus, matches, metrics, moments, notify, photos, shutdown, sports, structured
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -801,7 +801,9 @@ def to_arm(games: Iterable[tuple[int, str | None, datetime | None, bool]], now: 
 
 
 def due_work(now: datetime | None = None) -> Due:
-    """What the scheduler should enqueue now. Only followed players get work.
+    """What the scheduler should enqueue now. Only followed players get work, and games fans follow by
+    themselves (matches.py): those are polled as a followed player's are, and their follows lapse once
+    they're over.
 
     Events move scheduled -> armed at T-30 min, or earlier for a sport whose team sheets come out sooner
     (football's, at T-75 min: structured.arm_before). An armed or live event with a live binding gets one
@@ -837,6 +839,10 @@ def due_work(now: datetime | None = None) -> Due:
         ).all()
         # Closed without a final poll (the source stopped returning the game): its cards stop saying LIVE.
         unstuck = structured.close_live(db, list(closed))
+        # Games followed by themselves that are over: nothing more of them is sent. The rest settle on the event
+        # of a player their fan follows, where the game's here as several.
+        matches.lapse(db, now)
+        matches.settle(db)
         # Each followed player's fixtures binding (structured.binding()'s pick: highest priority, newest),
         # of the sources running as this tick began: the admin panel may turn one off while it runs.
         running = dict(structured.ADAPTERS.items())
@@ -887,6 +893,20 @@ def due_work(now: datetime | None = None) -> Due:
                 polls.add(event_id)
             elif pid not in bindings:
                 lives.add(pid)
+        # Games followed by themselves, nobody's player in them or not: polled the same way, by their source. One
+        # with nobody's player in it waits while its source is held back (structured.holds_back): followed
+        # players' games keep the reserve. A follow of a game here as two events (a chess board) moves first to
+        # the one a player its fan follows is in (matches.settle).
+        theirs = {event_id for event_id, _, _ in armed}
+        itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(matches.watched()))).all()
+        for event_id, live_binding, sport in itself:
+            source = (live_binding or {}).get("adapter")
+            if not sports.on(sport) or source not in running:
+                continue
+            if structured.batched(source):
+                lanes.add(source)
+            elif event_id in theirs or not structured.holds_back(running[source]):
+                polls.add(event_id)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]
         stale_before = now - timedelta(seconds=LIVE_CHECK_INTERVAL)

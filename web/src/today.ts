@@ -6,7 +6,7 @@
 import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { drawable } from './sports/facts'
-import type { ActivityItem, Card, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
+import type { ActivityItem, Card, FollowedMatch, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
 
 export const FEW = 3  // until a fan follows this many, Today keeps offering starters
 export const AHEAD_DAYS = 14  // how far Coming up looks
@@ -35,27 +35,48 @@ export function latestIn(items: ActivityItem[], group: Card[], seen: number): La
   const game = group[0].live.event_id
   if (game == null) return null
   const ids = new Set(group.map((c) => c.player_id))
-  const m = items.find((i) => i.event_id === game && ids.has(i.player_id))
+  const m = items.find((i) => i.event_id === game && i.player_id != null && ids.has(i.player_id))
   return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen && !m.muted } : null
 }
 
-export interface Coming { key: string; event: UpcomingEvent; players: Card[] }
+/** A game coming up: its fan's players in it, and its sport where none of theirs is (a game followed by itself). */
+export interface Coming { key: string; event: UpcomingEvent; players: Card[]; sport?: string }
 
 /** Every game of the fan's players in the next two weeks, soonest first, each once with everyone of theirs
- * who plays in it. One that has started has left: it's live, or it's a result. */
-export function comingUp(cards: Card[], now: number): Coming[] {
+ * who plays in it, and the games they follow by themselves (`matches`) that none of their players is in. One
+ * that has started has left: it's live, or it's a result. */
+export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = []): Coming[] {
+  const soon = (s: string | null | undefined) => {
+    const start = parseDate(s)
+    return start && ahead(s, now) && start.getTime() - now <= AHEAD_DAYS * 864e5 ? start : null
+  }
   const merged = new Map<string, Coming>()
   for (const c of cards) {
     for (const u of c.upcoming ?? []) {
-      const start = parseDate(u.start_utc)
-      if (!start || !ahead(u.start_utc, now) || start.getTime() - now > AHEAD_DAYS * 864e5) continue
+      const start = soon(u.start_utc)
+      if (!start) continue
       const key = u.event_id != null ? `event:${u.event_id}` : `${u.title.toLowerCase()}|${start.toDateString()}`
       const found = merged.get(key)
       if (!found) merged.set(key, { key, event: u, players: [c] })
       else if (!found.players.includes(c)) found.players.push(c)
     }
   }
+  for (const m of matches) {
+    const key = `event:${m.event_id}`
+    if (merged.has(key) || !soon(m.start_utc) || !['scheduled', 'armed'].includes(m.status)) continue
+    merged.set(key, { key, event: { title: m.title, competition: m.competition, start_utc: m.start_utc, status: m.status, event_id: m.event_id, match: m.match }, players: [], sport: m.sport })
+  }
   return [...merged.values()].sort((a, b) => parseDate(a.event.start_utc)!.getTime() - parseDate(b.event.start_utc)!.getTime())
+}
+
+/** The games the fan follows by themselves that are on now, none their players are in (those are on Today as
+ * their players' games already: by event, or at any of the game's addresses, a chess board's other one), in the
+ * order they were listed. */
+export function followedLive(matches: FollowedMatch[], cards: Card[]): FollowedMatch[] {
+  const live = cards.filter((c) => c.live.is_live)
+  const events = new Set(live.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
+  const addresses = new Set(live.flatMap((c) => (c.live.match ? [c.live.match] : [])))
+  return matches.filter((m) => m.live?.is_live && !events.has(m.event_id) && !(m.addresses ?? []).some((a) => addresses.has(a)))
 }
 
 /**

@@ -227,6 +227,8 @@ def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
         if tag == "GOAL" and e.get("related_player_name") and kind != "OWNGOAL":
             text += f", assist {e['related_player_name']}"
         moments.append({
+            # Sportmonks' id for the play: a goal's key in its alerts (sports.football), which a revised minute keeps.
+            "id": str(e["id"]) if e.get("id") is not None else None,
             "clock": minute(e), "kind": tag, "text": text, "athlete_ids": [str(i) for i in (e.get("player_id"), e.get("related_player_id")) if i],
             # For a goal's notification: whose goal it was, who set it up (sports.football._goal).
             "team_id": str(e.get("participant_id")), "assist": e.get("related_player_name") if tag == "GOAL" and kind != "OWNGOAL" else None, "own_goal": kind == "OWNGOAL",
@@ -472,6 +474,10 @@ class SportmonksFootball(Adapter):
     def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
         found = self._between(page["team"], date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600)
         return [f for f in found if f.status == "final"]
+
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A match polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.

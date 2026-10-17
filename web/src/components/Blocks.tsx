@@ -132,21 +132,22 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
 
 /**
  * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it. It
- * opens the game's match page (the line-ups as they come, both sides' players), else the first player's page.
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it, or
+ * saying they follow the game itself. It opens the game's match page (the line-ups as they come, both sides'
+ * players), else the first player's page.
  */
-export function ComingCard({ event, players, seed }: { event: UpcomingEvent; players: Card[]; seed: string }) {
+export function ComingCard({ event, players, seed, sport }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string }) {
   const now = useNow()
-  const key = sportKey(players[0].player.sport)
+  const key = sportKey(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Link to={event.match ? `/match/${event.match}` : `/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
+    <Link to={event.match ? `/match/${event.match}` : players[0] ? `/player/${players[0].player_id}` : '/'} className="next-card coming" data-sport={key}>
       <Backdrop sport={key} seed={seed} />
       <span className="eyebrow muted">{eyebrow}</span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
-        <span className="player-chip">{players.map((c) => shortName(c.player.name)).join(' · ')}</span>
+        <span className="player-chip">{players.length ? players.map((c) => shortName(c.player.name)).join(' · ') : 'Following this game'}</span>
       </span>
     </Link>
   )
