@@ -1,5 +1,5 @@
 import './esports.css'
-import { dotaLine, esports as facts, isLobby, lobbyRows, place, points, shortTeam, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam } from './facts/esports'
+import { dotaLine, esports as facts, isLobby, lobbyRows, lobbyWinners, place, points, shortTeam, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam } from './facts/esports'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
@@ -91,7 +91,7 @@ function EsportsBoard(props: BoardProps<EsportsState | BattleRoyaleState>) {
  * numbers), or a lobby's whole standings and who won each of its matches. */
 function EsportsMatch({ page }: MatchProps<EsportsPage>) {
   if (page.standings?.length) {
-    const won = (page.games ?? []).filter((g) => g.winner)
+    const won = lobbyWinners(page)
     return (
       <MatchSection title="Standings" note={`${page.standings.length} teams`}>
         <div className="card card-pad stack" style={{ gap: 12 }}>
@@ -103,7 +103,7 @@ function EsportsMatch({ page }: MatchProps<EsportsPage>) {
               ))}
             </tbody>
           </table>
-          {won.length > 0 && <span className="small muted">{won.map((g) => `M${g.n}${g.map ? ` (${g.map})` : ''}: ${g.winner}`).join(' · ')}</span>}
+          {won && <span className="small muted">{won}</span>}
         </div>
       </MatchSection>
     )

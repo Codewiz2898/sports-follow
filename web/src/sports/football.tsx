@@ -1,4 +1,4 @@
-import { football as facts, type FootballPage, type FootballSide, type FootballState } from './facts/football'
+import { football as facts, timelineKind, type FootballPage, type FootballSide, type FootballState } from './facts/football'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
@@ -21,8 +21,6 @@ function FootballBoard({ state, clock, compact }: BoardProps<FootballState>) {
   )
 }
 
-const KINDS: Record<string, string> = { GOAL: 'Goal', DISALLOWED: 'No goal', YELLOW: 'Yellow', RED: 'Red' }
-
 /** A match page's timeline: each goal and card at its minute, newest first, the home side's on the left and
  * the away side's on the right. */
 function FootballMatch({ page }: MatchProps<FootballPage>) {
@@ -33,7 +31,7 @@ function FootballMatch({ page }: MatchProps<FootballPage>) {
         {page.timeline.map((e, i) => (
           <li key={`${e.clock}-${e.kind}-${i}`} className={e.side === 1 ? 'away' : undefined}>
             <span className="num">{e.clock}</span>
-            <span className={`moment-kind ${e.kind.toLowerCase()}`}>{KINDS[e.kind] ?? e.kind.toLowerCase()}</span>
+            <span className={`moment-kind ${e.kind.toLowerCase()}`}>{timelineKind(e.kind)}</span>
             <span className="small">{e.text}</span>
           </li>
         ))}
