@@ -442,9 +442,13 @@ def test_the_api_offers_teams_in_search_and_follows_them(db, redis, source, monk
     shown = asyncio.run(server.team_page(arsenal, "gooner"))
     assert (shown["name"], shown["following"], shown["refreshing"]) == ("Arsenal", False, True) and queued == [("refresh_team", arsenal)]
     assert asyncio.run(server.team_page(arsenal, "gooner"))["refreshing"] is False  # asked once a while
-    # And pages ask at most teams.READS reads a minute of a source, whichever teams: a crawler spends no more.
+    # And pages and follows ask at most teams.READS reads a minute of a source, whichever teams: a crawler, or
+    # following and unfollowing team after team, spends no more; a followed team is read by the next tick anyway.
     monkeypatch.setattr(teams, "READS", 1)
     assert asyncio.run(server.team_page(team(db, CHE).id, "gooner"))["refreshing"] is False and len(queued) == 1
+    asyncio.run(server.follow_team(team(db, CHE).id, "blue"))
+    assert len(queued) == 1 and pipeline.due_work(NOW).teams == [team(db, CHE).id]
+    monkeypatch.setattr(teams, "READS", 6)
     assert asyncio.run(server.follow_team(arsenal, "gooner")) == {"team_id": arsenal, "following": True}
     assert queued[-1] == ("refresh_team", arsenal)  # its games now, not at the next tick
     assert server.set_team_alerts(arsenal, {"level": "results"}, "gooner", db) == {"team_id": arsenal, "alerts": "results"}

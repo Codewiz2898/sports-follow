@@ -645,17 +645,22 @@ async def team_page(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
     shown, asking = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such team.")
-    ask = False
-    if asking is not None:
-        try:
-            spent = f"teams:reads:{match.allowance(asking)}:{int(time.time() // 60)}"
-            ask = await state["redis"].incr(spent) <= teams.READS
-            await state["redis"].expire(spent, 120, nx=True)
-            if ask:
-                await enqueue("refresh_team", team_id)
-        except Exception:
-            log.warning("teams: couldn't ask for team %s's games", team_id, exc_info=True)
-    return {**shown, "refreshing": ask}
+    return {**shown, "refreshing": asking is not None and await _read_team(asking, team_id)}
+
+
+async def _read_team(system: str, team_id: int) -> bool:
+    """Queue a read of a team's games, unless fans' looks and follows have asked teams.READS of its source's
+    allowance this minute (a followed team is read by the next tick anyway). Whether it was queued."""
+    try:
+        spent = f"teams:reads:{match.allowance(system)}:{int(time.time() // 60)}"
+        ask = await state["redis"].incr(spent) <= teams.READS
+        await state["redis"].expire(spent, 120, nx=True)
+        if ask:
+            await enqueue("refresh_team", team_id)
+        return ask
+    except Exception:
+        log.warning("teams: couldn't ask for team %s's games", team_id, exc_info=True)
+        return False
 
 
 @app.put("/api/teams/{team_id}/follow")
@@ -664,17 +669,17 @@ async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, A
     its results from its side. No such team, or one of a sport turned off, is a 404; one whose source isn't
     running, a 409; a fan following teams.MAX teams already, a 429."""
 
-    def save(db: Session) -> bool:
+    def save(db: Session) -> str | None:
         team = teams.follow(db, fan, team_id)
         db.commit()  # before the answer: the tick that reads and polls its games reads it from now on
-        return teams.stale(team)
+        return team.system if teams.stale(team) else None
 
     try:
         stale = await in_db(save)
     except teams.Refused as refused:
         raise HTTPException(refused.status, refused.message)
-    if stale:
-        await enqueue("refresh_team", team_id)  # its games now, not at the next tick
+    if stale is not None:
+        await _read_team(stale, team_id)  # its games now, not at the next tick, within what fans' looks may ask
     return {"team_id": team_id, "following": True}
 
 
