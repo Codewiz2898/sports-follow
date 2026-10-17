@@ -21,8 +21,8 @@ from sports_follow import accounts, bus, notify, pipeline, server, sports, struc
 from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import (Account, Event, EventPlayer, EventTeam, Follow, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription, Team,
-                                  TeamFollow, TeamOverride)
+from sports_follow.models import (Account, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
+                                  PushSubscription, Team, TeamFollow, TeamOverride)
 from sports_follow.sports.football import result_label
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -67,13 +67,15 @@ def test_cricket_says_the_margin_and_esports_the_maps_or_the_forfeit():
     assert lol is not None
     series = {"kind": "esports", "teams": [{"id": "126061", "name": "T1", "score": 3, "winner": True}, {"id": "2", "name": "Gen.G", "score": 1, "winner": False}]}
     assert lol.side_final(series, "", "", "2") == "Gen.G lost 1–3 v T1"
+    sweep = {"kind": "esports", "teams": [{"id": "126061", "name": "T1", "score": 2}, {"id": "2", "name": "Gen.G", "score": 0}]}
+    assert lol.side_final(sweep, "", "", "126061") == "T1 won 2–0 v Gen.G"  # a sweep's 0 is a score, flagged winner or not
     assert lol.side_final({**series, "forfeit": True}, "", "", "126061") == "T1 won by forfeit v Gen.G"
     assert lol.side_final({"kind": "battle_royale", "standings": []}, "", "", "1") == ""  # a lobby has no two sides
 
 
 def test_only_team_sports_have_teams_to_follow():
     assert {s.key for s in sports.ALL if s.follow_teams} >= {"football", "cricket", "basketball", "valorant", "lol"}
-    assert not any(sports.get(k).follow_teams for k in ("tennis", "chess"))  # type: ignore[union-attr]
+    assert not any(sports.get(k).follow_teams for k in ("tennis", "chess", "bgmi", "freefire", "pubgmobile", "pubg", "apex"))  # type: ignore[union-attr]: one a side, or a lobby
 
 
 # ---------------------------------------------------------------- the noise rules
@@ -281,8 +283,15 @@ def test_following_a_team_reads_its_games_and_has_them_polled(db, redis, source,
     due = pipeline.due_work(NOW)
     assert due.teams == [] and due.polls == [events["pitch:100"].id]
     assert pipeline.due_work(NOW + timedelta(hours=1)).teams == [arsenal.id]
+    # A read the source answers with nothing doesn't empty the page: its results are kept, and its games still to come.
+    source.fixtures[ARS] = []
+    monkeypatch.setattr(teams, "_now", lambda: NOW + timedelta(days=1))
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    again = teams.page(db, arsenal.id, "gooner")
+    assert again is not None and [r["result"] for r in again["recent"]] == ["Drew 1–1", "Won 2–0"] and [g["match"] for g in again["upcoming"]] == ["pitch/101"]
     [mine] = teams.mine(db, "gooner")
-    assert (mine["name"], mine["alerts"], mine["next"]["title"], mine["last"]["result"], mine["live"]) == ("Arsenal", "key", "Arsenal vs Chelsea", "Drew 1–1", None)
+    assert (mine["name"], mine["alerts"], mine["next"]["title"], mine["last"]["result"], mine["live"]) == ("Arsenal", "key", "Tottenham Hotspur vs Arsenal", "Drew 1–1", None)
     assert teams.set_level(db, "gooner", arsenal.id, "results") and not teams.set_level(db, "someone", arsenal.id, "off")
     teams.unfollow(db, "gooner", arsenal.id)
     db.commit()
@@ -338,19 +347,21 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
     source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=5), "live")]
     source.fixtures[CHE] = [fixture("100", NOW - timedelta(minutes=5), "live")]
     arsenal, chelsea = team(db, ARS), team(db, CHE)
-    # gooner follows Arsenal, blue Chelsea, both sides follows each, saka Arsenal and Saka; quiet Arsenal at results only.
-    for fan, followed in (("gooner", [arsenal]), ("blue", [chelsea]), ("sides", [arsenal, chelsea]), ("saka", [arsenal]), ("quiet", [arsenal])):
+    # gooner follows Arsenal, blue Chelsea, sides each, saka Arsenal and Saka; quiet Arsenal at results only; half
+    # Chelsea, and Arsenal set to off. match follows the game by itself, and neither team.
+    for fan, followed in (("gooner", [arsenal]), ("blue", [chelsea]), ("sides", [arsenal, chelsea]), ("saka", [arsenal]), ("quiet", [arsenal]), ("half", [arsenal, chelsea])):
         for t in followed:
             teams.follow(db, fan, t.id)
     teams.set_level(db, "quiet", arsenal.id, "results")
+    teams.set_level(db, "half", arsenal.id, "off")
     db.commit()
     teams.refresh(arsenal.id)
     teams.refresh(chelsea.id)
     event = db.scalars(select(Event).where(Event.key == "pitch:100")).one()
     db.add_all([Player(id=5, slug="saka", name="Bukayo Saka", sport="Football"), PlayerIdentity(player_id=5, system="pitch", external_id="7", confidence=1.0)])
     db.flush()
-    db.add_all([EventPlayer(event_id=event.id, player_id=5), Follow(fan_id="saka", player_id=5, alert_rules={})])
-    db.add_all([PushSubscription(fan_id=f, endpoint=f"https://fcm.googleapis.com/fcm/send/{f}", p256dh="k", auth="a") for f in ("gooner", "blue", "sides", "saka", "quiet")])
+    db.add_all([EventPlayer(event_id=event.id, player_id=5), Follow(fan_id="saka", player_id=5, alert_rules={}), MatchFollow(fan_id="match", event_id=event.id, alert_rules={}, keys=[event.key])])
+    db.add_all([PushSubscription(fan_id=f, endpoint=f"https://fcm.googleapis.com/fcm/send/{f}", p256dh="k", auth="a") for f in ("gooner", "blue", "sides", "saka", "quiet", "half", "match")])
     db.commit()
     binding = {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}
     assert event.live_binding == binding
@@ -362,21 +373,29 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
     assert heard() == set()  # a first look
     saka = goal("23'", "Saka", "7")
     poll(board(1, 0, "23'", [saka], 1))
-    assert heard() == {("gooner", "Arsenal v Chelsea: Saka puts Arsenal ahead"), ("blue", "Arsenal v Chelsea: Saka puts Arsenal ahead"),
-                       ("sides", "Arsenal v Chelsea: Saka puts Arsenal ahead"), ("saka", "Goal: Bukayo Saka puts Arsenal ahead")}
+    goal_23 = "Arsenal v Chelsea: Saka puts Arsenal ahead"
+    assert heard() == {("gooner", goal_23), ("blue", goal_23), ("sides", goal_23), ("half", goal_23), ("match", goal_23), ("saka", "Goal: Bukayo Saka puts Arsenal ahead")}
     db.add(NotificationMute(fan_id="blue", event_id=event.id))  # "Mute this game": the rest of it isn't theirs
     db.commit()
     poll(board(1, 1, "60'", [goal("60'", "Palmer", "20", CHE), saka], 1))
-    assert heard() == {("gooner", "Arsenal v Chelsea: Palmer equalises"), ("sides", "Arsenal v Chelsea: Palmer equalises"), ("saka", "Arsenal v Chelsea: Palmer equalises")}
+    assert heard() == {(f, "Arsenal v Chelsea: Palmer equalises") for f in ("gooner", "sides", "saka", "half", "match")}
     poll(board(2, 1, "88'", [goal("88'", "Saka", "7"), goal("60'", "Palmer", "20", CHE), saka], 2))
     heard()
     poll(board(2, 1, "FT", [goal("88'", "Saka", "7"), goal("60'", "Palmer", "20", CHE), saka], 2, status="final"))
-    assert heard() == {("gooner", "Arsenal won 2–1 v Chelsea"), ("sides", "Arsenal won 2–1 v Chelsea"), ("saka", "Bukayo Saka: Arsenal 2 – 1 Chelsea"), ("quiet", "Arsenal won 2–1 v Chelsea")}
+    assert heard() == {("gooner", "Arsenal won 2–1 v Chelsea"), ("sides", "Arsenal won 2–1 v Chelsea"), ("saka", "Bukayo Saka: Arsenal 2 – 1 Chelsea"), ("quiet", "Arsenal won 2–1 v Chelsea"),
+                       ("half", "Chelsea lost 1–2 v Arsenal"), ("match", "Arsenal v Chelsea: Arsenal won")}  # half set Arsenal to off: Chelsea's side
     # The alerts list: the game's own moments since the follow, the result from their side.
     assert [i["title"] for i in server.activity(None, 50, "gooner", db)["items"]][:2] == ["Arsenal won 2–1 v Chelsea", "Arsenal v Chelsea: Late goal: Saka puts Arsenal ahead"]
     blue = [i["title"] for i in server.activity(None, 50, "blue", db)["items"]]
     assert blue[0] == "Chelsea lost 1–2 v Arsenal" and "Arsenal v Chelsea: Arsenal won" not in blue
     assert "Arsenal won 2–1 v Chelsea" not in [i["title"] for i in server.activity(None, 50, "quiet", db)["items"]][1:]  # results only: just the result
+    # Following the game by itself, neither team: the game's own result, not a side's.
+    match_only = [i["title"] for i in server.activity(None, 50, "match", db)["items"]]
+    assert match_only[0] == "Arsenal v Chelsea: Arsenal won" and not {"Arsenal won 2–1 v Chelsea", "Chelsea lost 1–2 v Arsenal"} & set(match_only)
+    # Both sides followed: the result once, as the push said it.
+    finals = [i["title"] for i in server.activity(None, 50, "sides", db)["items"] if i["kind"] == "final"]
+    assert finals == ["Arsenal won 2–1 v Chelsea"]
+    assert [i["title"] for i in server.activity(None, 50, "half", db)["items"] if i["kind"] == "final"] == ["Chelsea lost 1–2 v Arsenal"]
     assert all(n.player_id is None or n.fan_id == "saka" for n in db.scalars(select(Notification)))
 
 
@@ -406,7 +425,16 @@ def test_the_api_offers_teams_in_search_and_follows_them(db, redis, source, monk
     async def enqueue(function: str, *args, **options) -> None:
         queued.append((function, *args))
 
+    class Counts(dict):
+        async def incr(self, key: str) -> int:
+            self[key] = self.get(key, 0) + 1
+            return self[key]
+
+        async def expire(self, key: str, seconds: int, nx: bool = False) -> bool:
+            return True
+
     monkeypatch.setattr(server, "enqueue", enqueue)
+    monkeypatch.setitem(server.state, "redis", Counts())
     teams.import_teams(source.fake, NOW)
     arsenal = team(db, ARS).id
     found = server._search("arsenal", None, "gooner", lambda: False)  # pyright: ignore[reportPrivateUsage]
@@ -414,6 +442,9 @@ def test_the_api_offers_teams_in_search_and_follows_them(db, redis, source, monk
     shown = asyncio.run(server.team_page(arsenal, "gooner"))
     assert (shown["name"], shown["following"], shown["refreshing"]) == ("Arsenal", False, True) and queued == [("refresh_team", arsenal)]
     assert asyncio.run(server.team_page(arsenal, "gooner"))["refreshing"] is False  # asked once a while
+    # And pages ask at most teams.READS reads a minute of a source, whichever teams: a crawler spends no more.
+    monkeypatch.setattr(teams, "READS", 1)
+    assert asyncio.run(server.team_page(team(db, CHE).id, "gooner"))["refreshing"] is False and len(queued) == 1
     assert asyncio.run(server.follow_team(arsenal, "gooner")) == {"team_id": arsenal, "following": True}
     assert queued[-1] == ("refresh_team", arsenal)  # its games now, not at the next tick
     assert server.set_team_alerts(arsenal, {"level": "results"}, "gooner", db) == {"team_id": arsenal, "alerts": "results"}

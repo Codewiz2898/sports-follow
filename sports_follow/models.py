@@ -319,6 +319,8 @@ class Event(Base):
     sport: Mapped[str] = mapped_column(String(60))
     competition: Mapped[str] = mapped_column(String(200), default="")
     title: Mapped[str] = mapped_column(String(300))
+    # Its sides' ids in its source, as the last fixture read named them, a player's refresh or a team's (ESPN
+    # basketball's team ids carry the league): event_team, not this, says which followed teams play in it.
     participants: Mapped[list] = mapped_column(JSONB, default=list)
     start_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     venue: Mapped[str | None] = mapped_column(String(200))

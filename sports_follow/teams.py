@@ -34,9 +34,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import Select, Text, and_, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, Select, Text, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on, insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from . import bus, logs, matches, moments, registry, search, sports, structured
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, serving, source_name
@@ -55,6 +55,7 @@ RECENT = 5  # and results
 LIMIT = 6  # teams a search answers with
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
+READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
 NO_SOURCE = "This team's games can't be followed now: its source isn't running."
 TAG = "team:"  # a game's own moment from one team's side is about TAG + the team's id here (Moment.about)
 
@@ -410,14 +411,20 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
         events = {f.source_id: structured.upsert_game(db, adapter, label, f) for f in [*finals, *ahead]}
         for event in events.values():
             db.execute(insert(EventTeam).values(event_id=event.id, team_id=team.id).on_conflict_do_nothing())
-        results = []
         for f in finals:
             item = result(adapter, f, events[f.source_id], external)
             db.execute(update(EventTeam).where(EventTeam.event_id == events[f.source_id].id, EventTeam.team_id == team.id).values(result=item))
-            results.append(item)
+        # Its last results from every one kept (EventTeam.result), not only this read's: a source that answers
+        # with nothing doesn't empty the page; nor its games to come, of which those still to come stand till one
+        # that lists any.
+        kept = db.scalars(select(EventTeam.result).join(Event, Event.id == EventTeam.event_id).where(EventTeam.team_id == team.id, EventTeam.result.is_not(None))
+                          .order_by(Event.start_utc.desc().nulls_last(), Event.id.desc()).limit(RECENT)).all()
+        upcoming = [_upcoming(f, events[f.source_id], external) for f in ahead[:UPCOMING]]
+        if not fixtures:
+            upcoming = [g for g in card.get("upcoming") or [] if g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) > now]
         team.card = {
-            "upcoming": [_upcoming(f, events[f.source_id], external) for f in ahead[:UPCOMING]],
-            "recent": list(reversed(results))[:RECENT],
+            "upcoming": upcoming,
+            "recent": list(kept),
             "squad": squad or [],
             "squad_at": squad_at,
             "source": source_name(adapter.system),
@@ -485,7 +492,7 @@ def rules(db: Session, event_id: int) -> list[dict[str, Any]]:
 
 def watches(db: Session, events: set[int]) -> dict[str, dict[int, tuple[str, set[str]]]]:
     """Of these games, the ones each fan follows a team in: their level for it (the loudest, for a fan following
-    both sides), and whose side they're on (tag)."""
+    both sides), and whose side they're on (tag), of the teams they haven't set to off."""
     out: dict[str, dict[int, tuple[str, set[str]]]] = {}
     if not events:
         return out
@@ -494,7 +501,7 @@ def watches(db: Session, events: set[int]) -> dict[str, dict[int, tuple[str, set
                                                      .join(EventTeam, EventTeam.team_id == TeamFollow.team_id).where(EventTeam.event_id.in_(events))):
         level = (rules_ or {}).get("level", moments.DEFAULT_LEVEL)
         had, tags = out.setdefault(fan, {}).get(event_id, (level, set()))
-        out[fan][event_id] = (max(had, level, key=lambda x: order.get(x, 0)), {*tags, tag(team_id)})
+        out[fan][event_id] = (max(had, level, key=lambda x: order.get(x, 0)), {*tags, *([tag(team_id)] if level != "off" else [])})
     return out
 
 
@@ -503,13 +510,33 @@ def sided(about: list[str] | tuple[str, ...] | frozenset[str] | None) -> set[str
     return {a for a in about or () if str(a).startswith(TAG)}
 
 
+def for_fan(fan: str) -> ColumnElement[bool]:
+    """A game's own moment this fan may see: one told from no side, or from the side of a team they follow and
+    haven't set to off (its result: side_finals). The activity list's condition, for the games they follow by
+    themselves as for their teams' games, as alerts.level_of has it for a push."""
+    mine = aliased(TeamFollow)  # apart from a query's own team follows (activity's), which it'd correlate to
+    level = func.coalesce(mine.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+    theirs = select(mine.id).where(mine.fan_id == fan, level != "off", Moment.about.contains(func.jsonb_build_array(func.concat(TAG, mine.team_id))))
+    return or_(~Moment.about.cast(Text).like(f'%"{TAG}%'), theirs.exists())
+
+
+def listed(rows: list[Any]) -> list[Any]:
+    """The activity list's rows (each a moment first, newest first) with a game's result said once: from the side
+    of the fan's team where it's told so (the first team's, for a fan who follows both), in place of the game's own."""
+    sided_first: dict[int | None, int] = {}
+    for row in sorted(rows, key=lambda r: r[0].id):
+        m = row[0]
+        if m.player_id is None and m.kind == "final" and sided(m.about):
+            sided_first.setdefault(m.event_id, m.id)
+    return [r for r in rows if not (r[0].player_id is None and r[0].kind == "final" and r[0].event_id in sided_first and sided_first[r[0].event_id] != r[0].id)]
+
+
 def activity(fan: str, taken: Any, days: int) -> Select[Moment, str, bool, str]:
     """The game's own moments of the games of the teams this fan follows, since they followed each and within
     `days`, newest first, for the activity list (GET /api/me/activity): (moment, the game's title, whether they
     muted it, its sport). Not a team's they set to off; one from a side's, only from their team's. `taken` is the
     moment a correction takes back (an alias of Moment), as the list's other queries join it."""
     level = func.coalesce(TeamFollow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
-    theirs = Moment.about.contains(func.jsonb_build_array(func.concat(TAG, TeamFollow.team_id)))
     return (
         select(Moment, Event.title, NotificationMute.event_id.is_not(None), Event.sport)
         .join(EventTeam, EventTeam.event_id == Moment.event_id)
@@ -518,7 +545,7 @@ def activity(fan: str, taken: Any, days: int) -> Select[Moment, str, bool, str]:
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
         .outerjoin(taken, taken.id == Moment.corrects)
         .where(Moment.player_id.is_(None), level != "off", Moment.created_at >= TeamFollow.created_at, Moment.created_at >= func.now() - timedelta(days=days))
-        .where(or_(~Moment.about.cast(Text).like(f'%"{TAG}%'), theirs), or_(Moment.corrects.is_(None), taken.created_at >= TeamFollow.created_at))
+        .where(for_fan(fan), or_(Moment.corrects.is_(None), taken.created_at >= TeamFollow.created_at))
         .order_by(Moment.id.desc())
     )
 

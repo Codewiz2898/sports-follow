@@ -631,21 +631,30 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
 async def team_page(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """A team's page (teams.py): who it is, whether this fan follows it and at what level, its game on now, its
     games to come and last results from its side, and its squad to follow. Served from its last read; one that's
-    stale queues another for the worker (at most every teams.LOOK_AGAIN for a team nobody follows), so
+    stale queues another for the worker (at most every teams.LOOK_AGAIN a team, and teams.READS a minute of a
+    source's allowance, whichever teams fans look at: a crawler walking every team's page spends no more), so
     "refreshing" says newer games may come in a moment."""
 
-    def view(db: Session) -> tuple[dict[str, Any] | None, bool]:
+    def view(db: Session) -> tuple[dict[str, Any] | None, str | None]:
         team = db.get(Team, team_id)
         if team is None:
-            return None, False
+            return None, None
         shown = teams.page(db, team_id, fan)
-        return shown, shown is not None and teams.look_again(team)
+        return shown, team.system if shown is not None and teams.look_again(team) else None
 
-    shown, ask = await in_db(view)
+    shown, asking = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such team.")
-    if ask:
-        await enqueue("refresh_team", team_id)
+    ask = False
+    if asking is not None:
+        try:
+            spent = f"teams:reads:{match.allowance(asking)}:{int(time.time() // 60)}"
+            ask = await state["redis"].incr(spent) <= teams.READS
+            await state["redis"].expire(spent, 120, nx=True)
+            if ask:
+                await enqueue("refresh_team", team_id)
+        except Exception:
+            log.warning("teams: couldn't ask for team %s's games", team_id, exc_info=True)
     return {**shown, "refreshing": ask}
 
 
@@ -1725,6 +1734,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
         .outerjoin(taken, taken.id == Moment.corrects)
         .where(Moment.player_id.is_(None), game_level != "off", Moment.created_at >= MatchFollow.created_at, or_(MatchFollow.until.is_(None), Moment.created_at <= MatchFollow.until))
+        .where(teams.for_fan(fan))  # a result told from a side's is for that team's fans
         .where(Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS), or_(Moment.corrects.is_(None), taken.created_at >= MatchFollow.created_at))
         .order_by(Moment.id.desc())
         .limit(limit)
@@ -1736,9 +1746,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         sided = sided.where(Moment.id < before)
     found = [(m, None, event, muted, sport) for m, event, muted, sport in [*db.execute(games), *db.execute(sided)]]
     rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)
-    # A game's result from their team's side is listed in place of the game's own.
-    told_sides = {m.event_id for m, *_ in rows if m.player_id is None and m.kind == "final" and teams.sided(m.about)}
-    rows = [r for r in rows if not (r[0].player_id is None and r[0].kind == "final" and r[0].event_id in told_sides and not teams.sided(r[0].about))][:limit]
+    rows = teams.listed(rows)[:limit]  # a game's result from their team's side, in place of the game's own
     # A game's moment that one of the fan's players' says too is listed once, as their player's.
     planned = {i.id: i for i in notify.for_games(db, notify.as_items([r[0] for r in rows]))}
     theirs = [i for i in planned.values() if i.player_id is not None]

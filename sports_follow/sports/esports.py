@@ -222,7 +222,7 @@ class Esports(Sport):
     roster = True
     team_moments = True
     side_by_side = True
-    follow_teams = True  # a team title's teams, where its source lists them (a lobby's teams are a source's tags)
+    follow_teams = True  # a team title's teams, where its source lists them; not a battle royale's (Game: teams=False)
     colour = {"sport": "#ff4fa3", "on": "#1a0010", "on_soft": "rgba(26, 0, 16, 0.85)", "ink": "#ff4fa3"}
     # A game no source covers is esports; eFootball is a game too.
     pattern = r"e-?sports?\b|e-?football|call of duty:? ?mobile|\bcodm\b"
@@ -431,8 +431,11 @@ class Game(Esports):
     group = Esports.key
     kinds = ()  # its scoreboards are esports' (SPORT's kinds)
 
-    def __init__(self, key: str, label: str, colour: dict[str, str], names: tuple[str, ...] = (), pattern: str = "") -> None:
+    def __init__(self, key: str, label: str, colour: dict[str, str], names: tuple[str, ...] = (), pattern: str = "", teams: bool = True) -> None:
         self.key, self.label, self.colour, self.names = key, label, colour, names
+        # Fans can follow its teams (teams.py): a team title's. A battle royale's teams are a lobby's, a dozen or more
+        # a game, whose results are standings, not one side's against another's.
+        self.follow_teams = teams
         self.pattern = pattern or re.escape(label.lower()).replace("\\ ", " ")
 
     def __repr__(self) -> str:
@@ -457,15 +460,15 @@ GAMES: tuple[Game, ...] = (
     Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b"),
     Game("lol", "League of Legends", _light("#19c3e6", "#00161c"), ("LoL",), r"league of legends|\blol\b"),
     Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3"), ("Dota", "Dota2"), r"\bdota ?2?\b"),
-    Game("bgmi", "BGMI", _dark("#166534", "#4ade80"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india"),
-    Game("freefire", "Free Fire", _light("#e879f9", "#1f0024"), ("Free Fire MAX", "Garena Free Fire"), r"free ?fire"),
-    Game("pubgmobile", "PUBG Mobile", _light("#60a5fa", "#001a33"), ("PUBGM",), r"pubg ?mobile|\bpubgm\b"),
-    Game("pubg", "PUBG", _light("#ffc61a", "#1a1400"), ("PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds"), r"\bpubg\b|playerunknown|battlegrounds"),
+    Game("bgmi", "BGMI", _dark("#166534", "#4ade80"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india", teams=False),
+    Game("freefire", "Free Fire", _light("#e879f9", "#1f0024"), ("Free Fire MAX", "Garena Free Fire"), r"free ?fire", teams=False),
+    Game("pubgmobile", "PUBG Mobile", _light("#60a5fa", "#001a33"), ("PUBGM",), r"pubg ?mobile|\bpubgm\b", teams=False),
+    Game("pubg", "PUBG", _light("#ffc61a", "#1a1400"), ("PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds"), r"\bpubg\b|playerunknown|battlegrounds", teams=False),
     Game("mlbb", "Mobile Legends", _dark("#0f766e", "#2dd4bf"), ("Mobile Legends: Bang Bang", "MLBB"), r"mobile legends|\bmlbb\b"),
     Game("hok", "Honor of Kings", _dark("#8b5a2b", "#e0a96d"), ("King of Glory", "Honour of Kings"), r"hono(?:u)?r of kings|king of glory"),
     Game("r6siege", "Rainbow Six Siege", _dark("#6b2d5c", "#e79ad3"), ("Rainbow Six", "R6 Siege"), r"rainbow six|\br6\b"),
     Game("overwatch", "Overwatch", _light("#ffb37a", "#1f0d00"), ("Overwatch 2",), r"overwatch"),
-    Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c"), ("Apex",), r"apex legends|\bapex\b"),
+    Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c"), ("Apex",), r"apex legends|\bapex\b", teams=False),
     Game("rocketleague", "Rocket League", _light("#5eead4", "#00201b")),
     Game("cod", "Call of Duty", _dark("#6b5d4f", "#d2c4b4"), ("CoD",), r"call of duty(?!:? ?mobile)|\bcod\b"),
     Game("wildrift", "Wild Rift", _light("#c4b5fd", "#1a0f3d"), ("League of Legends: Wild Rift",), r"(?:league of legends:? )?wild ?rift"),

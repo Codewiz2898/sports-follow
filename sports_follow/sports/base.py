@@ -465,7 +465,7 @@ class Sport:
             return ""
         theirs = pair[1 - pair.index(ours)]
         name, other = ours.get("name"), theirs.get("name")
-        mine, against = str(ours.get("score") or ""), str(theirs.get("score") or "")
+        mine, against = ("" if s.get("score") is None else str(s["score"]) for s in (ours, theirs))  # a sweep's 0 is a score
         if not (name and other):
             return ""
         if ours.get("winner") or theirs.get("winner"):
