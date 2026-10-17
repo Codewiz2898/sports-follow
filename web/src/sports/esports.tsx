@@ -103,7 +103,7 @@ function EsportsMatch({ page }: MatchProps<EsportsPage>) {
               ))}
             </tbody>
           </table>
-          {won && <span className="small muted">{won}</span>}
+          {won ? <span className="small muted">{won}</span> : null}
         </div>
       </MatchSection>
     )

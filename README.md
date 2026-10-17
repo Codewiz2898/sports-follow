@@ -377,8 +377,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   draws, its ground as line art behind Today's cards (`art`), how its line reads (`highlight`, `noLine`,
   `inHeadline`), its score in a few characters for a live player's pill (`short`)), shared by both apps;
   and its live board, `web/src/sports/<sport>.tsx` (in `VIEWS`, with its match page's part, `Match`, drawn
-  from what its `match_page` sends) and `mobile/src/sports/<sport>.tsx` (in `BOARDS`). A sport without them
-  shows the plain score and no line art. The Android app (`mobile/`)
+  from what its `match_page` sends) and `mobile/src/sports/<sport>.tsx` (in `VIEWS`, with its match page's
+  part, `Match`). A sport without them shows the plain score and no line art. The Android app (`mobile/`)
   takes the same list, and the colours too, from `GET /api/sports` (a sport's `colour`: its block, text
   on it, softer text on it, and itself as text on ink).
 - **An admin panel** at `/admin` (`sports_follow/admin.py`, `web/src/admin/`) changes the running app, with
