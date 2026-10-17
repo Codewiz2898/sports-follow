@@ -94,7 +94,8 @@ export function MatchPage() {
   const view = viewOf(sportDrawn(match.sport)) // an esports game is drawn as esports
   const live = match.live
   const board = live && UNDER_WAY.includes(match.status) ? live : null
-  const soon = !board && match.status === 'scheduled' && match.start_utc ? comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big : null
+  // To come (or about to start, armed, with no board yet): its countdown under the title.
+  const soon = !board && (match.status === 'scheduled' || match.status === 'armed') && match.start_utc ? comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big : null
   const events = (match.page.events ?? []) as KeyEvent[]
   const yours = match.yours ?? []
 
