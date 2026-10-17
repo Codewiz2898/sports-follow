@@ -11,13 +11,14 @@ on a plan without internationals just has none).
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
 from .. import naming
 from ..sports import football
-from . import sportmonks
+from . import budget, sportmonks
 from .base import DIGITS, Absence, Adapter, AdapterError, Fixture, Line, LiveGame, PlayerRef, Snapshot, SourceTeam
 
 LIST_INCLUDE = "participants;scores;state;league;round;venue"
@@ -28,6 +29,11 @@ MATCH_INCLUDE = "participants;scores;state;periods;league;round;venue;lineups.de
 # Every match in play, league-wide: enough for its score, clock, scorers and the players in it.
 LIVE_INCLUDE = "participants;scores;state;periods;league;lineups;events.type"
 PLAYER_INCLUDE = "teams.team;nationality"
+# One player by id: who they are and their teams, with every season's numbers, so player() and stats() share
+# one Player request (a preview before following asks both; about a second each from the server). A search
+# keeps PLAYER_INCLUDE: eight players' statistics would be read to show their names.
+PLAYER_STATS_INCLUDE = f"{PLAYER_INCLUDE};statistics.details.type;statistics.season.league"
+PLAYER_TTL = 3 * 3600  # this season's numbers are three hours old at most; the teams with them
 # The plan's leagues with their seasons on now (sidelined): whose teams are read.
 LEAGUES_INCLUDE = "currentSeason"
 # A season's teams, each with every player of theirs out now: the spell, its type ("Back Injury"), the player.
@@ -473,9 +479,20 @@ class SportmonksFootball(Adapter):
         hits = [r for r in self.search(name) if naming.names_match(name, r.name)]
         return hits[0] if len(hits) == 1 else None  # two namesakes: the agent decides who is meant
 
+    def _player(self, athlete_id: str) -> dict[str, Any]:
+        """A player with their teams and season statistics: the one read player() and stats() share."""
+        return sportmonks.get_json(f"/football/players/{athlete_id}", ttl=PLAYER_TTL, include=PLAYER_STATS_INCLUDE)
+
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
         try:
-            data = sportmonks.get_json(f"/football/players/{athlete_id}", ttl=6 * 3600, include=PLAYER_INCLUDE)
+            try:
+                data = self._player(athlete_id)
+            except sportmonks.RateLimited:
+                raise
+            except AdapterError:
+                # Who they are doesn't hang on their numbers: a read with the statistics that fails (a plan without
+                # them, a timeout) is asked again without, or a fan's search result would be "no such athlete".
+                data = sportmonks.get_json(f"/football/players/{athlete_id}", ttl=PLAYER_TTL, include=PLAYER_INCLUDE)
         except AdapterError:
             return None
         return parse_player(data["data"]) if (data.get("data") or {}).get("id") else None
@@ -485,16 +502,21 @@ class SportmonksFootball(Adapter):
         return parse_fixtures(rows)
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
-        seen: dict[str, Fixture] = {}
-        for team_id in ref.team_ids:
+        def read(team_id: str) -> list[Fixture]:
             try:
-                found = self.team_fixtures(team_id)
+                return self.team_fixtures(team_id)
             except sportmonks.RateLimited:
                 raise
             except AdapterError:
-                continue  # a team outside the plan (a national team without internationals)
-            for f in found:
-                seen.setdefault(f.source_id, f)
+                return []  # a team outside the plan (a national team without internationals)
+
+        # Club and country read side by side: each is about a second from the server, and a preview waits on both
+        # (a national team outside the plan answers with nothing, as slowly).
+        seen: dict[str, Fixture] = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for found in pool.map(budget.carry(read), ref.team_ids):
+                for f in found:
+                    seen.setdefault(f.source_id, f)
         return sorted(seen.values(), key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     team_id_pattern = DIGITS
@@ -606,5 +628,4 @@ class SportmonksFootball(Adapter):
         return football.result_label(fixture, team_ids)
 
     def stats(self, ref: PlayerRef, recent: list[tuple[Fixture, Snapshot]]) -> tuple[list[dict[str, str]], str]:
-        data = sportmonks.get_json(f"/football/players/{ref.athlete_id}", ttl=3 * 3600, include="statistics.details.type;statistics.season.league")
-        return parse_season_stats(data.get("data") or {}, ref.team_ids)
+        return parse_season_stats(self._player(ref.athlete_id).get("data") or {}, ref.team_ids)
