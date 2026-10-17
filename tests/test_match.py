@@ -4,6 +4,7 @@ tests/test_players.py for setting it up). Sources and Redis are made up here."""
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sports_follow import bus, live, match, sports
 from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot
 from sports_follow.adapters.base import DIGITS
-from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -92,6 +93,28 @@ def test_a_sport_without_sections_lists_the_key_events_and_a_chess_board_says_it
     assert sports.get("chess").match_page({"kind": "chess"}, [], {}, {}) == {}
 
 
+def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
+    state = {"kind": "chess", "moves": ["d4", "Nf6", "c4", "e6", "Nf3"], "opening": "Queen's Gambit Declined", "ending": "resigned", "match": {"games": 8, "score": "6–2"}}
+    assert sports.get("chess").match_page(state, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6", "3. Nf3"], "opening": "Queen's Gambit Declined", "ending": "resigned", "game": 8}
+
+
+@pytest.mark.parametrize(("sport", "state", "clock", "said"), [
+    ("football", FOOTBALL, "FT", "Arsenal won"),
+    ("football", {**FOOTBALL, "away": {**FOOTBALL["away"], "score": "2"}}, "FT", "Draw"),
+    ("football", {**FOOTBALL, "away": {**FOOTBALL["away"], "score": "2"}, "detail": "Full Time After Penalties"}, "FT_PEN", ""),  # the board's goals don't say who
+    ("cricket", {"kind": "cricket"}, "India won by 57 runs", "India won by 57 runs"),
+    ("chess", {"kind": "chess"}, "Magnus Carlsen won the match (8 games)", "Magnus Carlsen won the match (8 games)"),
+    ("Valorant", {"kind": "esports", "teams": [{"id": "1", "name": "Sentinels", "score": 2, "winner": True}, {"id": "2", "name": "NRG", "score": 1, "winner": False}]}, "Final", "Sentinels won 2–1"),
+    ("Valorant", {"kind": "esports", "forfeit": True, "teams": [{"id": "1", "name": "Sentinels", "score": 0}, {"id": "2", "name": "NRG", "score": 0, "winner": True}]}, "Forfeit", "NRG won by forfeit"),
+    ("BGMI", {"kind": "battle_royale", "standings": [{"name": "Soul", "place": 2}, {"name": "GodLike", "place": 1}]}, "", "GodLike won the lobby"),
+    ("tennis", {"kind": "tennis", "players": [{"name": "Sinner"}, {"name": "Alcaraz", "winner": True}]}, "", "Alcaraz won"),
+    ("basketball", {"kind": "basketball", "home": {"name": "Celtics", "score": "101"}, "away": {"name": "Knicks", "score": "99"}}, "Final", "Celtics won"),
+    ("golf", {}, "", ""),  # a sport no module knows: the board says it
+])
+def test_a_finished_game_says_who_won_as_its_sport_words_it(sport, state, clock, said):
+    assert sports.of(sport).verdict(state, "", clock) == said
+
+
 # ---------------------------------------------------------------- the page
 
 
@@ -119,11 +142,22 @@ def db(monkeypatch):
     engine.dispose()
 
 
+class Store(dict):
+    """Redis as a dict, and how long it was asked to keep each key."""
+
+    def __init__(self):
+        super().__init__()
+        self.ttl: dict[str, int | None] = {}
+
+    def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self[key], self.ttl[key] = value, ex
+
+
 @pytest.fixture
 def redis(monkeypatch):
-    """Redis as a dict: what each read left."""
-    store: dict[str, str] = {}
-    monkeypatch.setattr(bus, "sync_redis", lambda: SimpleNamespace(get=store.get, set=lambda key, value, ex=None: store.__setitem__(key, value)))
+    """Redis as a dict: what each read left (the league's too)."""
+    store = Store()
+    monkeypatch.setattr(bus, "sync_redis", lambda: store)
     return store
 
 
@@ -319,3 +353,78 @@ def test_a_finished_game_is_its_final_state(db, redis, source, monkeypatch):
     db.commit()
     page, ask = match.view(db, "fan", "pitch", "200", NOW + timedelta(days=1))
     assert (page["status"], page["live"]["is_live"], page["live"]["score"], page["live"]["clock"], page["sport"], ask) == ("final", False, "Arsenal 3 – 2 Chelsea", "Full time", "football", False)
+
+
+@needs_db
+def test_a_big_result_is_named_by_the_league_and_a_crowd_opening_it_costs_one_read(db, redis, source):
+    over = NOW - timedelta(days=1)
+    league_game = {"key": "pitch:300", "sport": "football", "title": "Arsenal vs Chelsea", "competition": "Premier League", "detail": "Matchday 8",
+                   "start_utc": over.isoformat(), "status": "final", "rank": 80, "word": "3–2", "line": "Arsenal beat Chelsea", "why": "1st v 2nd", "group": ""}
+    redis.set("league:games:pitch", json.dumps({"as_of": (NOW - timedelta(hours=1)).isoformat(), "games": [league_game]}))
+    assert match.view(db, "fan", "pitch", "301", NOW) == (None, False)  # not the league's, nor anyone's: no read
+
+    page, ask = match.view(db, "fan", "pitch", "300", NOW)
+    assert ask  # never read: the first look asks for one
+    assert (page["title"], page["competition"], page["detail"], page["status"], page["live"], page["verdict"]) == (
+        "Arsenal vs Chelsea", "Premier League", "Matchday 8", "final", None, "Arsenal beat Chelsea")  # the league's line till it comes
+
+    source.game = game("Arsenal 3 – 2 Chelsea", status="final", players=ELEVENS, moments=[GOAL])
+    source.game.snapshot.state = {**FOOTBALL, "home": {**FOOTBALL["home"], "score": "3"}, "away": {**FOOTBALL["away"], "score": "2"}}
+    assert match.read("pitch", "300", NOW + timedelta(seconds=5))
+    assert redis.ttl["match:pitch:300"] == match.FINAL_KEEP  # a finished game is kept a week, not KEEP's hours
+    for later in (timedelta(minutes=1), timedelta(hours=7), timedelta(days=6)):  # the crowd, all week
+        page, ask = match.view(db, None, "pitch", "300", NOW + later)
+        assert not ask
+    assert source.read == ["300"]
+    assert (page["status"], page["live"]["score"], page["verdict"], page["yours"]) == ("final", "Arsenal 3 – 2 Chelsea", "Arsenal won", [])
+    assert page["page"] == {"timeline": [{"clock": "62'", "kind": "GOAL", "text": "Palmer (Chelsea)", "side": 1}]}
+
+
+@needs_db
+def test_a_game_to_come_is_read_every_half_hour_till_its_line_ups_are_near(db, redis, source):
+    start = NOW + timedelta(days=2)
+    redis.set("league:games:pitch", json.dumps({"as_of": NOW.isoformat(), "games": [
+        {"key": "pitch:400", "sport": "football", "title": "Chelsea vs Arsenal", "competition": "Premier League", "detail": None, "start_utc": start.isoformat(),
+         "status": "scheduled", "rank": 80, "word": "", "line": "", "why": "", "group": ""}]}))
+    page, ask = match.view(db, "fan", "pitch", "400", NOW)
+    assert (page["status"], page["start_utc"], page["live"], page["verdict"], ask) == ("scheduled", start.isoformat(), None, "", True)
+    source.game = game("Chelsea vs Arsenal", status="scheduled")
+    source.game.start_utc = start
+    match.read("pitch", "400", NOW)
+    assert redis.ttl["match:pitch:400"] == match.KEEP
+    assert not match.view(db, "fan", "pitch", "400", NOW + timedelta(minutes=5))[1]  # days off: not every minute
+    assert match.view(db, "fan", "pitch", "400", NOW + timedelta(minutes=31))[1]
+    near = start - timedelta(hours=1)  # its line-ups are due
+    match.read("pitch", "400", near)
+    assert match.view(db, "fan", "pitch", "400", near + timedelta(seconds=match.FRESH + 1))[1]  # read as often as a live game
+
+
+@needs_db
+def test_a_fans_players_in_a_game_with_their_lines_and_results(db, redis, source):
+    followed(db)
+    db.add(PlayerLine(event_id=40, player_id=5, as_of=NOW, stats={"headline": "1 goal", "stats": [{"label": "Goals", "value": "1"}]}))
+    db.execute(EventPlayer.__table__.update().where(EventPlayer.player_id == 5).values(result={"title": "Arsenal vs Chelsea", "result": "Won 2–1"}))
+    db.commit()
+    source.game = game(players=ELEVENS, lines={"7": Line(headline="2 goals", stats=[]), "9": Line(headline="Started", stats=[])})
+    match.read("pitch", "100", NOW)
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    # Saka, whom the fan follows: his line as the poll stored it, and his result. Kane, whom nobody here follows, isn't theirs.
+    assert page["yours"] == [{"player_id": 5, "name": "Bukayo Saka", "sport": "Football", "result": "Won 2–1", "headline": "1 goal", "stats": [{"label": "Goals", "value": "1"}]}]
+    db.add(Follow(fan_id="fan", player_id=6, alert_rules={}))
+    db.commit()
+    saka, kane = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))[0]["yours"]  # by name
+    assert (saka["name"], kane["name"], kane["headline"], kane["result"]) == ("Bukayo Saka", "Harry Kane", "Started", None)  # no poll stored his: the read's
+    assert match.view(db, "someone else", "pitch", "100", NOW)[0]["yours"] == [] and match.view(db, None, "pitch", "100", NOW)[0]["yours"] == []
+
+
+@needs_db
+def test_a_finished_games_own_read_is_its_board_over_the_state_stored_after_it(db, redis, source):
+    followed(db)
+    chess = {"kind": "chess", "moves": ["e4", "e5"], "white": {"id": "7", "name": "A"}, "black": {"id": "9", "name": "B"}}
+    source.game = game("A 1–0 B", status="final", players=ELEVENS[:2])
+    source.game.snapshot.state = chess
+    match.read("pitch", "100", NOW)
+    db.add(EventState(event_id=40, as_of=NOW + timedelta(minutes=5), status="final", score_label="A 1–0 B", clock_label="A won", state={**chess, "moves": []}))
+    db.commit()
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
+    assert (page["status"], page["live"]["source"], page["page"]["moves"]) == ("final", "Pitch", ["1. e4 e5"])

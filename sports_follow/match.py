@@ -1,25 +1,31 @@
 """A game's match page (GET /api/match/<source>/<game>, web/src/pages/MatchPage.tsx): one game, whoever follows
-anyone in it, live, to come or over: its board, its key moments, and both sides' players to follow. Every live
-game on Today opens it.
+anyone in it, live, to come or over: its board, its key moments, the fan's players in it with their lines, and
+both sides' players to follow. Every game on Today opens it, live, over or to come, and so does a game on a
+player's Matches tab.
 
 A game's address is its source and the id a fixture of it has there (Fixture.source_id), as an event's key
 holds them: "sportmonks_football:19134567" is /match/sportmonks_football/19134567. So it's the same at every
 read, before the game and after it, whether or not a fan follows a player in it. A chess board is a fixture of
-each of its two players, so it has two addresses, and both show it.
+each of its two players, so it has two addresses, and both show it. The server gives each game it lists its
+address (`match`), where it has a page: the app never makes one up.
 
 Where a fan follows someone in it, the game is polled already (structured.py): its board and the source's key
 events are their live card's, as fresh as the polls, and its moments are those found for every player in it.
-Otherwise its board is the newer of its own last read and Live now's (live.py). Its own read, from its source
-(an adapter's optional match()), brings both sides' line-ups and every player's line as well (a cricket
-scorecard). The worker reads it (worker.read_match) at most once every FRESH seconds a game and only while
-someone has the page open: the API serves the last read from Redis and asks for the next, so a page never
-waits on a source, and more fans looking cost a source nothing more. A read is asked only for a game a source
-has named (on Live now, read before, or a followed player's), so a made-up address spends nothing; at most
-READS a minute of one source's allowance, whichever games; and a read that finds the game over, or not
-there, is its last for hours.
+Otherwise its board is the newer of its own last read and Live now's (live.py); a finished game's is its final
+one, its own read's where there is one. Its own read, from its source (an adapter's optional match()), brings
+both sides' line-ups and every player's line as well (a cricket scorecard). The worker reads it
+(worker.read_match) at most once every FRESH seconds a game and only while someone has the page open: the API
+serves the last read from Redis and asks for the next, so a page never waits on a source, and more fans
+looking cost a source nothing more. A read is asked only for a game a source has named (on Live now, among
+Today's big results and big games coming up (league.py), read before, or a followed player's, their results
+included), so a made-up address spends nothing; at most READS a minute of one source's allowance, whichever
+games; for a game still hours off, once every AHEAD seconds. A read that finds the game over is the last for
+FINAL_KEEP, a week: a finished game doesn't change, so a crowd opening yesterday's final costs its source one
+read. One that finds it not there is the last for hours.
 
 What the page shows under the board is its sport's (Sport.match_page): a football timeline, a cricket
-scorecard, an esports series by map or a lobby's standings. A chess board says it all.
+scorecard, an esports series by map or a lobby's standings, a finished chess game's moves. Over a finished
+game's board its sport says who won (Sport.verdict).
 """
 
 from __future__ import annotations
@@ -27,21 +33,24 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import bus, live, registry, search, sports
+from . import bus, league, live, registry, search, sports
 from .adapters import ADAPTERS, KNOWN, Adapter, LiveGame, PlayerRef, source_name
 from .db import session
-from .models import Event, EventPlayer, EventState, Moment, Player, PlayerCard, PlayerIdentity
+from .models import Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
 
 log = logging.getLogger(__name__)
 
 FRESH = 60  # seconds a game's read is served before a look at its page asks for another
+AHEAD = 30 * 60  # or, for a game to come more than SOON from its start, this long: little changes but its line-ups,
+SOON = 2 * 3600  # out an hour or so before
 KEEP = 6 * 3600  # and Redis keeps it this long: a page open at full time, or opened again later, still has it
+FINAL_KEEP = 7 * 86400  # a read that found the game over, a week: it won't change, and isn't asked for again till then
 READS = 6  # reads a minute of one source for match pages, whichever games: what fans' looks may spend
 MOMENTS = 40  # the most of a game's moments a page lists
 # Moments every followed player in a game gets alike (their game started, they're in the XI): the board and
@@ -78,7 +87,8 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
         blocked = registry.blocked(db) if game and game.bench else set()
     bench = [{"athlete_id": r.athlete_id, "name": r.name, "team": (r.team_names or [""])[0]} for r in (game.bench if game else []) if (system, r.athlete_id) not in blocked]
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "game": _dump(adapter, game, players, bench) if game else None}
-    bus.sync_redis().set(_key(system, fixture), json.dumps(payload, default=str), ex=KEEP)
+    over = game is not None and game.snapshot.status == "final"
+    bus.sync_redis().set(_key(system, fixture), json.dumps(payload, default=str), ex=FINAL_KEEP if over else KEEP)
     return game is not None
 
 
@@ -141,6 +151,13 @@ def _listed(system: str, fixture: str) -> dict[str, Any] | None:
     return None
 
 
+def _big(system: str, fixture: str) -> dict[str, Any] | None:
+    """The game as the league's last read lists it, if it's one of Today's big results or big games coming up
+    (league.py): its title, when, and whether it's over."""
+    key = f"{system}:{fixture}"
+    return next((g for g in (league.last_read(system) or {}).get("games") or [] if g.get("key") == key), None)
+
+
 def _age(as_of: str | None, now: datetime) -> float:
     return (now - datetime.fromisoformat(as_of)).total_seconds() if as_of else float("inf")
 
@@ -164,9 +181,13 @@ def _merged(newer: list[dict[str, Any]], older: list[dict[str, Any]]) -> list[di
     return newer + older[alike[nth - 1] + 1:] if len(alike) >= nth else newer
 
 
-def _boards(db: Session, system: str, events: list[Event], game: dict[str, Any] | None, listed: dict[str, Any] | None, as_of: str | None) -> list[tuple[str, str, dict[str, Any], list[dict[str, Any]]]]:
-    """Every board of the game there is, as (as_of, status, live block, the source's key events): a followed
-    player's live card (as fresh as its polls), the last state stored, its own read, Live now's."""
+Board = tuple[str, str, dict[str, Any], list[dict[str, Any]], bool]
+
+
+def _boards(db: Session, system: str, events: list[Event], game: dict[str, Any] | None, listed: dict[str, Any] | None, as_of: str | None) -> list[Board]:
+    """Every board of the game there is, as (as_of, status, live block, the source's key events, whether it's
+    the game's own read): a followed player's live card (as fresh as its polls), the last state stored, its own
+    read, Live now's."""
     ids = [e.id for e in events]
     boards = []
     if ids:
@@ -174,59 +195,84 @@ def _boards(db: Session, system: str, events: list[Event], game: dict[str, Any] 
         for block in followed:
             if isinstance(block, dict) and block.get("is_live") and block.get("event_id") in ids and block.get("as_of"):
                 shown = {k: block.get(k) for k in ("event", "competition", "score", "clock", "state", "source", "live_note", "lag_note", "source_url", "as_of")}
-                boards.append((block["as_of"], "live", {**shown, "is_live": True, "player_stats": []}, block.get("moments") or []))
+                boards.append((block["as_of"], "live", {**shown, "is_live": True, "player_stats": []}, block.get("moments") or [], False))
         stored = db.scalar(select(EventState).where(EventState.event_id.in_(ids)).order_by(EventState.as_of.desc()).limit(1))
         if stored is not None:
             boards.append((stored.as_of.isoformat(), stored.status, {"is_live": stored.status == "live", "score": stored.score_label, "clock": stored.clock_label, "state": stored.state,
-                                                                      "source": source_name(system), "source_url": stored.source_url, "as_of": stored.as_of.isoformat(), "player_stats": []}, []))
+                                                                      "source": source_name(system), "source_url": stored.source_url, "as_of": stored.as_of.isoformat(), "player_stats": []}, [], False))
     if game and as_of:
-        boards.append((as_of, game["status"], {**game["live"], "as_of": as_of}, game.get("events") or []))
+        boards.append((as_of, game["status"], {**game["live"], "as_of": as_of}, game.get("events") or [], True))
     if listed:
-        boards.append((listed["as_of"], "live", {**listed["live"], "source": source_name(system), "as_of": listed["as_of"]}, []))
+        boards.append((listed["as_of"], "live", {**listed["live"], "source": source_name(system), "as_of": listed["as_of"]}, [], False))
     return boards
+
+
+def _shown(boards: list[Board]) -> Board:
+    """The board the page shows: a final one over any other (a finished game doesn't change, and a card can lag
+    its end), and of those the game's own read (it has all the page shows: a chess game's moves); else the newest."""
+    return max(boards, key=lambda b: (b[1] == "final", b[1] == "final" and b[4], datetime.fromisoformat(b[0])))
+
+
+def _fresh(status: str, start: str | None, now: datetime) -> float:
+    """How long a read of the game is served before a look asks for another: FRESH, or AHEAD for a game to come
+    more than SOON from its start (or with no start: postponed, or its day still to be fixed)."""
+    if status in ("scheduled", "postponed") and (not start or datetime.fromisoformat(start) - now > timedelta(seconds=SOON)):
+        return AHEAD
+    return FRESH
 
 
 def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime | None = None) -> tuple[dict[str, Any] | None, bool]:
     """A game's match page, and whether to ask its source for a new read; None when no source has named the
-    game here (on Live now, in a read, or a followed player's)."""
+    game here (on Live now, among the league's big games, in a read, or a followed player's)."""
     now = now or datetime.now(timezone.utc)
     read_ = last_read(system, fixture)
     game = (read_ or {}).get("game")
     listed = _listed(system, fixture)
+    big = _big(system, fixture)
     fixtures = list(dict.fromkeys([fixture, *((game or {}).get("fixtures") or []), *((listed or {}).get("fixtures") or [])]))
     events = list(db.scalars(select(Event).where(Event.key.in_([f"{system}:{f}" for f in fixtures])).order_by(Event.id)))
     source = KNOWN.get(system)
-    if not (events or game or listed) or (source and not sports.on(source.sport)):
+    if not (events or game or listed or big) or (source and not sports.on(source.sport)):
         return None, False  # a sport turned off has no pages, as it isn't searched or offered
 
     boards = _boards(db, system, events, game, listed, (read_ or {}).get("as_of"))
-    as_of, status, board, game_events = max(boards, key=lambda b: datetime.fromisoformat(b[0])) if boards else (None, events[0].status, None, [])
+    unread = events[0].status if events else (big or {}).get("status") or "scheduled"
+    as_of, status, board, game_events, _ = _shown(boards) if boards else (None, unread, None, [], False)
     game_events = _merged(game_events, (game or {}).get("events") or [])
     rules = sports.of(((board or {}).get("state") or {}).get("kind") or (source.sport if source else events[0].sport))
     if not sports.on(rules.key):
         return None, False
     event = events[0] if events else None
+    named = game or listed or big or {}
+    start = event.start_utc.isoformat() if event and event.start_utc else named.get("start_utc")
 
     roster = (game or {}).get("players") or (listed or {}).get("players") or []
     names = {p["athlete_id"]: (p["name"], p.get("team") or "") for p in [*roster, *((game or {}).get("bench") or [])]}
-    page = rules.match_page((board or {}).get("state") or {}, game_events, (game or {}).get("lines") or {}, names)
+    state = (board or {}).get("state") or {}
+    page = rules.match_page(state, game_events, (game or {}).get("lines") or {}, names)
+    # Who won, over a finished game's board; before its first read, the league's line ("Arsenal beat Chelsea").
+    verdict = ""
+    if status == "final":
+        verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or ""
     adapter = reader(system)
     # A read that found the game over, or found nothing (a source that hasn't got it), is settled: the next
     # comes when Redis has dropped it.
     settled = read_ is not None and (game is None or game.get("status") == "final")
-    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and not settled and _age((read_ or {}).get("as_of"), now) > FRESH)
+    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and not settled and _age((read_ or {}).get("as_of"), now) > _fresh(status, start, now))
     return {
         "key": f"{system}:{fixture}",
         "match": path(f"{system}:{fixture}"),
         "sport": rules.key or "other",
-        "title": event.title if event else (game or listed or {}).get("title"),
-        "competition": event.competition if event else (game or listed or {}).get("competition"),
-        "detail": event.notes if event else None,
-        "start_utc": event.start_utc.isoformat() if event and event.start_utc else (game or listed or {}).get("start_utc"),
+        "title": event.title if event else named.get("title"),
+        "competition": event.competition if event else named.get("competition"),
+        "detail": event.notes if event else (big or {}).get("detail"),
+        "start_utc": start,
         "status": status,
         "live": board,
+        "verdict": verdict,
         "page": page,
         "moments": _moments(db, [e.id for e in events]),
+        "yours": _yours(db, fan, system, [e.id for e in events], (game or {}).get("lines") or {}),
         "sides": _sides(db, fan, rules, system, roster, (game or {}).get("teams") or [], [e.id for e in events]),
         "event_ids": [e.id for e in events],
         "fixtures": fixtures,
@@ -240,6 +286,28 @@ def _moments(db: Session, event_ids: list[int]) -> list[dict[str, Any]]:
         return []
     rows = db.scalars(select(Moment).where(Moment.event_id.in_(event_ids), Moment.kind.not_in(ALIKE)).order_by(Moment.created_at.desc(), Moment.id.desc()).limit(MOMENTS))
     return [{"id": m.id, "at": m.created_at.isoformat(), "kind": m.kind, "level": m.level, "title": m.title, "body": m.body, "player_id": m.player_id} for m in rows]
+
+
+def _yours(db: Session, fan: str | None, system: str, event_ids: list[int], lines: dict[str, Any]) -> list[dict[str, Any]]:
+    """The players this fan follows in the game, by name, each with their line in it (the newest a poll stored,
+    else the game's read's) and, once it's over, their result from their side ("Won 2–1")."""
+    if not fan or not event_ids:
+        return []
+    rows = db.execute(select(Player.id, Player.name, Player.sport, EventPlayer.result).join(EventPlayer, EventPlayer.player_id == Player.id)
+                      .join(Follow, (Follow.player_id == Player.id) & (Follow.fan_id == fan)).where(EventPlayer.event_id.in_(event_ids)).order_by(Player.name, Player.id)).all()
+    if not rows:
+        return []
+    ids = list(dict.fromkeys(r.id for r in rows))
+    stored: dict[int, dict[str, Any]] = {}
+    for player_id, stats in db.execute(select(PlayerLine.player_id, PlayerLine.stats).where(PlayerLine.event_id.in_(event_ids), PlayerLine.player_id.in_(ids)).order_by(PlayerLine.as_of.desc())):
+        stored.setdefault(player_id, stats)
+    known = dict(db.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(ids), PlayerIdentity.system == system)).all())
+    out: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        line = stored.get(r.id) or lines.get(known.get(r.id) or "") or {}
+        result = r.result.get("result") if isinstance(r.result, dict) else None
+        out.setdefault(r.id, {"player_id": r.id, "name": r.name, "sport": r.sport, "result": result or None, "headline": line.get("headline"), "stats": line.get("stats") or []})
+    return list(out.values())
 
 
 def _sides(db: Session, fan: str | None, rules: sports.Sport, system: str, roster: list[dict[str, Any]], teams: list[str], event_ids: list[int]) -> list[dict[str, Any]]:

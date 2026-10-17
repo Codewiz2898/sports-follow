@@ -111,6 +111,15 @@ def test_results_since_yesterday_biggest_first_then_newest_of_every_sport(source
     assert "status" not in served["results"]["games"][0] and "group" not in served["results"]["games"][0]
 
 
+def test_a_game_says_its_match_page_where_its_source_reads_one_game_or_its_an_event_here(sources, redis):
+    sources.pitch.match = lambda source_id: None  # Pitch can read a game on its own; Arena can't
+    keep(redis, "pitch", [game("pitch:a", "final", NOW - timedelta(hours=2), 40), game("pitch:b", "scheduled", NOW + timedelta(days=1), 40)])
+    keep(redis, "arena", [game("arena:c", "final", NOW - timedelta(hours=3), 60, "esports"), game("arena:d", "final", NOW - timedelta(hours=4), 50, "esports")])
+    served, _ = league.offer(Db({"arena:d": 9}), NOW)
+    games = [*served["results"]["games"], *served["coming"]["games"]]
+    assert {g["key"]: g["match"] for g in games} == {"pitch:a": "pitch/a", "pitch:b": "pitch/b", "arena:c": None, "arena:d": "arena/d"}
+
+
 def test_the_sports_take_turns_and_an_esports_title_takes_its_own_within_its_sports(sources, redis):
     """A busy esports week doesn't fill the results: each sport's biggest, the biggest of those first, then
     each one's next biggest; esports' turns go round its titles, so one title's season doesn't take them all.

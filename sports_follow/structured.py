@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, metrics, moments, naming, notify, registry, shutdown, sports, tracing
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -53,6 +53,14 @@ def _now() -> datetime:
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def match_path(key: str | None) -> str | None:
+    """A game's match page address (match.py: after /match/), from its event's key: a source's game
+    ("sportmonks_football:19134567") is "sportmonks_football/19134567"; one the research agent wrote up, which
+    no source has, has none."""
+    system, sep, game = (key or "").partition(":")
+    return f"{system}/{game}" if sep and game and system in KNOWN else None
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:
@@ -558,6 +566,7 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
         "notes": f.detail,
         "status": event.status,
         "event_id": event.id,
+        "match": match_path(event.key),  # its match page's address
     }
 
 
@@ -571,6 +580,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         "player_contribution": contribution(snap, ref.athlete_id),
         "competition": f.competition,
         "event_id": event.id if event else None,
+        "match": match_path(event.key) if event else None,  # its match page's address
         "source_url": snap.source_url if snap else None,
     }
 
@@ -901,7 +911,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
         card["live"] = {
             "is_live": True,
             "event_id": event.id,
-            "match": event.key.replace(":", "/", 1) if event.key else None,  # its match page's address (match.path)
+            "match": match_path(event.key),  # its match page's address
             "event": title,
             "competition": event.competition,
             "score": snap.score_label,
@@ -929,6 +939,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "player_contribution": line.headline if line else None,
             "competition": event.competition,
             "event_id": event.id,
+            "match": match_path(event.key),
             "source_url": snap.source_url,
         }
         card["recent_results"] = [result, *[r for r in card.get("recent_results", []) if r.get("event_id") != event.id]][:RECENT_LIMIT]
