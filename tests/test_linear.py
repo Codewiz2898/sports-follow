@@ -76,8 +76,9 @@ def test_the_panel_warns_from_four_fifths_of_the_limit_and_says_new_issues_are_r
     assert linear.status(NOW)["state"] == state
 
 
-def test_a_paid_plan_has_no_issue_limit(monkeypatch):
-    fake(monkeypatch, answer(subscription={"type": "basic"}, teams=((900, 1200),)))
+@pytest.mark.parametrize("billed", ["basic_monthly_12", "basic"])  # as Linear said on 17 Oct, and as its schema says
+def test_a_paid_plan_has_no_issue_limit(monkeypatch, billed):
+    fake(monkeypatch, answer(subscription={"type": billed}, teams=((900, 1200),)))
     shown = linear.status(NOW)
     assert (shown["plan"], shown["limit"], shown["state"], shown["issues"], shown["archived"]) == ("basic", None, "ok", 900, 300)
 

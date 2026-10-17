@@ -9,8 +9,9 @@ asking again, showing the last reading meanwhile: the page never waits on Linear
 never breaks for it.
 
 What Linear's API says (its schema: github.com/linear/linear, packages/sdk/src/schema.graphql):
-- The plan is `organization.subscription.type` ("basic", "business", "enterprise"). A workspace with no
-  paid subscription is on the Free plan.
+- The plan is `organization.subscription.type`, the plan and its billing ("basic_monthly_12" on 17 Oct 2026; the
+  schema says "basic, business, enterprise"), shown by its first word. A workspace with no paid subscription
+  is on the Free plan.
 - `Team.issueCount` counts a team's issues without the archived ones (`includeArchived: true` counts those
   too). The limit isn't in the API (its `quotas` "are not subscription limits"), so it's a setting here,
   SPORTS_FOLLOW_LINEAR_FREE_ISSUES. Linear's pricing page says "250 issues"; its older wording, "Issues
@@ -112,7 +113,7 @@ def read(key: str, now: float) -> Reading:
     if hidden:
         plan = None
     elif isinstance(subscription, dict):
-        plan = str(subscription.get("type") or "").lower() or None
+        plan = str(subscription.get("type") or "").lower().split("_")[0] or None
     else:
         plan = "free"
     issues = everything = 0
