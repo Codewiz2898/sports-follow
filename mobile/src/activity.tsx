@@ -66,7 +66,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     return () => { stale = true }
   }, [following, who, seenRead])
 
-  // New moments, when the follow list (or a followed game's board) came back changed.
+  // New moments, when there may be some (following.tsx's heard): the follow list came back changed, a followed
+  // game's status or score moved on, a notification came, or the app came back to the front.
   useEffect(() => {
     if (!heard) return
     let stale = false

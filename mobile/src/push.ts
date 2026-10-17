@@ -154,6 +154,15 @@ export function usePushRegistration(following: boolean | null): void {
   }, [])
 }
 
+/** Calls `arrived` whenever a notification comes to this phone while the app is running (one of the fan's
+ * moments: their activity list has something new). */
+export function useNotificationsArriving(arrived: () => void): void {
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener(() => arrived())
+    return () => sub.remove()
+  }, [arrived])
+}
+
 /** Opens the page a tapped notification is about (one that started the app, or any while it runs): the player's,
  * or for a game followed by itself, its match page. */
 export function useNotificationTaps(): void {

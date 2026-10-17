@@ -1,12 +1,14 @@
 // The fan's players (GET /api/me/following) and the games they follow by themselves (GET /api/me/matches),
 // shared by every screen, as the web app's FollowingProvider (web/src/following.tsx) has them. The web keeps
 // them live over the fan stream; here they're read again every 30 s while the app is in front, and at once on
-// coming back to it (the stream comes with BHA-231).
+// coming back to it (the stream comes with BHA-231). `heard` says when there may be new moments: a changed
+// list, a followed game's score or status moving on, a notification arriving, the app coming back to the front.
 
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppState } from 'react-native'
 import { useAccount } from './account'
 import { api, type AlertLevel, type Card, type FollowedMatch, type FollowTarget } from './api'
+import { useNotificationsArriving } from './push'
 
 const EVERY_MS = 30_000
 
@@ -54,10 +56,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const fan = useRef(epoch)
   fan.current = epoch
   const versions = useRef('')
-  // Each followed game's status as last read (null before the first read), and the game follows and levels
-  // begun and finished: a re-read that overlapped one may have read the list from before it, so it's dropped.
+  // Each followed game's status and score as last read (null before the first read); and the game follows and
+  // levels under way, and how many have begun or finished: a re-read that started while one was under way, or
+  // that one began or finished during, may have read the list from before it, so its answer is dropped.
   const games = useRef<Map<number, string> | null>(null)
-  const matchWrites = useRef(0)
+  const matchWrites = useRef({ busy: 0, seen: 0 })
   const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
 
   // The list as the server has it now: a player unfollowed elsewhere (or a whole account signed out) goes.
@@ -77,19 +80,20 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // The games followed by themselves, as the server has them now. A followed game whose status moved on since
-  // the last read (it started, or ended) counts as the list changed (heard): the activity list looks for its
-  // moments then; the web's stream brings each as it comes. Not a game just followed or dropped (the activity
-  // list loads again for those), nor the first read.
+  // The games followed by themselves, as the server has them now. A followed game whose status or score moved
+  // on since the last read (it started, a goal, a map, it ended) counts as the list changed (heard): the
+  // activity list looks for its moments then, as the web's stream brings each. Not every new board, not a game
+  // just followed or dropped (the activity list loads again for those), nor the first read.
   const reloadMatches = useCallback(async () => {
-    const before = matchWrites.current
+    const before = matchWrites.current.seen
+    const busy = matchWrites.current.busy > 0
     const asked = fan.current
     try {
       const r = await api.matches()
-      if (fan.current !== asked || matchWrites.current !== before) return
+      if (fan.current !== asked || busy || matchWrites.current.seen !== before) return
       setMatches(r.matches)
       const was = games.current
-      const now = new Map<number, string>(r.matches.map((m) => [m.event_id, m.status]))
+      const now = new Map<number, string>(r.matches.map((m) => [m.event_id, `${m.status}:${m.live?.score ?? ''}`]))
       games.current = now
       if (was && [...now].some(([id, said]) => was.has(id) && was.get(id) !== said)) setHeard((n) => n + 1)
     } catch { /* the last list stays */ }
@@ -113,11 +117,23 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     }
     both()
     start()
+    // Back in front: what came while it was away (a notification in the tray) may be in the activity list.
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') { both(); start() } else clearInterval(timer.current)
+      if (state === 'active') { both(); start(); setHeard((n) => n + 1) } else clearInterval(timer.current)
     })
     return () => { clearInterval(timer.current); sub.remove() }
   }, [reload, reloadMatches, epoch])
+
+  // A notification while the app is in front: one of the fan's moments, a player's or a game's, is new.
+  useNotificationsArriving(useCallback(() => setHeard((n) => n + 1), []))
+
+  // A game follow or level on its way to the server (matchWrites: re-reads overlapping it are dropped).
+  const writing = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
+    const w = matchWrites.current
+    w.busy++
+    w.seen++
+    try { return await work() } finally { w.busy--; w.seen++ }
+  }, [])
 
   const follow = useCallback(async (target: FollowTarget) => {
     writes.current++
@@ -161,22 +177,17 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   // address, a chess board's); then the list as the server has it.
   const followMatch = useCallback(async (address: string, on: boolean, eventId?: number | null) => {
     const at = address.indexOf('/')
-    matchWrites.current++
-    try {
-      if (!on && eventId != null) await api.unfollowMatch(eventId)
-      else await api.followMatch(address.slice(0, at), address.slice(at + 1), on)
-    } finally { matchWrites.current++ }
+    await writing(() => (!on && eventId != null ? api.unfollowMatch(eventId) : api.followMatch(address.slice(0, at), address.slice(at + 1), on)))
     await reloadMatches()
-  }, [reloadMatches])
+  }, [writing, reloadMatches])
 
   // A game's level shows the moment it's tapped, and goes back to what it was if the server refuses it.
   const setMatchAlerts = useCallback(async (eventId: number, level: AlertLevel) => {
     const was = matchesRef.current.find((m) => m.event_id === eventId)?.alerts ?? 'key'
     const show = (value: AlertLevel) => setMatches((prev) => prev.map((m) => (m.event_id === eventId ? { ...m, alerts: value } : m)))
     show(level)
-    matchWrites.current++
-    try { await api.setMatchAlerts(eventId, level) } catch (e) { show(was); throw e } finally { matchWrites.current++ }
-  }, [])
+    try { await writing(() => api.setMatchAlerts(eventId, level)) } catch (e) { show(was); throw e }
+  }, [writing])
 
   const value = useMemo<Following>(() => {
     const ids = new Set(cards.map((c) => c.player_id))
