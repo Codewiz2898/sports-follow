@@ -485,7 +485,14 @@ class SportmonksFootball(Adapter):
 
     def player(self, athlete_id: str, league: str | None = None) -> PlayerRef | None:
         try:
-            data = self._player(athlete_id)
+            try:
+                data = self._player(athlete_id)
+            except sportmonks.RateLimited:
+                raise
+            except AdapterError:
+                # Who they are doesn't hang on their numbers: a read with the statistics that fails (a plan without
+                # them, a timeout) is asked again without, or a fan's search result would be "no such athlete".
+                data = sportmonks.get_json(f"/football/players/{athlete_id}", ttl=PLAYER_TTL, include=PLAYER_INCLUDE)
         except AdapterError:
             return None
         return parse_player(data["data"]) if (data.get("data") or {}).get("id") else None

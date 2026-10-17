@@ -197,13 +197,16 @@ PLAYER = {
 
 
 def _serve(monkeypatch, answer) -> list[tuple[str, str | None]]:
-    """Sportmonks answering each path from answer(path), with every request it's sent noted (path, include)."""
+    """Sportmonks answering each request from answer(path, include): a document, or an HTTP status for an
+    error. Every request it's sent is noted (path, include)."""
     sent = []
 
     def get(url, params=None, headers=None):
-        path = url.removeprefix(sportmonks.BASE)
-        sent.append((path, (params or {}).get("include")))
-        doc = answer(path)
+        path, include = url.removeprefix(sportmonks.BASE), (params or {}).get("include")
+        sent.append((path, include))
+        doc = answer(path, include)
+        if isinstance(doc, int):
+            return SimpleNamespace(status_code=doc, headers={}, json=lambda: {"message": "made up"})
         return SimpleNamespace(status_code=200, headers={}, json=lambda: doc)
 
     monkeypatch.setattr(sportmonks, "token", lambda: "example")
@@ -215,7 +218,7 @@ def _serve(monkeypatch, answer) -> list[tuple[str, str | None]]:
 def test_who_a_player_is_and_their_season_are_one_read(monkeypatch):
     """A preview asks player() then stats(): one Player request answers both, each being about a second
     from the server. A search still reads names and teams alone."""
-    sent = _serve(monkeypatch, lambda path: {"data": [PLAYER] if "/search/" in path else PLAYER})
+    sent = _serve(monkeypatch, lambda path, include: {"data": [PLAYER] if "/search/" in path else PLAYER})
     adapter = sm.SportmonksFootball()
     ref = adapter.player(str(STAR))
     assert ref is not None and ref.team_names == ["Trabzonspor", "Egypt"]
@@ -226,6 +229,17 @@ def test_who_a_player_is_and_their_season_are_one_read(monkeypatch):
     assert [include for _, include in sent] == [sm.PLAYER_INCLUDE]
 
 
+def test_who_a_player_is_doesnt_hang_on_their_statistics(monkeypatch):
+    """A read with the statistics that fails (a plan without them, a timeout) is asked again without: the fan's
+    search result is still that athlete, not "no such athlete". A source out of requests isn't asked twice."""
+    sent = _serve(monkeypatch, lambda path, include: 403 if include == sm.PLAYER_STATS_INCLUDE else {"data": PLAYER})
+    ref = sm.SportmonksFootball().player(str(STAR))
+    assert ref is not None and ref.name == "Mohamed Salah"
+    assert [include for _, include in sent] == [sm.PLAYER_STATS_INCLUDE, sm.PLAYER_INCLUDE]
+    sent = _serve(monkeypatch, lambda path, include: 429)
+    assert sm.SportmonksFootball().player(str(STAR)) is None and len(sent) == 1
+
+
 def test_a_preview_reads_the_player_once_and_club_and_country_side_by_side(monkeypatch):
     """A football preview before following (search.preview) waits on each round of requests, about a second
     each from the server (Grafana, 17 Oct: four in a row, 4.4 s). It's three rounds: the player with their
@@ -233,11 +247,13 @@ def test_a_preview_reads_the_player_once_and_club_and_country_side_by_side(monke
     from sports_follow import search
 
     both_teams = threading.Barrier(2, timeout=5)  # broken unless the two teams' reads are out together
+    lanes = []
 
-    def answer(path):
+    def answer(path, include):
         if path == f"/football/players/{STAR}":
             return {"data": PLAYER}
         if path.startswith("/football/fixtures/between/"):
+            lanes.append(budget.lane())
             both_teams.wait()
             return {"data": [_match("FT", 2, 1)] if path.endswith(f"/{HOME}") else []}  # no internationals on the plan
         if path == "/football/fixtures/555":
@@ -247,13 +263,29 @@ def test_a_preview_reads_the_player_once_and_club_and_country_side_by_side(monke
     sent = _serve(monkeypatch, answer)
     monkeypatch.setitem(search.ADAPTERS, sm.SportmonksFootball.system, sm.SportmonksFootball())
     search._previews.clear()
-    out = search.preview(sm.SportmonksFootball.system, str(STAR), None)
+    with budget.in_lane("fan"):
+        out = search.preview(sm.SportmonksFootball.system, str(STAR), None)
+    # A fan is waiting, in the threads too: background work would stop at the live reserve.
+    assert lanes == ["fan", "fan"] and [r["lane"] for r in budget.usage([sportmonks.BUDGET])] == ["fan"]
     assert out is not None and out["stats"] == [{"label": "Goals", "value": "7"}]
     assert out["last"]["player_contribution"] == "2 goals, 1 assist"
     paths = [path for path, _ in sent]
     assert [p for p in paths if p.startswith("/football/players/")] == [f"/football/players/{STAR}"]
     assert sorted(p.rsplit("/", 1)[1] for p in paths if p.startswith("/football/fixtures/between/")) == sorted([str(HOME), str(EGYPT)])
     assert paths[-1] == "/football/fixtures/555" and len(paths) == 4
+
+
+def test_a_team_outside_the_plan_leaves_the_others_fixtures_and_a_spent_hour_stops_the_read(monkeypatch):
+    ref = sm.parse_player(PLAYER)
+
+    def outside(path, include):
+        return {"data": [_match("FT", 2, 1)]} if path.endswith(f"/{HOME}") else 403
+
+    _serve(monkeypatch, outside)
+    assert [f.source_id for f in sm.SportmonksFootball().fixtures(ref)] == ["555"]
+    _serve(monkeypatch, lambda path, include: {"data": []} if path.endswith(f"/{HOME}") else 429)
+    with pytest.raises(sportmonks.RateLimited):
+        sm.SportmonksFootball().fixtures(ref)
 
 
 def test_history_pages_step_back_ninety_days_per_team():
