@@ -56,7 +56,7 @@ def test_football_tells_every_goal_and_card_whoevers_with_what_it_did():
     later = [goal("88'", "Gabriel", "4", own_goal=True), {"clock": "60'", "kind": "YELLOW", "text": "Rice (Arsenal)", "athlete_ids": ["41"], "team_id": HOME}, saka]
     found = rules.game_moments("Arsenal v Chelsea", now, Played("live", football(1, 1), "Arsenal 1 – 1 Chelsea", "88'", later), [("goal", "goal@23'")])
     assert [(f.kind, f.level, f.title, f.about) for f in found] == [
-        ("yellow", "minor", "Arsenal v Chelsea: Yellow card for Rice (Arsenal)", ("41",)), ("goal", "key", "Arsenal v Chelsea: Own goal by Gabriel", ("4",))]
+        ("yellow", "minor", "Arsenal v Chelsea: Yellow card for Rice (Arsenal)", ("41",)), ("goal", "key", "Arsenal v Chelsea: Own goal by Gabriel", ("og:4",))]  # not one of his goals
 
 
 def test_football_corrects_a_goal_told_that_the_source_rules_out():
@@ -730,3 +730,56 @@ def test_a_board_followed_before_anything_listed_its_other_address_still_settles
     db.expire_all()
     assert db.scalar(select(MatchFollow.event_id)) == 2
     assert set(db.scalars(select(NotificationMute.event_id).where(NotificationMute.fan_id == "fan"))) == {1, 2}  # still muted
+
+
+@needs_db
+def test_a_players_goal_isnt_taken_for_an_own_goal_or_a_goal_listed_again_long_before(db, redis, source, monkeypatch):
+    # A fan follows the game and Gabriel; "saka" follows Saka. Neither an own goal of Gabriel's earlier nor a goal of
+    # Saka's the source dropped and listed again (told again by the game) may hide a real goal later: twice beats never.
+    pushed = listen(monkeypatch)
+    named(source)
+    event_id = matches.follow(db, "both", "pitch", "100")
+    db.commit()
+    saka_followed_by(db, event_id, "both")
+    db.add_all([Player(id=4, slug="gabriel", name="Gabriel", sport="Football"), PlayerIdentity(player_id=4, system="pitch", external_id="4", confidence=1.0)])
+    db.flush()
+    db.add_all([EventPlayer(event_id=event_id, player_id=4), Follow(fan_id="both", player_id=4, alert_rules={})])
+    db.commit()
+    phones(db, "both")
+    binding = {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}
+
+    def poll(home: int, away: int, clock: str, plays: list[dict], gabriel: int, saka: int) -> None:
+        lines = {"4": Line("Started", [{"label": "Goals", "value": str(gabriel)}]), "7": Line("Started", [{"label": "Goals", "value": str(saka)}])}
+        structured.apply_poll(event_id, binding, source.fake, [(4, "4"), (5, "7")], Snapshot("live", f"Arsenal {home} – {away} Chelsea", clock, football(home, away), lines=lines, moments=plays))
+
+    poll(0, 0, "10'", [], 0, 0)
+    own = goal("20'", "Gabriel", "4", own_goal=True, id="701")
+    poll(0, 1, "20'", [own], 0, 0)
+    assert pushed == [("both", "Arsenal v Chelsea: Own goal by Gabriel")]
+    pushed.clear()
+    poll(1, 1, "30'", [own], 1, 0)  # his own goal at the other end: his line counts it before the events list it
+    assert pushed == [("both", "Goal: Gabriel")]
+    pushed.clear()
+
+    saka = goal("40'", "Saka", "7", id="501")
+    poll(2, 1, "40'", [saka, own], 1, 1)
+    assert pushed == [("both", "Goal: Bukayo Saka puts Arsenal ahead")]  # once, as his
+    pushed.clear()
+    poll(2, 1, "41'", [{**saka, "id": "503"}, own], 1, 1)  # the source drops it and lists it again, a new id
+    assert pushed == [("both", "Arsenal v Chelsea: Saka puts Arsenal ahead")]  # told again by the game: twice beats never
+    pushed.clear()
+    db.execute(text("UPDATE moment SET created_at = created_at - interval '20 minutes'"))  # all that was a while ago
+    db.commit()
+    poll(3, 1, "75'", [{**saka, "id": "503"}, own], 1, 2)  # his real second, which his line counts first
+    assert pushed == [("both", "Goal: Bukayo Saka (2)")]
+
+
+@needs_db
+def test_one_read_of_several_boards_teaches_each_follow_its_own_boards_addresses(db, redis, source):
+    binding = lambda f: {"adapter": "pitch", "locator": {"fixture": f}, "cadence": 15}  # noqa: E731
+    db.add_all([Event(id=n, key=f"pitch:{f}", sport="Football", title="A v B", status="live", live_binding=binding(f)) for n, f in ((1, "100"), (2, "200"))])
+    db.add_all([MatchFollow(fan_id="fan", event_id=1, alert_rules={}, keys=["pitch:100"]), MatchFollow(fan_id="other", event_id=2, alert_rules={}, keys=["pitch:200"])])
+    db.commit()
+    matches.learn(db, "pitch", [["100", "101"], ["200", "201"], ["300"]])  # Live now's boards: each its two fixtures
+    db.commit()
+    assert dict(db.execute(select(MatchFollow.fan_id, MatchFollow.keys)).all()) == {"fan": ["pitch:100", "pitch:101"], "other": ["pitch:200", "pitch:201"]}

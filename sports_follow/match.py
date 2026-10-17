@@ -101,7 +101,7 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
         players = _roster(db, sport, system, game) if game else []
         blocked = registry.blocked(db) if game and game.bench else set()
         if game:
-            matches.learn(db, system, [fixture, *game.fixtures])  # a board's other address, for its follows
+            matches.learn(db, system, [[fixture, *game.fixtures]])  # a board's other address, for its follows
     bench = [{"athlete_id": r.athlete_id, "name": r.name, "team": (r.team_names or [""])[0]} for r in (game.bench if game else []) if (system, r.athlete_id) not in blocked]
     now = now or datetime.now(timezone.utc)
     over = game is not None and game.snapshot.status == "final"

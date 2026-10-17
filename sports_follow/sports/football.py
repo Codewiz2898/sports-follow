@@ -251,7 +251,10 @@ class Football(Sport):
         newest = next((e for _, e in reversed(plays) if e.get("kind") == "GOAL"), None)
         found = []
         for ref, e in plays:
-            about = tuple((e.get("athlete_ids") or [""])[:1])
+            scorer = (e.get("athlete_ids") or [""])[0]
+            # An own goal isn't its scorer's goal (their line doesn't count it): about them apart, so it's never
+            # taken for one of theirs, nor counted among them.
+            about = (f"og:{scorer}",) if e.get("own_goal") else (scorer,)
             where = joined(now.score, e.get("clock"), "penalty" if "penalty" in (e.get("text") or "") else None, f"assist {e['assist']}" if e.get("assist") else None)
             if e.get("kind") in PLAYS and ref not in had:
                 kind, level, priority = PLAYS[e["kind"]]

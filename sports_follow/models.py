@@ -409,7 +409,7 @@ class MatchFollow(Base):
     (until): what the game says after that isn't theirs. Kept a month after, for the activity list."""
 
     __tablename__ = "match_follow"
-    __table_args__ = (UniqueConstraint("fan_id", "event_id"),)
+    __table_args__ = (UniqueConstraint("fan_id", "event_id"), Index("ix_match_follow_keys", "keys", postgresql_using="gin"))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     fan_id: Mapped[str] = mapped_column(String(64), index=True)

@@ -46,6 +46,9 @@ GAME_COOLDOWN = timedelta(minutes=3)
 LOUD_PER_HOUR = 6
 BREAKTHROUGH = 90
 MAX_LINES = 5  # a phone shows about this many lines of an expanded notification
+# How close in time a game's own moment and a player's must be found to be taken for one play by their places
+# alone (same): a source's events and a player's line a poll or two apart. Past it, both are sent: twice beats never.
+PLAY_WINDOW = timedelta(minutes=5)
 
 LIVE_TTL = 15 * 60  # a goal an hour late isn't news; results and injuries keep for half a day
 LINEUP_TTL = 60 * 60  # a line-up is news until kick-off
@@ -144,13 +147,16 @@ def same(game: Item, player: Item, exact: bool = False) -> bool:
     enough; `exact`, for one found at another poll, the play too, as a player may score twice: the same detail
     ("goal@501", "50"), or, where one side names it by the source's id and the other only by count (a goal the
     player's line counted before the source's events had it, any card: "red1" and "red@601"), the same place
-    among the player's of its kind (nth: their first, the game's first by them)."""
+    among the player's of its kind (nth: their first, the game's first by them), found within PLAY_WINDOW of
+    each other: a goal the source dropped and listed again, told again by the game, isn't taken for the player's
+    next one later on."""
     if not (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))):
         return False
     if not exact or game.detail == player.detail:
         return True
     by_id = "@" in game.detail, "@" in player.detail
-    return by_id[0] != by_id[1] and "*" not in game.about and game.nth > 0 and game.nth == player.nth
+    near = abs(game.created_at - player.created_at) <= PLAY_WINDOW
+    return by_id[0] != by_id[1] and "*" not in game.about and game.nth > 0 and game.nth == player.nth and near
 
 
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,

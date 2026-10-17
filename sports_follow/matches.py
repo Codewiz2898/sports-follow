@@ -201,16 +201,20 @@ def unfollow_event(db: Session, fan: str, event_id: int) -> None:
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id == event_id))
 
 
-def learn(db: Session, system: str, fixtures: list[str]) -> None:
-    """A read that lists a game's every fixture (a chess board's two: Live now's, its match page's) adds them to
-    the follows of any of them, so a board followed before anything listed both still settles (settle)."""
-    keys = list(dict.fromkeys(f"{system}:{f}" for f in fixtures))
-    if len(keys) < 2:
+def learn(db: Session, system: str, games: list[list[str]]) -> None:
+    """A read that lists games' every fixture (a chess board's two: Live now's, a match page's) adds them to the
+    follows of any of them, so a board followed before anything listed both still settles (settle). One query a
+    read, however many games it lists."""
+    boards = [keys for keys in (list(dict.fromkeys(f"{system}:{f}" for f in fixtures)) for fixtures in games) if len(keys) > 1]
+    every = [k for keys in boards for k in keys]
+    if not every:
         return
-    ids = select(Event.id).where(Event.key.in_(keys))
-    for row in db.scalars(select(MatchFollow).where(MatchFollow.until.is_(None), or_(MatchFollow.event_id.in_(ids), MatchFollow.keys.has_any(array(keys))))):
-        known = list(dict.fromkeys([*(row.keys or []), *keys]))
-        if known != list(row.keys or []):
+    for row, key in db.execute(select(MatchFollow, Event.key).join(Event, Event.id == MatchFollow.event_id)
+                               .where(MatchFollow.until.is_(None), or_(Event.key.in_(every), MatchFollow.keys.has_any(array(every))))).all():
+        had = list(row.keys or [])
+        mine = {key, *had}
+        known = list(dict.fromkeys([*had, *(k for keys in boards if mine & set(keys) for k in keys)]))
+        if known != had:
             row.keys = known
 
 

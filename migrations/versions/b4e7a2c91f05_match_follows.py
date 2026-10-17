@@ -42,6 +42,8 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_match_follow_fan_id"), "match_follow", ["fan_id"], unique=False)
     op.create_index(op.f("ix_match_follow_event_id"), "match_follow", ["event_id"], unique=False)
+    # A read that lists a board's addresses finds the follows made at any of them (matches.learn).
+    op.create_index("ix_match_follow_keys", "match_follow", ["keys"], unique=False, postgresql_using="gin")
     op.alter_column("moment", "player_id", existing_type=sa.Integer(), nullable=True)
     op.add_column("moment", sa.Column("about", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
     op.alter_column("notification", "player_id", existing_type=sa.Integer(), nullable=True)
@@ -53,6 +55,7 @@ def downgrade() -> None:
     op.drop_column("moment", "about")
     op.execute("DELETE FROM moment WHERE player_id IS NULL")
     op.alter_column("moment", "player_id", existing_type=sa.Integer(), nullable=False)
+    op.drop_index("ix_match_follow_keys", table_name="match_follow")
     op.drop_index(op.f("ix_match_follow_event_id"), table_name="match_follow")
     op.drop_index(op.f("ix_match_follow_fan_id"), table_name="match_follow")
     op.drop_table("match_follow")
