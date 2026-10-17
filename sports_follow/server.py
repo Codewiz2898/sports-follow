@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, linear, live, logs, mail, match, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
@@ -1337,6 +1337,13 @@ def admin_reset_budget(name: str) -> dict[str, Any]:
         raise HTTPException(404, "There's no such allowance.") from None
     admin_log.info("admin panel: allowance %s back to its source's own", name)
     return admin.sources_view()
+
+
+@app.get("/api/admin/linear", dependencies=AdminOnly)
+def admin_linear() -> dict[str, Any]:
+    """Linear's plan and how many issues it holds against the Free plan's limit (linear.py). It asks Linear at
+    most once an hour, and answers even without a key or with Linear down, saying so."""
+    return linear.status()
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)

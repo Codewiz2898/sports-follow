@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { admin, type AdminSource, type Allowance, type Limits, type SourcesView } from './api'
+import { LinearCard } from './LinearCard'
 import { Note, breakable, count, useFailure } from './shared'
 
 const REFRESH_MS = 30_000
@@ -72,10 +73,12 @@ export function SourcesTab() {
         <Note>
           Each API key's allowance: the requests its plan gives a minute, an hour or a day, and how they're shared. The margin is never spent
           (another process may count a moment late). The reserve is kept for live games and fans: refreshes, older results and the registry
-          import stop there. The fans' share caps searches and follows on a scarce source. A change applies to the next request.
+          import stop there. The fans' share caps searches and follows on a scarce source. A change applies to the next request. Last,
+          Linear's issues against its plan's limit: past it, Linear takes no new ones.
         </Note>
         <div className="admin-allowances">
           {view.budgets.map((b) => <AllowanceCard key={b.name} allowance={b} onSaved={setView} />)}
+          <LinearCard />
         </div>
       </section>
     </>

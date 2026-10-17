@@ -3,7 +3,8 @@
 #   deploy/push-secrets.sh deploy@<server-ip>
 # Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token,
 # resend-key and google-client-secret (signing in), admin-password (the admin panel's password hash and
-# authenticator key, made by python -m sports_follow.admin password and code), fcm-service-account.json (the Android app's notifications), alert-url
+# authenticator key, made by python -m sports_follow.admin password and code), linear-key (a read-only Linear API key, for the
+# admin panel's plan and issue count), fcm-service-account.json (the Android app's notifications), alert-url
 # and heartbeat-url (the server checks, see README.md), offsite.env (the off-site backups), grafana.env (Grafana Cloud, for Alloy) and otlp.env (where the
 # app's traces and logs go) if there are, and production's OpenRouter key from ~/.config/sports-follow/openrouter-key
 # (or OPENROUTER_KEY_FILE=<file holding only a key>), falling back to the development key in the gateway's
@@ -23,7 +24,7 @@ for f in sportmonks-token lichess-token; do
   [ -s "$LOCAL/$f" ] || { echo "push-secrets: $LOCAL/$f is missing or empty" >&2; exit 1; }
   cp "$LOCAL/$f" "$stage/$f"
 done
-for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret admin-password fcm-service-account.json alert-url heartbeat-url offsite.env grafana.env otlp.env; do
+for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret admin-password linear-key fcm-service-account.json alert-url heartbeat-url offsite.env grafana.env otlp.env; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
 PROD_KEY="${OPENROUTER_KEY_FILE:-$LOCAL/openrouter-key}"

@@ -364,7 +364,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   it's kept, both in `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE`. Without a password the panel isn't there (404);
   without a key it asks for the password alone and says so on every page. An admin stays signed in 12
   hours, a new password or key signs every admin out, and tries are limited per address and, for wrong
-  ones, across everyone. Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
+  ones, across everyone. Beside the sources' allowances it shows Linear's plan and how many issues the
+  project's workspace holds against the Free plan's limit (`sports_follow/linear.py`, with a read-only
+  Linear key in `SPORTS_FOLLOW_LINEAR_KEY_FILE`; Linear is asked at most once an hour). Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
   how many in the last 5 minutes), and when many don't. The page tells search engines not to list it (`X-Robots-Tag`), and it's its
   own chunk of the web build, so fans don't download it.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),
@@ -481,6 +483,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |
+| `SPORTS_FOLLOW_LINEAR_KEY_FILE` | `~/.config/sports-follow/linear-key` | a Linear personal API key with the Read permission alone, for the admin panel's Linear plan and issue count (deploy/README.md); without it the panel says how to add one |
+| `SPORTS_FOLLOW_LINEAR_FREE_ISSUES` | `250` | the issues Linear's Free plan holds (not counting archived ones), which the panel counts against; Linear's API doesn't say it |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
 | `SPORTS_FOLLOW_COMMIT` | none | the commit the image was built from, which `/api/health` says; `deploy.sh` passes it to the build, so set it by hand only to test |
