@@ -76,6 +76,9 @@ class Item:
     # game), a player's own (their id there), so the two can be told to be the same moment.
     about: frozenset[str] = frozenset()
     detail: str = ""  # what tells two moments of a kind apart (its key's: "goal@501", "50", "set2")
+    # Its place among its game's moments of its kind about the same player (their 2nd goal; the game's 2nd goal
+    # by them): the same play where one side names it by the source's id ("goal@501") and the other by count.
+    nth: int = 0
 
 
 @dataclass
@@ -138,10 +141,16 @@ def level_of(item: Item, levels: dict[int, str], games: dict[int, Watch]) -> str
 def same(game: Item, player: Item, exact: bool = False) -> bool:
     """Whether a game's own moment is one of a player's: of one game, of a kind, about that player or the
     whole game ("Kohli out for 82" from the game's side and from Kohli's, a result). Found at one poll, that's
-    enough; `exact`, for one found at another poll, the play too (its detail: "goal@501"), as a player may score
-    twice."""
-    return (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))
-            and (not exact or game.detail == player.detail))
+    enough; `exact`, for one found at another poll, the play too, as a player may score twice: the same detail
+    ("goal@501", "50"), or, where one side names it by the source's id and the other only by count (a goal the
+    player's line counted before the source's events had it, any card: "red1" and "red@601"), the same place
+    among the player's of its kind (nth: their first, the game's first by them)."""
+    if not (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))):
+        return False
+    if not exact or game.detail == player.detail:
+        return True
+    by_id = "@" in game.detail, "@" in player.detail
+    return by_id[0] != by_id[1] and "*" not in game.about and game.nth > 0 and game.nth == player.nth
 
 
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,

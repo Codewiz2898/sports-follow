@@ -22,7 +22,7 @@ from sports_follow import db as db_module
 from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, Snapshot, budget, lichess_chess
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import Account, Event, EventPlayer, Follow, MatchFollow, Moment, Notification, Player, PlayerIdentity, PushSubscription
+from sports_follow.models import Account, Event, EventPlayer, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription
 from sports_follow.sports.base import Played
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -226,6 +226,9 @@ class Store(dict):
 
     def mget(self, keys: list[str]) -> list:
         return [self.get(k) for k in keys]
+
+    def publish(self, channel: str, message: str) -> int:
+        return 0
 
 
 @pytest.fixture
@@ -609,6 +612,23 @@ def test_a_goal_is_told_once_though_its_minute_is_revised_or_its_scorers_line_co
     # Then his line counts it, and the source revises its minute: the same play, told already.
     poll(snap(1, 0, "46'", [goal("45+2'", "Saka", "7", id="501")], 1))
     assert pushed == []
+    # The other way round: his line counts his second before the source's events have it ("goal2" from his
+    # side), then the events do (by its id): his fans who follow the game too hear it once.
+    poll(snap(2, 0, "60'", [goal("45+2'", "Saka", "7", id="501")], 2))
+    assert sorted(pushed) == [("both", "Goal: Bukayo Saka (2)")]
+    pushed.clear()
+    poll(snap(2, 0, "61'", [goal("60'", "Saka", "7", id="502"), goal("45+2'", "Saka", "7", id="501")], 2))
+    assert pushed == [("fan", "Arsenal v Chelsea: Saka scores")]
+    pushed.clear()
+    # A card: the source's events name it a poll before his line counts it, which only counts it ("red1").
+    red = {"clock": "70'", "kind": "RED", "text": "Saka (Arsenal)", "athlete_ids": ["7"], "team_id": HOME, "id": "601"}
+    plays = [red, goal("60'", "Saka", "7", id="502"), goal("45+2'", "Saka", "7", id="501")]
+    poll(snap(2, 0, "70'", plays, 2))
+    assert sorted(pushed) == [("both", "Arsenal v Chelsea: Red card for Saka (Arsenal)"), ("fan", "Arsenal v Chelsea: Red card for Saka (Arsenal)")]
+    pushed.clear()
+    sent_off = Snapshot("live", "Arsenal 2 – 0 Chelsea", "71'", football(2, 0), lines={"7": Line("2 goals", [{"label": "Goals", "value": "2"}, {"label": "Red", "value": "1"}])}, moments=plays)
+    poll(sent_off)
+    assert pushed == []  # "Red card: Bukayo Saka", from his side: the same card
 
 
 @needs_db
@@ -664,9 +684,49 @@ def test_a_polls_own_moments_are_kept_as_its_baseline_only_once_committed(db, re
 
 
 def test_lichess_keeps_a_reserve_for_followed_players_boards():
-    adapter = lichess_chess.LichessChess()
-    assert adapter.spare()
+    # With a token or without (the allowance is the token's or Lichess's anonymous one): up to its reserve.
+    adapter, kept = lichess_chess.LichessChess(), lichess_chess.BUDGET
+    [window] = kept.windows
+    assert kept.reserve > 0 and adapter.spare()
     with budget.in_lane("live"):
-        for _ in range(10 - 1 - lichess_chess.BUDGET.reserve):
-            budget.take(lichess_chess.BUDGET)
+        for _ in range(window.requests - window.margin - kept.reserve):
+            budget.take(kept)
     assert not adapter.spare()  # what's left is the live boards': a board nobody follows a player in waits
+    with budget.in_lane("live"):
+        budget.take(kept)  # which a followed player's board may still spend
+
+
+@needs_db
+def test_a_game_nobody_follows_a_player_in_waits_at_every_round_while_its_source_is_short(db, redis, source, monkeypatch):
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    read: list[dict] = []
+    source.fake.snapshot = lambda locator, final=False: read.append(locator) or snap(0, 0, "10'", [], None)
+    source.fake.spare = lambda: False
+    assert structured.poll_once(event_id) == ("idle", 0, False) and read == []  # a poll already going stops too
+    source.fake.spare = lambda: True
+    assert structured.poll_once(event_id)[0] == "live" and read == [{"fixture": "100"}]
+
+
+@needs_db
+def test_a_board_followed_before_anything_listed_its_other_address_still_settles_and_stays_muted(db, redis, source, monkeypatch):
+    # Followed from a list that names one fixture of the board; Live now (or its match page) later names both.
+    source.game = game("100")
+    match.read("pitch", "100", NOW)
+    binding = lambda f: {"adapter": "pitch", "locator": {"fixture": f}, "cadence": 15}  # noqa: E731
+    db.add_all([Event(id=1, key="pitch:100", sport="Football", title="A v B", status="live", live_binding=binding("100")),
+                Event(id=2, key="pitch:101", sport="Football", title="A v B", status="live", live_binding=binding("101")),
+                Player(id=6, slug="b", name="Bo", sport="Football")])
+    db.commit()
+    assert matches.follow(db, "fan", "pitch", "100") == 1
+    db.add_all([EventPlayer(event_id=2, player_id=6), Follow(fan_id="fan", player_id=6, alert_rules={}), NotificationMute(fan_id="fan", event_id=1)])
+    db.commit()
+    pipeline.due_work(NOW)
+    assert db.scalar(select(MatchFollow.event_id)) == 1  # nothing has said 101 is this board yet
+    source.game = game("100", fixtures=["100", "101"])
+    match.read("pitch", "100", NOW + timedelta(minutes=2))
+    pipeline.due_work(NOW)
+    db.expire_all()
+    assert db.scalar(select(MatchFollow.event_id)) == 2
+    assert set(db.scalars(select(NotificationMute.event_id).where(NotificationMute.fan_id == "fan"))) == {1, 2}  # still muted

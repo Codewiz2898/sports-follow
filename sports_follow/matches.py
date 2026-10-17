@@ -30,12 +30,12 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Select, and_, delete, func, or_, select, update
-from sqlalchemy.dialects.postgresql import distinct_on, insert
+from sqlalchemy.dialects.postgresql import array, distinct_on, insert
 from sqlalchemy.orm import Session
 
 from . import sports, structured
 from .adapters import ADAPTERS, KNOWN, source_name
-from .models import Event, EventPlayer, EventState, Follow, MatchFollow
+from .models import Event, EventPlayer, EventState, Follow, MatchFollow, NotificationMute
 from .moments import DEFAULT_LEVEL
 
 if TYPE_CHECKING:
@@ -201,6 +201,19 @@ def unfollow_event(db: Session, fan: str, event_id: int) -> None:
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id == event_id))
 
 
+def learn(db: Session, system: str, fixtures: list[str]) -> None:
+    """A read that lists a game's every fixture (a chess board's two: Live now's, its match page's) adds them to
+    the follows of any of them, so a board followed before anything listed both still settles (settle)."""
+    keys = list(dict.fromkeys(f"{system}:{f}" for f in fixtures))
+    if len(keys) < 2:
+        return
+    ids = select(Event.id).where(Event.key.in_(keys))
+    for row in db.scalars(select(MatchFollow).where(MatchFollow.until.is_(None), or_(MatchFollow.event_id.in_(ids), MatchFollow.keys.has_any(array(keys))))):
+        known = list(dict.fromkeys([*(row.keys or []), *keys]))
+        if known != list(row.keys or []):
+            row.keys = known
+
+
 def settle(db: Session) -> None:
     """A follow of a game here as several events (a chess board: one per player's fixture) moves to the one a
     player the fan follows is in, once there is one (the tick, pipeline.due_work): one notification for the game,
@@ -218,6 +231,9 @@ def settle(db: Session) -> None:
             db.execute(delete(MatchFollow).where(MatchFollow.id == follow_id))
         else:
             db.execute(update(MatchFollow).where(MatchFollow.id == follow_id).values(event_id=to))
+        # A game the fan muted stays muted on the event it's followed on now.
+        if db.scalar(select(NotificationMute.event_id).where(NotificationMute.fan_id == fan, NotificationMute.event_id == event_id)) is not None:
+            db.execute(insert(NotificationMute).values(fan_id=fan, event_id=to).on_conflict_do_nothing())
 
 
 def lapse(db: Session, now: datetime | None = None) -> None:

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -250,22 +251,33 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
 
 def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
     """Moments as the planner sees them: a game's own with whom it's about, each with its detail, read back from
-    its key. A player's says whom it's about once with_athletes() has looked them up."""
+    its key. A player's says whom it's about, and each its place among its kind, once for_games() has looked them up."""
     return [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects,
                         frozenset(m.about or ()) if m.player_id is None else frozenset(), (m.key.split(":", 3)[3:] or [""])[0]) for m in rows]
 
 
-def with_athletes(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
-    """Each player moment's player by their id in its game's source, so a game's own moment about them can be
-    told to be the same one (alerts.same). Looked up only where it's needed: a game someone follows by itself."""
+def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
+    """What tells a game's own moment to be one of a player's (alerts.same), looked up only where it's needed (a
+    game someone follows by itself): each player moment's player by their id in its game's source, and each
+    moment's place among its game's of its kind about the same player (Item.nth: their first goal, the game's
+    first goal by them), for a play one side names by the source's id and the other only by its count."""
     pairs = {(i.player_id, i.event_id) for i in items if i.player_id is not None and i.event_id is not None}
-    if not pairs:
+    events = {i.event_id for i in items if i.event_id is not None}
+    if not events:
         return items
-    systems = {e.id: (e.key or "").partition(":")[0] for e in db.scalars(select(Event).where(Event.id.in_({e for _, e in pairs})))}
+    systems = {e.id: (e.key or "").partition(":")[0] for e in db.scalars(select(Event).where(Event.id.in_(events)))}
     ids: dict[tuple[int, str], set[str]] = {}
-    for player_id, system, external in db.execute(select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_({p for p, _ in pairs}))):
+    for player_id, system, external in db.execute(select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_({p for p, _ in pairs}))) if pairs else []:
         ids.setdefault((player_id, system), set()).add(external)
-    return [replace(i, about=frozenset(ids.get((i.player_id, systems.get(i.event_id, "")), ()))) if i.player_id is not None and i.event_id is not None else i for i in items]
+    counted: Counter[tuple[int | None, str, Any]] = Counter()
+    nth: dict[int, int] = {}
+    for moment_id, event_id, kind, player_id, about in db.execute(select(Moment.id, Moment.event_id, Moment.kind, Moment.player_id, Moment.about)
+                                                                  .where(Moment.event_id.in_(events), Moment.kind.in_({i.kind for i in items})).order_by(Moment.id)):
+        whose = player_id if player_id is not None else ("game", (about or ["*"])[0])
+        counted[(event_id, kind, whose)] += 1
+        nth[moment_id] = counted[(event_id, kind, whose)]
+    return [replace(i, about=frozenset(ids.get((i.player_id, systems.get(i.event_id, "")), ())) if i.player_id is not None and i.event_id is not None else i.about,
+                    nth=nth.get(i.id, 0)) for i in items]
 
 
 def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
@@ -290,7 +302,7 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
         games.setdefault(fan, {})[event_id] = alerts.Watch((rules or {}).get("level", DEFAULT_LEVEL), until)
     fans = set(levels) | set(games)
     if games:
-        items = with_athletes(db, items)  # whom each player moment is about, to tell a game's own of the same
+        items = for_games(db, items)  # whom each player moment is about, and where, to tell a game's own of the same
     devices: dict[str, list[PushSubscription]] = {}
     for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(fans), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())) if fans else []:
         mine = devices.setdefault(d.fan_id, [])
@@ -311,7 +323,7 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     # isn't said again by the other (alerts.plan).
     followed = {e for watches in games.values() for e in watches}
     earlier_ids = {m for fan in games for s in sent.get(fan, []) if s.event_id in followed for m in s.moment_ids}
-    told = {i.id: i for i in with_athletes(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
+    told = {i.id: i for i in for_games(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
     jobs = []
     for fan, fan_devices in devices.items():
         heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) for m in s.moment_ids if m in told]

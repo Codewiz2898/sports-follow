@@ -848,6 +848,8 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
     if watching is None:
         return "idle", 0, False
     live_binding, adapter, watchers = watching
+    if not watchers and holds_back(adapter):
+        return "idle", 0, False  # nobody's player in it, and its source is down to its live reserve: it waits, every round
     try:
         snap = adapter.snapshot(live_binding["locator"])
     except AdapterError as exc:

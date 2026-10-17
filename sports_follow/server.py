@@ -1663,7 +1663,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
     rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + [(m, None, event, muted, sport) for m, event, muted, sport in db.execute(games)],
                   key=lambda r: -r[0].id)[:limit]
     # A game's moment that one of the fan's players' says too is listed once, as their player's.
-    planned = {i.id: i for i in notify.with_athletes(db, notify.as_items([r[0] for r in rows]))}
+    planned = {i.id: i for i in notify.for_games(db, notify.as_items([r[0] for r in rows]))}
     theirs = [i for i in planned.values() if i.player_id is not None]
     items = [
         {
