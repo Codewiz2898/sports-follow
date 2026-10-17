@@ -34,6 +34,7 @@ x-app: &app
     SPORTS_FOLLOW_RESEND_KEY_FILE: /run/secrets/resend-key   # optional: sign-in codes by email
     SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google-client-secret   # optional: Continue with Google
     SPORTS_FOLLOW_ADMIN_PASSWORD_FILE: /run/secrets/admin-password   # optional: the admin panel (/admin), its password's hash and authenticator key
+    SPORTS_FOLLOW_LINEAR_KEY_FILE: /run/secrets/linear-key   # optional: the admin panel's Linear plan and issue count (a read-only key)
   volumes:
     - ${SECRETS_DIR:-/etc/sports-follow}/files:/run/secrets:ro
   depends_on:

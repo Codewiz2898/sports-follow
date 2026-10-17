@@ -251,6 +251,17 @@ everyone together (30 an hour), so someone guessing can lock you out for the res
 sooner, clear the count:
 `docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
 
+**Linear's plan on the admin panel** (you, once): the panel's Sources tab shows which plan the Linear
+workspace is on and how many issues it holds against the Free plan's 250, past which Linear refuses new
+issues. It reads them with a key that can only read: in Linear, Settings › Account › Security & access,
+make a personal API key with the Read permission alone and access to all teams, copy it, then save it on
+the Mac and send it. No restart: the API reads the key when the panel next asks, and each API process
+asks Linear at most once an hour. Without a key the card says how to add one, and the rest of the panel doesn't need it.
+```bash
+pbpaste > ~/.config/sports-follow/linear-key && chmod 600 ~/.config/sports-follow/linear-key
+deploy/push-secrets.sh deploy@<server-ip>
+```
+
 **Esports** (you, once): `settings.env` runs PandaScore (team titles) and PUBG (PUBG PC), and each runs
 only with its token on the server. Save them on the Mac as `~/.config/sports-follow/pandascore-token` and
 `pubg-token` (PandaScore's free plan is enough; PUBG's at developer.pubg.com), then send them and restart:
