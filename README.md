@@ -161,6 +161,24 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   finds the game over is kept a week and not asked for again till then, so a crowd opening yesterday's
   final costs its source one read; one that finds it not there, for hours. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
+- **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
+  from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
+  (`match_follow`: the fan, the game's event, their level, and when it lapsed); following a game nobody
+  follows a player in makes its event, polled by its source's `locator` (an adapter's, below). From then on
+  the poller treats it as a followed player's game: armed by its sport's lead, polled at its source's cadence
+  in the live lane, through the same lanes and allowances, and left alone once it's over. Each poll finds
+  the game's own moments as its sport sees a whole game (`Sport.game_moments`: football's goals and cards
+  whoever's, every named cricketer's wickets and fifties, a chess board turning, an esports series' maps or a
+  lobby's matches, every result), titled with the game ("India v Australia: Kohli out for 82"), and says
+  whom each is about, so a fan who follows a player in it too hears each moment once, as their player's.
+  They go by the fan's level for the game (key moments by default; the bell beside Follow, or Alerts'
+  Settings), on the game's one notification, muted with it, and are in the Alerts list. Today shows the
+  games followed this way that none of the fan's players is in, live with their own games and to come in
+  Coming up (`GET /api/me/matches`, and the fan stream's game channels). When the game ends the follow
+  lapses within the minute (the tick), after the result is sent; a game that never starts lapses a day past
+  its start. A fan follows at most 20 games at once; a made-up address makes no follow and no poll, and a
+  game no running source can poll by itself (one only a followed player's fixtures bring) says No live
+  alerts rather than promise them. `PUT`/`DELETE /api/match/<source>/<game id>/follow`.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -265,6 +283,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
+  `locator` for following a game by itself (the locator its live polls take, from a fixture's id alone, so
+  a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
+  followed player's fixtures bring can be followed that way, and its others say alerts aren't available),
   `match` for a game's match page (one game by a fixture's id, whoever follows it, live, to come or over,
   with its line-ups and every player's line, in a request or two: a finished chess board's moves are a
   second; ids of another shape than its `fixture_pattern` are refused; `sports_follow/match.py`; a league
@@ -310,7 +331,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
   finish, or none, as for a cricket final whose sides are still "TBC"; for Today's big results and big games
-  coming up), what its match page shows under the board (`match_page`: a football timeline, a cricket
+  coming up), what a fan following a whole game hears (`game_moments`: by default its start, every named
+  player's moments as `during` finds them, and its result by `verdict`; football's are the source's goals and
+  cards, chess's the board turning, esports' maps and lobby matches, tennis's sets, each from the side that
+  won them), what its match page shows under the board (`match_page`: a football timeline, a cricket
   scorecard, an esports series by map, a finished chess game's moves; by default the source's key events)
   and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), its form summary,
   how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
