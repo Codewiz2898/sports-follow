@@ -201,6 +201,27 @@ def test_cricket_lists_its_competitions_teams_nations_as_international(monkeypat
     assert [path.rsplit("/", 1)[1] for path, _, _, _ in asked[1:]] == ["1715", "1689"]
 
 
+def test_a_cricket_season_the_plan_cant_read_leaves_out_its_teams_not_the_list(monkeypatch):
+    def get_json(path, ttl, **params):
+        if path.endswith("/leagues"):
+            return {"data": [{"id": 3, "season_id": 1715, **T20I}, {"id": 1, "season_id": 1689, **IPL}]}
+        if path.endswith("/1715"):
+            raise AdapterError("Sportmonks returned HTTP 404: This season is not accessible from your subscription.")
+        return {"data": {"id": 1689, "teams": [MUMBAI]}}
+
+    monkeypatch.setattr(sportmonks, "get_json", get_json)
+    assert [t.name for t in sc.SportmonksCricket().teams()] == ["Mumbai Indians"]
+
+    def limited(path, ttl, **params):
+        if path.endswith("/leagues"):
+            return {"data": [{"id": 3, "season_id": 1715, **T20I}]}
+        raise sportmonks.RateLimited("Sportmonks hourly limit reached (429)")
+
+    monkeypatch.setattr(sportmonks, "get_json", limited)
+    with pytest.raises(sportmonks.RateLimited):
+        sc.SportmonksCricket().teams()  # the hour's limit stops the list: the import tries again next week
+
+
 def test_a_cricket_teams_games_are_every_match_where_a_players_keep_their_xi(monkeypatch):
     now = datetime.now(timezone.utc)
     played = _cmatch(1, "Finished", now - timedelta(days=10), INDIA, AFGHANISTAN, lineup=[OPENER], winner_team_id=10, note="India won by 57 runs")
