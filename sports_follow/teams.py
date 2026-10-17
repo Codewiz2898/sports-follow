@@ -589,7 +589,7 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
     label = sports.label(team.sport)
     refs = [PlayerRef(system=team.system, athlete_id=p["athlete_id"], name=p["name"], team_ids=[team.external_id], team_names=[team.name], league=p.get("league"))
             for p in card.get("squad") or [] if p.get("athlete_id") and (team.system, p["athlete_id"]) not in blocked]
-    form = [o for r in card.get("recent") or [] if (o := sports.of(team.sport).outcome(r.get("result") or "", []))]
+    form = [o for r in card.get("recent") or [] if (o := sports.of(team.sport).outcome(r.get("result") or "", [team.name]))]  # "India won by 14 runs": a W for India
     return {
         **summary(team, followers, level is not None),
         "alerts": level or moments.DEFAULT_LEVEL,

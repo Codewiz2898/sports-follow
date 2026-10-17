@@ -503,13 +503,20 @@ class SportmonksCricket(Adapter):
         request, kept a day; each names its season on now), then each season with its teams (one request a
         competition, kept a day: the plan's 27 in 27). Each season's, not each window's: a franchise is listed
         between its league's seasons too. A nation in several (its T20Is, a World Cup) is listed under each,
-        as International (teams.py makes it one)."""
+        as International (teams.py makes it one). A season the plan can't read (Sportmonks lists competitions it
+        doesn't cover, and says "not accessible from your subscription") is left out, not the whole list; the
+        hourly limit stops it."""
         leagues = sportmonks.get_json(f"{API}/leagues", ttl=24 * 3600).get("data") or []
         out = []
         for league in leagues if isinstance(leagues, list) else []:
             if not league.get("season_id"):
                 continue  # a competition without a season on now
-            season = sportmonks.get_json(f"{API}/seasons/{league['season_id']}", ttl=24 * 3600, include="teams").get("data")
+            try:
+                season = sportmonks.get_json(f"{API}/seasons/{league['season_id']}", ttl=24 * 3600, include="teams").get("data")
+            except sportmonks.RateLimited:
+                raise
+            except AdapterError:
+                continue
             out += parse_teams(season if isinstance(season, dict) else {}, league, self.system)
         return out
 
