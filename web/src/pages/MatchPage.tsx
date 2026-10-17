@@ -9,7 +9,7 @@ import { FollowPills } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
 import { dateTime, relative } from '../format'
 import { comingCard } from '../lines'
-import { sportKey, sportName, viewOf } from '../sports'
+import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
 const EVERY = 30_000  // a look again: a followed player's game is polled every few seconds, any other read once a minute
 const SOON = 5_000  // when the server says a read is on its way, the next look
@@ -91,7 +91,7 @@ export function MatchPage() {
       : <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
   }
   const key = sportKey(match.sport)
-  const view = viewOf(key)
+  const view = viewOf(sportDrawn(match.sport)) // an esports game is drawn as esports
   const live = match.live
   const board = live && UNDER_WAY.includes(match.status) ? live : null
   const soon = !board && match.status === 'scheduled' && match.start_utc ? comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big : null

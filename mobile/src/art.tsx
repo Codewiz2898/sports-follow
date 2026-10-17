@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { SvgXml } from 'react-native-svg'
 import { artPlace, factsOf } from '../../web/src/sports/facts'
+import { useSports } from './catalog'
 
 const STROKE = 1.2 // px on screen, whatever the art's size (the web's vector-effect: non-scaling-stroke)
 
@@ -17,10 +18,11 @@ function markup(art: string, size: number, colour: string): string {
   return `<svg viewBox="0 0 100 100" fill="none" stroke="${colour}" stroke-width="${STROKE * unit}" stroke-linecap="round" stroke-linejoin="round" color="${colour}">${scaled.replace(/currentColor/g, colour)}</svg>`
 }
 
-/** Fills its card (which clips it: overflow hidden) with the sport's art; nothing for a sport that draws none. */
+/** Fills its card (which clips it: overflow hidden) with the sport's art (an esports game's is esports', its
+ * group's: naming.ts, drawn); nothing for a sport that draws none. */
 export function Backdrop({ sport, seed, colour, opacity = 0.18 }: { sport: string; seed: string; colour: string; opacity?: number }) {
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
-  const art = factsOf(sport)?.art
+  const art = factsOf(useSports().drawn(sport))?.art
   if (!art) return null
   const at = artPlace(seed)
   const size = box ? at.size * Math.min(box.w, 320) : 0

@@ -205,7 +205,7 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 
 class EspnTennis(espn.EspnAdapter, Adapter):
     system = "espn_tennis"
-    sport = "tennis"
+    sports = ("tennis",)
     live_cadence = 10
     name = "ESPN"
     covers = "Tennis"

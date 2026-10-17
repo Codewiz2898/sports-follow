@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -149,7 +149,7 @@ def parse_search(data: dict[str, Any], query: str, adapters: list[Adapter]) -> l
                 if league is None:
                     system = None  # a league the adapter doesn't read (EuroLeague, ITF): the agent covers them
             if adapter:
-                sport = sports.label(adapter.sport)
+                sport = sports.label(adapter.sports[0])
                 detail = adapter.search_detail(subtitle, description, league)
             else:
                 sport = OTHER_SPORTS.get(item.get("sport") or "", (item.get("sport") or description or "Other").title())
@@ -253,4 +253,4 @@ class EspnAdapter:
 
     def search_detail(self, subtitle: str, description: str, league: str | None) -> str:
         """This sport's line for a search hit."""
-        return search_detail(subtitle, description, self.sport)
+        return search_detail(subtitle, description, cast("Adapter", self).sports[0])

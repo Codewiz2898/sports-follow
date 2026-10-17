@@ -7,14 +7,16 @@ worker (worker.read_league), at most once every FRESH seconds and only while fan
 serves what was last read, from Redis, and when that's older than FRESH it asks for a read, once every
 ASK seconds whatever came of the last. A read covers BACK days before today to AHEAD days after (UTC),
 and each game in it is ranked by its sport (Sport.notable), which leaves out the ones that aren't big. A
-sport turned off isn't read: its sources don't run. Of a sport's sources, the first that lists a schedule
-is read, or every one where they sit side by side (Sport.side_by_side: each covers its own games).
+sport turned off isn't read: its sources don't run, and a source of several sports (esports games) reads
+only those that run. Of a sport's sources, the first that lists a schedule is read, or every one where they
+sit side by side (Sport.side_by_side: each covers its own games); a source of several sports is read once.
 
 The API serves the finished games since yesterday, or of the latest day that has some (days where the fan
 is: the app says its UTC offset), and those to come in the next AHEAD days, at most RESULTS and COMING. In
 each list the sports take turns, so one sport's busy week never fills it: each sport's biggest game, the
-biggest of those first, then each one's next biggest, and so on; and within a sport its groups (an esports
-title: Notable.group) take turns the same way. Today shows Coming up's first few soonest first (web/src/today.ts).
+biggest of those first, then each one's next biggest, and so on; a group of sports (Sport.group: every
+esports game) takes one turn, and its sports take turns within it the same way, so a busy esports week of
+many games doesn't fill it either. Today shows Coming up's first few soonest first (web/src/today.ts).
 Each game says which of Sports Follow's events it is (event_ids, by the source's fixture id), so Today
 shows a game a fan's player is in once, as theirs; and its match page's address (match), where it has one: a
 game its source can read on its own (an adapter's match()), or one of those events. A game listed here counts
@@ -54,8 +56,8 @@ def sources() -> list[Adapter]:
     for a sport whose sources sit side by side."""
     out: list[Adapter] = []
     for sport in sports.ENABLED:
-        theirs = [a for a in ADAPTERS.values() if a.sport == sport.key and callable(getattr(a, "schedule", None))]
-        out += theirs if sport.side_by_side else theirs[:1]
+        theirs = [a for a in ADAPTERS.values() if sport.key in a.sports and callable(getattr(a, "schedule", None))]
+        out += [a for a in (theirs if sport.side_by_side else theirs[:1]) if a not in out]
     return out
 
 
@@ -76,7 +78,6 @@ def _dump(system: str, sport: str, f: Fixture, n: Notable) -> dict[str, Any]:
         "word": n.word,
         "line": n.line,
         "why": n.why,
-        "group": n.group,
     }
 
 
@@ -87,14 +88,15 @@ def read(system: str, now: datetime | None = None) -> int:
     adapter = ADAPTERS.get(system)
     if adapter is None:
         return 0
-    sport = sports.of(adapter.sport)
     now = now or datetime.now(timezone.utc)
     today = now.date()
     fixtures = cast(Any, adapter).schedule(today - timedelta(days=BACK), today + timedelta(days=AHEAD))
+    one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     games = []
     for f in fixtures:
-        if f.status in ("final", "scheduled") and f.start_utc and (n := sport.notable(f)) is not None:
-            games.append(_dump(system, adapter.sport, f, n))
+        key = f.sport or one
+        if key and f.status in ("final", "scheduled") and f.start_utc and (n := sports.of(key).notable(f)) is not None:
+            games.append(_dump(system, key, f, n))
     bus.sync_redis().set(_key(system), json.dumps({"as_of": now.isoformat(), "games": games}, default=str), ex=KEEP)
     return len(games)
 
@@ -144,8 +146,9 @@ def _coming(games: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
 
 def _turns(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Games, best first, as their sports take turns: every sport's best, then every sport's next best, and
-    so on, a round in the order given; a sport's own turns go round its groups (esports titles) the same way."""
-    return _rounds(games, lambda g: g["sport"], lambda g: g.get("group") or "")
+    so on, a round in the order given; a group of sports (every esports game) takes one turn, which goes
+    round its sports the same way."""
+    return _rounds(games, lambda g: sports.of(g["sport"]).group or g["sport"], lambda g: g["sport"])
 
 
 def _rounds(items: list[dict[str, Any]], *by: Callable[[dict[str, Any]], str]) -> list[dict[str, Any]]:
@@ -186,7 +189,7 @@ def _gather(now: datetime) -> tuple[list[dict[str, Any]], list[str], tuple[str |
         if age > FRESH:
             stale.append(adapter.system)
         if age <= SERVE:
-            games += (read_ or {}).get("games") or []
+            games += [g for g in (read_ or {}).get("games") or [] if sports.on(g.get("sport"))]  # a game turned off since: not served
     return games, stale, tuple(seen)
 
 

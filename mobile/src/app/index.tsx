@@ -147,7 +147,7 @@ export default function TodayScreen() {
   }
 
   const games = liveGames(cards)
-  const done = results(cards, now, (sport) => sports.info(sport).key)
+  const done = results(cards, now, sports.drawn)
   const coming = comingUp(cards, now)
   // After the fan's own, the big games none of their players are in, outlined. Once the follow list has
   // answered: a rail of only big games that the fan's own then come in front of would stay on the big ones

@@ -76,7 +76,7 @@ export function LineStats({ text, sport }: { text?: string | null; sport?: strin
 export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?: boolean; now: number } & RailCard) {
   const sports = useSports()
   const tone = toneOf(sports, game.players[0].sport)
-  const c = resultCard(game, Boolean(hero), now, tone.key)
+  const c = resultCard(game, Boolean(hero), now, sports.drawn(game.players[0].sport))
   const badge = c.wl ? <WL mark={c.wl} on={tone.on} block={tone.sport} /> : null
   const line = (text: string, strong?: boolean) => <Text key={text} style={[b.resultLine, { color: tone.on, fontFamily: strong ? font[800] : font[700] }]} numberOfLines={2}>{text}</Text>
   return (

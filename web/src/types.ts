@@ -264,6 +264,7 @@ export interface LiveGame {
 export interface LiveSport {
   key: string
   label: string
+  group?: string // the group it's one of ("esports" for each game)
   games: LiveGame[]
 }
 
@@ -369,9 +370,12 @@ export interface SportInfo {
   stats_title: string // the Stats tab's first view: "Season" or "Overview"
   team_results: boolean // results are the team's: no player lines (esports)
   keeps_names: boolean // a player's sport is shown as written ("CS2")
+  group?: string // the group it's one of and drawn as (its board, line art): "esports" for each game; "" for none
   // The block colour, text on it, softer text on it, and the colour as text on ink; null: it wears ink. The web
   // app takes them from /api/sports.css instead; the Android app from here.
   colour: { sport: string; on: string; on_soft: string; ink: string } | null
 }
 
-export interface SportCatalog { sports: SportInfo[]; other: SportInfo }
+// sports: those the app lists, in order; groups: sports that stand for several of them and aren't listed (esports,
+// every game), as a name no listed sport has ("Esports", "Call of Duty: Mobile") is drawn; other: any other sport.
+export interface SportCatalog { sports: SportInfo[]; groups?: SportInfo[]; other: SportInfo }

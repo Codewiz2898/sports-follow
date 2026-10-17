@@ -12,19 +12,21 @@ birth date agrees (resolve); the id found is kept, so it's a lookup by id from t
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
     .venv/bin/python -m sports_follow.registry --new      # only people not imported yet
-    .venv/bin/python -m sports_follow.registry esports    # esports pros, from their sources, then their photos
+    .venv/bin/python -m sports_follow.registry esports    # every game's pros, from their sources, then their photos
+    .venv/bin/python -m sports_follow.registry valorant   # one game's
 
 The query service allows a client about a minute of query time a minute, so batches run one at a
 time: chess, basketball and tennis take a few minutes each, cricket ten, football about an hour. A
 run, by hand or the worker's weekly one, holds the "registry-import" lock, so two never overlap; a
 sport (or esports source) that fails keeps last week's rows, and the rest still run.
 
-Esports comes from its sources instead (import_rosters): Wikidata has a Liquipedia id for only 2,844
-people. Each esports source with a roster lists its pros (team titles from PandaScore, battle royale
-from Liquipedia and PUBG), keyed by the source ("pandascore:<id>", "lp:<wiki>:<page id>") where the
-others hold a Wikidata id. Each carries its source's id, so following one binds that source by id like
-any other. After each import, roster_wikidata.py finds each pro's Wikidata person, where it can tell for
-sure, for their photo; a source's roster never overwrites the photo it found.
+Esports games come from their sources instead (import_rosters): Wikidata has a Liquipedia id for only
+2,844 people. Each esports source with a roster lists its pros (team titles from PandaScore, battle royale
+from Liquipedia and PUBG), each under their game's sport ("cs2", "bgmi"), keyed by the source
+("pandascore:<id>", "lp:<wiki>:<page id>") where the others hold a Wikidata id. Each carries its source's
+id, so following one binds that source by id like any other. A source is read once for every game of it
+the run imports. After each import, roster_wikidata.py finds each pro's Wikidata person, where it can tell
+for sure, for their photo; a source's roster never overwrites the photo it found.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ MAX_ALIASES = 8
 
 # The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
-# then those whose athletes come from their sources' own lists (sports.Sport.roster: esports).
+# then those whose athletes come from their sources' own lists (sports.Sport.roster: the esports games).
 def importable() -> list[str]:
     on = [s for s in sports.ENABLED if s.wikidata or s.roster]
     return [s.key for s in sorted(on, key=lambda s: (s.roster, s.athletes))]
@@ -297,8 +299,10 @@ def upsert(db: Session, rows: list[dict[str, Any]], photos: bool = True) -> None
     it has (roster_wikidata.py found it)."""
     if not rows:
         return
-    removed = set(db.execute(select(AthleteOverride.qid, AthleteOverride.sport).where(AthleteOverride.action == "remove", AthleteOverride.sport.in_({r["sport"] for r in rows}))).all())
-    rows = [r for r in rows if (r["qid"], r["sport"]) not in removed]
+    wanted = {r["sport"] for r in rows}
+    wanted |= {sports.of(k).group for k in wanted} - {""}  # removed under a group ("esports"): from every game
+    removed = set(db.execute(select(AthleteOverride.qid, AthleteOverride.sport).where(AthleteOverride.action == "remove", AthleteOverride.sport.in_(wanted))).all())
+    rows = [r for r in rows if (r["qid"], r["sport"]) not in removed and (r["qid"], sports.of(r["sport"]).group) not in removed]
     if not rows:
         return
     stmt = insert(Athlete).values(rows)
@@ -328,9 +332,11 @@ def db_now() -> datetime:
         return db.scalar(select(func.now()))
 
 
-def operator_kept(sport: str) -> Any:
-    """The athletes of a sport an operator keeps (players.py: added by hand, or pinned): never dropped by an import."""
-    return select(AthleteOverride.qid).where(AthleteOverride.sport == sport, AthleteOverride.action == "keep")
+def operator_kept(*keys: str) -> Any:
+    """The athletes of these sports an operator keeps (players.py: added by hand, or pinned), or of their
+    group (kept as "esports", from before each game was a sport): never dropped by an import."""
+    within = {*keys, *(sports.of(k).group for k in keys)} - {""}
+    return select(AthleteOverride.qid).where(AthleteOverride.sport.in_(within), AthleteOverride.action == "keep")
 
 
 def too_many_gone(leaving: int, kept: int) -> bool:
@@ -384,18 +390,25 @@ def import_sport(sport: str, new_only: bool = False) -> int:
 
 
 def import_all(keys: Iterable[str] | None = None, new_only: bool = False) -> dict[str, int | None]:
-    """Import each sport in turn (all of importable() unless given): athletes kept per sport, None for one
-    that failed. A sport that fails keeps last week's rows, and the others still run."""
+    """Import each sport in turn (all of importable() unless given), then the sports whose athletes come from
+    their sources' own lists all at once (each source read once for all of its sports): athletes kept per
+    sport, None for one that failed. A sport that fails keeps last week's rows, and the others still run."""
     done: dict[str, int | None] = {}
-    for sport in importable() if keys is None else keys:
-        roster = sports.BY_KEY[sport].roster
+    wanted = importable() if keys is None else list(keys)
+    for sport in [k for k in wanted if not sports.BY_KEY[k].roster]:
         try:
-            done[sport] = import_rosters(sport) if roster else import_sport(sport, new_only)
+            done[sport] = import_sport(sport, new_only)
         except Exception:
             log.exception("registry %s: import failed; last week's rows kept", sport)
             done[sport] = None
-        if roster:
-            find_people(sport)  # last week's rows too, when a source failed
+    rostered = [k for k in wanted if sports.BY_KEY[k].roster]
+    if rostered:
+        try:
+            done |= import_rosters(rostered)
+        except Exception:
+            log.exception("registry %s: import failed; last week's rows kept", ", ".join(rostered))
+            done |= dict.fromkeys(rostered, None)
+        find_people(rostered)  # last week's rows too, when a source failed
     failed = [s for s, n in done.items() if n is None]
     if failed:
         log.warning("registry import: %s; %s failed", done, ", ".join(failed))
@@ -404,15 +417,17 @@ def import_all(keys: Iterable[str] | None = None, new_only: bool = False) -> dic
     return done
 
 
-def find_people(sport: str) -> None:
-    """Each of a roster sport's athletes' Wikidata person and photo, where it can tell for sure
-    (roster_wikidata.py). Wikidata not answering keeps last week's, and the import still counts."""
+def find_people(keys: list[str]) -> None:
+    """Each of these roster sports' athletes' Wikidata person and photo, where it can tell for sure
+    (roster_wikidata.py), a group's sports together (every esports game: one read of Wikidata). Wikidata not
+    answering keeps last week's, and the import still counts."""
     from . import roster_wikidata  # it reads Wikidata through this module
 
-    try:
-        roster_wikidata.run(sport)
-    except Exception:
-        log.exception("registry %s: matching athletes to Wikidata failed; last week's matches kept", sport)
+    for kind, within in roster_wikidata.by_group(keys):
+        try:
+            roster_wikidata.run(kind, within)
+        except Exception:
+            log.exception("registry %s: matching athletes to Wikidata failed; last week's matches kept", kind.key)
 
 
 LOCK = "registry-import"
@@ -433,14 +448,15 @@ def import_locked(keys: Iterable[str] | None = None, new_only: bool = False) -> 
 # ---------------------------------------------------------------- athletes from the sources' own lists (esports)
 
 
-def roster_rows(system: str, entries: list[Rostered], sport: str | None = None) -> list[dict[str, Any]]:
-    """Athlete rows from a source's roster (pure), in the source's sport. Sources have no popularity signal,
-    so sitelinks stay 0."""
-    sport = sport or KNOWN[system].sport
+def roster_rows(adapter: Adapter, entries: list[Rostered], wanted: set[str] | None = None) -> list[dict[str, Any]]:
+    """Athlete rows from a source's roster (pure), each in the sport the source has them in (an esports pro's
+    game: Adapter.sport_of), of the sports wanted (all by default). Sources have no popularity signal, so
+    sitelinks stay 0."""
     rows = []
     for e in entries:
         ref = e.ref
-        if not words(ref.name):
+        sport = adapter.sport_of(ref)
+        if not words(ref.name) or (wanted is not None and sport not in wanted):
             continue
         aliases = [n for n in dict.fromkeys(e.aliases) if n and words(n) and words(n) != words(ref.name)][:MAX_ALIASES]
         rows.append({
@@ -454,7 +470,7 @@ def roster_rows(system: str, entries: list[Rostered], sport: str | None = None) 
             "teams": ref.team_names,
             "league": ref.league,
             "title": None,
-            "ids": {system: ref.athlete_id},
+            "ids": {adapter.system: ref.athlete_id},
             "image": None,
             "sitelinks": 0,
             "current": e.current,
@@ -462,56 +478,63 @@ def roster_rows(system: str, entries: list[Rostered], sport: str | None = None) 
     return rows
 
 
-def import_roster(adapter: Adapter) -> int:
-    """One source's athletes into the registry (adapter.roster). After a complete run, its rows it didn't
-    see again are dropped, in the leagues it read; rows of leagues it didn't read are left alone, so a run
-    of a few games is safe. A row not seen again goes after the run's grace, or at once if it holds an id
-    of a shape the source no longer gives (id_pattern): it names the athlete as the source used to, and
-    they're among this run's rows as it names them now."""
+def import_roster(adapter: Adapter, wanted: Iterable[str] | None = None) -> dict[str, int]:
+    """One source's athletes of these of its sports (those that run, by default) into the registry
+    (adapter.roster): how many kept, by sport. After a complete run, its rows it didn't see again are
+    dropped, in the sports and leagues it read; rows of leagues it didn't read are left alone, so a run of a
+    few games is safe. A row not seen again goes after the run's grace, or at once if it holds an id of a
+    shape the source no longer gives (id_pattern): it names the athlete as the source used to, and they're
+    among this run's rows as it names them now."""
+    within = set(adapter.running() if wanted is None else wanted) & set(adapter.sports)
+    if not within:
+        return {}
     started = db_now()
-    total = 0
+    kept: dict[str, int] = dict.fromkeys(sorted(within), 0)
 
     def keep(entries: list[Rostered]) -> int:
-        nonlocal total
-        rows = roster_rows(adapter.system, entries, adapter.sport)
+        rows = roster_rows(adapter, entries, within)
         with session() as db:
             upsert(db, rows, photos=False)
-        total += len(rows)
-        return total
+        for r in rows:
+            kept[r["sport"]] += 1
+        return sum(kept.values())
 
-    run = adapter.roster(keep)
+    run = adapter.roster(keep, within)
+    named = ", ".join(sorted(within))
+    prefix: str = getattr(adapter, "roster_prefix", "")
     if run.complete:
-        unseen = [Athlete.sport == adapter.sport, Athlete.qid.like(f"{adapter.roster_prefix}%"), Athlete.updated_at < started, Athlete.qid.not_in(operator_kept(adapter.sport))]
+        unseen = [Athlete.sport.in_(within), Athlete.qid.like(f"{prefix}%"), Athlete.updated_at < started, Athlete.qid.not_in(operator_kept(*within))]
         if run.leagues is not None:
             unseen.append(Athlete.league.in_(run.leagues))
         with session() as db:
             renamed = [qid for qid, ids in db.execute(select(Athlete.qid, Athlete.ids).where(*unseen)) if (ids or {}).get(adapter.system) and not adapter.id_pattern.fullmatch(str(ids[adapter.system]))]
             gone = len(db.execute(delete(Athlete).where(*unseen, or_(Athlete.updated_at < started - run.grace, Athlete.qid.in_(renamed))).returning(Athlete.id)).all())
         if gone:
-            log.info("registry %s: %d %s athletes no longer listed removed", adapter.sport, gone, adapter.provider.name)
-    log.info("registry %s: %d %s athletes kept", adapter.sport, total, adapter.provider.name)
-    return total
+            log.info("registry %s: %d %s athletes no longer listed removed", named, gone, adapter.provider.name)
+    log.info("registry %s: %s %s athletes kept", named, kept, adapter.provider.name)
+    return kept
 
 
-def import_rosters(sport: str) -> int:
-    """A sport's athletes from each of its sources with a roster (adapters.base.Adapter) that runs (esports
-    pros). A source that fails keeps its rows and the others still run; then this raises, so the run
-    reports the sport as failed."""
-    total, failed = 0, []
+def import_rosters(keys: list[str]) -> dict[str, int | None]:
+    """These sports' athletes from each of their sources with a roster (adapters.base.Adapter) that runs (the
+    esports games' pros), each source read once for all of its sports: athletes kept by sport. A source that
+    fails keeps its rows and the others still run; its sports are reported as failed (None)."""
+    done: dict[str, int | None] = dict.fromkeys(keys, 0)
     for adapter in KNOWN.values():
-        if adapter.sport != sport or not hasattr(adapter, "roster"):
+        mine = [k for k in keys if k in adapter.sports]
+        if not mine or not hasattr(adapter, "roster"):
             continue
         if adapter.system not in ADAPTERS:
-            log.info("registry %s: %s isn't running (no key); skipped", sport, adapter.provider.name)
+            log.info("registry %s: %s isn't running (no key); skipped", ", ".join(mine), adapter.provider.name)
             continue
         try:
-            total += import_roster(adapter)
+            for sport, n in import_roster(adapter, mine).items():
+                if (before := done[sport]) is not None:
+                    done[sport] = before + n
         except Exception:
-            log.exception("registry %s: %s failed; its rows kept", sport, adapter.provider.name)
-            failed.append(adapter.provider.name)
-    if failed:
-        raise RuntimeError(f"{', '.join(failed)} failed ({total} athletes imported from the rest)")
-    return total
+            log.exception("registry %s: %s failed; its rows kept", ", ".join(mine), adapter.provider.name)
+            done |= dict.fromkeys(mine, None)
+    return done
 
 
 # ---------------------------------------------------------------- search
@@ -524,10 +547,11 @@ def score():
 
 
 def running(stmt: Any) -> Any:
-    """Only athletes of the sports this build runs (every sport, unless SPORTS_FOLLOW_SPORTS names some)."""
+    """Only athletes of the sports this build runs (every sport, unless SPORTS_FOLLOW_SPORTS names some), and
+    of a group any of them is in (an esports pro whose game can't be told is "esports")."""
     if len(sports.ENABLED) == len(sports.ALL):
         return stmt
-    return stmt.where(Athlete.sport.in_([s.key for s in sports.ENABLED]))
+    return stmt.where(Athlete.sport.in_(sports.running_keys()))
 
 
 def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> list[Athlete]:
@@ -541,7 +565,7 @@ def find(db: Session, query: str, sport: str | None = None, limit: int = 20) -> 
     starts = [Athlete.search_text.like(f"% {w}%") for w in typed]
     base = running(select(Athlete).where(*starts))
     if sport:
-        base = base.where(Athlete.sport == sport)
+        base = base.where(Athlete.sport.in_(sports.within(sport)))  # a group: any of its sports
     exact = db.scalars(base.where(named(" ".join(typed))).order_by(Athlete.sitelinks.desc(), Athlete.current.desc()).limit(NAMESAKES)).all()
     popular = db.scalars(base.order_by(score().desc(), Athlete.current.desc()).limit(limit)).all()
     return list({a.id: a for a in [*exact, *popular]}.values())
@@ -555,7 +579,7 @@ def near(db: Session, query: str, sport: str | None = None, limit: int = 10) -> 
     db.execute(text("SET LOCAL pg_trgm.word_similarity_threshold = 0.5"))
     stmt = running(select(Athlete).where(literal(folded).op("<%")(Athlete.search_text)))
     if sport:
-        stmt = stmt.where(Athlete.sport == sport)
+        stmt = stmt.where(Athlete.sport.in_(sports.within(sport)))  # a group: any of its sports
     return list(db.scalars(stmt.order_by(func.word_similarity(folded, Athlete.search_text).desc(), Athlete.sitelinks.desc()).limit(limit)))
 
 
@@ -665,7 +689,8 @@ def find_in_source(person: Person) -> tuple[Adapter, PlayerRef] | None:
 def sport_of(system: str) -> str | None:
     """The Wikidata sport a running adapter serves ("football" for both football sources)."""
     adapter = ADAPTERS.get(system)
-    return adapter.sport if adapter and sports.of(adapter.sport).wikidata else None
+    wikidata = [s for s in adapter.sports if sports.of(s).wikidata] if adapter else []
+    return wikidata[0] if len(wikidata) == 1 else None
 
 
 def _candidates(adapter: Adapter, name: str, league: str | None, tried: set[str]) -> Iterable[PlayerRef]:
@@ -774,7 +799,10 @@ def describe(player_id: int) -> str | None:
 def main(argv: list[str]) -> None:
     new_only = "--new" in argv
     every = importable()
-    wanted = [a for a in argv if a != "--new"] or every
+    asked = [a for a in argv if a != "--new"]
+    wanted = sports.expand(asked, among=every) or every  # "esports": every game that runs
+    if asked and not sports.expand(asked, among=every):
+        sys.exit(f"none of {', '.join(asked)} runs here; choose from {', '.join(every)}")
     unknown = [s for s in wanted if s not in every]
     if unknown:
         sys.exit(f"unknown sport(s): {', '.join(unknown)}; choose from {', '.join(every)}")

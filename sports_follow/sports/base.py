@@ -88,9 +88,6 @@ class Notable:
     word: str = ""  # a finished game's big word: its score ("4–1"), its margin ("By 6 wickets"), its winner
     line: str = ""  # under it, who played and how it went: "Arsenal beat Chelsea"; the game's title if ""
     why: str = ""  # what makes it big, in a word or two: "Final", "1st v 2nd", "Last ball"
-    # The part of its sport the game is in, which takes its own turn among the sport's games (league.py), so
-    # one part never fills the sport's turns: an esports title ("Valorant"); "" for a sport of one part.
-    group: str = ""
 
 
 @dataclass
@@ -189,10 +186,10 @@ class Sport:
     key = ""  # "cricket": the registry's name for it, the search filter's, and the settings'
     label = ""  # "Cricket", as the app shows it
     names: tuple[str, ...] = ()  # other names a page or a source may give it ("soccer")
-    # Games of the sport no source covers by that name, as an AI-built page may call them ("LoL"): known
-    # to be the sport, but no source is looked up by them. Its sources add the games they cover.
-    other_games: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()  # its scoreboards' kinds (Snapshot.state["kind"])
+    # The group of sports it's one of, whose rules and look it shares and whose name a setting may give for
+    # all of them at once ("esports": each esports game is a sport of its own); "" for a sport on its own.
+    group = ""
     team = False  # its athletes turn out for teams: clubs, countries
     # Who counts as one of its athletes on Wikidata (anyone with any of these ids), and the ids kept,
     # keyed by the source that reads each one where one does ("espn_cricket"), or the database's name.

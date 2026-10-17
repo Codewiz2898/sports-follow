@@ -4,7 +4,7 @@ import { useNow } from '../clock'
 import type { Card, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, WON, wordSize, type GameResult } from '../lines'
-import { Backdrop, sportKey, sportName, viewOfKind } from '../sports'
+import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { ErrorBoundary } from './ErrorBoundary'
 
@@ -80,7 +80,7 @@ export function LineStats({ text, sport }: { text?: string | null; sport?: strin
 
 /** A line worth a word, as its sport words it: a triple-double, a hundred (lines.ts). */
 export function highlight(sport: string | null | undefined, text?: string | null): string | null {
-  return sportHighlight(sportKey(sport), text)
+  return sportHighlight(sportDrawn(sport), text)
 }
 
 export type { GameResult }
@@ -95,7 +95,7 @@ export type { GameResult }
  */
 export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
   const key = sportKey(game.players[0].sport)
-  const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, key)
+  const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, sportDrawn(game.players[0].sport))
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   const page = game.players.find((p) => p.result.match)?.result.match
   return (

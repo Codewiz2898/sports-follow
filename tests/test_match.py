@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, live, match, sports
+from sports_follow import bus, live, match, registry, sports
 from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot
 from sports_follow.adapters.base import DIGITS
 from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
@@ -183,7 +183,7 @@ def source(monkeypatch):
         on.read.append(fixture)
         return on.game
 
-    fake = SimpleNamespace(system="pitch", sport="football", name="Pitch", fixture_pattern=DIGITS, live_now=lambda: on.live, match=one, credit=lambda snap: "Pitch", live_note=None, lag_note=None)
+    fake = SimpleNamespace(system="pitch", sports=("football",), name="Pitch", fixture_pattern=DIGITS, live_now=lambda: on.live, match=one, credit=lambda snap: "Pitch", live_note=None, lag_note=None)
     for system in [s for s, a in ADAPTERS.items() if callable(getattr(a, "live_now", None))]:
         monkeypatch.delitem(ADAPTERS, system)
     monkeypatch.setitem(ADAPTERS, "pitch", fake)
@@ -306,6 +306,29 @@ def test_a_sport_turned_off_has_no_match_pages(db, redis, source, monkeypatch):
     live.read("pitch", NOW)
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "football"))
     assert match.view(db, "fan", "pitch", "100", NOW) == (None, False)
+
+
+@needs_db
+def test_an_esports_game_turned_off_has_no_match_page_while_its_source_runs_for_another(db, redis, monkeypatch):
+    """A source of several games: each series is its game's sport (LiveGame.sport), its pros the registry knows
+    in that game; one of a game turned off has no page, while the source's other games' do."""
+    series = {"kind": "esports", "game": "Valorant", "teams": [{"id": "10", "name": "Sentinels", "score": 1}, {"id": "20", "name": "NRG", "score": 0}], "maps": []}
+    games = {"1": LiveGame(source_id="1", title="Sentinels vs NRG", competition="VCT", start_utc=NOW, teams=["Sentinels", "NRG"], league="valorant", sport="valorant",
+                           snapshot=Snapshot(status="live", score_label="Sentinels 1 – 0 NRG", clock_label="Map 2", state=series)),
+             "2": LiveGame(source_id="2", title="Vitality vs FaZe", competition="Major", start_utc=NOW, teams=["Vitality", "FaZe"], league="cs-go", sport="cs2",
+                           snapshot=Snapshot(status="live", score_label="Vitality 1 – 0 FaZe", clock_label="Map 2", state={**series, "game": "CS2", "teams": []}))}
+    arena = SimpleNamespace(system="arena", sports=("cs2", "valorant"), name="Arena", fixture_pattern=DIGITS, match=games.get, credit=lambda snap: "Arena", live_note=None, lag_note=None)
+    monkeypatch.setitem(ADAPTERS, "arena", arena)
+    monkeypatch.setitem(KNOWN, "arena", arena)
+    registry.upsert(db, [{"qid": "pandascore:7", "sport": "valorant", "name": "TenZ", "aliases": [], "search_text": " tenz |", "birth_date": None, "country": None,
+                          "teams": ["Sentinels"], "league": "valorant", "title": None, "ids": {"arena": "7"}, "image": None, "sitelinks": 3, "current": True}])
+    db.commit()
+    assert match.read("arena", "1", NOW) and match.read("arena", "2", NOW)
+    page, _ = match.view(db, "fan", "arena", "1", NOW)
+    assert page["sport"] == "valorant" and [p["name"] for s in page["sides"] for p in s["players"]] == ["TenZ"]  # the game's pros, by its sport
+    assert match.view(db, "fan", "arena", "2", NOW)[0]["sport"] == "cs2"
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert match.view(db, "fan", "arena", "1", NOW) == (None, False) and match.view(db, "fan", "arena", "2", NOW)[0] is not None
 
 
 @needs_db

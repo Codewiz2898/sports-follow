@@ -188,9 +188,14 @@ def reset(store: Any) -> None:
 # ---------------------------------------------------------------- changing them
 
 
-def _switch(key: str, name: str, on: bool) -> None:
+def _switch(key: str, name: str, on: bool, stands_for: dict[str, list[str]] | None = None) -> None:
+    """Turn one name off or on in a row's list; a name there that stands for several (stands_for: a group of
+    sports, "esports") is first put as each of them, so turning one back on leaves the others off."""
     def fn(value: Any) -> list[str] | None:
         off = set(value) if isinstance(value, list) else set()
+        for group, names in (stands_for or {}).items():
+            if group in off:
+                off = (off - {group}) | set(names)
         off = off - {name} if on else off | {name}
         return sorted(off) or None
 
@@ -198,8 +203,8 @@ def _switch(key: str, name: str, on: bool) -> None:
     load()
 
 
-def turn_sport(key: str, on: bool) -> None:
-    _switch(SPORTS_OFF, key, on)
+def turn_sport(key: str, on: bool, stands_for: dict[str, list[str]] | None = None) -> None:
+    _switch(SPORTS_OFF, key, on, stands_for)
 
 
 def turn_source(system: str, on: bool) -> None:

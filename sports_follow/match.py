@@ -82,11 +82,12 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
     if adapter is None or not adapter.fixture_pattern.fullmatch(fixture):
         return False
     game: LiveGame | None = cast(Any, adapter).match(fixture)
+    sport = (game.sport if game else "") or (adapter.sports[0] if len(adapter.sports) == 1 else "")  # a source of several says the game's
     with session() as db:
-        players = _roster(db, adapter.sport, system, game) if game else []
+        players = _roster(db, sport, system, game) if game else []
         blocked = registry.blocked(db) if game and game.bench else set()
     bench = [{"athlete_id": r.athlete_id, "name": r.name, "team": (r.team_names or [""])[0]} for r in (game.bench if game else []) if (system, r.athlete_id) not in blocked]
-    payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "game": _dump(adapter, game, players, bench) if game else None}
+    payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "game": _dump(adapter, game, sport, players, bench) if game else None}
     over = game is not None and game.snapshot.status == "final"
     bus.sync_redis().set(_key(system, fixture), json.dumps(payload, default=str), ex=FINAL_KEEP if over else KEEP)
     return game is not None
@@ -94,7 +95,8 @@ def read(system: str, fixture: str, now: datetime | None = None) -> bool:
 
 def _roster(db: Session, sport: str, system: str, game: LiveGame) -> list[dict[str, Any]]:
     """A game's players as its source lists them (its line-ups), without anyone an operator removed; for a
-    game that names only its teams (an esports series), their pros the registry knows, as Live now offers them."""
+    game that names only its teams (an esports series), their pros the registry knows in its sport (its game's:
+    the registry keeps each pro under theirs), as Live now offers them."""
     blocked = registry.blocked(db)
     if not game.players:
         return [{k: p[k] for k in ("athlete_id", "name", "team", "league")} for p in live._ranked(db, sport, system, game, blocked)[0]]
@@ -102,10 +104,11 @@ def _roster(db: Session, sport: str, system: str, game: LiveGame) -> list[dict[s
             for r in game.players if (system, r.athlete_id) not in blocked]
 
 
-def _dump(adapter: Adapter, game: LiveGame, players: list[dict[str, Any]], bench: list[dict[str, Any]]) -> dict[str, Any]:
+def _dump(adapter: Adapter, game: LiveGame, sport: str, players: list[dict[str, Any]], bench: list[dict[str, Any]]) -> dict[str, Any]:
     snap = game.snapshot
     return {
         "source_id": game.source_id,
+        "sport": sport,  # the game's (an esports game's: "cs2"), as Live now's games say theirs
         "fixtures": game.fixtures or [game.source_id],
         "title": game.title,
         "competition": game.competition,
@@ -232,19 +235,27 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     fixtures = list(dict.fromkeys([fixture, *((game or {}).get("fixtures") or []), *((listed or {}).get("fixtures") or [])]))
     events = list(db.scalars(select(Event).where(Event.key.in_([f"{system}:{f}" for f in fixtures])).order_by(Event.id)))
     source = KNOWN.get(system)
-    if not (events or game or listed or big) or (source and not sports.on(source.sport)):
+    if not (events or game or listed or big) or (source and not any(sports.on(k) for k in source.sports)):
         return None, False  # a sport turned off has no pages, as it isn't searched or offered
+    # The game's sport, which a read or Live now says (a source of several names each game's: "cs2"), else its
+    # event's, else its source's one; else, by its board's kind, the rules it's read by (esports' for any game).
+    named = (game or {}).get("sport") or (listed or {}).get("sport") or (big or {}).get("sport") or (events[0].sport if events else "") or (source.sports[0] if source and len(source.sports) == 1 else "")
 
     boards = _boards(db, system, events, game, listed, (read_ or {}).get("as_of"))
     unread = events[0].status if events else (big or {}).get("status") or "scheduled"
     as_of, status, board, game_events, _ = _shown(boards) if boards else (None, unread, None, [], False)
     game_events = _merged(game_events, (game or {}).get("events") or [])
-    rules = sports.of(((board or {}).get("state") or {}).get("kind") or (source.sport if source else events[0].sport))
+    # Read by its board's kind ("cricket"), as the source drew it; for an esports game, the kind is the group's,
+    # and the game's own sport ("cs2") is its, with the same rules.
+    by_kind = sports.get(((board or {}).get("state") or {}).get("kind"))
+    rules = sports.get(named) or by_kind or sports.OTHER
+    if by_kind is not None and rules is not by_kind and rules.group != by_kind.key:
+        rules = by_kind
     if not sports.on(rules.key):
-        return None, False
+        return None, False  # a game turned off, though its source runs for another
     event = events[0] if events else None
-    named = game or listed or big or {}
-    start = event.start_utc.isoformat() if event and event.start_utc else named.get("start_utc")
+    said = game or listed or big or {}  # what a source last said of the game, where nothing's stored
+    start = event.start_utc.isoformat() if event and event.start_utc else said.get("start_utc")
 
     roster = (game or {}).get("players") or (listed or {}).get("players") or []
     names = {p["athlete_id"]: (p["name"], p.get("team") or "") for p in [*roster, *((game or {}).get("bench") or [])]}
@@ -263,8 +274,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         "key": f"{system}:{fixture}",
         "match": path(f"{system}:{fixture}"),
         "sport": rules.key or "other",
-        "title": event.title if event else named.get("title"),
-        "competition": event.competition if event else named.get("competition"),
+        "title": event.title if event else said.get("title"),
+        "competition": event.competition if event else said.get("competition"),
         "detail": event.notes if event else (big or {}).get("detail"),
         "start_utc": start,
         "status": status,

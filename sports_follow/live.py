@@ -83,10 +83,11 @@ def _ranked(db: Session, sport: str, system: str, game: LiveGame, blocked: set[t
     return players, max((p["fame"] for p in players), default=0)
 
 
-def _dump(game: LiveGame, players: list[dict[str, Any]], fame: int) -> dict[str, Any]:
+def _dump(game: LiveGame, sport: str, players: list[dict[str, Any]], fame: int) -> dict[str, Any]:
     snap = game.snapshot
     return {
         "source_id": game.source_id,
+        "sport": sport,  # the sport it's of (a source of several esports games names each game's)
         "fixtures": game.fixtures or [game.source_id],  # an event's key is "system:fixture" (structured.upsert_event)
         "title": game.title,
         "competition": game.competition,
@@ -107,9 +108,10 @@ def read(system: str, now: datetime | None = None) -> int:
     if adapter is None:
         return 0
     games = cast(Any, adapter).live_now()
+    one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     with session() as db:
         blocked = registry.blocked(db)
-        dumped = [_dump(g, *_ranked(db, adapter.sport, system, g, blocked)) for g in games]
+        dumped = [_dump(g, sport, *_ranked(db, sport, system, g, blocked)) for g in games if (sport := g.sport or one)]
     dumped.sort(key=lambda g: (-g["tier"], -g["fame"]))
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)
@@ -137,7 +139,8 @@ def _event_keys(system: str, game: dict[str, Any]) -> list[str]:
 
 
 def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
-    """The games on now, by running sport in the order the app lists sports ({"key", "label", "games"}),
+    """The games on now, by running sport in the order the app lists sports ({"key", "label", "group", "games"}: an
+    esports game's group is "esports"),
     each with the players this fan can follow from it and the ids of the events it is here (a followed
     player's live card names its game by one); and the sources whose last read is over FRESH old, for the
     caller to ask a read of."""
@@ -150,7 +153,10 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
         if age > FRESH:
             stale.append(adapter.system)
         if age <= SERVE:
-            by_sport.setdefault(adapter.sport, []).extend((adapter.system, g) for g in (read_ or {}).get("games") or [])
+            # A read from before games said their sport is its source's one sport's, or for a source of several, none's.
+            one = adapter.sports[0] if len(adapter.sports) == 1 else ""
+            for g in (read_ or {}).get("games") or []:
+                by_sport.setdefault(g.get("sport") or one, []).append((adapter.system, g))
     blocked = registry.blocked(db) if by_sport else set()
     ranked = {sport.key: sorted(by_sport.get(sport.key, []), key=lambda sg: (-sg[1].get("tier", 0), -sg[1].get("fame", 0)))[: GAMES * 2] for sport in sports.ENABLED}
     keys = {k for candidates in ranked.values() for system, game in candidates for k in _event_keys(system, game)}
@@ -173,5 +179,5 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
                                  "event_ids": sorted({events[k] for k in _event_keys(system, game) if k in events})}))
         games.sort(key=lambda g: g[0])
         if games:
-            out.append({"key": sport.key, "label": sport.label, "games": [g for _, g in games[:GAMES]]})
+            out.append({"key": sport.key, "label": sport.label, "group": sport.group, "games": [g for _, g in games[:GAMES]]})
     return out, stale

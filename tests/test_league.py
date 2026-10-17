@@ -29,8 +29,8 @@ def redis(monkeypatch):
 class Source:
     """A made-up source that lists its competitions' games, and the days it was asked for."""
 
-    def __init__(self, system: str, sport: str, games: list[Fixture] | None = None):
-        self.system, self.sport, self.games, self.asked = system, sport, games or [], []
+    def __init__(self, system: str, sports: tuple[str, ...], games: list[Fixture] | None = None):
+        self.system, self.sports, self.games, self.asked = system, sports, games or [], []
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         self.asked.append((start, end))
@@ -39,8 +39,8 @@ class Source:
 
 @pytest.fixture
 def sources(monkeypatch):
-    """Only made-up sources run: a football one and two esports ones side by side."""
-    made = SimpleNamespace(pitch=Source("pitch", "football"), arena=Source("arena", "esports"), lobby=Source("lobby", "esports"))
+    """Only made-up sources run: a football one, and two esports ones, of two games and of one."""
+    made = SimpleNamespace(pitch=Source("pitch", ("football",)), arena=Source("arena", ("valorant", "lol")), lobby=Source("lobby", ("pubg",)))
     monkeypatch.setattr(league, "ADAPTERS", {s.system: s for s in vars(made).values()})
     return made
 
@@ -81,29 +81,42 @@ def test_a_read_keeps_what_its_sport_ranks_finished_or_to_come(sources, redis, m
 
 
 def test_each_sport_reads_its_first_source_that_lists_a_schedule_or_every_one_side_by_side(sources, monkeypatch):
-    monkeypatch.setitem(league.ADAPTERS, "second", Source("second", "football"))
-    monkeypatch.setitem(league.ADAPTERS, "no_schedule", SimpleNamespace(system="no_schedule", sport="cricket"))
-    assert [a.system for a in league.sources()] == ["pitch", "arena", "lobby"]
+    monkeypatch.setitem(league.ADAPTERS, "second", Source("second", ("football",)))
+    monkeypatch.setitem(league.ADAPTERS, "no_schedule", SimpleNamespace(system="no_schedule", sports=("cricket",)))
+    assert [a.system for a in league.sources()] == ["pitch", "arena", "lobby"]  # a source of two games, once
 
 
 def test_a_sport_turned_off_isnt_read(sources, monkeypatch):
-    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "esports"))
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if not s.group))
     assert [a.system for a in league.sources()] == ["pitch"]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert [a.system for a in league.sources()] == ["pitch", "arena", "lobby"]  # its other game still runs
+
+
+def test_a_source_of_several_games_reads_each_as_its_sport_and_a_game_turned_off_isnt_served(sources, redis, monkeypatch):
+    sources.arena.games = [fixture("v", "final", NOW - timedelta(hours=2), sport="valorant", tier=3, detail="Grand final · Bo5",
+                                   result={"teams": [{"id": "1", "name": "SEN", "score": 3, "winner": True}, {"id": "2", "name": "FNC", "score": 1, "winner": False}]}),
+                           fixture("l", "scheduled", NOW + timedelta(days=1), sport="lol", tier=2, detail="Semi-final · Bo5")]
+    assert league.read("arena", NOW) == 2
+    assert [(g["key"], g["sport"], g["why"]) for g in json.loads(redis["league:games:arena"])["games"]] == [("arena:v", "valorant", "Grand final"), ("arena:l", "lol", "Semi-final")]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    served, _ = league.offer(Db(), NOW)
+    assert [g["key"] for g in served["results"]["games"]] == [] and [g["key"] for g in served["coming"]["games"]] == ["arena:l"]
 
 
 def keep(redis: dict, system: str, games: list[dict], as_of: datetime = NOW) -> None:
     redis[f"league:games:{system}"] = json.dumps({"as_of": as_of.isoformat(), "games": games})
 
 
-def game(key: str, status: str, start: datetime, rank: int, sport: str = "football", group: str = "") -> dict:
+def game(key: str, status: str, start: datetime, rank: int, sport: str = "football") -> dict:
     return {"key": key, "sport": sport, "title": key, "competition": "League", "detail": None, "start_utc": start.isoformat(), "status": status,
-            "rank": rank, "word": "", "line": "", "why": "", "group": group}
+            "rank": rank, "word": "", "line": "", "why": ""}
 
 
 def test_results_since_yesterday_biggest_first_then_newest_of_every_sport(sources, redis):
     keep(redis, "pitch", [game("pitch:old", "final", NOW - timedelta(days=3), 99), game("pitch:a", "final", NOW - timedelta(hours=30), 40),
                           game("pitch:b", "final", NOW - timedelta(hours=2), 40), game("pitch:c", "final", NOW - timedelta(hours=20), 80)])
-    keep(redis, "arena", [game("arena:d", "final", NOW - timedelta(hours=5), 60, "esports")])
+    keep(redis, "arena", [game("arena:d", "final", NOW - timedelta(hours=5), 60, "valorant")])
     served, stale = league.offer(Db({"pitch:b": 7}), NOW)
     assert stale == ["lobby"]  # never read
     assert served["results"]["day"] is None
@@ -114,20 +127,21 @@ def test_results_since_yesterday_biggest_first_then_newest_of_every_sport(source
 def test_a_game_says_its_match_page_where_its_source_reads_one_game_or_its_an_event_here(sources, redis):
     sources.pitch.match = lambda source_id: None  # Pitch can read a game on its own; Arena can't
     keep(redis, "pitch", [game("pitch:a", "final", NOW - timedelta(hours=2), 40), game("pitch:b", "scheduled", NOW + timedelta(days=1), 40)])
-    keep(redis, "arena", [game("arena:c", "final", NOW - timedelta(hours=3), 60, "esports"), game("arena:d", "final", NOW - timedelta(hours=4), 50, "esports")])
+    keep(redis, "arena", [game("arena:c", "final", NOW - timedelta(hours=3), 60, "valorant"), game("arena:d", "final", NOW - timedelta(hours=4), 50, "valorant")])
     served, _ = league.offer(Db({"arena:d": 9}), NOW)
     games = [*served["results"]["games"], *served["coming"]["games"]]
     assert {g["key"]: g["match"] for g in games} == {"pitch:a": "pitch/a", "pitch:b": "pitch/b", "arena:c": None, "arena:d": "arena/d"}
 
 
-def test_the_sports_take_turns_and_an_esports_title_takes_its_own_within_its_sports(sources, redis):
+def test_the_sports_take_turns_and_the_esports_games_one_between_them(sources, redis):
     """A busy esports week doesn't fill the results: each sport's biggest, the biggest of those first, then
-    each one's next biggest; esports' turns go round its titles, so one title's season doesn't take them all.
-    A read from before games had a group (no "group") is one group."""
+    each one's next biggest; the esports games take one turn between them, which goes round the games, so
+    neither one game's season nor many games take them all. A read from before each game was a sport (its
+    sport "esports") is in esports' turn."""
     hours = lambda n: NOW - timedelta(hours=n)  # noqa: E731
-    keep(redis, "arena", [game("lol:1", "final", hours(1), 90, "esports", "League of Legends"), game("lol:2", "final", hours(2), 85, "esports", "League of Legends"),
-                          game("lol:3", "final", hours(3), 80, "esports", "League of Legends"), game("val:1", "final", hours(4), 60, "esports", "Valorant")])
-    keep(redis, "lobby", [{k: v for k, v in game("pubg:1", "final", hours(5), 55, "esports").items() if k != "group"}])
+    keep(redis, "arena", [game("lol:1", "final", hours(1), 90, "lol"), game("lol:2", "final", hours(2), 85, "lol"),
+                          game("lol:3", "final", hours(3), 80, "lol"), game("val:1", "final", hours(4), 60, "valorant")])
+    keep(redis, "lobby", [{**game("pubg:1", "final", hours(5), 55, "esports"), "group": "PUBG"}])
     keep(redis, "pitch", [game("pitch:1", "final", hours(6), 50), game("pitch:2", "final", hours(7), 40)])
     served, _ = league.offer(Db(), NOW)
     assert [g["key"] for g in served["results"]["games"]] == ["lol:1", "pitch:1", "val:1", "pitch:2", "pubg:1", "lol:2", "lol:3"]
@@ -172,7 +186,7 @@ def test_each_list_is_cut_at_its_most(sources, redis, monkeypatch):
 
 def test_a_list_is_cut_after_the_sports_take_turns_so_a_smaller_sport_keeps_its_share(sources, redis, monkeypatch):
     monkeypatch.setattr(league, "COMING", 4)
-    keep(redis, "arena", [game(f"arena:{i}", "scheduled", NOW + timedelta(hours=i + 1), 90 - i, "esports") for i in range(6)])
+    keep(redis, "arena", [game(f"arena:{i}", "scheduled", NOW + timedelta(hours=i + 1), 90 - i, "valorant") for i in range(6)])
     keep(redis, "pitch", [game("pitch:1", "scheduled", NOW + timedelta(days=3), 40)])
     served, _ = league.offer(Db(), NOW)
     assert [g["key"] for g in served["coming"]["games"]] == ["arena:0", "pitch:1", "arena:1", "arena:2"]
@@ -180,7 +194,7 @@ def test_a_list_is_cut_after_the_sports_take_turns_so_a_smaller_sport_keeps_its_
 
 def test_a_read_hours_old_is_served_and_read_again_a_days_old_one_isnt_served(sources, redis):
     keep(redis, "pitch", [game("pitch:a", "final", NOW - timedelta(hours=3), 40)], as_of=NOW - timedelta(seconds=league.FRESH + 60))
-    keep(redis, "arena", [game("arena:b", "final", NOW - timedelta(hours=3), 40, "esports")], as_of=NOW - timedelta(seconds=league.SERVE + 60))
+    keep(redis, "arena", [game("arena:b", "final", NOW - timedelta(hours=3), 40, "valorant")], as_of=NOW - timedelta(seconds=league.SERVE + 60))
     keep(redis, "lobby", [], as_of=NOW - timedelta(minutes=5))
     served, stale = league.offer(Db(), NOW)
     assert stale == ["pitch", "arena"]
@@ -288,14 +302,6 @@ def test_esports_ranks_the_big_events_series_by_their_stage_and_a_series_that_we
     assert rank(series(2, "Bo3", (1, 2))) == Notable(48, word="2–1", line="FaZe beat Vitality", why="Decider")  # the winner's score first
     assert rank(series(1, "Grand final · Bo5")) is None  # a smaller event's
     assert rank(series(3, "Bo3", (2, 0), forfeit=True)) is None
-
-
-def test_an_esports_games_group_is_its_title_as_its_source_names_it():
-    rank = sports.BY_KEY["esports"].notable
-    valorant = series(3, "Grand final · Bo5")
-    valorant.facts = {"game": "Valorant"}
-    assert rank(valorant) == Notable(90, why="Grand final", group="Valorant")
-    assert rank(series(3, "Grand final · Bo5")) == Notable(90, why="Grand final")  # a source that doesn't say
 
 
 def test_esports_ranks_a_big_events_lobby_by_its_tier_and_names_its_winner():

@@ -270,7 +270,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]], fmt: st
 
 class EspnCricket(espn.EspnAdapter, Adapter):
     system = "espn_cricket"
-    sport = "cricket"
+    sports = ("cricket",)
     live_cadence = 8
     name = "ESPNcricinfo"
     covers = "Cricket (ESPNcricinfo)"

@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import registry
-from sports_follow.adapters import PlayerRef, Roster, Rostered
+from sports_follow.adapters import Adapter, PlayerRef, Roster, Rostered
 from sports_follow.models import Athlete
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -60,14 +60,14 @@ def pro(key: str, athlete_id: str, name: str) -> Rostered:
     return Rostered(key=key, ref=PlayerRef("fake_source", athlete_id, name, ["FLC"], ["FLC"], league="fake"))
 
 
-class Source:
+class Source(Adapter):
     """A source with a roster that used to give its athletes ids of one shape ("account.1") and now gives another."""
 
-    system, sport, roster_prefix = "fake_source", "esports", "fake:"
+    system, sports, roster_prefix = "fake_source", ("pubg",), "fake:"
     id_pattern = re.compile(r"[a-z_]{1,20}")
     provider = SimpleNamespace(name="Fake")
 
-    def roster(self, keep):
+    def roster(self, keep, wanted=None):
         keep([pro("fake:new", "flc_tgltn", "TGLTN")])
         return Roster(complete=True, grace=timedelta(days=21))
 
@@ -75,7 +75,7 @@ class Source:
 def test_rows_with_an_id_the_source_no_longer_gives_go_with_the_next_complete_run(db):
     # BHA-216: TGLTN's two rows (an event account each) stayed in search beside his new one for the grace.
     with registry.session() as s:
-        registry.upsert(s, registry.roster_rows("fake_source", [pro("fake:a1", "account.1", "TGLTN"), pro("fake:a2", "account.2", "TGLTN"), pro("fake:old", "flc_shrimzy", "Shrimzy")], "esports"))
-    assert registry.import_roster(Source()) == 1
+        registry.upsert(s, registry.roster_rows(Source(), [pro("fake:a1", "account.1", "TGLTN"), pro("fake:a2", "account.2", "TGLTN"), pro("fake:old", "flc_shrimzy", "Shrimzy")]))
+    assert registry.import_roster(Source()) == {"pubg": 1}
     # Shrimzy wasn't seen this run, but his id is of today's shape: kept for the grace, as before.
     assert sorted(db.scalars(select(Athlete.qid))) == ["fake:new", "fake:old"]

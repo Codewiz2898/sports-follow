@@ -240,7 +240,7 @@ def parse_season_stats(data: dict[str, Any]) -> tuple[list[dict[str, str]], str]
 
 class EspnSoccer(espn.EspnAdapter, Adapter):
     system = "espn_soccer"
-    sport = "football"
+    sports = ("football",)
     live_cadence = 10
     name = "ESPN"
     covers = "Football"
