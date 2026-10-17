@@ -24,7 +24,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ build_card: research agent → profile + news → card, then bind to an adapter
                                 ├─ refresh_structured: adapter → fixtures, results, stats → card
                                 ├─ poll_event: one job per live game, shared by every player in it
-                                ├─ poll_lane: every live Sportmonks football match, one request a round
+                                ├─ poll_lane: every live Sportmonks football or cricket match, one request a round
                                 ├─ refresh_live: agent live check, for sports with no adapter
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
@@ -139,7 +139,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's card. The job hands over every 10 minutes; the tick restarts it while the game is on.
   Sportmonks football matches share one `poll_lane` job instead: each round fetches every armed and
   live match in one request (`fixtures/multi`, 50 matches a request), so a busy matchday costs 240
-  requests an hour, not 240 per match, and one worker thread, not one per match.
+  requests an hour, not 240 per match, and one worker thread, not one per match. Sportmonks cricket
+  matches have a lane of their own: one `livescores` request a round brings every match in play (360
+  an hour, however many are on), and a match it leaves out (before the toss, just finished) is read on
+  its own at `poll_event`'s pace: at once when livescores drops it, every round while it's in play and
+  changing, otherwise once a minute.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
 - **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`

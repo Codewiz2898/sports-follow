@@ -245,8 +245,8 @@ def test_one_games_bad_data_doesnt_stop_the_others(monkeypatch):
 def test_only_sources_that_fetch_many_games_at_once_get_a_lane(monkeypatch):
     monkeypatch.setitem(structured.ADAPTERS, "sportmonks_football", SportmonksFootball())
     monkeypatch.setitem(structured.ADAPTERS, "sportmonks_cricket", SportmonksCricket())
-    assert structured.batched("sportmonks_football")
-    assert not structured.batched("sportmonks_cricket") and not structured.batched("espn_soccer")
+    assert structured.batched("sportmonks_football") and structured.batched("sportmonks_cricket")
+    assert not structured.batched("espn_soccer") and not structured.batched("espn_cricket")
     assert not structured.batched(None) and not structured.batched("not_running")
 
 
