@@ -6,7 +6,7 @@ import { count, useFailure } from './shared'
 const PLANS: Record<string, string> = { free: 'Free', basic: 'Basic', business: 'Business', enterprise: 'Enterprise' }
 
 /** Linear, where the project's work is tracked: its plan, and its issues against the Free plan's limit, past which
- * Linear refuses new ones. The server asks Linear at most once an hour (sports_follow/linear.py), so it's read once a visit. */
+ * Linear refuses new ones. Each API process asks Linear at most once an hour (sports_follow/linear.py), so it's read once a visit. */
 export function LinearCard() {
   const failed = useFailure()
   const [status, setStatus] = useState<LinearStatus | null>(null)

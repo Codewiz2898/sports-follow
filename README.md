@@ -366,7 +366,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   hours, a new password or key signs every admin out, and tries are limited per address and, for wrong
   ones, across everyone. Beside the sources' allowances it shows Linear's plan and how many issues the
   project's workspace holds against the Free plan's limit (`sports_follow/linear.py`, with a read-only
-  Linear key in `SPORTS_FOLLOW_LINEAR_KEY_FILE`; Linear is asked at most once an hour). Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
+  Linear key in `SPORTS_FOLLOW_LINEAR_KEY_FILE`; each API process asks Linear at most once an hour). Each sign-in is counted (`metrics.admin_sign_in`): Grafana emails when one works (with
   how many in the last 5 minutes), and when many don't. The page tells search engines not to list it (`X-Robots-Tag`), and it's its
   own chunk of the web build, so fans don't download it.
 - **Adding or removing a player** is a command, `python -m sports_follow.players` (`sports_follow/players.py`),

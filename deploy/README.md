@@ -255,8 +255,8 @@ sooner, clear the count:
 workspace is on and how many issues it holds against the Free plan's 250, past which Linear refuses new
 issues. It reads them with a key that can only read: in Linear, Settings › Account › Security & access,
 make a personal API key with the Read permission alone and access to all teams, copy it, then save it on
-the Mac and send it. No restart: the API reads the key when the panel next asks, and asks Linear at most
-once an hour. Without a key the card says how to add one, and the rest of the panel doesn't need it.
+the Mac and send it. No restart: the API reads the key when the panel next asks, and each API process
+asks Linear at most once an hour. Without a key the card says how to add one, and the rest of the panel doesn't need it.
 ```bash
 pbpaste > ~/.config/sports-follow/linear-key && chmod 600 ~/.config/sports-follow/linear-key
 deploy/push-secrets.sh deploy@<server-ip>

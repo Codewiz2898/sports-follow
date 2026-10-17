@@ -20,6 +20,7 @@ What Linear's API says (its schema: github.com/linear/linear, packages/sdk/src/s
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -70,10 +71,21 @@ def _key() -> str | None:
         return None
 
 
+ODD = "Linear's answer wasn't what this app expects"
+
+
 def _count(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-        raise LinearError("Linear's answer wasn't what this app expects")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise LinearError(ODD)
     return int(value)
+
+
+def _list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise LinearError(ODD)
+    return value
 
 
 def read(key: str, now: float) -> Reading:
@@ -87,7 +99,7 @@ def read(key: str, now: float) -> Reading:
     except ValueError:
         body = None
     data = body.get("data") if isinstance(body, dict) else None
-    errors = [e for e in body.get("errors") or [] if isinstance(e, dict)] if isinstance(body, dict) else []
+    errors = [e for e in _list(body.get("errors")) if isinstance(e, dict)] if isinstance(body, dict) else []
     org = data.get("organization") if isinstance(data, dict) else None
     teams = data.get("teams") if isinstance(data, dict) else None
     if answer.status_code >= 300 or not isinstance(org, dict) or not isinstance(teams, dict):
@@ -104,9 +116,9 @@ def read(key: str, now: float) -> Reading:
     else:
         plan = "free"
     issues = everything = 0
-    for team in teams.get("nodes") or []:
+    for team in _list(teams.get("nodes")):
         if not isinstance(team, dict):
-            raise LinearError("Linear's answer wasn't what this app expects")
+            raise LinearError(ODD)
         issues += _count(team.get("issueCount"))
         everything += _count(team.get("all"))
     url_key = str(org.get("urlKey") or "")

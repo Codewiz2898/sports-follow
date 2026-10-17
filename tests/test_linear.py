@@ -126,12 +126,14 @@ def test_a_failed_read_keeps_the_last_reading_on_the_panel_with_why_it_wasnt_ren
     assert shown["error"] == "Linear answered 503" and shown["read_at"] < shown["failed_at"]
 
 
-def test_a_refused_key_says_what_linear_said_and_never_the_key(monkeypatch):
+def test_a_refused_key_says_what_linear_said_and_never_the_key(monkeypatch, caplog):
     refused = httpx.Response(400, json={"errors": [{"message": "Authentication required, not authenticated", "extensions": {"code": "AUTHENTICATION_ERROR"}}]})
     fake(monkeypatch, refused)
-    shown = linear.status(NOW)
+    with caplog.at_level("WARNING", logger="sports_follow.linear"):
+        shown = linear.status(NOW)
     assert shown["error"] == "Linear answered 400: Authentication required, not authenticated"
-    assert KEY not in json.dumps(shown)
+    assert "Authentication required" in caplog.text  # the refusal is logged, the request and its key aren't
+    assert KEY not in json.dumps(shown) and KEY not in caplog.text
 
 
 @pytest.mark.parametrize("odd", [
@@ -139,6 +141,10 @@ def test_a_refused_key_says_what_linear_said_and_never_the_key(monkeypatch):
     {"data": {"organization": {"name": "x"}, "teams": {"nodes": [{"key": "T", "issueCount": "many", "all": 1}]}}},
     {"data": {"organization": {"name": "x"}, "teams": {"nodes": [{"key": "T", "issueCount": -1, "all": 1}]}}},
     ["not", "an", "object"],
+    {"errors": 5},
+    {"data": {"organization": {"name": "x"}, "teams": {"nodes": 5}}},
+    httpx.Response(200, content=b'{"data": {"organization": {"name": "x"}, "teams": {"nodes": [{"key": "T", "issueCount": 1e400, "all": 1}]}}}'),
+    httpx.Response(200, text="<html>a proxy's error page</html>"),
 ])
 def test_an_answer_this_app_doesnt_expect_is_an_error_on_the_panel_not_a_crash(monkeypatch, odd):
     fake(monkeypatch, odd)

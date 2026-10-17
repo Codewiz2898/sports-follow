@@ -1341,8 +1341,8 @@ def admin_reset_budget(name: str) -> dict[str, Any]:
 
 @app.get("/api/admin/linear", dependencies=AdminOnly)
 def admin_linear() -> dict[str, Any]:
-    """Linear's plan and how many issues it holds against the Free plan's limit (linear.py). It asks Linear at
-    most once an hour, and answers even without a key or with Linear down, saying so."""
+    """Linear's plan and how many issues it holds against the Free plan's limit (linear.py). Each process asks
+    Linear at most once an hour, and it answers even without a key or with Linear down, saying so."""
     return linear.status()
 
 
