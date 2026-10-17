@@ -19,6 +19,11 @@ export interface ChessState {
 // ended where that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
 export interface ChessPage { moves?: string[]; opening?: string | null; ending?: string | null; game?: number | null }
 
+/** The line over a finished game's moves: its opening, and how it ended ("Resigned"). */
+export function movesAbout(page: ChessPage): string {
+  return [page.opening, page.ending && page.ending[0].toUpperCase() + page.ending.slice(1)].filter(Boolean).join(' · ')
+}
+
 export const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
 
 /** The position from the followed player's side: its eight ranks of squares (a piece's FEN letter, or

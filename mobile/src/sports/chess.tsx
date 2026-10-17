@@ -1,7 +1,13 @@
+import { useState } from 'react'
 import { Text, View } from 'react-native'
-import { chess as facts, chessMiddle, PIECES, position, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
+import { chess as facts, chessMiddle, movesAbout, PIECES, position, type ChessPage, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
 import { colour, num, t } from '../theme'
-import { Muted, Title, type Board, type BoardProps, type Palette } from './board'
+import { Card } from '../ui'
+import { Muted, Title, type Board, type BoardProps, type MatchPart, type MatchProps, type Palette } from './board'
+import { MatchSection } from './section'
+
+const MOVE = 118 // a column of moves, at least (the web's .chess-moves grid)
+const MOVE_GAP = 14
 
 // The web's chess.css: light and dark squares, the last move's in yellow, white pieces outlined.
 const SQUARE = { light: '#ECE6D6', dark: '#8B6FD6', movedLight: '#F3E38A', movedDark: '#C9B34A' }
@@ -59,4 +65,24 @@ function ChessBoard({ state, clock, compact, live, pal }: BoardProps<ChessState>
   )
 }
 
-export const chess = { ...facts, Board: ChessBoard as Board }
+/** A finished game's match page under its board: the moves that led there, in pairs, as many columns as fit,
+ * with its opening and how it ended; of a mini-match, the last game's (the one on the board). */
+function ChessMatch({ page }: MatchProps<ChessPage>) {
+  const [width, setWidth] = useState(0)
+  if (!page.moves?.length) return null
+  const about = movesAbout(page)
+  const columns = Math.max(1, Math.floor((width + MOVE_GAP) / (MOVE + MOVE_GAP)))
+  const cell = width ? Math.floor((width - MOVE_GAP * (columns - 1)) / columns) : 0 // whole pixels: a row's sum never runs over
+  return (
+    <MatchSection title="Moves" note={page.game ? `Game ${page.game}` : null}>
+      <Card pad style={{ gap: 10 }}>
+        {about ? <Text style={[t.small, t.muted]}>{about}</Text> : null}
+        <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: MOVE_GAP, rowGap: 4 }}>
+          {cell > 0 ? page.moves.map((m) => <Text key={m} style={[t.small, { width: cell, fontVariant: ['tabular-nums'] }]}>{m}</Text>) : null}
+        </View>
+      </Card>
+    </MatchSection>
+  )
+}
+
+export const chess = { ...facts, Board: ChessBoard as Board, Match: ChessMatch as MatchPart }

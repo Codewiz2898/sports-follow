@@ -9,15 +9,11 @@ import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
-import { dateOnly, dateTime, parseDate, relative } from '../format'
+import { dateTime, relative } from '../format'
 import { useFollowing } from '../following'
-import { comingCard } from '../lines'
+import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn } from '../match'
 import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
-
-const EVERY = 30_000  // a look again: a followed player's game is polled every few seconds, any other read once a minute
-const SOON = 5_000  // when the server says a read is on its way, the next look
-const TRIES = 3  // and how many such looks before waiting the usual time again
 
 /**
  * A game's match page from the server (GET /api/match/<source>/<game id>), looked at again while the page is in
@@ -44,7 +40,8 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
           if (!current || mine !== latest) return
           setMatch(m)
           setFailed(null)
-          timer = window.setTimeout(() => look(m.refreshing ? tries + 1 : 0), m.refreshing && tries < TRIES ? SOON : EVERY)
+          const next = nextLook(m.refreshing, tries)
+          timer = window.setTimeout(() => look(next.tries), next.wait)
         })
         .catch((e: Error) => {
           if (!current || mine !== latest) return
@@ -61,22 +58,6 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
   return { match, failed }
 }
 
-/** When a game to come (or about to start, armed, with no board yet) starts, under its title: its countdown
- * within a day, else its day, as Coming up's cards say it; "Starting soon" once its start has passed without
- * it (a delayed start), for a few hours; else nothing. */
-function startsIn(match: Match, now: number): string | null {
-  const at = parseDate(match.start_utc)?.getTime()
-  if (at == null) return null
-  // A day with no time yet: its day, whatever the hour.
-  if (at > now || dateOnly(match.start_utc)) return comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big
-  return now - at < LATE ? 'Starting soon' : null
-}
-
-const LATE = 6 * 36e5  // how long after its start a game that hasn't begun is still "starting soon"
-
-/** A game's board means something once it's under way: before, the head says when it starts instead. */
-const UNDER_WAY = ['live', 'final', 'armed']
-
 /** Where the game is: live, over, called off, or when it starts. */
 function Status({ match }: { match: Match }) {
   if (match.status === 'live') return <span className="badge-live">Live</span>
@@ -84,8 +65,6 @@ function Status({ match }: { match: Match }) {
   if (match.status === 'postponed') return <span className="pill outline">Off</span>
   return match.start_utc ? <span className="pill outline">{dateTime(match.start_utc)}</span> : null
 }
-
-interface KeyEvent { clock: string; kind: string; text: string }
 
 /**
  * Following the game by itself (sports_follow/matches.py): its key moments from both sides reach the fan until
@@ -104,7 +83,7 @@ function useFollowGame(match: Match | null) {
   useEffect(() => { setMine(null); setOpen(false); setError(null) }, [match?.key])
   useEffect(() => { if (mine && said && said.following === mine.following) setMine(null) }, [said, mine])
   const state = mine ?? said
-  const followed = match ? matches.find((m) => match.event_ids.includes(m.event_id) || (m.addresses ?? []).includes(match.match) || m.event_id === state?.event_id) : undefined
+  const followed = match ? followedOf(match, matches, state) : undefined
   const attempt = (work: () => Promise<unknown>) => { setError(null); return work().catch((e: Error) => setError(e.message)) }
   const toggle = async () => {
     if (!match || !state) return
@@ -143,11 +122,12 @@ export function MatchPage() {
   const key = sportKey(match.sport)
   const view = viewOf(sportDrawn(match.sport)) // an esports game is drawn as esports
   const live = match.live
-  const board = live && UNDER_WAY.includes(match.status) ? live : null
-  const soon = !board && (match.status === 'scheduled' || match.status === 'armed') ? startsIn(match, now) : null
-  const events = (match.page.events ?? []) as KeyEvent[]
+  const board = boardOf(match)
+  const soon = startsIn(match, now)
+  const events = keyEvents(match)
   const yours = match.yours ?? []
   const { state, followed } = watch
+  const head = followHead(match, state)
   const level = followed?.alerts ?? 'key'
   const eventId = followed?.event_id ?? match.event_ids[0]
 
@@ -163,14 +143,14 @@ export function MatchPage() {
                 <BellIcon width={20} height={20} />
               </button>
             )}
-            {state && (state.following || state.alerts) && (
+            {state && head.button && (
               <button type="button" className="btn" onClick={watch.toggle} disabled={watch.busy} aria-pressed={state.following}>
                 {watch.busy && <span className="spinner" />}
                 {state.following ? <><CheckIcon width={16} height={16} />Following</> : <><PlusIcon width={16} height={16} />Follow</>}
               </button>
             )}
-            {state && !state.following && !state.alerts && match.status !== 'final' && (
-              <span className="pill outline" title={state.note ?? undefined}>No live alerts</span>
+            {head.noAlerts && (
+              <span className="pill outline" title={state?.note ?? undefined}>No live alerts</span>
             )}
           </span>
         </div>
@@ -211,7 +191,7 @@ export function MatchPage() {
         {board?.as_of && <span className="tiny soft">Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</span>}
       </header>
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
-      {state && (state.following ? state.held : !state.alerts) && state.note && match.status !== 'final' && <p className="small muted" role="status">{state.note}</p>}
+      {head.note && <p className="small muted" role="status">{head.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
 
       {yours.length > 0 && (
