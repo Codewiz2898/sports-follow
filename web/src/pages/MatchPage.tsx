@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, type Match } from '../api'
 import { useNow } from '../clock'
-import { GameBoard, PlainScore, SectionHead } from '../components/Blocks'
+import { GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
 import { dateTime, relative } from '../format'
+import { comingCard } from '../lines'
 import { sportKey, sportName, viewOf } from '../sports'
 
 const EVERY = 30_000  // a look again: a followed player's game is polled every few seconds, any other read once a minute
@@ -56,6 +57,9 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
   return { match, failed }
 }
 
+/** A game's board means something once it's under way: before, the head says when it starts instead. */
+const UNDER_WAY = ['live', 'final', 'armed']
+
 /** Where the game is: live, over, called off, or when it starts. */
 function Status({ match }: { match: Match }) {
   if (match.status === 'live') return <span className="badge-live">Live</span>
@@ -68,9 +72,11 @@ interface KeyEvent { clock: string; kind: string; text: string }
 
 /**
  * One game, whoever follows anyone in it, live, to come or over (sports_follow/match.py): a head in its sport's
- * colour with the competition and its board (the sides and the big score, as its sport draws them), then what
- * its sport shows under the board (a timeline, a scorecard, its maps), what was found for the players followed in
- * it, and both sides' players to follow with a tap. Every live game on Today opens it.
+ * colour with the competition and its board (the sides and the big score, as its sport draws them), and over
+ * a finished game's board who won, big; a game to come has its countdown there instead. Then what its sport
+ * shows under the board (a timeline, a scorecard, its maps, a chess game's moves), the fan's players in it with
+ * their lines, what was found for the players followed in it, and both sides' players to follow with a tap.
+ * Every game on Today opens it, live, over or to come, and so does a game on a player's Matches tab.
  */
 export function MatchPage() {
   const { source = '', game = '' } = useParams()
@@ -87,7 +93,10 @@ export function MatchPage() {
   const key = sportKey(match.sport)
   const view = viewOf(key)
   const live = match.live
+  const board = live && UNDER_WAY.includes(match.status) ? live : null
+  const soon = !board && match.status === 'scheduled' && match.start_utc ? comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big : null
   const events = (match.page.events ?? []) as KeyEvent[]
+  const yours = match.yours ?? []
 
   return (
     <>
@@ -103,19 +112,42 @@ export function MatchPage() {
             <span className="tag soft">{[match.competition, match.detail].filter(Boolean).join(' · ') || sportName(match.sport)}</span>
           </span>
           {/* The board names the sides; without one yet, the title does. */}
-          <h1 className={live ? 'sr-only' : 'dsp match-title'}>{match.title}</h1>
+          <h1 className={board ? 'sr-only' : 'dsp match-title'}>{match.title}</h1>
+          {soon && <span className="dsp match-count">{soon}</span>}
         </div>
-        {live && (
+        {board && (
           <div className="match-board">
             {/* A state in a shape this app doesn't know shows as the plain score. */}
-            <ErrorBoundary fallback={<PlainScore live={live} />} resetKey={live}>
-              <GameBoard live={live} />
+            <ErrorBoundary fallback={<PlainScore live={board} />} resetKey={board}>
+              <GameBoard live={board} />
             </ErrorBoundary>
           </div>
         )}
-        {live?.as_of && <span className="tiny soft">Updated {relative(live.as_of, now)}{live.source ? ` · ${live.source}` : ''}</span>}
+        {/* Over: who won, big, as its sport says it. */}
+        {match.status === 'final' && match.verdict && <p className="dsp match-verdict">{match.verdict}</p>}
+        {board?.as_of && <span className="tiny soft">Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</span>}
       </header>
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
+
+      {yours.length > 0 && (
+        <section className="section" aria-label="Your players">
+          <SectionHead title="Your players" />
+          <ul className="card list">
+            {yours.map((p) => (
+              <li key={p.player_id}>
+                <Link to={`/player/${p.player_id}`} className="stack" style={{ gap: 6 }}>
+                  <span className="row">
+                    <span className="title">{p.name}</span>
+                    {p.result && <span className="small" style={{ fontWeight: 800 }}>{p.result}</span>}
+                  </span>
+                  {p.headline && <span className="small" style={{ fontWeight: 800 }}>{p.headline}</span>}
+                  {p.stats.length > 0 && <StatGrid stats={p.stats} />}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {view?.Match && (
         <ErrorBoundary fallback={<BlockError />} resetKey={match.page}>

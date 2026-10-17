@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { api, type League, type LeagueGame } from '../api'
 import { dayLabel, shortWhen } from '../format'
 import { wordSize } from '../lines'
@@ -53,16 +54,24 @@ export function useLeague(theirs: string | null = null): League | null {
   return league
 }
 
+/** A big game's card: a link to its match page where the server gave it one (match), else the card alone. */
+function LeagueCard({ game, className, label, children }: { game: LeagueGame; className: string; label: string; children: ReactNode }) {
+  const key = sportKey(game.sport)
+  return game.match
+    ? <Link to={`/match/${game.match}`} className={className} data-sport={key} aria-label={label}>{children}</Link>
+    : <article className={className} data-sport={key} aria-label={label}>{children}</article>
+}
+
 /**
  * A finished game on Today none of the fan's players are in: outlined, as Also live's games are, so it doesn't
  * pass for theirs. Its competition, when, its sport's big word for it (the score, the margin, a lobby's
- * winner), who played, and what made it big. Not a link: nobody here need follow anyone in it.
+ * winner), who played, and what made it big. It opens the game's match page: what happened in it.
  */
 export function LeagueResultCard({ game, now }: { game: LeagueGame; now: number }) {
   const key = sportKey(game.sport)
   const word = game.word || game.title
   return (
-    <article className="league-card league-result" data-sport={key} aria-label={`${game.competition}: ${game.line || game.title}, ${word}`}>
+    <LeagueCard game={game} className="league-card league-result" label={`${game.competition}: ${game.line || game.title}, ${word}`}>
       <Backdrop sport={key} seed={game.key} />
       <span className="head"><span className="sport-tag">{game.competition}</span><span className="eyebrow">{dayLabel(game.start_utc, new Date(now))}</span></span>
       <span className="dsp word" style={{ '--word': `${wordSize(word)}px` } as CSSProperties}>{word}</span>
@@ -70,16 +79,17 @@ export function LeagueResultCard({ game, now }: { game: LeagueGame; now: number 
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
         <span className="line soft">{leagueAbout(game)}</span>
       </span>
-    </article>
+    </LeagueCard>
   )
 }
 
-/** A big game to come on Today, outlined: the countdown within a day, else the day, big; then the game. */
+/** A big game to come on Today, outlined: the countdown within a day, else the day, big; then the game. It
+ * opens the game's match page: its line-ups as they come, and both sides' players to follow. */
 export function LeagueComingCard({ game, now }: { game: LeagueGame; now: number }) {
   const key = sportKey(game.sport)
   const { big, when } = leagueComing(game, now)
   return (
-    <article className="league-card league-coming" data-sport={key} aria-label={`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`}>
+    <LeagueCard game={game} className="league-card league-coming" label={`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`}>
       <Backdrop sport={key} seed={game.key} />
       <span className="sport-tag">{game.competition}</span>
       <span className="dsp count">{big}</span>
@@ -87,6 +97,6 @@ export function LeagueComingCard({ game, now }: { game: LeagueGame; now: number 
         <span className="line strong">{game.title}</span>
         <span className="line soft">{leagueAbout(game, when)}</span>
       </span>
-    </article>
+    </LeagueCard>
   )
 }

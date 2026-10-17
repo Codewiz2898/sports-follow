@@ -90,14 +90,16 @@ export type { GameResult }
  * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
  * and their win, draw or loss. Players whose games went differently (opponents, or teams apart in one lobby)
  * share the card too: then it shows the score alone, or the game, and each player's line says how theirs went.
- * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers.
+ * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers. It opens
+ * the game's match page, what happened in it, where a source has the game; else the first player's page.
  */
 export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
   const key = sportKey(game.players[0].sport)
   const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, key)
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
+  const page = game.players.find((p) => p.result.match)?.result.match
   return (
-    <Link to={`/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
+    <Link to={page ? `/match/${page}` : `/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
       <Backdrop sport={key} seed={game.key} />
       {hero ? (
         <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
@@ -130,14 +132,15 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
 
 /**
  * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it.
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it. It
+ * opens the game's match page (the line-ups as they come, both sides' players), else the first player's page.
  */
 export function ComingCard({ event, players, seed }: { event: UpcomingEvent; players: Card[]; seed: string }) {
   const now = useNow()
   const key = sportKey(players[0].player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Link to={`/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
+    <Link to={event.match ? `/match/${event.match}` : `/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
       <Backdrop sport={key} seed={seed} />
       <span className="eyebrow muted">{eyebrow}</span>
       <span className="dsp count">{big}</span>

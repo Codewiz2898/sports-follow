@@ -500,6 +500,10 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .match-board .live-note { color: var(--on-sport); font-size: 13px; font-weight: 800; }
 .match-board .linescore.lobby tr.ours td { color: var(--on-sport); }
 @media (min-width: 640px) { .match-board .score { font-size: 80px; } }
+/* Over: who won, big under the board; to come: the countdown under the title. */
+.match-verdict { margin: 0; font-size: 36px; line-height: 1; overflow-wrap: anywhere; }
+.match-count { font-size: 56px; line-height: 1; white-space: nowrap; }
+@media (min-width: 640px) { .match-verdict { font-size: 44px; } }
 .match-sides { gap: 16px; }
 .match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A football timeline: the home side's on the left, the away side's on the right. */

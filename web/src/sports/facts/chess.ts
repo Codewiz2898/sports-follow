@@ -15,6 +15,9 @@ export interface ChessState {
   result?: string | null
   match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
 }
+// A finished game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"), its opening, how it
+// ended where that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
+export interface ChessPage { moves?: string[]; opening?: string | null; ending?: string | null; game?: number | null }
 
 export const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
 

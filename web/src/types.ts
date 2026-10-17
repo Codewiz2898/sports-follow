@@ -72,6 +72,7 @@ export interface UpcomingEvent {
   notes?: string | null
   status?: 'scheduled' | 'armed' | 'live' | 'postponed' | 'final'
   event_id?: number
+  match?: string | null  // its match page's address after /match/, where a source has the game
 }
 
 export interface RecentResult {
@@ -83,6 +84,7 @@ export interface RecentResult {
   competition?: string | null
   source_url?: string | null
   event_id?: number | null
+  match?: string | null  // its match page's address after /match/, where a source has the game
   scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
 }
 
@@ -300,10 +302,14 @@ export interface MatchMoment { id: number; at: string; kind: string; level: 'key
  * offers the players on the app in it, as one side with no name. */
 export interface MatchSide { name: string; players: SearchResult[] }
 
+/** One of the fan's players in a game, with their line in it and, once it's over, their result from their side. */
+export interface MatchPlayer { player_id: number; name: string; sport: string; result: string | null; headline: string | null; stats: Stat[] }
+
 /** One game's match page (GET /api/match/<source>/<game id>, sports_follow/match.py), whoever follows anyone
  * in it: live, to come or over. Its board is a live block like a card's (null before a game has one), `page`
- * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps), drawn by the sport's
- * view, `moments` what was found for the players followed in it. */
+ * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps, a chess game's moves),
+ * drawn by the sport's view, `moments` what was found for the players followed in it, `yours` the fan's
+ * players in it with their lines. */
 export interface Match {
   key: string
   match: string  // its address after /match/
@@ -314,8 +320,10 @@ export interface Match {
   start_utc?: string | null
   status: 'scheduled' | 'armed' | 'live' | 'final' | 'postponed'
   live: LiveStatus | null
+  verdict?: string  // a finished game's: who won, as its sport says it ("Arsenal won", "Draw"); "" where the board says it
   page: Record<string, unknown>
   moments: MatchMoment[]
+  yours?: MatchPlayer[]
   sides: MatchSide[]
   event_ids: number[]
   fixtures: string[]
@@ -336,6 +344,7 @@ export interface LeagueGame {
   line: string  // "Arsenal beat Chelsea"; "" says the title
   why: string  // "1st v 3rd", "Final", "Tier S"
   event_ids: number[]  // the events it is here: a fan's player in one makes it theirs
+  match?: string | null  // its match page's address after /match/, where it has one
 }
 
 export interface League {
