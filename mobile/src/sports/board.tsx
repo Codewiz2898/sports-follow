@@ -3,7 +3,7 @@
 // (a game none of the fan's players are in, .live-other) or on its sport's colour (a match page's band,
 // .match-board): the palette says which.
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from 'react-native'
 import type { LiveStatus } from '../api'
 import type { Tone } from '../catalog'
@@ -68,6 +68,9 @@ export const INK = { text: colour.text, muted: colour.muted }
 export const LOBBY_COLUMNS = [46, null, 44, 38, 42]
 
 const CELL_PAD = 6 // a cell's padding a side, as .linescore's
+const MAX_GROWTH = 1.15 // a table's fixed columns grow with the phone's text size up to this; past it the numbers shrink to fit
+const ROOM = 100 // the wide column's least room (a batter and how they were out): the others give way to keep it,
+const MIN_SHRINK = 0.85 // down to this share of their own widths (a narrow phone at a large text size)
 
 // ---------------------------------------------------------------- shared pieces
 
@@ -105,14 +108,23 @@ export function Sides({ left, right, middle }: { left: ReactNode; right: ReactNo
 /** A row of a line score (.linescore): its cells, the `wide` one (the first) taking the room, it and those before
  * it to the left, the rest centred, or to the right (`right`: a scorecard's, a lobby's). `total` is the column in
  * bold: the last, or the one at that index. `widths`, each column's own with its padding (none for the wide
- * one), the same for every row of a table, so its columns line up as a table's do whatever's in them; they grow
- * with the phone's text size, and a number that still doesn't fit is drawn smaller rather than cut. */
+ * one), the same for every row of a table, so its columns line up as a table's do whatever's in them. They grow
+ * a little with the phone's text size, and give way, a little, to keep the wide column's ROOM in a narrow row;
+ * a number that doesn't fit is drawn smaller rather than cut. */
 export function LineRow({ cells, pal, head, total, first = 1, bold, wide = 0, right, widths }: { cells: ReactNode[]; pal: Pick<Palette, 'text' | 'muted'>; head?: boolean; total?: boolean | number; first?: number; bold?: boolean[]; wide?: number; right?: boolean; widths?: (number | null)[] }) {
   const { fontScale } = useWindowDimensions()
+  const [row, setRow] = useState(0) // the row's width, once laid out
   const strong = total === true ? cells.length - 1 : typeof total === 'number' ? total : -1
-  const width = (w: number) => 2 * CELL_PAD + (w - 2 * CELL_PAD) * Math.max(1, fontScale)
+  // Each fixed column is its padding and its text's room, k times its own: as the text size has it, but no more
+  // than leaves the wide column ROOM in the row (once it's laid out), nor less than MIN_SHRINK.
+  const own = (widths ?? []).filter((w, i): w is number => Boolean(w) && i !== wide)
+  const pads = own.length * 2 * CELL_PAD
+  const text = own.reduce((sum, w) => sum + w, 0) - pads
+  const growth = Math.min(MAX_GROWTH, Math.max(1, fontScale))
+  const k = row && text ? Math.max(MIN_SHRINK, Math.min(growth, (row - ROOM - pads) / text)) : growth
+  const width = (w: number) => 2 * CELL_PAD + (w - 2 * CELL_PAD) * k
   return (
-    <View style={s.lineRow}>
+    <View style={s.lineRow} onLayout={widths ? (e) => setRow(e.nativeEvent.layout.width) : undefined}>
       {cells.map((c, i) => (
         <View key={i} style={i === wide ? { flex: first, minWidth: 0, paddingHorizontal: CELL_PAD } : [widths?.[i] ? { width: width(widths[i]) } : { minWidth: 30 }, { paddingHorizontal: CELL_PAD, alignItems: i < wide ? 'flex-start' : right ? 'flex-end' : 'center' }]}>
           {typeof c === 'string' || typeof c === 'number' ? (
