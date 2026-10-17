@@ -770,6 +770,11 @@ class LichessChess(Adapter):
             out.extend(live_boards(get_json(f"{API}broadcast/-/-/{entry['round']['id']}", ttl=60), self.system, now))
         return out
 
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A board polled by its address alone ("<round id>-<FIDE id>"), as its player's fixture of it is (matches.py)."""
+        round_id, _, fide = source_id.partition("-")
+        return {"round": round_id, "fide": fide} if self.fixture_pattern.fullmatch(source_id) else None
+
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
         return parse_board(data, locator["fide"])

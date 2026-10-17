@@ -473,6 +473,10 @@ class SportmonksFootball(Adapter):
         found = self._between(page["team"], date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600)
         return [f for f in found if f.status == "final"]
 
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A match polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
+
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.
         data = sportmonks.get_json(f"/football/fixtures/{locator['fixture']}", ttl=24 * 3600 if final else 5, include=MATCH_INCLUDE)

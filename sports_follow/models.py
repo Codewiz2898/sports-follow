@@ -403,6 +403,22 @@ class Follow(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class MatchFollow(Base):
+    """A game a fan follows by itself (matches.py: the match page's Follow), whoever plays in it: its key
+    moments from both sides reach them, by their level, until it ends. Then the follow lapses on its own
+    (until): what the game says after that isn't theirs. Kept a month after, for the activity list."""
+
+    __tablename__ = "match_follow"
+    __table_args__ = (UniqueConstraint("fan_id", "event_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"), index=True)
+    alert_rules: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"level": ...}, as a player follow's
+    created_at: Mapped[datetime] = _now()
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when it lapsed: the game ended (or never came)
+
+
 class PlayerCard(Base):
     """The read model: what the app renders. Mirrored to Redis."""
 
@@ -423,14 +439,15 @@ class PlayerCard(Base):
 
 class Moment(Base):
     """Something worth telling a player's fans (moments.py): a goal, a fifty, a set, a result, an
-    injury. The key makes each one happen once, however many polls see it."""
+    injury. The key makes each one happen once, however many polls see it. A game's own moment, for the
+    fans following the game itself (matches.py, Sport.game_moments), has no player: it says whom it's about."""
 
     __tablename__ = "moment"
     __table_args__ = (Index("ix_moment_unsent", "created_at", postgresql_where=text("sent_at IS NULL")),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(200), unique=True)
-    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)  # None: the game's own
     event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | correction | ...
     level: Mapped[str] = mapped_column(String(10))  # key | minor
@@ -443,11 +460,14 @@ class Moment(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The moment a correction takes back (a goal VAR rules out): it goes only to the fans who were sent that one.
     corrects: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)
+    # A game's own moment: the players it's about, by their ids in its source (a goal's scorer), or ["*"], the
+    # whole game (the result). A fan who follows one of them hears it once, as their player's (alerts.plan).
+    about: Mapped[list | None] = mapped_column(JSONB)
 
 
 class Notification(Base):
     """One push to one fan (alerts.py plans it, notify.py sends it to each of their devices): one or
-    more moments of one game, or one player's news. The log the noise rules read (how often this fan's
+    more moments of one game (their players', or a game they follow), or one player's news. The log the noise rules read (how often this fan's
     phone buzzed, the game's story so far) and the open rate is measured from."""
 
     __tablename__ = "notification"
@@ -456,7 +476,7 @@ class Notification(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     fan_id: Mapped[str] = mapped_column(String(64))
     event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"), index=True)
-    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))  # the lead moment's
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))  # the lead moment's; None: the game's own
     moment_ids: Mapped[list] = mapped_column(JSONB, default=list)
     kind: Mapped[str] = mapped_column(String(30))  # the lead moment's
     lines: Mapped[list] = mapped_column(JSONB, default=list)  # every moment's title, lead first

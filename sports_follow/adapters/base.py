@@ -98,6 +98,9 @@ class Snapshot:
     # The published team sheet, before kick-off as well as during: athlete_id -> "starting" | "bench".
     # Empty until the source has one (and for sports without line-ups).
     squad: dict[str, str] = field(default_factory=dict)
+    # Who its lines are, by the same ids, where the source names them (a scorecard's batters and bowlers):
+    # a game's own moments name its players (Sport.game_moments). Optional; a line of someone unnamed isn't told.
+    names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -349,6 +352,13 @@ class Adapter:
     # a source of several sports says the game's (LiveGame.sport). None: the source has no such game, or it's of
     # a sport turned off. Asked at most once a minute a game, only while someone has its page open, and only for
     # a game a source named first (on Live now, or a followed player's).
+    #
+    # Optional, for a source whose live polls need nothing but a game's id (a fixture's source_id):
+    #   def locator(self, source_id: str) -> dict[str, Any] | None
+    # the locator snapshot() takes for that game (None for an id it can't poll), so a fan can follow a game by
+    # itself, from its match page, though they follow nobody in it (matches.py): the game is then polled in
+    # the live lane like a followed player's, and stops when it ends. A source without it has only the games
+    # a followed player's fixtures bring followed that way; its others say alerts aren't available.
     #
     # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
     # requests:

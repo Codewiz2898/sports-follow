@@ -175,6 +175,7 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
             "ending": ending,
         },
         lines=lines,
+        names={p["id"]: p["name"] for p in (a, b) if p.get("id") and p.get("name") != "TBD"},
         source_url=next((l.get("href") for l in event.get("links") or [] if "summary" in (l.get("rel") or [])), None),
     )
 

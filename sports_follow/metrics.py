@@ -150,20 +150,21 @@ def behind_after(live_binding: dict[str, Any]) -> float:
 
 
 def live(now: float | None = None) -> dict[str, Reading]:
-    """The armed and live games with a followed player and a live binding to a source this build runs
-    (one it doesn't run never polls them, and they aren't late for it), by source and status; per
+    """The armed and live games with a followed player, or followed by themselves (matches.py), and a live
+    binding to a source this build runs (one it doesn't run never polls them, and they aren't late for it),
+    by source and status; per
     source, how long since its least recently polled game was polled (structured._polled), and how
     many of its games weren't polled within behind_after (or ever)."""
     from sqlalchemy import select
 
-    from . import bus
+    from . import bus, structured
     from .adapters import ADAPTERS
     from .db import session
-    from .models import Event, EventPlayer, Follow
+    from .models import Event
 
     now = now or time.time()
     with session() as db:
-        followed = select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id)))
+        followed = structured.watched()
         games = [(event_id, status, dict(binding or {})) for event_id, status, binding in db.execute(
             select(Event.id, Event.status, Event.live_binding)
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(followed))

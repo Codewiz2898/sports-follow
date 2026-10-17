@@ -268,6 +268,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         source_url=None,  # Sportmonks has no public match pages
         # The XI, named at the toss; an impact player waiting to come in is a substitute.
         squad={str(p["id"]): "bench" if (p.get("lineup") or {}).get("substitution") else "starting" for p in x.get("lineup") or [] if p.get("id")},
+        names={str(p["id"]): p["fullname"] for p in x.get("lineup") or [] if p.get("id") and p.get("fullname")},
     )
 
 
@@ -457,6 +458,10 @@ class SportmonksCricket(Adapter):
         request, the one a followed player's live poll makes, so while one is polled it's often read already."""
         x = sportmonks.get_json(f"{API}/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
         return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
+
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A match polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.
