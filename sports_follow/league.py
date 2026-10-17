@@ -18,7 +18,9 @@ biggest of those first, then each one's next biggest, and so on; a group of spor
 esports game) takes one turn, and its sports take turns within it the same way, so a busy esports week of
 many games doesn't fill it either. Today shows Coming up's first few soonest first (web/src/today.ts).
 Each game says which of Sports Follow's events it is (event_ids, by the source's fixture id), so Today
-shows a game a fan's player is in once, as theirs.
+shows a game a fan's player is in once, as theirs; and its match page's address (match), where it has one: a
+game its source can read on its own (an adapter's match()), or one of those events. A game listed here counts
+as named for its match page (match.py), so opening it may cost its source a read, once.
 """
 
 from __future__ import annotations
@@ -163,8 +165,16 @@ def _rounds(items: list[dict[str, Any]], *by: Callable[[dict[str, Any]], str]) -
     return out
 
 
+def _address(key: str, event: bool) -> str | None:
+    """A game's match page address (after /match/), where its page has more than the card says: its source
+    can read the game (match()), or it's an event here, with what was stored of it."""
+    system, _, game = key.partition(":")
+    return f"{system}/{game}" if event or callable(getattr(ADAPTERS.get(system), "match", None)) else None
+
+
 def _shown(game: dict[str, Any], events: dict[str, int]) -> dict[str, Any]:
-    return {**{k: v for k, v in game.items() if k not in ("status", "group")}, "event_ids": [events[game["key"]]] if game["key"] in events else []}
+    return {**{k: v for k, v in game.items() if k not in ("status", "group")}, "event_ids": [events[game["key"]]] if game["key"] in events else [],
+            "match": _address(game["key"], game["key"] in events)}
 
 
 def _gather(now: datetime) -> tuple[list[dict[str, Any]], list[str], tuple[str | None, ...]]:

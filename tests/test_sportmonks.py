@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sports_follow import moments
+from sports_follow import moments, sports
 from sports_follow.adapters import sportmonks, sportmonks_football as sm
 from sports_follow.adapters import budget
 
@@ -399,3 +399,18 @@ def test_a_match_page_reads_one_match_with_its_timeline_lines_and_both_elevens(m
     assert sm.SportmonksFootball().match("555").players == []
     monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": None})
     assert sm.SportmonksFootball().match("555") is None
+
+
+def test_a_match_page_reads_a_finished_match_whole_with_every_card_and_who_won(monkeypatch):
+    # A made-up full-time match: three goals, and fourteen bookings besides, more than a live poll keeps.
+    bookings = [{"type": {"developer_name": "YELLOWCARD"}, "minute": 20 + m, "participant_id": AWAY, "player_id": KEEPER, "player_name": f"Booked {m}"} for m in range(14)]
+    lineups = [{"player_id": STAR, "team_id": HOME, "type_id": 11, "position_id": 27, "player_name": "Mohamed Salah", "details": [_detail("GOALS", 2), _detail("MINUTES_PLAYED", 90)]}]
+    x = _match("FT", 2, 1, lineups=lineups, events=[EVENTS[0], EVENTS[1], *bookings])
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": x})
+    game = sm.SportmonksFootball().match("555")
+    assert game is not None and (game.snapshot.status, game.snapshot.score_label) == ("final", "Trabzonspor 2 – 1 Galatasaray")
+    assert len(game.snapshot.moments) == 16 and game.snapshot.moments[-1]["clock"] == "4'"  # the whole timeline, newest first
+    assert len(sm.parse_match(x).moments) == 13  # a poll keeps the newest dozen, and every goal
+    assert game.snapshot.lines[str(STAR)].headline == "2 goals"
+    state = game.snapshot.state
+    assert sports.get("football").verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Trabzonspor won"

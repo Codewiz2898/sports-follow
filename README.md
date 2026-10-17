@@ -142,18 +142,28 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   requests an hour, not 240 per match, and one worker thread, not one per match.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
-- **A page for every game.** Every live game on Today opens its match page, `/match/<source>/<game id>`
-  (`sports_follow/match.py`, `GET /api/match/...`): its board large in a block of its sport's colour, what
-  its sport shows under it (a football timeline, a cricket scorecard, an esports series by map or a lobby's
-  standings), the moments found for the players followed in it, and both sides' players to follow with a
-  tap. A game's address is its source and the id a fixture of it has there, as its event's key holds them,
-  so it's the same whether or not anyone follows a player in it, and once it's over. Where a fan follows
-  someone in it, its board is their live card's, as fresh as the polls. Any other game's board, and every
-  game's line-ups and players' lines, come from a read of its source (an adapter's `match`) by the worker: at
-  most once a minute a game and only while someone has its page open, for a game a source has named (on
-  Live now, or a followed player's), at most six a minute of a source's allowance, and none more for hours
-  once one finds it over or not there. The page shows Live now's copy until the first read comes, and looks
-  again while it's in view. A sport turned off has no match pages.
+- **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`
+  (`sports_follow/match.py`, `GET /api/match/...`), live, over or to come: the fan's live boards, results
+  and games to come, the big results and big games coming up, and Live now's games; so does a game on a
+  player's Matches tab ("The match"). Its board large in a block of its sport's colour, and over a finished
+  game's board who won, big, in its sport's words (`Sport.verdict`); a game to come has its countdown
+  instead. Then what its sport shows under it (a football timeline, a cricket scorecard, an esports series by
+  map or a lobby's standings, a finished chess game's moves), the fan's players in it with their lines and
+  results, the moments found for the players followed in it, and both sides' players to follow with a tap.
+  A game's address is its source and the id a fixture of it has there, as its event's key holds them, so
+  it's the same whether or not anyone follows a player in it, and once it's over; the server gives every
+  game it lists its address (`match`) where it has a page, and the app never makes one up. Where a fan
+  follows someone in it, its board is their live card's, as fresh as the polls. Any other game's board, and
+  every game's line-ups and players' lines, come from a read of its source (an adapter's `match`) by the
+  worker: at most once a minute a game (a game still hours off, or called off, every half hour) and only
+  while someone has its page open, for a game a source has named (on Live now, among the big results and
+  games coming up, or a followed player's, their results included), at most six a minute of a source's
+  allowance. A read that finds the game over is read once more half an hour on, when the source has filled
+  in what it hadn't at the whistle (and every half hour while the source says it's partial: a chess round
+  still on, moves or a Dota map's numbers not read yet); that one is kept a week and not asked for again
+  till then, so a crowd opening yesterday's final costs its source two reads. One that finds it not there
+  is the last for hours. The page shows Live now's copy
+  until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -258,9 +268,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers),
-  `match` for a game's match page (one game by a fixture's id, whoever follows it, with its line-ups and
-  every player's line, in a request; ids of another shape than its `fixture_pattern` are refused;
-  `sports_follow/match.py`),
+  `match` for a game's match page (one game by a fixture's id, whoever follows it, live, to come or over,
+  with its line-ups and every player's line, in a request or two: a finished chess board's moves are a
+  second; a finished game's read that lacks what the source will have later, or may still change, sets
+  `LiveGame.partial`, so it's read again rather than kept a week; ids of another shape than its
+  `fixture_pattern` are refused; `sports_follow/match.py`; a league game whose source has none has no page of
+  its own),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks
@@ -303,7 +316,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
   finish, or none, as for a cricket final whose sides are still "TBC"; for Today's big results and big games
   coming up), what its match page shows under the board (`match_page`: a football timeline, a cricket
-  scorecard, an esports series by map; by default the source's key events), its form summary,
+  scorecard, an esports series by map, a finished chess game's moves; by default the source's key events)
+  and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), its form summary,
   how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;

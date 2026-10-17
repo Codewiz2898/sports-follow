@@ -1,6 +1,7 @@
 import './chess.css'
-import { chess as facts, chessMiddle, PIECES, position, type ChessSide, type ChessState } from './facts/chess'
-import type { BoardProps, SportView } from './view'
+import { chess as facts, chessMiddle, PIECES, position, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { MatchSection } from './section'
+import type { BoardProps, MatchProps, SportView } from './view'
 
 /** The board from the position's FEN, from the followed player's side, with the last move marked. */
 function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
@@ -39,4 +40,21 @@ function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
   )
 }
 
-export const chess: SportView = { ...facts, Board: ChessBoard as SportView['Board'] }
+/** A finished game's match page under its board: the moves that led there, in pairs, with its opening and how
+ * it ended; of a mini-match, the last game's (the one on the board). */
+function ChessMatch({ page }: MatchProps<ChessPage>) {
+  if (!page.moves?.length) return null
+  const about = [page.opening, page.ending && page.ending[0].toUpperCase() + page.ending.slice(1)].filter(Boolean).join(' · ')
+  return (
+    <MatchSection title="Moves" note={page.game ? `Game ${page.game}` : null}>
+      <div className="card card-pad stack" style={{ gap: 10 }}>
+        {about && <span className="small muted">{about}</span>}
+        <ol className="chess-moves">
+          {page.moves.map((m) => <li key={m} className="small">{m}</li>)}
+        </ol>
+      </div>
+    </MatchSection>
+  )
+}
+
+export const chess: SportView = { ...facts, Board: ChessBoard as SportView['Board'], Match: ChessMatch as SportView['Match'] }

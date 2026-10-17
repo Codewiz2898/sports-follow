@@ -28,6 +28,16 @@ def test_a_reread_without_the_scorecard_keeps_what_it_added():
     assert merged_result(None, item, scorecard=False)["scorecard"] is False
 
 
+def test_a_result_says_its_match_page_where_a_source_has_the_game():
+    from sports_follow.models import Event
+
+    kept = {"title": "Arsenal vs Chelsea", "result": "Won 2–1"}  # kept before results said their match page
+    game = Event(id=4, key="sportmonks_football:19134567", start_utc=datetime(2026, 10, 12, 19, tzinfo=timezone.utc))
+    assert results._item(game, kept)["match"] == "sportmonks_football/19134567"
+    assert results._item(Event(id=5, key="a" * 64, start_utc=None), kept)["match"] is None  # the research agent's: no source has it
+    assert results._item(Event(id=6, key="gone:1", start_utc=None), kept)["match"] is None  # no source by that name
+
+
 def test_cursors_round_trip_and_bad_ones_are_ignored():
     when = datetime(2026, 9, 27, 19, 0, tzinfo=timezone.utc)
     assert results.decode(results.encode(when, 412)) == (when, 412)

@@ -1,5 +1,6 @@
 """Reading a player's results history (event_player.result, filled by structured._refresh and
-history.py): pages newest first, one game in full, the latest across a fan's players, and form."""
+history.py): pages newest first, one game in full, the latest across a fan's players, and form. Each result
+says its game's match page (match), where a source has the game."""
 
 from __future__ import annotations
 
@@ -48,7 +49,8 @@ def _item(event: Event, result: dict[str, Any]) -> dict[str, Any]:
     """A stored result as the app reads it. start_utc dates it: the app shows the fan's local day of the
     game, which isn't the UTC day for a US night game or a European evening seen from India."""
     start = event.start_utc.isoformat() if event.start_utc else result.get("start_utc")
-    return {**result, "event_id": event.id, "date": result.get("date") or (event.start_utc.date().isoformat() if event.start_utc else None), "start_utc": start}
+    return {**result, "event_id": event.id, "date": result.get("date") or (event.start_utc.date().isoformat() if event.start_utc else None), "start_utc": start,
+            "match": structured.match_path(event.key)}  # its match page's address, kept or not
 
 
 def page(db: Session, player_id: int, before: str | None = None, limit: int = 20) -> dict[str, Any]:

@@ -15,6 +15,7 @@ own, a 429 there pauses only them, and FIDE records are read through FIDE search
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -31,6 +32,8 @@ from .. import bus, naming
 from ..config import USER_AGENT
 from . import budget
 from .base import Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
+
+log = logging.getLogger(__name__)
 
 # With the slash: the budgets below match requests by this prefix, so every address is API + path.
 API = "https://lichess.org/api/"
@@ -256,6 +259,36 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
         players = [_pgn_player(tags, "White"), _pgn_player(tags, "Black")]
         rounds.setdefault(round_id, []).append({"id": game_id, "players": players, "status": tags.get("Result", "*"), "fen": ""})
     return rounds
+
+
+_NUMBER = re.compile(r"(\d+)(\.+)(.*)")  # a move number, "12." (White's) or "12..." (Black's), maybe with the move on it
+_RESULTS = {"1-0", "0-1", "1/2-1/2", "½-½", "*"}
+_ENDINGS = {"normal", "unterminated", ""}  # Termination tags that say nothing more than the result
+
+
+def parse_pgn_game(pgn: str) -> dict[str, Any]:
+    """One game's PGN -> its moves, each move number's as [n, White's, Black's] ([1, "d4", "Nf6"]; None for one
+    not played: Black's first in a game set up with Black to move), placed by the PGN's own move numbers, so a
+    move written some other way ("e8Q", a null move "--") can't put the rest on the wrong side; castling written
+    with zeros ("0-0") as O-O. Its opening ("Queen's Gambit Declined: Ragozin Defense") and how it ended where
+    that says more than the result ("resigned", "Time forfeit"). Comments, side lines, annotation glyphs ($1)
+    and the result are left out."""
+    tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, pgn)}
+    body = re.sub(r"\{[^}]*\}|;[^\n]*", " ", re.sub(_TAG, " ", pgn))
+    while (bare := re.sub(r"\([^()]*\)", " ", body)) != body:  # side lines nest: the innermost go first
+        body = bare
+    moves: dict[int, list[str | None]] = {}
+    n, black = 1, False
+    for token in body.split():
+        if number := _NUMBER.fullmatch(token):
+            n, black, token = int(number[1]), len(number[2]) > 1, number[3]
+        if not token or token in _RESULTS or token.startswith("$"):
+            continue
+        moves.setdefault(n, [None, None])[black] = re.sub(r"^0-0(-0)?", lambda c: c[0].replace("0", "O"), token)
+        n, black = (n + 1, False) if black else (n, True)
+    ending = tags.get("Termination") or ""
+    return {"moves": [[k, *pair] for k, pair in sorted(moves.items())], "opening": tags.get("Opening") or None,
+            "ending": None if ending.lower() in _ENDINGS else ending}
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
@@ -755,10 +788,26 @@ class LichessChess(Adapter):
     def match(self, source_id: str) -> LiveGame | None:
         """One board by a fixture of it ("<round id>-<FIDE id>", one player's game or mini-match in a round),
         whoever follows it, for its match page: its position, clocks and match score, and both players. One
-        round request, the one Live now and a followed player's live poll make."""
+        round request, the one Live now and a followed player's live poll make; and once the game on the board
+        is over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A board
+        whose moves couldn't be read, or whose round is still on (a mini-match's next game may follow a decided
+        one), is partial: match.py reads it again later, and keeps it a week once the round is over (or, if
+        Lichess never says so, once it has waited long enough: match.PARTIAL)."""
         round_id, _, fide = source_id.partition("-")
         data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
-        return parse_game(data, fide, self.system)
+        game = parse_game(data, fide, self.system)
+        state = game.snapshot.state if game else {}
+        if game and game.snapshot.status == "final":
+            game.partial = not (data.get("round") or {}).get("finished")
+            try:
+                if state.get("game_id"):
+                    state.update(parse_pgn_game(get_json(f"{API}study/{round_id}/{state['game_id']}.pgn", ttl=24 * 3600, text=True)))
+            except RateLimited:
+                raise  # the read fails, and is asked for again
+            except AdapterError as exc:
+                game.partial = True  # the board and its result say it till the next read
+                log.info("lichess: no moves for %s yet: %s", source_id, exc)
+        return game
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)

@@ -180,6 +180,11 @@ class Cricket(Sport):
     def result_text(self, score: str, clock: str) -> str:
         return clock  # "India won by 57 runs"
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """The source's summary where it says how the match went ("India won by 57 runs", "Match tied (India won
+        the Super Over)", "No result"); not a bare "Result", a summary still to come."""
+        return clock if re.search(r"\b(?:won|drawn|tied|no result|abandoned)\b", clock, re.I) else ""
+
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """Fifties, hundreds, out and wicket hauls in the player's latest innings: a line's stats are its
         latest batting and bowling innings, and its headline lists every innings ("103 (152) & 48* (60)").

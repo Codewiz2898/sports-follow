@@ -54,6 +54,7 @@ _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "
 LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
 # And whose series are among the big results and big games coming up (schedule): world events and top leagues.
 SCHEDULE_TIERS = ("s", "a")
+DOTA_WAIT = 6 * 3600  # how long after a Dota 2 series ends its match page waits for OpenDota to parse its maps
 SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
 
 # Nationalities come as ISO 3166 codes; the countries most pros play for, by name. Others show as the code.
@@ -525,15 +526,16 @@ class PandascoreEsports(Adapter):
         except Exception:  # Redis down: no memory, the fallback still works
             return {}
 
-    def _dota(self, m: dict[str, Any], snap: Snapshot) -> None:
+    def _dota(self, m: dict[str, Any], snap: Snapshot) -> bool:
         """A Dota 2 series on now (or just over) gains what OpenDota knows inside its maps: the map being
         played, and each finished map's numbers for both rosters' players. Anything OpenDota can't say
-        leaves the series as PandaScore has it."""
+        leaves the series as PandaScore has it. Returns whether that's all there will be: False while a
+        finished map's numbers are missing (OpenDota down, or the map not parsed yet)."""
         if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
-            return
+            return True
         teams = snap.state.get("teams") or []
         if len(teams) != 2:
-            return
+            return True
         try:
             roster = [p for t in teams for p in (pandascore.get_json(f"/teams/{t['id']}", ttl=24 * 3600) or {}).get("players") or []]
             finished = [g for g in snap.state.get("maps") or [] if g.get("winner")]
@@ -549,19 +551,21 @@ class PandascoreEsports(Adapter):
                 # Nothing seen live (the worker started mid-series): OpenDota's last hundred pro matches.
                 begin = _time(m.get("begin_at") or m.get("scheduled_at"))
                 numbered = dota.number_maps(dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
-            maps = []
+            maps, parsed = [], 0
             for n, match_id in numbered if players else []:
                 details = opendota.match(match_id)
                 if details:
                     maps.append({"n": n, "match_id": match_id, "players": dota.map_stats(details, players, heroes)})
+                    parsed += all(p.get("kills") is not None for p in details.get("players") or [{}])
             live = dota.live_map(game, teams, players, heroes, len(finished) + 1) if game else None
         except AdapterError as exc:
             log.info("dota %s: no OpenDota data: %s", m.get("id"), exc)
-            return
+            return False
         snap.state["dota"] = {"maps": maps, "live": live}
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
+        return parsed >= len(finished)
 
     def live_now(self) -> list[LiveGame]:
         """The big series on now in the plan's games (matches/running, one request): those of a tournament in
@@ -600,9 +604,14 @@ class PandascoreEsports(Adapter):
         if not found or (m.get("videogame") or {}).get("slug") not in self._on():
             return None  # a game turned off (or one it doesn't cover) has no page, as its series aren't polled
         f, snap = found[0], parse_match(m)
-        self._dota(m, snap)
+        whole = self._dota(m, snap)
+        # A finished Dota 2 series whose maps OpenDota hasn't all got yet is read again, for a while: past
+        # DOTA_WAIT after it ended, a map OpenDota hasn't got isn't coming.
+        ended = _time(m.get("end_at"))
+        partial = snap.status == "final" and not whole and (ended is None or datetime.now(timezone.utc) - ended < timedelta(seconds=DOTA_WAIT))
         return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names,
-                        league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0), sport=f.sport)
+                        league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0), sport=f.sport,
+                        partial=partial)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its

@@ -164,6 +164,23 @@ class Chess(Sport):
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
 
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """The board says the game; once it's over, the moves that led there, a move number's pair to a line
+        ("1. d4 Nf6", "1... e5" where Black moved first), its opening and how it ended, where its source's read
+        of the finished game brought them (state["moves"]: [n, White's, Black's] each). Of a mini-match, the last
+        game's, the one on the board (game: its number)."""
+        pairs = []
+        for row in state.get("moves") or []:
+            if isinstance(row, list) and len(row) == 3 and (row[1] or row[2]):
+                n, white, black = row
+                pairs.append(f"{n}. {white} {black or ''}".rstrip() if white else f"{n}... {black}")
+        if not pairs:
+            return {}
+        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": (state.get("match") or {}).get("games")}
+
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        return clock  # its source's words for a finished board: "Magnus Carlsen won", "Draw", "Match drawn (4 games)"
+
     def high(self, f: Found, versus: str) -> Poster | None:
         """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""
         return _won(f.title)

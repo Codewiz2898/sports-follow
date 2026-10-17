@@ -244,6 +244,25 @@ def test_a_match_page_reads_one_match_with_its_scorecard_and_both_elevens(monkey
     assert game.snapshot.lines[str(OPENER)].headline == "108 (34)"
 
 
+def test_a_match_page_reads_a_finished_match_with_its_whole_scorecard_and_who_won(monkeypatch):
+    def player(pid: int, name: str, team: int) -> dict:
+        return {"id": pid, "fullname": name, "lineup": {"team_id": team, "substitution": False}}
+
+    # A made-up finished T20I: India batted first, Afghanistan were all out chasing.
+    bowling = [{"player_id": SPINNER, "team_id": AFG, "scoreboard": "S1", "sort": 1, "overs": 4, "runs": 30, "wickets": 2, "rate": 7.5}]
+    x = _match("Finished", [FIRST, CHASE], note="India won by 127 runs", winner_team_id=IND, batting=[_bat(OPENER, 108, 34, "Catch Out")], bowling=bowling,
+               lineup=[player(OPENER, "Abhishek Sharma", IND), player(SPINNER, "Rashid Khan", AFG)])
+    monkeypatch.setattr(sportmonks, "get_json", lambda path, ttl, **params: {"data": x})
+    game = sc.SportmonksCricket().match("71215")
+    assert game is not None and game.snapshot.status == "final"
+    cricket = sports.get("cricket")
+    assert cricket.verdict(game.snapshot.state, game.snapshot.score_label, game.snapshot.clock_label) == "India won by 127 runs"
+    names = {p.athlete_id: (p.name, p.team_names[0]) for p in game.players}
+    lines = {aid: {"headline": line.headline, "stats": line.stats} for aid, line in game.snapshot.lines.items()}
+    india = cricket.match_page(game.snapshot.state, [], lines, names)["scorecard"][0]
+    assert (india["team"], [b["name"] for b in india["batting"]], [w["name"] for w in india["bowling"]]) == ("India", ["Abhishek Sharma"], ["Rashid Khan"])
+
+
 def test_a_match_pages_scorecard_names_an_impact_substitute_who_bowls_without_offering_them():
     def player(pid: int, name: str, team: int, sub: bool = False) -> dict:
         return {"id": pid, "fullname": name, "lineup": {"team_id": team, "substitution": sub}}

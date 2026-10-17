@@ -186,8 +186,9 @@ def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
     return lines
 
 
-def parse_match(x: dict[str, Any]) -> Snapshot:
-    """A fixture with participants, scores, state, periods, line-ups and events -> snapshot."""
+def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
+    """A fixture with participants, scores, state, periods, line-ups and events -> snapshot. every: all its goals
+    and cards, for its match page's timeline, not only the newest a poll keeps."""
     home, away = _sides(x)
     status = _status(x.get("state"), _start(x))
     goals = _goals(x)
@@ -244,7 +245,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         state=state,
         lines=parse_lines(x, status),
         # The newest dozen, and every goal, ruled out or not: a goal's alert reads its minute and assist here.
-        moments=[m for i, m in enumerate(moments) if i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
+        moments=[m for i, m in enumerate(moments) if every or i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
         source_url=None,  # Sportmonks has no public match pages
         squad=parse_squad(x),
     )
@@ -279,8 +280,9 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
 
 
 def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
-    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page: its snapshot, and each side's
-    starting eleven once the clubs have published them, attackers first, the home side's then the away side's."""
+    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page, live, to come or over: its
+    snapshot with every goal and card, and each side's starting eleven once the clubs have published them,
+    attackers first, the home side's then the away side's."""
     fixtures = parse_fixtures([x])
     if not fixtures:
         return None
@@ -291,7 +293,7 @@ def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
         PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[team], team_names=[teams.get(team, "")])
         for team in f.team_ids for r in sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2))
     ]
-    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x, every=True), players=players, teams=f.team_names)
 
 
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:

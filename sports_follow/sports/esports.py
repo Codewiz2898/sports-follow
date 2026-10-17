@@ -277,6 +277,19 @@ class Esports(Sport):
                          "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
         return {"maps": maps} if maps else {}
 
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
+        lobby ("GodLike Esports won the lobby")."""
+        if state.get("kind") == "battle_royale":
+            top = [t for t in state.get("standings") or [] if t.get("place") == 1]
+            return f"{top[0]['name']} won the lobby" if len(top) == 1 and top[0].get("name") else ""  # level on points: nobody's alone
+        teams = state.get("teams") or []
+        winner = next((t for t in teams if t.get("winner")), None)
+        loser = next((t for t in teams if t is not winner), None)
+        if winner is None or loser is None or not winner.get("name"):
+            return ""
+        return f"{winner['name']} won by forfeit" if state.get("forfeit") else f"{winner['name']} won {winner.get('score')}–{loser.get('score')}"
+
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
         lobby, or one of its games (the game's own word: "Booyah", "Chicken dinner")."""

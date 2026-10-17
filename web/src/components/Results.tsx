@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
 import { day, hostname, outcome, playedOn, safeHref } from '../format'
 import { sportInfo } from '../sports'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
 
-/** One finished game; tapping it opens the final score, the player's whole line and the source. */
+/** One finished game; tapping it opens the final score, the player's whole line, the game's match page and the source. */
 function GameRow({ r, playerId, teams, teamOnly }: { r: RecentResult; playerId: number; teams?: string[]; teamOnly?: boolean }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<GameDetail | null>(null)
@@ -34,15 +35,17 @@ function GameRow({ r, playerId, teams, teamOnly }: { r: RecentResult; playerId: 
           {canOpen && <ChevronIcon className={open ? 'chev open' : 'chev'} width={16} height={16} aria-hidden />}
         </span>
       </button>
-      {open && <GameView detail={detail} error={error} teamOnly={teamOnly} />}
+      {open && <GameView detail={detail} error={error} teamOnly={teamOnly} match={r.match} />}
     </li>
   )
 }
 
-/** teamOnly: a sport whose source has no player numbers (esports), so a result is the team's. */
-function GameView({ detail, error, teamOnly }: { detail: GameDetail | null; error: string | null; teamOnly?: boolean }) {
+/** teamOnly: a sport whose source has no player numbers (esports), so a result is the team's. match: the
+ * game's match page (what happened in it: the timeline, the scorecard, the maps), where a source has the game. */
+function GameView({ detail, error, teamOnly, match }: { detail: GameDetail | null; error: string | null; teamOnly?: boolean; match?: string | null }) {
   if (error) return <div className="game-body small muted">{error}</div>
   if (!detail) return <div className="game-body"><span className="spinner" /></div>
+  const page = match ?? detail.match
   const lineNote = teamOnly ? "The team's result: the source has no player numbers."
     : detail.scorecard === 'missing' ? 'The source has no scorecard for this game.'
     : detail.scorecard ? 'No line for the player in this game.' : "The player's line is still being read."
@@ -60,7 +63,12 @@ function GameView({ detail, error, teamOnly }: { detail: GameDetail | null; erro
           {detail.line.stats.length > 0 && <StatGrid stats={detail.line.stats} />}
         </>
       ) : <span className="small muted">{lineNote}</span>}
-      {safeHref(detail.source_url) && <a href={safeHref(detail.source_url)} target="_blank" rel="noreferrer" className="link small" style={{ alignSelf: 'flex-start' }}>Open on {hostname(detail.source_url)}</a>}
+      {(page || safeHref(detail.source_url)) && (
+        <span className="row small" style={{ justifyContent: 'flex-start', gap: 16 }}>
+          {page && <Link to={`/match/${page}`} className="link">The match</Link>}
+          {safeHref(detail.source_url) && <a href={safeHref(detail.source_url)} target="_blank" rel="noreferrer" className="link">Open on {hostname(detail.source_url)}</a>}
+        </span>
+      )}
     </div>
   )
 }

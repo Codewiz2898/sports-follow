@@ -71,6 +71,22 @@ def test_a_live_card_names_its_games_match_page():
     assert c["live"]["match"] == "sportmonks_football/555"  # /match/<source>/<its fixture id> (match.py)
 
 
+def test_a_result_and_a_game_to_come_name_their_match_pages():
+    source = KNOWN["sportmonks_football"]
+    ref = PlayerRef("sportmonks_football", "7", "Bukayo Saka", ["19"], ["Arsenal"], None)
+    final = Fixture(source_id="555", title="Arsenal vs Chelsea", competition="Premier League", start_utc=NOW, venue=None, status="final", team_ids=["19", "18"], locator={})
+    event = Event(id=5, key="sportmonks_football:555", title="Arsenal vs Chelsea", start_utc=NOW, status="final")
+    assert structured.result_item(source, final, None, event, ref)["match"] == "sportmonks_football/555"
+    assert structured.result_item(source, final, None, None, ref)["match"] is None
+    ahead = Event(id=6, key="sportmonks_football:556", title="Chelsea vs Arsenal", start_utc=NOW + timedelta(days=7), status="scheduled")
+    assert structured._upcoming_item(replace(final, source_id="556", status="scheduled"), ahead, ref)["match"] == "sportmonks_football/556"
+    # The poller seeing it finish: the result it adds names its page too.
+    c = card(live={"is_live": True, "event_id": 5, "player_stats": []})
+    structured._apply_snapshot(c, event, Snapshot(status="final", score_label="Arsenal 2 – 1 Chelsea", clock_label="FT", state={"kind": "football"}), None, source, NOW)
+    assert c["recent_results"][0]["match"] == "sportmonks_football/555"
+    assert structured.match_path("0123abcd" * 8) is None  # an event the research agent wrote up: no source has it
+
+
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():
     snap = espn_cricket.parse_summary(load("cricket-summary-final"))
     event = Event(id=9, title="India v West Indies", notes="1st ODI (D/N)", competition="West Indies tour of India", start_utc=datetime(2026, 9, 27, 8, 30, tzinfo=timezone.utc))
