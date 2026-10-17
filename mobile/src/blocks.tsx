@@ -8,9 +8,9 @@ import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type L
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
-import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, wordSize, type GameResult } from '../../web/src/lines'
+import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
-import { absolute, type Card, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
+import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
 import { Backdrop } from './art'
 import { toneOf, useSports, useTone, type Tone } from './catalog'
 import { useNow } from './clock'
@@ -185,6 +185,22 @@ export function PlayerTile({ card, progress }: { card: Card; progress?: string[]
       <View style={b.corner}>{card.status === 'building' ? <Spinner color={tone.on} /> : live ? <LiveBadge /> : null}</View>
       <Dsp size={30} color={tone.on}>{shortName(card.player.name)}</Dsp>
       <Text style={[b.tileStatus, { color: tone.on }]} numberOfLines={2}>{statusLine(card, progress, now, sports.name(card.player.sport))}</Text>
+    </Pressable>
+  )
+}
+
+/** One followed team on the Following page, the web's TeamTile: a block of its sport's colour, as a player's
+ * tile, saying its game on now, a game this week or its last result (lines.teamLine). */
+export function TeamTile({ team }: { team: FollowedTeam }) {
+  const now = useNow()
+  const sports = useSports()
+  const tone = toneOf(sports, team.sport)
+  return (
+    <Pressable onPress={go(`/team/${team.team_id}`)} style={[b.tile, { backgroundColor: tone.sport }]}>
+      <Text style={[b.tileSport, { color: tone.onSoft }]}>{sports.name(team.sport) || 'Team'} · Team</Text>
+      <View style={b.corner}>{team.live?.is_live ? <LiveBadge /> : null}</View>
+      <Dsp size={30} color={tone.on}>{team.name}</Dsp>
+      <Text style={[b.tileStatus, { color: tone.on }]} numberOfLines={2}>{teamLine(team, now)}</Text>
     </Pressable>
   )
 }

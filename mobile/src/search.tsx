@@ -1,14 +1,14 @@
 // Search as the web's components/Search.tsx has it: as you type, one request per 250 ms pause; the answer in
 // sections (shared web/src/search.ts), each result opening the player or a preview of the athlete, and Follow
-// or Research beside it; the research agent offered last.
+// or Research beside it; teams by that name, each opening its page; the research agent offered last.
 
 import Constants from 'expo-constants'
 import { router } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native'
 import { followTarget } from '../../web/src/follow'
-import { allowance, exactName, highlightParts, liveNote, nextLine, OTHER_SCRIPT, sections } from '../../web/src/search'
-import { api, type Research, type SearchResponse, type SearchResult } from './api'
+import { allowance, exactName, fold, highlightParts, liveNote, nextLine, OTHER_SCRIPT, sections, teamNext } from '../../web/src/search'
+import { api, type Research, type SearchResponse, type SearchResult, type TeamSummary } from './api'
 import { Avatar } from './blocks'
 import { toneOf, useSports } from './catalog'
 import { useFollowing } from './following'
@@ -80,7 +80,25 @@ export function useSearchActions() {
 
   const follow = useCallback((r: SearchResult) => run(r.key, () => following.follow(followTarget(r))), [following, run])
   const research = useCallback((query: string) => run(`research:${query}`, () => following.follow({ query })), [following, run])
-  return { open, follow, research, pending, error, isFollowing: following.isFollowing }
+
+  // A team (sports_follow/teams.py): its page, and following it there, as a player's.
+  const openTeam = useCallback((x: TeamSummary) => router.push(`/team/${x.team_id}`), [])
+  const followTeam = useCallback(async (x: TeamSummary) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setError(null)
+    setPending(`team:${x.team_id}`)
+    try {
+      await following.followTeam(x.team_id, true)
+      router.push(`/team/${x.team_id}`)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      inFlight.current = false
+      setPending(null)
+    }
+  }, [following])
+  return { open, follow, research, pending, error, isFollowing: following.isFollowing, openTeam, followTeam, isFollowingTeam: following.isFollowingTeam }
 }
 
 type Actions = ReturnType<typeof useSearchActions>
@@ -128,6 +146,31 @@ function ResultRow({ r, query, actions, last }: { r: SearchResult; query: string
   )
 }
 
+/** A team by that name, the web's TeamResultRow: its sport and what it plays in, its next game, and Follow. */
+function TeamRow({ x, query, actions, last }: { x: TeamSummary; query: string; actions: Actions; last: boolean }) {
+  const sports = useSports()
+  const following = x.following || actions.isFollowingTeam(x.team_id)
+  const busy = actions.pending === `team:${x.team_id}`
+  const next = teamNext(x)
+  return (
+    <View style={[s.result, !last && s.line]}>
+      <Pressable onPress={() => actions.openTeam(x)} style={s.main}>
+        <Avatar name={x.name} sport={x.sport} />
+        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+          <Text style={t.title}><Highlight name={x.name} query={query} /></Text>
+          <Text style={[t.small, t.muted]} numberOfLines={2}>{[sports.name(x.sport), x.detail, x.followers ? `${x.followers} following` : ''].filter(Boolean).join(' · ')}</Text>
+          {next ? <Text style={[t.tiny, { fontFamily: font[800], color: next.live ? colour.liveText : colour.text }]}>{next.text}</Text> : null}
+        </View>
+      </Pressable>
+      {following ? (
+        <Btn label="Following" icon={<CheckIcon size={16} />} disabled style={{ opacity: 1 }} />
+      ) : (
+        <Btn kind="primary" label="Follow" accessibilityLabel={`Follow ${x.name}`} icon={<PlusIcon size={16} color={colour.bg} />} busy={busy} disabled={Boolean(actions.pending) && !busy} onPress={() => actions.followTeam(x)} />
+      )}
+    </View>
+  )
+}
+
 /** The research agent, offered last: any sport, 1 to 3 minutes, a few a day per fan. */
 function ResearchOffer({ query, research, full, actions }: { query: string; research?: Research; full?: boolean; actions: Actions }) {
   const sports = useSports()
@@ -162,7 +205,18 @@ function ResearchOffer({ query, research, full, actions }: { query: string; rese
 /** Everything under the search box: namesake picker, sections, did-you-mean and the AI offer. */
 export function SearchResults({ data, query, loading, actions }: { data: SearchResponse; query: string; loading?: boolean; actions: Actions }) {
   const parts = sections(data, APP)
-  const nothing = !data.results.length
+  const teams = data.teams ?? []
+  const nothing = !data.results.length && !teams.length
+  // As the web's: teams first when one is called just what was typed, or no athlete is; else after the athletes.
+  const teamsFirst = teams.some((x) => fold(x.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
+  const teamSection = teams.length > 0 ? (
+    <View style={{ gap: 10 }}>
+      <Eyebrow>Teams</Eyebrow>
+      <Card style={s.list}>
+        {teams.map((x, i) => <TeamRow key={`team-${x.team_id}`} x={x} query={query} actions={actions} last={i === teams.length - 1} />)}
+      </Card>
+    </View>
+  ) : null
   return (
     <View style={{ gap: 18, opacity: loading ? 0.7 : 1 }}>
       {data.namesakes > 1 ? (
@@ -173,6 +227,7 @@ export function SearchResults({ data, query, loading, actions }: { data: SearchR
       ) : null}
       {nothing && data.suggestions.length > 0 ? <Text style={[t.small, t.muted]}>No athlete in the live sources is called “{data.query}”. The closest spelling:</Text> : null}
       {nothing && !data.suggestions.length && !loading ? <Text style={[t.small, t.muted]}>No athlete in the live sources is called “{data.query}”.</Text> : null}
+      {teamsFirst ? teamSection : null}
       {parts.map((x) => (
         <View key={x.key} style={{ gap: 10 }}>
           {x.title ? <Eyebrow>{x.title}</Eyebrow> : null}
@@ -181,6 +236,7 @@ export function SearchResults({ data, query, loading, actions }: { data: SearchR
           </Card>
         </View>
       ))}
+      {!teamsFirst ? teamSection : null}
       {data.partial.length > 0 ? <Text style={[t.tiny, t.muted]}>{data.partial.join(' and ')} didn't answer in time, so some athletes may be missing. Keep typing or try again.</Text> : null}
       {data.researchable
         ? <ResearchOffer query={data.query} research={data.research} full={nothing} actions={actions} />
