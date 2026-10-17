@@ -9,7 +9,7 @@ import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
 import { DEVICE } from '../alerts'
-import { AlertLevels, levelText, usePush } from '../notifications'
+import { AlertLevels, gameLevelText, levelText, usePush } from '../notifications'
 
 /** Alerts: what's happened to your players (Latest), and what reaches this device (Settings). */
 export function NotificationsPage() {
@@ -35,7 +35,7 @@ export function NotificationsPage() {
 
 /** Every moment of the fan's players, newest first, by day; what came since they last looked is marked. */
 function Latest({ onSettings }: { onSettings: () => void }) {
-  const { cards } = useFollowing()
+  const { cards, matches } = useFollowing()
   const activity = useActivity()
   // What was new when the list opened stays marked while it's open; the badge clears at once.
   const [seenAtOpen] = useState(activity.seen)
@@ -48,7 +48,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
   if (!activity.items.length) {
     return (
       <div className="card empty small stack" style={{ alignItems: 'center' }}>
-        <span>{cards.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players show up here as they happen.' : 'Follow a player to see their moments here.'}</span>
+        <span>{cards.length || matches.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players and games show up here as they happen.' : 'Follow a player, or a game, to see their moments here.'}</span>
         {cards.length > 0 && <button type="button" className="btn link" onClick={onSettings}>Choose what reaches this phone</button>}
       </div>
     )
@@ -65,7 +65,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
         <section key={label} className="section" aria-label={label}>
           <span className="eyebrow">{label}</span>
           <ul className="card list">
-            {items.map((item) => <LatestRow key={item.id} item={item} sport={sportOf(item.player_id)} fresh={item.id > seenAtOpen} />)}
+            {items.map((item) => <LatestRow key={item.id} item={item} sport={item.player_id != null ? sportOf(item.player_id) : item.sport} fresh={item.id > seenAtOpen} />)}
           </ul>
         </section>
       ))}
@@ -79,7 +79,8 @@ function LatestRow({ item, sport, fresh }: { item: ActivityItem; sport?: string 
   const [context] = item.body.split('\n')
   return (
     <li className={`alert-row${fresh ? ' fresh' : ''}${item.level === 'minor' ? ' minor' : ''}`}>
-      <Avatar name={item.player} sport={sport} size="sm" />
+      {/* A game's own moment (a game followed by itself) wears its sport, by the game's name. */}
+      <Avatar name={item.player ?? item.event ?? ''} sport={sport} size="sm" />
       <Link to={item.url} className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
         <span className="title">{item.title}</span>
         {context && <span className="small muted">{context}</span>}
@@ -119,11 +120,16 @@ function AccountRow() {
   )
 }
 
-/** On or off for this device, its quiet hours, and how much to hear about each player. */
+/** On or off for this device, its quiet hours, and how much to hear about each player and each game followed by itself. */
 function Settings() {
   const push = usePush()
-  const { cards, setAlerts } = useFollowing()
+  const { cards, setAlerts, matches, setMatchAlerts } = useFollowing()
   const [failed, setFailed] = useState<Record<number, string>>({})
+  const [gameFailed, setGameFailed] = useState<Record<number, string>>({})
+  const chooseGame = (eventId: number, level: AlertLevel) => {
+    setGameFailed((f) => ({ ...f, [eventId]: '' }))
+    setMatchAlerts(eventId, level).catch((e: Error) => setGameFailed((f) => ({ ...f, [eventId]: e.message })))
+  }
   const choose = (playerId: number, level: AlertLevel) => {
     setFailed((f) => ({ ...f, [playerId]: '' }))
     setAlerts(playerId, level).catch((e: Error) => setFailed((f) => ({ ...f, [playerId]: e.message })))
@@ -195,6 +201,31 @@ function Settings() {
           </ul>
         )}
       </section>
+
+      {/* The games followed by themselves, until each ends (sports_follow/matches.py). */}
+      {matches.length > 0 && (
+        <section className="section" aria-label="Your games">
+          <div className="section-head">
+            <h2 className="dsp section-title">Per game</h2>
+            <span className="tiny muted" style={{ fontWeight: 700 }}>Until each one ends</span>
+          </div>
+          <ul className="card list">
+            {matches.map((m) => (
+              <li key={m.event_id} className="stack" style={{ gap: 10 }}>
+                <span className="row" style={{ justifyContent: 'flex-start' }}>
+                  <Avatar name={m.title} sport={m.sport} size="sm" />
+                  <span className="stack" style={{ gap: 0 }}>
+                    <Link to={`/match/${m.match}`} className="title">{m.title}</Link>
+                    <span className="tiny muted">{gameLevelText(m.alerts, m.sport)}</span>
+                  </span>
+                </span>
+                <AlertLevels label={`Alerts for ${m.title}`} value={m.alerts} onChange={(l) => chooseGame(m.event_id, l)} />
+                {gameFailed[m.event_id] && <div className="error-box" role="alert">{gameFailed[m.event_id]}</div>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   )
 }

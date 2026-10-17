@@ -23,6 +23,7 @@ from sports_follow.models import Athlete, AthleteUnmatch, Follow, Player, Player
 WD = "http://www.wikidata.org/entity/"
 FILE = "http://commons.wikimedia.org/wiki/Special:FilePath/"
 ESPORTS = sports.BY_KEY["esports"]
+GAMES = ["esports", *(s.key for s in sports.members(ESPORTS))]  # every game's rows, matched together, and those of no game
 
 
 def query(qid: str, label: str, *, born: str | None = None, precision: str = "11", image: str | None = None, sitelinks: int = 0, dead: bool = False,
@@ -281,63 +282,63 @@ def _row(db, qid: str) -> Athlete:
 
 @needs_db
 def test_a_match_is_written_kept_by_the_weekly_roster_and_taken_back_when_it_no_longer_holds(db, monkeypatch):
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo"), pro("7", "Nobody", "No One")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo"), pro("7", "Nobody", "No One")]), photos=False)
     db.commit()
     tenz = wikidata_tenz()
     read = {"people": ([tenz], True)}
     monkeypatch.setattr(rw, "read_people", lambda kind: read["people"])
 
-    found, done = rw.match_sport("esports")
+    found, done = rw.match_sport(ESPORTS, GAMES)
     assert [m.row.qid for m in found] == ["pandascore:20401"] and (done["changed"], done["with_photo"]) == (1, 1)
     row = _row(db, "pandascore:20401")
     assert row.ids == {"pandascore_esports": "20401", "wikidata": "Q113450352"} and row.image == "SEN TENZ 2023.jpg"
-    assert rw.match_sport("esports")[1]["changed"] == 0  # nothing new
+    assert rw.match_sport(ESPORTS, GAMES)[1]["changed"] == 0  # nothing new
 
     # The weekly roster refreshes the row and keeps what was found.
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
     row = _row(db, "pandascore:20401")
     assert row.ids["wikidata"] == "Q113450352" and row.image == "SEN TENZ 2023.jpg"
 
     # A run that couldn't read everyone takes nothing back; a complete one does, photo and all.
     read["people"] = ([], False)
-    assert rw.match_sport("esports")[1]["taken_back"] == 0 and _row(db, "pandascore:20401").image
+    assert rw.match_sport(ESPORTS, GAMES)[1]["taken_back"] == 0 and _row(db, "pandascore:20401").image
     read["people"] = ([], True)
-    assert rw.match_sport("esports")[1]["taken_back"] == 1
+    assert rw.match_sport(ESPORTS, GAMES)[1]["taken_back"] == 1
     row = _row(db, "pandascore:20401")
     assert row.ids == {"pandascore_esports": "20401"} and row.image is None
 
 
 @needs_db
 def test_a_dry_run_writes_nothing(db, monkeypatch):
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
     monkeypatch.setattr(rw, "read_people", lambda kind: ([wikidata_tenz()], True))
-    found, done = rw.match_sport("esports", write=False)
+    found, done = rw.match_sport(ESPORTS, GAMES, write=False)
     assert len(found) == 1 and "changed" not in done and _row(db, "pandascore:20401").image is None
 
 
 @needs_db
 def test_a_followed_pro_matched_has_their_photo_fetched(db, monkeypatch):
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.add(Player(id=3, slug="tenz", name="TenZ", sport="Valorant"))
     db.flush()
     db.add_all([PlayerIdentity(player_id=3, system="wikidata", external_id="pandascore:20401", confidence=1.0), Follow(fan_id="fan", player_id=3, alert_rules={})])
     db.commit()
     assert photos.wanted(db) == {}
     monkeypatch.setattr(rw, "read_people", lambda kind: ([wikidata_tenz()], True))
-    rw.match_sport("esports")
+    rw.match_sport(ESPORTS, GAMES)
     db.expire_all()
     assert photos.wanted(db) == {"SEN TENZ 2023.jpg": "TenZ"}
 
 
 @needs_db
 def test_a_pro_an_operator_unmatched_stays_unmatched_through_the_weekly_runs_until_rematched(db, monkeypatch):
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
     read = {"people": ([wikidata_tenz()], True)}
     monkeypatch.setattr(rw, "read_people", lambda kind: read["people"])
-    rw.match_sport("esports")
+    rw.match_sport(ESPORTS, GAMES)
     assert _row(db, "pandascore:20401").image == "SEN TENZ 2023.jpg"
 
     [(_, now, image)] = players.unmatch(db, players.find(db, "pandascore:20401"), note="someone else's face")
@@ -345,37 +346,37 @@ def test_a_pro_an_operator_unmatched_stays_unmatched_through_the_weekly_runs_unt
     row = _row(db, "pandascore:20401")
     assert now and image == "SEN TENZ 2023.jpg" and row.ids == {"pandascore_esports": "20401"} and row.image is None
     [u] = db.scalars(select(AthleteUnmatch)).all()
-    assert (u.qid, u.sport, u.person, u.name, u.note) == ("pandascore:20401", "esports", None, "TenZ", "someone else's face")
+    assert (u.qid, u.sport, u.person, u.name, u.note) == ("pandascore:20401", "valorant", None, "TenZ", "someone else's face")
 
     # Neither a run that read everyone nor one that didn't matches him again, nor does the weekly roster.
     for complete in (True, False):
         read["people"] = ([wikidata_tenz()], complete)
-        found, done = rw.match_sport("esports")
+        found, done = rw.match_sport(ESPORTS, GAMES)
         assert found == [] and (done["changed"], done["taken_back"]) == (0, 0)
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
     assert _row(db, "pandascore:20401").image is None
 
     # Rematched, the next run matches him again.
     assert [u.person for u in players.rematch(db, "pandascore:20401")] == [None]
     db.commit()
-    assert rw.match_sport("esports")[1]["changed"] == 1 and _row(db, "pandascore:20401").image == "SEN TENZ 2023.jpg"
+    assert rw.match_sport(ESPORTS, GAMES)[1]["changed"] == 1 and _row(db, "pandascore:20401").image == "SEN TENZ 2023.jpg"
 
 
 @needs_db
 def test_a_match_found_before_the_operator_unmatched_isnt_written_and_one_held_is_taken_back_by_any_run(db):
-    registry.upsert(db, registry.roster_rows("pandascore_esports", [pro("20401", "TenZ", "Tyson Ngo")], "esports"), photos=False)
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
-    found = rw.match(rw.rows(db, ESPORTS), [wikidata_tenz()])  # the run read the registry and Wikidata, then:
+    found = rw.match(rw.rows(db, ESPORTS, GAMES), [wikidata_tenz()])  # the run read the registry and Wikidata, then:
     [(_, now, _)] = players.unmatch(db, players.find(db, "pandascore:20401"), "Q113450352")
     db.commit()
     assert not now  # he wasn't matched to them yet
-    assert rw.record(db, "esports", found, complete=False) == {"changed": 0, "taken_back": 0}
+    assert rw.record(db, GAMES, found, complete=False) == {"changed": 0, "taken_back": 0}
     db.commit()
     assert _row(db, "pandascore:20401").image is None
     # A match to them the row holds anyway (written by hand) is taken back, even by a run that didn't read everyone.
     db.execute(update(Athlete).where(Athlete.qid == "pandascore:20401").values(ids=Athlete.ids.op("||")(func.jsonb_build_object("wikidata", "Q113450352")), image="x.jpg"))
     db.commit()
-    assert rw.record(db, "esports", [], complete=False) == {"changed": 0, "taken_back": 1}
+    assert rw.record(db, GAMES, [], complete=False) == {"changed": 0, "taken_back": 1}
     db.commit()
     assert _row(db, "pandascore:20401").image is None

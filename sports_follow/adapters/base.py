@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
+from .. import sports
+
 if TYPE_CHECKING:
     from .budget import Budget
 
@@ -39,11 +41,12 @@ class PlayerRef:
     # found by matching these against the competitors' names.
     other_teams: list[str] = field(default_factory=list)
     # The competition family the id lives in, where the source needs it: "nba", "wnba", "atp", "wta"; an
-    # esports pro's game ("valorant", "cs-go").
+    # esports pro's game as the source names it ("valorant", "cs-go", "pubgmobile").
     league: str | None = None
     # Birth date as the source gives it, ISO ("1988-11-05"); how the registry confirms a name match.
     born: str | None = None
-    # The game an esports pro plays, as fans name it ("Valorant", "BGMI"): their sport on Sports Follow.
+    # The game an esports pro plays, as the app names it ("Valorant", "BGMI"): their sport on Sports Follow
+    # (Adapter.sport_of).
     game: str | None = None
 
 
@@ -67,9 +70,10 @@ class Fixture:
     # schedule's games are ranked by their sport (Sport.notable), which reads it.
     tier: int = 0
     # What else the source knows that its sport ranks a game by (Sport.notable), in the shape the sport's
-    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}, esports'
-    # {"game": "Valorant"}.
+    # sources share: football's {"table": [home's place, away's]}, cricket's {"super_over": True}.
     facts: dict[str, Any] = field(default_factory=dict)
+    # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
+    sport: str = ""
 
 
 @dataclass
@@ -94,6 +98,9 @@ class Snapshot:
     # The published team sheet, before kick-off as well as during: athlete_id -> "starting" | "bench".
     # Empty until the source has one (and for sports without line-ups).
     squad: dict[str, str] = field(default_factory=dict)
+    # Who its lines are, by the same ids, where the source names them (a scorecard's batters and bowlers):
+    # a game's own moments name its players (Sport.game_moments). Optional; a line of someone unnamed isn't told.
+    names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -109,7 +116,7 @@ class LiveGame:
     snapshot: Snapshot
     players: list[PlayerRef] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)  # its sides' names, when it has teams: whose players the registry knows
-    league: str | None = None  # where a sport's sources cover several games (esports), this one's, as the registry's league
+    league: str | None = None  # where a source covers several games (esports), this one's, as the registry's league
     # The Fixture.source_ids a followed player's card has this game under, where that isn't source_id (a chess
     # board is a fixture of each of its players): how Today knows it's one of the fan's games (live.offer).
     fixtures: list[str] = field(default_factory=list)
@@ -117,9 +124,15 @@ class LiveGame:
     # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
     # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
     tier: int = 0
+    # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
+    sport: str = ""
     # The rest of its line-ups (substitutes, an impact player), by the source's ids, where a source's match()
     # names them: whose lines its match page names (a scorecard's), though only `players` are offered to follow.
     bench: list[PlayerRef] = field(default_factory=list)
+    # A finished game's match() read that isn't all its source will have, or may yet change: a chess board's moves
+    # it couldn't read, or a round with more games to come; a Dota 2 map OpenDota hasn't parsed yet. Its match
+    # page reads it again later instead of keeping it as the game's last word (match.read).
+    partial: bool = False
 
 
 @dataclass
@@ -238,11 +251,11 @@ class Adapter:
 
     Optional, where a source has it (asked for with getattr): search(name, league) -> [PlayerRef] (the
     registry's name lookup), spare() (whether background reads leave live games their share),
-    snapshots(locators) (below), warm() (a shared index kept fresh); for esports, games and game_of(ref),
-    game_names (every name its games go by) and game_of_league(league, country); and a roster for the
-    registry: roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep) -> Roster, which
-    hands keep() its athletes (Rostered) a page at a time, and roster_every (seconds) for a source whose
-    list is read more often than the weekly import; and for a source that has changed how it names its
+    snapshots(locators) (below), warm() (a shared index kept fresh); for esports, games (its own names for
+    the games it covers: PandaScore's slugs, Liquipedia's wikis); and a roster for the registry:
+    roster_prefix (its registry ids' prefix, "pandascore:"), roster(keep, sports) -> Roster, which hands
+    keep() its athletes of those sports (Rostered) a page at a time, and roster_every (seconds) for a
+    source whose list is read more often than the weekly import; and for a source that has changed how it names its
     athletes, rekey(ref) -> PlayerRef | None: a bound player under the id it gives them now (None: the
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
     the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
@@ -250,7 +263,8 @@ class Adapter:
     of its team ids: a campaign page follows a whole team through them (campaigns.py)."""
 
     system: str  # "espn_cricket": the key of its bindings, events and athlete ids
-    sport: str  # the sport it serves (sports.Sport.key): "cricket"
+    # The sports it serves (sports.Sport.key): ("cricket",); a source of several esports games, each game's.
+    sports: tuple[str, ...]
     live_cadence: int  # seconds between polls while an event is live
     name: str  # the source as a player's page names it: "ESPNcricinfo"
     provider: Provider
@@ -275,6 +289,24 @@ class Adapter:
     def wikidata_id(self, athlete_id: str) -> str:
         """One of its athlete ids as Wikidata writes it, under wikidata_property."""
         return athlete_id
+
+    def sport_of(self, ref: PlayerRef) -> str:
+        """The sport one of its athletes plays: its one sport; for a source of several, the athlete's game's
+        (one_of)."""
+        return self.sports[0]
+
+    def one_of(self, found: str | None) -> str:
+        """One of its sports, as found for an athlete; where it can't tell which (a game it doesn't cover, or
+        none named), the group its sports are of: an esports pro whose game is unknown is "esports", never
+        another game's."""
+        if found and found in self.sports:
+            return found
+        return sports.of(self.sports[0]).group or self.sports[0]
+
+    def running(self) -> tuple[str, ...]:
+        """Its sports that run now (sports.ENABLED): a source of several reads only their games."""
+        on = {s.key for s in sports.ENABLED}
+        return tuple(s for s in self.sports if s in on)
 
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py): its provider's, and any other source's it reads."""
@@ -320,9 +352,19 @@ class Adapter:
     #   def match(self, source_id: str) -> LiveGame | None
     # the game a fixture of it names (Fixture.source_id, of the shape fixture_pattern says), whoever follows
     # it, live, to come or over, as live_now() gives one: its snapshot with every player's line the source
-    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py). None:
-    # the source has no such game. Asked at most once a minute a game, only while someone has its page open,
-    # and only for a game a source named first (on Live now, or a followed player's).
+    # has, and both sides' players (the line-ups, one side's then the other's), for its match page (match.py);
+    # a source of several sports says the game's (LiveGame.sport). None: the source has no such game, or it's of
+    # a sport turned off. Asked at most once a minute a game, only while someone has its page open, and only for
+    # a game a source named first (on Live now, or a followed player's). A finished game whose read lacks a part
+    # the source will have later (a second request that failed), or that may still change, says so
+    # (LiveGame.partial): it's read again later, not kept a week.
+    #
+    # Optional, for a source whose live polls need nothing but a game's id (a fixture's source_id):
+    #   def locator(self, source_id: str) -> dict[str, Any] | None
+    # the locator snapshot() takes for that game (None for an id it can't poll), so a fan can follow a game by
+    # itself, from its match page, though they follow nobody in it (matches.py): the game is then polled in
+    # the live lane like a followed player's, and stops when it ends. A source without it has only the games
+    # a followed player's fixtures bring followed that way; its others say alerts aren't available.
     #
     # Optional, for a source that can list its competitions' games between two days, league-wide, in a few
     # requests:

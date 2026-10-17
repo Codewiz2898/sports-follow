@@ -29,23 +29,24 @@ function writeSeen(id: number) {
 }
 
 /**
- * The fan's activity list (every moment of their players, pushed or not, newest first), how much of
- * it is new, and the games they muted. It loads when the follow list or a level changes and picks
- * up new moments as the stream brings them. "Seen" is per device, like quiet hours.
+ * The fan's activity list (every moment of their players, and of the games they follow by themselves, pushed
+ * or not, newest first), how much of it is new, and the games they muted. It loads when the follow list or a
+ * level changes and picks up new moments as the stream brings them. "Seen" is per device, like quiet hours.
  */
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { cards, loaded: following, heard } = useFollowing()
+  const { cards, loaded: following, heard, matches } = useFollowing()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [next, setNext] = useState<number | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [seen, setSeen] = useState<number | null>(readSeen)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
   // Following someone new, or turning a player off, changes the whole list.
-  const who = cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`).sort().join(',')
+  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`)].sort().join(',')
 
   useEffect(() => {
     if (!following) return
-    if (!who) { setItems([]); setNext(null); setLoaded(true); return }
+    // Asked even when the fan follows nothing now: a game they followed by itself has lapsed since it ended, and
+    // its moments stay in the list (30 days), as a player's do.
     let stale = false
     api.activity().then((r) => {
       if (stale) return

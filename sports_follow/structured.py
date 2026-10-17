@@ -4,25 +4,28 @@ Once the research agent has said who a player is and what they play, bind() look
 in that sport's adapter and records the identity and source bindings. From then on the player's
 fixtures, results and stats come from the source (refresh), and every event with a live binding
 is polled by one job shared by every player in it (poll_event), or, where the source can fetch many
-events in one request, together with all of that source's other events (poll_lane). The agent keeps
-the profile and the news, and stays the only source for sports without an adapter.
+events in one request, together with all of that source's other events (poll_lane). A game a fan follows
+by itself (matches.py) is polled the same way, whether or not anyone follows a player in it, and each of
+its polls finds the game's own moments too (Sport.game_moments). The agent keeps the profile and the news,
+and stays the only source for sports without an adapter.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, metrics, moments, naming, notify, registry, shutdown, sports, tracing
-from .adapters import ADAPTERS, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
+from . import bus, engine, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -53,6 +56,14 @@ def _now() -> datetime:
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def match_path(key: str | None) -> str | None:
+    """A game's match page address (match.py: after /match/), from its event's key: a source's game
+    ("sportmonks_football:19134567") is "sportmonks_football/19134567"; one the research agent wrote up, which
+    no source has, has none."""
+    system, sep, game = (key or "").partition(":")
+    return f"{system}/{game}" if sep and game and system in KNOWN else None
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:
@@ -244,11 +255,10 @@ def describe(player_id: int) -> str | None:
         teams = [t for t in loc.get("team_names") or [] if t and t != loc.get("name")]
         where = f", {', '.join(teams)}" if teams else ""
         adapter = ADAPTERS.get(row.adapter)
-        named = sports.of(adapter.sport).leagues if adapter else ()
-        league = f" ({loc['league'].upper()})" if loc.get("league") in named else ""
-        game = adapter.game_of(PlayerRef(**loc)) if getattr(adapter, "games", None) else None
-        if game:
-            league = f" ({game} pro, known by this handle)"
+        kind = sports.BY_KEY.get(adapter.sport_of(PlayerRef(**loc))) if adapter else None
+        league = f" ({loc['league'].upper()})" if kind and loc.get("league") in kind.leagues else ""
+        if kind and kind.group:
+            league = f" ({kind.label} pro, known by this handle)"  # one game of a group: an esports pro's
         page = f" Their page on {source_name(row.adapter)}: {loc['profile_url']}." if loc.get("profile_url") else ""
         return f"{loc.get('name') or player.name}, {player.sport if league else player.sport.lower()}{where}{league}.{page} Other athletes may share the name; report only on this one."
 
@@ -312,10 +322,9 @@ def retry_at(health: dict[str, Any] | None) -> datetime | None:
 
 
 def sport_name(adapter: Adapter, ref: PlayerRef) -> str:
-    """A player's sport as Sports Follow names it: their game for an esports pro ("CS2", "BGMI"), else
-    the sport their source covers ("Football")."""
-    game_of = getattr(adapter, "game_of", None)
-    return (game_of(ref) if game_of else None) or sports.label(adapter.sport)
+    """A player's sport as Sports Follow names it: the sport their source has them in ("Football"; an esports
+    pro's game, "CS2", "BGMI")."""
+    return sports.label(adapter.sport_of(ref))
 
 
 def rebind(current: str | None, preferred: Adapter | None) -> bool:
@@ -370,9 +379,9 @@ def _refresh(player_id: int) -> None:
         card_row = db.get(PlayerCard, player_id)
         if player is None or card_row is None:
             return
-        game = sport_name(adapter, ref) if getattr(adapter, "games", None) else None
-        if game and player.sport != game:
-            player.sport = game  # an esports pro's sport is their game (bound as "Esports", or changed games)
+        kind = sports.BY_KEY.get(adapter.sport_of(ref))
+        if kind and kind.group and sports.get(player.sport) is not kind:
+            player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
         events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
         for f, snap in recent:
             if snap:
@@ -558,6 +567,7 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
         "notes": f.detail,
         "status": event.status,
         "event_id": event.id,
+        "match": match_path(event.key),  # its match page's address
     }
 
 
@@ -571,6 +581,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         "player_contribution": contribution(snap, ref.athlete_id),
         "competition": f.competition,
         "event_id": event.id if event else None,
+        "match": match_path(event.key) if event else None,  # its match page's address
         "source_url": snap.source_url if snap else None,
     }
 
@@ -653,19 +664,31 @@ def poll_event(event_id: int) -> None:
         bus.release(lock, token)
 
 
+def holds_back(adapter: Adapter) -> bool:
+    """Whether a game nobody follows a player in, followed by itself (matches.py), waits to be polled: its source
+    is polled a request a game (not a lane, where it costs nothing more) and is down to what its live games need
+    (spare), which followed players' games keep."""
+    return not batched(adapter.system) and not spare(adapter)
+
+
 def batched(system: str | None) -> bool:
     """Whether a source's events are polled together by one lane: its adapter fetches many events in
     one request (snapshots). The rest get one poll_event job per event."""
     return hasattr(ADAPTERS.get(system or ""), "snapshots")
 
 
+def watched() -> Any:
+    """The events the poller looks after: a followed player is in it, or a fan follows the game by itself
+    (matches.py). A select of event ids."""
+    return select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id))).union(matches.watched())
+
+
 def lane_events(system: str) -> list[int]:
-    """The armed and live events with a followed player in them that this source polls."""
+    """The armed and live events this source polls with a followed player in them, or followed by themselves."""
     with session() as db:
         return list(db.scalars(
-            select(Event.id).distinct()
-            .join(EventPlayer, EventPlayer.event_id == Event.id)
-            .where(Event.status.in_(("armed", "live")), Event.live_binding["adapter"].astext == system, EventPlayer.player_id.in_(select(Follow.player_id)))
+            select(Event.id)
+            .where(Event.status.in_(("armed", "live")), Event.live_binding["adapter"].astext == system, Event.id.in_(watched()))
             .order_by(Event.id)
         ))
 
@@ -703,7 +726,7 @@ def poll_lane(system: str) -> None:
 
 def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> int | None:
     """One round of a lane: fetch all its events at once, then apply each. Returns how long to wait
-    before the next round, or None when no followed player is in any of them any more.
+    before the next round, or None when none of them is followed any more (a player in it, or itself).
 
     moved holds when each event last changed (a game quiet for a minute stops setting the pace);
     missing, the events the source didn't return, so each is logged once a session.
@@ -737,7 +760,7 @@ def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> 
     return adapter.live_cadence if busy else max(60, adapter.live_cadence)
 
 
-def _evaluate(rules: sports.Sport, db: Session, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
+def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
     """A sport our engine evaluates (chess): ask the engine for the game's position while it's on and a
     follower wants to hear about swings, and put the game's latest evaluation (engine.py), settled by
     the sport, into the state."""
@@ -746,8 +769,9 @@ def _evaluate(rules: sports.Sport, db: Session, snap: Snapshot, latest: EventSta
     if not (game and fen and engine.enabled()):
         return
     if snap.status == "live" and not state.get("result"):
-        rules = db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all()
-        if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in rules):
+        # Its followed players' fans, and the game's own (a game followed by itself).
+        wanted = [*db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all(), *matches.rules(db, event_id)]
+        if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in wanted):
             engine.request(game, fen)
     ev = engine.latest(game)
     if ev:
@@ -792,7 +816,9 @@ def _team_ids(db: Session, system: str, player_ids: list[int]) -> dict[int, list
 
 def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, str]]] | None:
     """An event's live binding, its adapter and the followed players in it (player id, their id in the
-    source); None when no followed player is in it or its source doesn't run."""
+    source) whose sport runs; None when there are none, nor a fan following the game by itself, or its source
+    doesn't run. A source of several sports (esports games) runs while one does: a game turned off isn't
+    polled."""
     with session() as db:
         event = db.get(Event, event_id)
         if event is None or not event.live_binding:
@@ -803,11 +829,14 @@ def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, s
             return None
         followed = select(Follow.player_id)
         watchers = db.execute(
-            select(PlayerIdentity.player_id, PlayerIdentity.external_id)
+            select(PlayerIdentity.player_id, PlayerIdentity.external_id, Player.sport)
             .join(EventPlayer, EventPlayer.player_id == PlayerIdentity.player_id)
+            .join(Player, Player.id == PlayerIdentity.player_id)
             .where(EventPlayer.event_id == event_id, PlayerIdentity.system == adapter.system, PlayerIdentity.player_id.in_(followed))
         ).all()
-    return (live_binding, adapter, [(pid, xid) for pid, xid in watchers]) if watchers else None
+        itself = sports.on(event.sport) and matches.followed(db, event_id)
+    on = [(pid, xid) for pid, xid, sport in watchers if sports.on(sport)]
+    return (live_binding, adapter, on) if on or itself else None
 
 
 def poll_once(event_id: int) -> tuple[str, int, bool]:
@@ -819,6 +848,8 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
     if watching is None:
         return "idle", 0, False
     live_binding, adapter, watchers = watching
+    if not watchers and holds_back(adapter):
+        return "idle", 0, False  # nobody's player in it, and its source is down to its live reserve: it waits, every round
     try:
         snap = adapter.snapshot(live_binding["locator"])
     except AdapterError as exc:
@@ -832,6 +863,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     (poll_once's second half, shared with the lanes). Returns as poll_once does."""
     now = _now()
     published: list[tuple[int, dict[str, Any]]] = []
+    published_game: dict[str, Any] | None = None
+    game_kept: tuple[str, str, int] | None = None  # the game's own poll, for Redis once this one is committed
     new_moments: list[int] = []
     with session() as db:
         event = db.get(Event, event_id)
@@ -846,7 +879,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         # minutes before kick-off); whether polling had a gap comes from the polls themselves.
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
         if rules.engine:
-            _evaluate(rules, db, snap, latest, [w[0] for w in watchers])
+            _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
             snap.state["team_sheet"] = True  # so the poll that first sees line-ups counts as a change
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
@@ -885,13 +918,64 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             card_row.freshness = card["freshness"]
             card_row.is_live = bool(card["live"].get("is_live"))
             published.append((player_id, card))
+        if matches.followed(db, event_id):
+            found, game_kept = _game_moments(db, event, adapter, snap, recent, people, watchers)
+            new_moments += found
+            if changed:
+                live = matches.board(event, snap.status, snap.score_label, snap.clock_label, snap.state, snap.source_url, now)
+                live["source"] = adapter.credit(snap)
+                published_game = matches.item(event, live)
+    if game_kept is not None:
+        # Only now: a poll whose moments weren't committed must find them again, against the poll before it.
+        bus.sync_redis().set(game_kept[0], game_kept[1], ex=game_kept[2])
     for player_id, card in published:
         bus.store_card(player_id, card)
+    if published_game is not None:
+        bus.publish_match(event_id, {"type": "match", "event_id": event_id, "match": published_game})
     notify.dispatch(new_moments)
     if published:
         log.info("poll %s: %s | %s -> %d card(s)", event_id, snap.score_label, snap.clock_label, len(published))
     wait = int(live_binding.get("cadence") or 10) if snap.status == "live" else 60
     return snap.status, wait, changed
+
+
+def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, recent: bool,
+                  people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]]) -> tuple[list[int], tuple[str, str, int]]:
+    """The game's own moments since its last poll, for the fans following it by itself (matches.py), as its
+    sport finds them (Sport.game_moments), against that poll as Redis kept it, for as long as a poll after it
+    is recent (_polled's gap): a copy from before a gap (nobody followed the game a while, though its players'
+    polls went on) would tell what happened meanwhile as new. A first look (no recent copy, or polling had a
+    gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids, and this
+    poll as Redis is to keep it (its key, value and seconds), which apply_poll writes once they're committed."""
+    names = {**_roster_names(event), **snap.names, **{xid: people[pid][0] for pid, xid in watchers if pid in people}}
+    now = sports.Played(snap.status, snap.state, snap.score_label, snap.clock_label, snap.moments,
+                        {a: {"headline": ln.headline, "stats": ln.stats} for a, ln in snap.lines.items()}, names)
+    key = f"game:{event.id}"
+    try:
+        kept = json.loads(cast(str, bus.sync_redis().get(key)) or "null")
+    except Exception:
+        kept = None
+    before = sports.Played(**{**kept, "names": names}) if kept and recent else None
+    if before is not None and before.status in PRE_MATCH and (snap.status == "final" or (snap.status == "live" and _under_way(snap))):
+        before = None  # last seen before the start and now over, or well under way: what happened meanwhile is old news
+    rules = sports.of_state(snap.state)
+    name = rules.matchup(snap.state) or event.title
+    found = rules.game_moments(name, before, now, notify.told_game(db, event.id) if before else [])
+    for f in found:
+        f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
+    gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
+    value = json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str)
+    return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}"), (key, value, gap)
+
+
+def _roster_names(event: Event) -> dict[str, str]:
+    """Who plays in a game, by their ids in its source, as its match page's last read named them (match.read):
+    a source whose polls don't name its lines' players has them there."""
+    from . import match  # the match page's reads (match reads Live now, which reads search, which reads this)
+
+    system, _, fixture = (event.key or "").partition(":")
+    game = (match.last_read(system, fixture) or {}).get("game") or {}
+    return {p["athlete_id"]: p["name"] for p in [*(game.get("players") or []), *(game.get("bench") or [])] if p.get("athlete_id") and p.get("name")}
 
 
 def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Line | None, adapter: Adapter, now: datetime) -> None:
@@ -901,7 +985,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
         card["live"] = {
             "is_live": True,
             "event_id": event.id,
-            "match": event.key.replace(":", "/", 1) if event.key else None,  # its match page's address (match.path)
+            "match": match_path(event.key),  # its match page's address
             "event": title,
             "competition": event.competition,
             "score": snap.score_label,
@@ -929,6 +1013,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "player_contribution": line.headline if line else None,
             "competition": event.competition,
             "event_id": event.id,
+            "match": match_path(event.key),
             "source_url": snap.source_url,
         }
         card["recent_results"] = [result, *[r for r in card.get("recent_results", []) if r.get("event_id") != event.id]][:RECENT_LIMIT]

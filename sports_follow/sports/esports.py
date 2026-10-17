@@ -1,6 +1,9 @@
-"""Esports, by game. A pro's sport on their page is the game they play, as fans name it ("Valorant", "CS2",
-"BGMI"), not "Esports"; esports is what those games share: one search filter, one set of moment and form
-rules, one colour in the app. The registry keeps "esports" as the athlete's sport.
+"""Esports: each game a sport of its own ("Valorant", "CS2", "BGMI"), as fans follow them, and what the games
+share, kept here once: series and lobby moments, form, alert wording, how big a game is, who's a pro on
+Wikidata. Esports holds those rules; each game is one entry in GAMES (Game: its key, its name and the other
+names it goes by, and its colour), so adding a game is one line there and the source that covers it. SPORT
+is the esports group: what a setting naming "esports" stands for (every game), and the sport of a pro whose
+game can't be told; it isn't one of the sports the app lists.
 
 Two shapes of game: team series, map by map (Valorant, CS2), and battle royale lobbies (BGMI, Free Fire,
 PUBG), which rank every team in one result: {"teams": 16, "standings": [{"id", "name", "place", "points", …}]}.
@@ -12,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Found, Line, Notable, Poster, Seen, Sport, joined, ordinal, stage
+from .base import Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -159,6 +162,38 @@ def _lobby_final(who: str, now: Seen) -> Found:
     return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
 
 
+def _game_maps(name: str, before: Played, now: Played) -> list[Found]:
+    """Each map of a series taken since the last poll, from the side that took it, with the series score:
+    for a fan following the series itself these are its key moments, as goals are a match's."""
+    teams = {t.get("id"): t for t in now.state.get("teams") or []}
+    done = {m.get("n") for m in before.state.get("maps") or [] if m.get("winner")}
+    if len(teams) != 2 or now.status == "final":
+        return []  # the result says it
+    a, b = teams.values()
+    found = []
+    for m in now.state.get("maps") or []:
+        winner = teams.get(m.get("winner"))
+        if winner and m.get("n") not in done:
+            found.append(Found("map", "key", f"{name}: {winner.get('name')} take map {m.get('n')}", f"{a.get('name')} {a.get('score')}–{b.get('score')} {b.get('name')}", f"map{m.get('n')}", 60))
+    return found
+
+
+def _game_lobby(name: str, before: Played, now: Played) -> list[Found]:
+    """Each match of a lobby won since the last poll, by whom ("Booyah: GodLike Esports"), with who's top."""
+    teams = {t.get("id"): t for t in now.state.get("standings") or []}
+    done = {g.get("n") for g in before.state.get("games") or [] if g.get("winner")}
+    top = next((t for t in teams.values() if t.get("place") == 1), None)
+    if now.status == "final":
+        return []
+    found = []
+    for g in now.state.get("games") or []:
+        winner = teams.get(g.get("winner"))
+        if winner and g.get("n") not in done:
+            body = joined(f"Match {g['n']}", g.get("map"), f"{top['name']} top, {points(top.get('points'))} pts" if top and top.get("name") else None)
+            found.append(Found("dinner", "key", f"{name}: {now.state.get('win_word') or 'Win'}, {winner.get('name')}", body, f"g{g['n']}", 70))
+    return found
+
+
 def _series_won(won: int, lost: int) -> str:
     """A series won as a poster's word: "Sweep 2–0" when the other side took no map (of more than one), else "Win 2–1"."""
     return f"{'Sweep' if lost == 0 and won > 1 else 'Win'} {won}–{lost}"
@@ -177,34 +212,37 @@ def _placed(result: str | None) -> tuple[int, int, float] | None:
 
 
 class Esports(Sport):
+    """What every esports game shares, and the esports group itself (SPORT)."""
+
     key = "esports"
     label = "Esports"
-    names = ("e-sports", "electronic sports")
-    # Its sources add the games they cover (adapters' game_names).
-    other_games = ("counter-strike 2", "lol", "dota", "mlbb", "honor of kings", "apex", "call of duty: mobile", "codm")
+    # Games no source covers, as an AI-built page may call them: esports, but none of its games' sports.
+    names = ("e-sports", "electronic sports", "call of duty: mobile", "codm")
     kinds = ("esports", "battle_royale")
     roster = True
     team_moments = True
     side_by_side = True
-    colour = {"sport": "#ff4fa3", "on": "#1a0010", "on_soft": "rgba(26, 0, 16, 0.8)", "ink": "#ff4fa3"}
-    # Every game wears the esports colour; eFootball is a game too.
-    pattern = (r"e-?sports?\b|e-?football|valorant|counter-strike|\bcs2\b|\bcs:go\b|league of legends|\blol\b|dota|mobile legends|\bmlbb\b"
-               r"|overwatch|rainbow six|rocket league|call of duty|\bcodm\b|wild rift|king of glory|honor of kings|bgmi|pubg|free fire|apex legends")
+    colour = {"sport": "#ff4fa3", "on": "#1a0010", "on_soft": "rgba(26, 0, 16, 0.85)", "ink": "#ff4fa3"}
+    # A game no source covers is esports; eFootball is a game too.
+    pattern = r"e-?sports?\b|e-?football|call of duty:? ?mobile|\bcodm\b"
     alerts = {
         "key": ("Starts, wins and results", "A series or lobby starting, winning a lobby match, going top, the result and transfers"),
         "more": ("every map and match", "each map or lobby match, a Dota player’s numbers each map, and milestones"),
+    }
+    game_alerts = {
+        "key": ("Maps and the result", "Each map of a series or match of a lobby won, the start and the result"),
+        "more": ("", ""),
     }
     stats_title = "Overview"
     keeps_names = True
 
     def label_of(self, name: str) -> str:
-        """A game's own name as written ("CS2", "PUBG Mobile", "League of Legends")."""
-        return name if name.strip().lower() != self.key else name.title()
+        """A game's own name as written ("PUBG Mobile", "Counter-Strike"); its label for its key or label in any case."""
+        return self.label if name.strip().lower() in (self.key, self.label.lower()) else name
 
     def result_sport(self, athlete: Athlete) -> str:
-        """The game, from the league the athlete's source keeps: "valorant" -> "Valorant"; an Indian player
-        on the PUBG Mobile wiki plays BGMI."""
-        return game_of_league(athlete.league, athlete.country) or athlete.sport.title()
+        """The game: the registry keeps each pro under theirs ("cs2" is "CS2")."""
+        return self.label
 
     def search_detail(self, athlete: Athlete) -> list[str]:
         return [*list(athlete.teams or [])[:1], athlete.country or ""]  # the game is the result's sport
@@ -254,6 +292,11 @@ class Esports(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)
 
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """A series' maps, each from the side that took it, or a lobby's matches, each by who won it: about the
+        whole game, as a fan of a player in it hears each from their team's side."""
+        return _game_lobby(name, before, now) if now.state.get("kind") == "battle_royale" else _game_maps(name, before, now)
+
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
         Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
@@ -274,6 +317,19 @@ class Esports(Sport):
             maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
                          "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
         return {"maps": maps} if maps else {}
+
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
+        lobby ("GodLike Esports won the lobby")."""
+        if state.get("kind") == "battle_royale":
+            top = [t for t in state.get("standings") or [] if t.get("place") == 1]
+            return f"{top[0]['name']} won the lobby" if len(top) == 1 and top[0].get("name") else ""  # level on points: nobody's alone
+        teams = state.get("teams") or []
+        winner = next((t for t in teams if t.get("winner")), None)
+        loser = next((t for t in teams if t is not winner), None)
+        if winner is None or loser is None or not winner.get("name"):
+            return ""
+        return f"{winner['name']} won by forfeit" if state.get("forfeit") else f"{winner['name']} won {winner.get('score')}–{loser.get('score')}"
 
     def high(self, f: Found, versus: str) -> Poster | None:
         """The player's team winning: a series ("Sweep 2–0" when the other side took no map, "Win 2–1"), a
@@ -302,19 +358,17 @@ class Esports(Sport):
         """A series or lobby of a big event (Fixture.tier S or A), as big as its tier and, for a series, how
         late in the event it is (its stage, as its detail says: "Grand final · Bo5"), 8 more once it's over
         if it went the distance. A forfeit isn't one. Its word is the series score, the winner's first, or a
-        lobby's winner. Its group is its game, as its source names it (facts["game"]: "Valorant"), so each
-        game takes its turn among the sport's and one game's season never fills Today."""
+        lobby's winner."""
         r = fixture.result or {}
-        group = str(fixture.facts.get("game") or "")
         if "standings" in r or (fixture.status != "final" and len(fixture.team_ids) > 2):
             rank = LOBBY_RANK.get(fixture.tier)
             if rank is None:
                 return None
             table = r.get("standings") or []
             if fixture.status != "final" or not table:
-                return Notable(rank, why=TIERS[fixture.tier], group=group)
+                return Notable(rank, why=TIERS[fixture.tier])
             top = table[0]
-            return Notable(rank, word=str(top.get("name") or ""), line=f"Won the lobby · {points(top.get('points'))} pts · {r.get('teams')} teams", why=TIERS[fixture.tier], group=group)
+            return Notable(rank, word=str(top.get("name") or ""), line=f"Won the lobby · {points(top.get('points'))} pts · {r.get('teams')} teams", why=TIERS[fixture.tier])
         if fixture.tier not in SERIES_RANK or r.get("forfeit"):
             return None
         level, said = stage(fixture.detail)
@@ -322,7 +376,7 @@ class Esports(Sport):
         why = said or TIERS[fixture.tier]
         sides = r.get("teams") or []
         if fixture.status != "final" or len(sides) != 2:
-            return Notable(rank, why=why, group=group)
+            return Notable(rank, why=why)
         scores = sorted((int(t.get("score") or 0) for t in sides), reverse=True)
         best_of = re.search(r"\bBo(\d+)\b", fixture.detail or "")
         distance = scores[1] > 0 and (scores[0] - scores[1] == 1) and (not best_of or scores[0] + scores[1] == int(best_of[1]))
@@ -332,7 +386,7 @@ class Esports(Sport):
         first, second = (winner, loser) if winner and loser else sides
         line = f"{winner['name']} beat {loser['name']}" if winner and loser else ""
         return Notable(min(100, rank + (8 if distance else 0)), word=f"{first.get('score')}–{second.get('score')}", line=line,
-                       why=why if said or not distance else "Decider", group=group)
+                       why=why if said or not distance else "Decider")
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         """Battle royale: placings and points from the lobby results ("3rd of 16 · 87 pts"). Team series:
@@ -356,16 +410,51 @@ class Esports(Sport):
         return ("lobby", "lobbies") if any(_placed(r.get("result")) for r in items) else ("series", "series")
 
 
-def game_of_league(league: str | None, country: str | None = None) -> str | None:
-    """The game a registry esports athlete plays, from the league their source keeps (a PandaScore slug or
-    a Liquipedia wiki), asking each esports source (adapters' game_of_league)."""
-    from ..adapters import KNOWN  # here: sources import this module for what esports sources share
+class Game(Esports):
+    """One esports game, a sport of its own: its key (the registry's, the settings' and the search filter's),
+    its name and the other names a source or a page gives it, the free-text names that are it (pattern, for
+    the apps), and its colour. Everything else is esports'."""
 
-    for adapter in KNOWN.values():
-        game_of = getattr(adapter, "game_of_league", None)
-        if adapter.sport == SPORT.key and game_of and (game := game_of(league, country)):
-            return game
-    return None
+    group = Esports.key
+    kinds = ()  # its scoreboards are esports' (SPORT's kinds)
+
+    def __init__(self, key: str, label: str, colour: dict[str, str], names: tuple[str, ...] = (), pattern: str = "") -> None:
+        self.key, self.label, self.colour, self.names = key, label, colour, names
+        self.pattern = pattern or re.escape(label.lower()).replace("\\ ", " ")
+
+    def __repr__(self) -> str:
+        return f"Game({self.key!r})"
 
 
+def _light(block: str, ink: str) -> dict[str, str]:
+    """A light block with dark text on it, as basketball's."""
+    r, g, b = (int(ink[i : i + 2], 16) for i in (1, 3, 5))
+    return {"sport": block, "on": ink, "on_soft": f"rgba({r}, {g}, {b}, 0.85)", "ink": block}
+
+
+def _dark(block: str, ink: str) -> dict[str, str]:
+    """A dark block with white text on it, and its colour lighter as text on ink, as cricket's."""
+    return {"sport": block, "on": "#ffffff", "on_soft": "#ffffff", "ink": ink}
+
+
+# Every game a source covers, in the order the app lists them, after the other sports. Each colour reads
+# with its text at 4.5:1 or better and stands apart from every other sport's (tests/test_sports.py).
+GAMES: tuple[Game, ...] = (
+    Game("valorant", "Valorant", _light("#ff6b6b", "#1f0005")),
+    Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b"),
+    Game("lol", "League of Legends", _light("#19c3e6", "#00161c"), ("LoL",), r"league of legends|\blol\b"),
+    Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3"), ("Dota", "Dota2"), r"\bdota ?2?\b"),
+    Game("bgmi", "BGMI", _dark("#166534", "#4ade80"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india"),
+    Game("freefire", "Free Fire", _light("#e879f9", "#1f0024"), ("Free Fire MAX", "Garena Free Fire"), r"free ?fire"),
+    Game("pubgmobile", "PUBG Mobile", _light("#60a5fa", "#001a33"), ("PUBGM",), r"pubg ?mobile|\bpubgm\b"),
+    Game("pubg", "PUBG", _light("#ffc61a", "#1a1400"), ("PUBG: Battlegrounds", "PlayerUnknown's Battlegrounds"), r"\bpubg\b|playerunknown|battlegrounds"),
+    Game("mlbb", "Mobile Legends", _dark("#0f766e", "#2dd4bf"), ("Mobile Legends: Bang Bang", "MLBB"), r"mobile legends|\bmlbb\b"),
+    Game("hok", "Honor of Kings", _dark("#8b5a2b", "#e0a96d"), ("King of Glory", "Honour of Kings"), r"hono(?:u)?r of kings|king of glory"),
+    Game("r6siege", "Rainbow Six Siege", _dark("#6b2d5c", "#e79ad3"), ("Rainbow Six", "R6 Siege"), r"rainbow six|\br6\b"),
+    Game("overwatch", "Overwatch", _light("#ffb37a", "#1f0d00"), ("Overwatch 2",), r"overwatch"),
+    Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c"), ("Apex",), r"apex legends|\bapex\b"),
+    Game("rocketleague", "Rocket League", _light("#5eead4", "#00201b")),
+    Game("cod", "Call of Duty", _dark("#6b5d4f", "#d2c4b4"), ("CoD",), r"call of duty(?!:? ?mobile)|\bcod\b"),
+    Game("wildrift", "Wild Rift", _light("#c4b5fd", "#1a0f3d"), ("League of Legends: Wild Rift",), r"(?:league of legends:? )?wild ?rift"),
+)
 SPORT = Esports()

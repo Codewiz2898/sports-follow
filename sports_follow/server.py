@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, FanSource, Follow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -376,7 +376,8 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
 
 @app.get("/api/health")
 async def health(response: Response) -> dict[str, Any]:
-    """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't."""
+    """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't.
+    Also the commit this image was built from (null outside a deployed one), which the deploy workflow checks."""
     checks = {"db": False, "redis": False}
     try:
         checks["db"] = await in_db(lambda db: db.execute(select(1)).scalar() == 1)
@@ -389,7 +390,7 @@ async def health(response: Response) -> dict[str, Any]:
     ok = all(checks.values())
     if not ok:
         response.status_code = 503
-    return {"ok": ok, **checks}
+    return {"ok": ok, **checks, "commit": COMMIT or None}
 
 
 # ---------------------------------------------------------------- cards
@@ -430,10 +431,12 @@ def config(request: Request) -> dict[str, Any]:
 def sports_list(response: Response) -> dict[str, Any]:
     """The sports this app knows, in the order it lists them (sports.ALL): each one's name, the free-text
     names that are it, what its alerts say, and whether this build runs it and has live scores for it.
-    "other" is any sport no module knows."""
+    "other" is any sport no module knows; "groups" the sports each standing for several of them, not listed
+    (esports: every game), as a game no source covers ("Call of Duty: Mobile") is drawn."""
     response.headers["cache-control"] = "public, max-age=300"
-    live = {a.sport for a in ADAPTERS.values()}
-    return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False)}
+    live = {k for a in ADAPTERS.values() for k in a.running()}
+    return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False),
+            "groups": [sports.shown(g, any(m.key in live for m in sports.members(g))) for g in sports.GROUPS]}
 
 
 @app.get("/api/sports.css")
@@ -545,7 +548,14 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     source."""
     if system not in KNOWN or not match.ID.fullmatch(game):
         raise HTTPException(404, "No such game.")
-    page, ask = await in_db(match.view, fan, system, game)
+
+    def view(db: Session) -> tuple[dict[str, Any] | None, bool]:
+        page, ask = match.view(db, fan, system, game)
+        if page is not None:
+            page["follow"] = matches.offer(db, fan, system, game, page)  # the Follow button: following, and whether alerts can come
+        return page, ask
+
+    page, ask = await in_db(view)
     if ask:
         try:
             # One read a minute of a game, whether the last one came or failed, and at most match.READS a
@@ -561,6 +571,59 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     if page is None:
         raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
+
+
+@app.put("/api/match/{system}/{game}/follow")
+def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Follow a game by itself (matches.py): its key moments, from both sides, reach this fan until it ends.
+    A game no source has named here is a 404, so a made-up address makes no follow and no poll; one that's
+    over, or that no running source can poll, a 409; a fan following matches.MAX games already, a 429."""
+    try:
+        event_id = matches.follow(db, fan, system, game)
+    except matches.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()  # before the answer: the tick that arms and polls it reads it from now on
+    return {"following": True, "event_id": event_id}
+
+
+@app.delete("/api/match/{system}/{game}/follow")
+def unfollow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Stop following a game by itself: nothing more of it is sent to this fan (their players in it still are)."""
+    if system in KNOWN:
+        matches.unfollow(db, fan, system, game)
+    db.commit()
+    return {"following": False}
+
+
+@app.get("/api/me/matches")
+def my_matches(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The games this fan follows by themselves, soonest first, each with its board as last polled: Today shows
+    them with the fan's own live games and in Coming up."""
+    return {"matches": matches.mine(db, fan)}
+
+
+@app.delete("/api/me/matches/{event_id}")
+def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Stop following a game by the event the follow is on (the match page's follow state, or /api/me/matches):
+    whichever of a game's addresses the follow was made at, or has moved to (a chess board's)."""
+    matches.unfollow_event(db, fan, event_id)
+    db.commit()
+    return {"event_id": event_id, "following": False}
+
+
+@app.put("/api/me/matches/{event_id}/alerts")
+def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Which of a followed game's own moments the fan is told about: everything, key, results or off, as for a player."""
+    level = body.get("level")
+    if level not in moments.LEVELS:
+        raise HTTPException(400, f"level must be one of {', '.join(moments.LEVELS)}")
+    row = db.scalar(select(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.event_id == event_id))
+    if row is None:
+        raise HTTPException(404, "Follow the game first.")
+    row.alert_rules = {**(row.alert_rules or {}), "level": level}
+    db.commit()
+    return {"event_id": event_id, "alerts": level}
 
 
 @app.get("/api/league")
@@ -794,7 +857,7 @@ def _same_athlete(person: registry.Person, ref: Any) -> bool:
     them, or has none in this source and they match by birth date (or name and team). The client sends
     both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
     adapter = ADAPTERS.get(ref.system)
-    if adapter is None or person.sport != adapter.sport:
+    if adapter is None or person.sport not in adapter.sports:
         return False
     known = person.ids.get(ref.system)
     return known == ref.athlete_id if known else registry.same_person(person, ref)
@@ -1562,9 +1625,11 @@ ACTIVITY_DAYS = 30
 
 @app.get("/api/me/activity")
 def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit: int = 30, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Every moment of the fan's players since they followed them, newest first, whatever reached the
-    phone: the app's activity list. Players set to off are left out, and a correction (a goal VAR ruled
-    out) unless the list has the moment it takes back. Page with ?before=<next>."""
+    """Every moment of the fan's players since they followed them, and of the games they follow by themselves
+    while they did (matches.py), newest first, whatever reached the phone: the app's activity list. Players and
+    games set to off are left out, a correction (a goal VAR ruled out) unless the list has the moment it takes
+    back, and a game's moment that one of their players' in the list says too (alerts.same). Page with
+    ?before=<next>."""
     limit = max(1, min(limit, 50))
     level = func.coalesce(Follow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
     taken = aliased(Moment)
@@ -1580,16 +1645,36 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         .order_by(Moment.id.desc())
         .limit(limit)
     )
+    game_level = func.coalesce(MatchFollow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+    games = (
+        select(Moment, Event.title, NotificationMute.event_id.is_not(None), Event.sport)
+        .join(MatchFollow, and_(MatchFollow.event_id == Moment.event_id, MatchFollow.fan_id == fan))
+        .join(Event, Event.id == Moment.event_id)
+        .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
+        .outerjoin(taken, taken.id == Moment.corrects)
+        .where(Moment.player_id.is_(None), game_level != "off", Moment.created_at >= MatchFollow.created_at, or_(MatchFollow.until.is_(None), Moment.created_at <= MatchFollow.until))
+        .where(Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS), or_(Moment.corrects.is_(None), taken.created_at >= MatchFollow.created_at))
+        .order_by(Moment.id.desc())
+        .limit(limit)
+    )
     if before is not None:
         query = query.where(Moment.id < before)
+        games = games.where(Moment.id < before)
+    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + [(m, None, event, muted, sport) for m, event, muted, sport in db.execute(games)],
+                  key=lambda r: -r[0].id)[:limit]
+    # A game's moment that one of the fan's players' says too is listed once, as their player's.
+    planned = {i.id: i for i in notify.for_games(db, notify.as_items([r[0] for r in rows]))}
+    theirs = [i for i in planned.values() if i.player_id is not None]
     items = [
         {
             "id": m.id, "kind": m.kind, "level": m.level, "priority": m.priority, "title": m.title, "body": m.body, "url": m.url,
             "player_id": m.player_id, "player": name, "event_id": m.event_id, "event": event, "muted": bool(muted), "at": m.created_at.isoformat(),
+            **({"sport": sports.of(sport).key or "other"} if m.player_id is None else {}),  # a game's own: its sport, for its mark
         }
-        for m, name, event, muted in db.execute(query)
+        for m, name, event, muted, sport in rows
+        if m.player_id is not None or not any(alerts.same(planned[m.id], p) for p in theirs)
     ]
-    return {"items": items, "next": items[-1]["id"] if len(items) == limit else None}
+    return {"items": items, "next": rows[-1][0].id if len(rows) == limit else None}
 
 
 @app.get("/api/me/week")
@@ -1822,10 +1907,11 @@ async def player_stream(player_id: RowId, request: Request) -> StreamingResponse
 @app.get("/api/me/stream")
 async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingResponse:
     """One connection for every player the fan follows: browsers cap connections per origin, so one per player won't scale.
-    It opens with what /api/me/following returns, so an app that reconnects (a phone back from the lock
-    screen, a restart) gets every score and result it missed."""
-    ids = await in_db(lambda db: db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all())
-    if not ids:
+    It opens with what /api/me/following returns, and the games they follow by themselves (/api/me/matches),
+    so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
+    missed; then each followed game's board as it's polled, and its own moments (bus.match_channel)."""
+    ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(), matches.event_ids(db, fan)))
+    if not ids and not games:
         async def idle():
             while not await request.is_disconnected():
                 yield PING
@@ -1833,9 +1919,9 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
         return _sse(idle())
 
     async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan)}]
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan)}]
 
-    return _sse(_stream([bus.channel(i) for i in ids], first, request))
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request))
 
 
 # ---------------------------------------------------------------- the Android app

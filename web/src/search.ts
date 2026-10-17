@@ -63,9 +63,10 @@ export function allowance(research?: Research): { text: string | undefined; out:
   return { out, text: out ? `You've used today's ${research.limit} AI researches. More from ${reset}.` : `${research.left} of ${research.limit} left today` }
 }
 
-/** Which sports have live scores here (each from its sources; see Credits), and what the rest get. */
+/** Which sports have live scores here (each from its sources; see Credits), and what the rest get. A group's sports
+ * are named once, by the group ("esports" for the games). */
 export function liveNote(running: SportInfo[]): string {
-  const live = running.filter((s) => s.live).map((s) => s.label.toLowerCase())
+  const live = [...new Set(running.filter((s) => s.live).map((s) => s.group || s.label.toLowerCase()))]
   if (!live.length) return 'Every sport gets news and results from the agent.'
   const listed = live.length > 1 ? `${live.slice(0, -1).join(', ')} and ${live.at(-1)}` : live[0]
   return `Live scores come from sources for ${listed} (see Credits). Other sports get news and results from the agent.`

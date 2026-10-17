@@ -11,7 +11,7 @@ phone ─────────────────▶ caddy ──▶ api
                                    gateway (llm-providers) ◀──┴───────────────┘
                                         └──▶ OpenRouter
 backup: pg_dump once a day, 14 kept in /var/backups/sports-follow ──▶ sealed, to object storage hourly
-GitHub Actions ──ssh deploy@──▶ deploy.sh (build, migrate, swap, wait for health)
+GitHub Actions ──your approval──ssh deploy@──▶ deploy.sh (build, migrate, swap, wait for health)
 systemd timers: server checks every 5 minutes, off-site backups hourly, Docker clean-up weekly
 alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the checks'; alert rules there email you
 ```
@@ -32,7 +32,8 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | `offsite-backup.sh`, `systemd/sports-follow-offsite.*` | On the server, hourly: seals new dumps and sends them, with the sealed secrets, to object storage; thins out old ones. |
 | `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `pg_restore`. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
-| `../.github/workflows/deploy.yml` | Checks that CI passed, then runs `deploy.sh` over SSH, then a health check from outside. |
+| `../.github/workflows/deploy.yml` | After CI passes on main: waits for your approval, then runs `deploy.sh` over SSH, then a health check from outside that the site runs that commit. |
+| `deploy-summary.sh`, `../.github/workflows/deploy-summary.yml` | What a waiting deploy brings, on its run's page; sent when it starts waiting and every morning while it does. |
 | `server-check.sh`, `systemd/` | The server checks, whose findings go to Grafana Cloud as metrics; the weekly Docker clean-up. |
 | `alloy/` | Grafana Alloy's config: the server's metrics and the checks' findings, to Grafana Cloud every minute. |
 | `grafana/` | The alert rules (`rules.json`), and `apply-alerts.sh`, which puts them, an email contact point and the policy into Grafana Cloud. |
@@ -375,11 +376,29 @@ c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --
 
 ## Deploying
 
-**From GitHub:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`. A deploy
-goes ahead only if the CI workflow passed for that commit; then it runs `deploy.sh` on the server and
-fetches `/api/health` from outside. It never runs for pull requests: a fork's PR must not reach the deploy
-key. Once it's trusted, uncomment `workflow_run` in the workflow so
-every commit on main that CI passes deploys by itself.
+**From GitHub, after each merge:** every commit on main that CI passes starts a Deploy run, named after
+the commit, which waits for your approval at the `production` environment. GitHub notifies you, and its
+phone app can approve it; so can the run's page (**Review deployments** → **Approve and deploy**). Approving deploys that
+exact commit; the run then checks from outside that `/api/health` names it. Leaving it changes nothing on
+the site.
+
+- **Only the newest waits.** When the next commit passes CI, its run cancels the one waiting, so approving
+  deploys everything merged so far. A run for a commit a newer one has replaced (an old CI run re-run)
+  stops before it waits. A deploy that's running is never stopped: the next run waits behind it, then for
+  approval.
+- **What it brings** is on the run's page, above the approval button: the changes since the live commit,
+  the BHA issues they close, whether CI passed (`deploy-summary.sh`). The first deploy to wait since the
+  last one went out is also sent to you at once, and every morning at 09:00 (India) whatever is waiting
+  then is (`deploy-summary.yml`; Actions → Deploy summary → Run workflow sends it now). Several merges in
+  a day make one waiting deploy, one message when it starts and the morning's.
+- **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
+
+**From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
+It waits for your approval too. A deploy goes ahead only if the CI workflow passed for that commit. A run
+by hand cancels a deploy waiting after CI (a rollback would otherwise queue behind it); re-run that one
+later to deploy it. One catch: a rollback queued behind a deploy that's running is replaced if a merge's
+deploy queues too (GitHub keeps one run waiting per group), so after such a merge check that the rollback
+is still there. Deploys never run for pull requests: a fork's PR must not reach the deploy key.
 
 **By hand:** `ssh deploy@<server-ip> /opt/sports-follow/deploy/deploy.sh deploy` (or `deploy <commit>`,
 `rollback`, `status`).
@@ -420,6 +439,20 @@ The live image and the previous one are kept; older ones are removed.
    gh variable set APP_URL --env production --body https://<domain>
    ```
 4. Delete `deploy_key` from the Mac: GitHub has it, and a new one is quick to make.
+5. **Approval:** in the `production` environment, tick **Required reviewers** and add yourself. Leave
+   **Prevent self-review** unticked: GitHub counts a merge you make as yours, so you couldn't approve it.
+6. **The summary's way to you**, as repository secrets (Settings → Secrets and variables → Actions), not the
+   environment's, which would make it wait for approval too. Either or both:
+   - **Email, through Resend** (the sign-in codes' service, from `deploys@` the same domain): make a key
+     with sending access only (Resend → API Keys), then
+     ```bash
+     gh secret set RESEND_KEY            # paste the key
+     gh secret set DEPLOY_SUMMARY_TO --body <your address>
+     ```
+   - **A push through ntfy**, with a button that opens the approval: `gh secret set DEPLOY_SUMMARY_URL
+     --body https://ntfy.sh/<a topic only you know>`, and subscribe to the topic in ntfy's phone app.
+
+   Check it with Actions → Deploy summary → Run workflow while a deploy is waiting.
 
 ## Alerts
 
@@ -634,12 +667,12 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 
 | | |
 |---|---|
-| What's live | `deploy/deploy.sh status` |
+| What's live | `deploy/deploy.sh status`; from anywhere, `curl https://<domain>/api/health` (its `commit`) |
 | Logs | `c logs -f api worker` (Caddy's certificate work: `c logs caddy`) |
 | One request or job's lines | `c logs api worker \| grep <id>`: JSON lines, each with the `rid` of its request or job; a request's id is in its answer's `X-Request-ID` header, and the jobs it queued log under it too |
 | Restart after a secret changes | `c up -d --force-recreate` |
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
-| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry esports`) |
+| Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry chess`; every esports game: `… registry esports`, or one: `… registry valorant`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
 | A campaign page (stann.in/gukesh) | `c exec worker python -m sports_follow.campaigns list` (`set`, `show`, `player add`, `team find`, `team add`, `game add`, `remove`: see the README) |

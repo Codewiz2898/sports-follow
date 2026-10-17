@@ -4,7 +4,7 @@ import { useNow } from '../clock'
 import type { Card, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, WON, wordSize, type GameResult } from '../lines'
-import { Backdrop, sportKey, sportName, viewOfKind } from '../sports'
+import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { ErrorBoundary } from './ErrorBoundary'
 
@@ -80,7 +80,7 @@ export function LineStats({ text, sport }: { text?: string | null; sport?: strin
 
 /** A line worth a word, as its sport words it: a triple-double, a hundred (lines.ts). */
 export function highlight(sport: string | null | undefined, text?: string | null): string | null {
-  return sportHighlight(sportKey(sport), text)
+  return sportHighlight(sportDrawn(sport), text)
 }
 
 export type { GameResult }
@@ -90,14 +90,16 @@ export type { GameResult }
  * for the line, a hat-trick or a hundred, else the result), each of the fan's players in it with their line,
  * and their win, draw or loss. Players whose games went differently (opponents, or teams apart in one lobby)
  * share the card too: then it shows the score alone, or the game, and each player's line says how theirs went.
- * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers.
+ * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers. It opens
+ * the game's match page, what happened in it, where a source has the game; else the first player's page.
  */
 export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
   const key = sportKey(game.players[0].sport)
-  const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, key)
+  const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, sportDrawn(game.players[0].sport))
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
+  const page = game.players.find((p) => p.result.match)?.result.match
   return (
-    <Link to={`/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
+    <Link to={page ? `/match/${page}` : `/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
       <Backdrop sport={key} seed={game.key} />
       {hero ? (
         <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
@@ -130,20 +132,22 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
 
 /**
  * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it.
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it, or
+ * saying they follow the game itself. It opens the game's match page (the line-ups as they come, both sides'
+ * players), else the first player's page.
  */
-export function ComingCard({ event, players, seed }: { event: UpcomingEvent; players: Card[]; seed: string }) {
+export function ComingCard({ event, players, seed, sport }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string }) {
   const now = useNow()
-  const key = sportKey(players[0].player.sport)
+  const key = sportKey(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Link to={`/player/${players[0].player_id}`} className="next-card coming" data-sport={key}>
+    <Link to={event.match ? `/match/${event.match}` : players[0] ? `/player/${players[0].player_id}` : '/'} className="next-card coming" data-sport={key}>
       <Backdrop sport={key} seed={seed} />
       <span className="eyebrow muted">{eyebrow}</span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
-        <span className="player-chip">{players.map((c) => shortName(c.player.name)).join(' · ')}</span>
+        <span className="player-chip">{players.length ? players.map((c) => shortName(c.player.name)).join(' · ') : 'Following this game'}</span>
       </span>
     </Link>
   )

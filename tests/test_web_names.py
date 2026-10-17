@@ -64,13 +64,16 @@ def names_of(sport: sports.Sport) -> set[str]:
     return {n.lower() for n in (sport.key, sport.label, *sport.names, *sport.kinds)}
 
 
+EVERY = (*sports.ALL, *sports.GROUPS)  # the sports the app lists (each esports game), and their groups (esports)
+
+
 def test_the_web_app_names_no_more_sports_than_before():
-    found = named(set().union(*(names_of(s) for s in sports.ALL)))
+    found = named(set().union(*(names_of(s) for s in EVERY)))
     held({rel: hits for rel, hits in found.items() if not rel.startswith(VIEWS)}, SPORT_LIMITS, "sport")
 
 
 def test_a_sports_view_names_only_its_own_sport():
-    found = named(set().union(*(names_of(s) for s in sports.ALL)))
+    found = named(set().union(*(names_of(s) for s in EVERY)))
     wrong = []
     for rel, hits in found.items():
         if rel.startswith(VIEWS):
@@ -101,6 +104,6 @@ def test_the_android_app_names_no_sport_and_no_source():
     """The Android app (mobile/src) takes everything from the API and the shared facts, so it has no limits:
     no file names a sport or a source, not even a sport's own board (mobile/src/sports/<sport>.tsx), which
     gets its key from its facts."""
-    wanted = set().union(*(names_of(s) for s in sports.ALL)) | source_names()
+    wanted = set().union(*(names_of(s) for s in EVERY)) | source_names()
     found = named(wanted, MOBILE)
     assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)

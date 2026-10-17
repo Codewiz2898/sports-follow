@@ -175,6 +175,7 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
             "ending": ending,
         },
         lines=lines,
+        names={p["id"]: p["name"] for p in (a, b) if p.get("id") and p.get("name") != "TBD"},
         source_url=next((l.get("href") for l in event.get("links") or [] if "summary" in (l.get("rel") or [])), None),
     )
 
@@ -205,7 +206,7 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 
 class EspnTennis(espn.EspnAdapter, Adapter):
     system = "espn_tennis"
-    sport = "tennis"
+    sports = ("tennis",)
     live_cadence = 10
     name = "ESPN"
     covers = "Tennis"

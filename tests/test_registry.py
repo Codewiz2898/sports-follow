@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from sports_follow import bus, registry, search
+from sports_follow import bus, registry, search, sports
 from sports_follow.adapters import KNOWN, PlayerRef, SearchResult
 from sports_follow.models import Athlete
 
@@ -195,12 +195,14 @@ def test_one_failed_sport_doesnt_stop_the_others(monkeypatch, caplog):
             raise RuntimeError("wikidata query service kept failing")
         return 10
 
+    games = [s.key for s in sports.ALL if s.group == "esports"]
     monkeypatch.setattr(registry, "import_sport", import_sport)
-    monkeypatch.setattr(registry, "import_rosters", lambda sport: asked.append(sport) or 3)
-    monkeypatch.setattr(registry, "find_people", lambda sport: None)
+    monkeypatch.setattr(registry, "import_rosters", lambda keys: asked.append(keys) or dict.fromkeys(keys, 3))
+    monkeypatch.setattr(registry, "find_people", lambda keys: None)
     done = registry.import_all()
-    assert asked == ["basketball", "tennis", "cricket", "chess", "football", "esports"]  # smallest first, football last of Wikidata's
-    assert done == {"basketball": None, "tennis": 10, "cricket": 10, "chess": 10, "football": 10, "esports": 3}
+    # Smallest first, football last of Wikidata's; then every esports game at once (each source read once).
+    assert asked == ["basketball", "tennis", "cricket", "chess", "football", games]
+    assert done == {"basketball": None, "tennis": 10, "cricket": 10, "chess": 10, "football": 10, **dict.fromkeys(games, 3)}
     assert "basketball failed" in caplog.text
 
 
@@ -209,20 +211,21 @@ def test_a_roster_sports_people_are_found_after_its_import_even_a_failed_one(mon
 
     found = []
 
-    def import_rosters(sport):
+    def import_rosters(keys):
         raise RuntimeError("PandaScore failed")
 
-    def run(sport):
-        found.append(sport)
+    def run(kind, within):
+        found.append((kind.key, within))
         raise RuntimeError("wikidata query service kept failing")
 
     monkeypatch.setattr(registry, "import_rosters", import_rosters)
     monkeypatch.setattr(roster_wikidata, "run", run)
-    done = registry.import_all(["esports"])
-    assert found == ["esports"] and done == {"esports": None}  # last week's rows are matched again; matching failing changes nothing
+    done = registry.import_all(["valorant", "bgmi"])
+    # Last week's rows are matched again, every game's at once (and the esports rows of no game); matching failing changes nothing.
+    assert found == [("esports", ["esports", "valorant", "bgmi"])] and done == {"valorant": None, "bgmi": None}
     assert "matching athletes to Wikidata failed" in caplog.text
-    monkeypatch.setattr(registry, "import_rosters", lambda sport: 3)
-    assert registry.import_all(["esports"]) == {"esports": 3} and found == ["esports", "esports"]
+    monkeypatch.setattr(registry, "import_rosters", lambda keys: dict.fromkeys(keys, 3))
+    assert registry.import_all(["valorant", "bgmi"]) == {"valorant": 3, "bgmi": 3} and len(found) == 2
 
 
 def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):
@@ -232,12 +235,14 @@ def test_one_failed_esports_source_doesnt_stop_the_others(monkeypatch):
         ran.append("pandascore")
         raise KeyError("id")
 
-    imports = {"pandascore_esports": pandascore, "liquipedia_esports": lambda: ran.append("liquipedia") or 4, "pubg_esports": lambda: ran.append("pubg") or 5}
+    imports = {"pandascore_esports": pandascore, "liquipedia_esports": lambda: ran.append("liquipedia") or {"bgmi": 4, "freefire": 1}, "pubg_esports": lambda: ran.append("pubg") or {"pubg": 5}}
     monkeypatch.setattr(registry, "ADAPTERS", {s: KNOWN[s] for s in imports})
-    monkeypatch.setattr(registry, "import_roster", lambda adapter: imports[adapter.system]())
-    with pytest.raises(RuntimeError, match="PandaScore failed"):
-        registry.import_rosters("esports")
-    assert ran == ["pandascore", "liquipedia", "pubg"]
+    asked = []
+    monkeypatch.setattr(registry, "import_roster", lambda adapter, keys: asked.append((adapter.system, keys)) or imports[adapter.system]())
+    done = registry.import_rosters(["valorant", "cs2", "bgmi", "freefire", "pubg"])
+    assert ran == ["pandascore", "liquipedia", "pubg"]  # each source once, for all of its games asked for
+    assert asked == [("pandascore_esports", ["valorant", "cs2"]), ("liquipedia_esports", ["bgmi", "freefire"]), ("pubg_esports", ["pubg"])]
+    assert done == {"valorant": None, "cs2": None, "bgmi": 4, "freefire": 1, "pubg": 5}  # PandaScore's games failed, the others kept
 
 
 def test_an_empty_answer_from_wikidata_deletes_nothing(monkeypatch):
@@ -279,3 +284,27 @@ def test_a_run_by_hand_takes_the_weekly_runs_lock(monkeypatch, capsys):
     from sports_follow import worker
     worker._import_registry()
     assert len(held) == 1
+
+
+def test_the_commands_take_esports_as_its_games_that_run(monkeypatch, capsys):
+    """`registry esports` and `roster_wikidata esports` with a game turned off: the games that run."""
+    from sports_follow import roster_wikidata
+
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cod"))
+    games = [s.key for s in sports.ALL if s.group and s.key != "cod"]
+    asked = []
+    monkeypatch.setattr(registry, "import_locked", lambda keys, new_only=False: asked.append(list(keys)) or dict.fromkeys(keys, 1))
+    registry.main(["esports"])
+    registry.main(["valorant", "chess"])
+    assert asked == [games, ["valorant", "chess"]]
+    with pytest.raises(SystemExit, match="unknown sport"):
+        registry.main(["cod"])  # turned off: not one that runs
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if not s.group))
+    with pytest.raises(SystemExit, match="none of esports runs"):
+        registry.main(["esports"])
+
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cod"))
+    matched = []
+    monkeypatch.setattr(roster_wikidata, "match_sport", lambda kind, within, write=True: matched.append((kind.key, within)) or ([], {}))
+    roster_wikidata.main(["esports", "--dry-run"])
+    assert matched == [("esports", ["esports", *games])]

@@ -280,6 +280,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         source_url=None,  # Sportmonks has no public match pages
         # The XI, named at the toss; an impact player waiting to come in is a substitute.
         squad={str(p["id"]): "bench" if (p.get("lineup") or {}).get("substitution") else "starting" for p in x.get("lineup") or [] if p.get("id")},
+        names={str(p["id"]): p["fullname"] for p in x.get("lineup") or [] if p.get("id") and p.get("fullname")},
     )
 
 
@@ -378,7 +379,7 @@ def recent_form(athlete_id: str, recent: list[tuple[Fixture, Snapshot]]) -> tupl
 
 class SportmonksCricket(Adapter):
     system = "sportmonks_cricket"
-    sport = "cricket"
+    sports = ("cricket",)
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Cricket"
@@ -496,6 +497,10 @@ class SportmonksCricket(Adapter):
         out), cached half a minute."""
         x = sportmonks.get_json(f"{API}/fixtures/{source_id}", ttl=30, include=MATCH_INCLUDE).get("data")
         return parse_game(x, self.system) if isinstance(x, dict) and x.get("id") else None
+
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A match polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
 
     def _match(self, fixture: str, ttl: float) -> dict[str, Any]:
         data = sportmonks.get_json(f"{API}/fixtures/{fixture}", ttl=ttl, include=MATCH_INCLUDE)

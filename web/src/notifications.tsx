@@ -5,13 +5,18 @@ import { APP_NAME } from './app'
 import { Avatar } from './components/Blocks'
 import { CloseIcon } from './components/Icons'
 import { sportInfo } from './sports'
-import { DEVICE, LEVELS, levelText as sportLevelText, quietSaid, testSaid, wanted } from './alerts'
+import { DEVICE, gameLevelText as sportGameLevelText, LEVELS, levelText as sportLevelText, quietSaid, testSaid, wanted } from './alerts'
 
 export { LEVELS, wanted }
 
 /** A level in a line and in full, for a player of this sport (alerts.ts). */
 export function levelText(level: AlertLevel, sport?: string | null): { brief: string; hint: string } {
   return sportLevelText(level, sportInfo(sport))
+}
+
+/** A level in full, for a game of this sport followed by itself (alerts.ts). */
+export function gameLevelText(level: AlertLevel, sport?: string | null): string {
+  return sportGameLevelText(level, sportInfo(sport))
 }
 
 const QUIET = 'sf-quiet-hours'
@@ -156,7 +161,7 @@ export function MomentToasts({ moments, dismiss, playerOf }: { moments: PlayerMo
   return (
     <div className="toasts" role="status" aria-live="polite">
       {moments.map((m) => {
-        const player = playerOf(m.player_id)?.player
+        const player = m.player_id != null ? playerOf(m.player_id)?.player : undefined  // a game's own moment has none
         return (
           <div key={m.id} className="toast">
             {player && <Avatar name={player.name} sport={player.sport} />}

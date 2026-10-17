@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Fact, Found, Line, Notable, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
+from .base import Fact, Found, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -144,6 +144,51 @@ def _goal(who: str, athlete_id: str, n: int, now: Seen, where: str) -> Found:
     return Found("goal", "key", title, body, _play_key("goal", n, goal), priority)
 
 
+# A game's goals and cards, as the source's events name them (Snapshot.moments), as a game's own moments:
+# kind, level and priority. A goal's priority rises with what it did (_goal_head).
+PLAYS = {"GOAL": ("goal", "key", 85), "RED": ("red", "key", 80), "YELLOW": ("yellow", "minor", 20)}
+
+
+def _keyed(events: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+    """The source's goals and cards, oldest first, each with its detail in a game's moments: its kind and the
+    source's play (its id, else its minute; a second alike in one minute counted on: "goal@23'#2"). A goal VAR
+    ruled out (DISALLOWED) keeps its goal's, so its correction names the goal told."""
+    out, seen = [], Counter()
+    for e in reversed(events):
+        kind = "goal" if e.get("kind") in ("GOAL", "DISALLOWED") else PLAYS.get(e.get("kind") or "", ("",))[0]
+        if not kind:
+            continue
+        ref = _play_key(kind, 0, e)
+        seen[ref] += 1
+        out.append((ref if seen[ref] == 1 else f"{ref}#{seen[ref]}", e))
+    return out
+
+
+def _who(e: dict[str, Any]) -> str:
+    """The player an event names, without their side ("Saka (Arsenal), assist Ødegaard" is Saka)."""
+    return re.split(r" \(|, ", e.get("text") or "", maxsplit=1)[0] or "?"
+
+
+def _goal_head(e: dict[str, Any], now: Played, newest: bool) -> tuple[str, int]:
+    """A game's goal as its moment's title says it, and how big: an equaliser or a side going ahead (late
+    from LATE_MINUTE) when it's the newest goal, so the score says what it did; an own goal as one."""
+    who = _who(e)
+    if e.get("own_goal"):
+        return f"own goal by {who}", 85
+    sides = {(now.state.get(s) or {}).get("id"): now.state.get(s) or {} for s in ("home", "away")}
+    mine = sides.get(e.get("team_id"))
+    if not (newest and mine and mine.get("name") and len(sides) == 2):
+        return f"{who} scores", 85
+    theirs = next(v for k, v in sides.items() if k != e.get("team_id"))
+    lead = number(str(mine.get("score"))) - number(str(theirs.get("score")))
+    late = number(e.get("clock")) >= LATE_MINUTE
+    if lead == 0:
+        return (f"late equaliser from {who}" if late else f"{who} equalises"), 95 if late else 90
+    if lead == 1:
+        return (f"late goal: {who} puts {mine['name']} ahead" if late else f"{who} puts {mine['name']} ahead"), 95 if late else 90
+    return f"{who} scores", 85
+
+
 class Football(Sport):
     key = "football"
     label = "Football"
@@ -164,6 +209,11 @@ class Football(Sport):
         "more": ("subs and yellow cards", "coming on, yellow cards and milestones"),
     }
 
+    game_alerts = {
+        "key": ("Goals, red cards and the result", "Every goal, whoever scores it, red cards, kick-off and the result"),
+        "more": ("yellow cards", "yellow cards"),
+    }
+
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
@@ -179,6 +229,43 @@ class Football(Sport):
                 side = 1 - side
             timeline.append({"clock": e.get("clock"), "kind": e.get("kind"), "text": e.get("text"), "side": side})
         return {"timeline": timeline} if timeline else {}
+
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        """The side with more goals won; level is a draw, but for a game settled on penalties, which the
+        board's goals don't say: then nothing, and the clock line says how it ended."""
+        home, away = state.get("home") or {}, state.get("away") or {}
+        goals = [str(side.get("score") or "") for side in (home, away)]
+        if not all(g.isdigit() for g in goals):
+            return ""
+        if goals[0] != goals[1]:
+            return f"{(home if int(goals[0]) > int(goals[1]) else away).get('name') or 'They'} won"
+        return "" if re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I) else "Draw"
+
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """Every goal and card the source's events add, whoever's: a goal with what it did ("Saka puts Arsenal
+        ahead", an equaliser, an own goal) and its minute, a red card (key), a yellow (minor); each about the
+        player it names. And a goal told that the source has since ruled out (DISALLOWED), corrected. A play
+        already told isn't again, should the source drop and add it back."""
+        had = {ref for ref, _ in _keyed(before.events)} | {d for k, d in told if k != "correction"}
+        plays = _keyed(now.events)
+        newest = next((e for _, e in reversed(plays) if e.get("kind") == "GOAL"), None)
+        found = []
+        for ref, e in plays:
+            scorer = (e.get("athlete_ids") or [""])[0]
+            # An own goal isn't its scorer's goal (their line doesn't count it): about them apart, so it's never
+            # taken for one of theirs, nor counted among them.
+            about = (f"og:{scorer}",) if e.get("own_goal") else (scorer,)
+            where = joined(now.score, e.get("clock"), "penalty" if "penalty" in (e.get("text") or "") else None, f"assist {e['assist']}" if e.get("assist") else None)
+            if e.get("kind") in PLAYS and ref not in had:
+                kind, level, priority = PLAYS[e["kind"]]
+                if kind == "goal":
+                    head, priority = _goal_head(e, now, e is newest)
+                else:
+                    head = f"{'red' if kind == 'red' else 'yellow'} card for {e.get('text') or _who(e)}"
+                found.append(Found(kind, level, f"{name}: {head[:1].upper()}{head[1:]}", where, ref, priority, about))
+            elif e.get("kind") == "DISALLOWED" and ("goal", ref) in told and ("correction", f"goal:{ref}") not in told:
+                found.append(Found("correction", "key", f"{name}: Goal ruled out, {_who(e)}", joined(now.score, now.clock), f"goal:{ref}", 85, about))
+        return found
 
     def left_out(self, now: Seen) -> bool:
         # A national team game shows up for every player of that country, called up or not.

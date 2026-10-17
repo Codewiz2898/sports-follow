@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Poster, Seen, Sport, stat
+from .base import Found, Line, Played, Poster, Seen, Sport, stat
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -108,6 +108,11 @@ class Chess(Sport):
         "more": ("every edge", "a game edging better or worse, and milestones"),
     }
 
+    game_alerts = {
+        "key": ("The game turning and the result", "The game starting, turning (a side winning, a turnaround) and the result"),
+        "more": ("every edge", "the game edging one way or back to level"),
+    }
+
     def title_of(self, label: str) -> str | None:
         return TITLES.get(label)
 
@@ -163,6 +168,43 @@ class Chess(Sport):
         opponent = stat(now.line, "Opponent")
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
+
+    def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
+        """The board turning, as the engine sees it, told once, in during's words from the side it moved
+        toward ("Gukesh D is winning", "Turnaround: Carlsen is winning"), or, level again, from the side that
+        came back ("Carlsen is back level"); about both players. A fan of either hears it as their player's."""
+        was, got = before.state.get("eval"), now.state.get("eval")
+        if not was or not got or was.get("band") == got.get("band"):
+            return []
+        old, new = was["band"], got["band"]
+        sides = [now.state.get("white") or {}, now.state.get("black") or {}]
+        if not all(p.get("name") for p in sides):
+            return []
+        # The side it moved toward; level again, the side that came back.
+        towards = 0 if (new > 0 or (new == 0 and old < 0)) else 1
+        me, other = sides[towards], sides[1 - towards]
+        line = {"headline": "", "stats": [{"label": "Colour", "value": ("White", "Black")[towards]}, {"label": "Opponent", "value": other["name"]}]}
+        found = self.during(me["name"], str(me.get("id") or ""), Seen(before.status, before.state, line), Seen(now.status, now.state, line))
+        for f in found:
+            f.title, f.about = f"{name}: {f.title}", tuple(str(p.get("id") or "") for p in sides)
+        return found
+
+    def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
+        """The board says the game; once it's over, the moves that led there, a move number's pair to a line
+        ("1. d4 Nf6", "1... e5" where Black moved first), its opening and how it ended, where its source's read
+        of the finished game brought them (state["moves"]: [n, White's, Black's] each). Of a mini-match, the last
+        game's, the one on the board (game: its number)."""
+        pairs = []
+        for row in state.get("moves") or []:
+            if isinstance(row, list) and len(row) == 3 and (row[1] or row[2]):
+                n, white, black = row
+                pairs.append(f"{n}. {white} {black or ''}".rstrip() if white else f"{n}... {black}")
+        if not pairs:
+            return {}
+        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": (state.get("match") or {}).get("games")}
+
+    def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
+        return clock  # its source's words for a finished board: "Magnus Carlsen won", "Draw", "Match drawn (4 games)"
 
     def high(self, f: Found, versus: str) -> Poster | None:
         """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""

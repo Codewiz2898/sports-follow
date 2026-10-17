@@ -52,6 +52,11 @@ export function sportKey(name?: string | null): string {
   return sportInfo(name).key
 }
 
+/** The key a sport is drawn as (its view: board, line art): "esports" for "CS2" (naming.ts). */
+export function sportDrawn(name?: string | null): string {
+  return sports.drawn(name)
+}
+
 /** A player's sport written one way: "Cricket" for "CRICKET", a game's own name as written (naming.ts). */
 export function sportName(sport?: string | null): string {
   return sports.name(sport)

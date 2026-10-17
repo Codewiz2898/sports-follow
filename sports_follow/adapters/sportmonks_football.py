@@ -186,8 +186,9 @@ def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
     return lines
 
 
-def parse_match(x: dict[str, Any]) -> Snapshot:
-    """A fixture with participants, scores, state, periods, line-ups and events -> snapshot."""
+def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
+    """A fixture with participants, scores, state, periods, line-ups and events -> snapshot. every: all its goals
+    and cards, for its match page's timeline, not only the newest a poll keeps."""
     home, away = _sides(x)
     status = _status(x.get("state"), _start(x))
     goals = _goals(x)
@@ -226,6 +227,8 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         if tag == "GOAL" and e.get("related_player_name") and kind != "OWNGOAL":
             text += f", assist {e['related_player_name']}"
         moments.append({
+            # Sportmonks' id for the play: a goal's key in its alerts (sports.football), which a revised minute keeps.
+            "id": str(e["id"]) if e.get("id") is not None else None,
             "clock": minute(e), "kind": tag, "text": text, "athlete_ids": [str(i) for i in (e.get("player_id"), e.get("related_player_id")) if i],
             # For a goal's notification: whose goal it was, who set it up (sports.football._goal).
             "team_id": str(e.get("participant_id")), "assist": e.get("related_player_name") if tag == "GOAL" and kind != "OWNGOAL" else None, "own_goal": kind == "OWNGOAL",
@@ -244,7 +247,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         state=state,
         lines=parse_lines(x, status),
         # The newest dozen, and every goal, ruled out or not: a goal's alert reads its minute and assist here.
-        moments=[m for i, m in enumerate(moments) if i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
+        moments=[m for i, m in enumerate(moments) if every or i < 12 or m["kind"] in ("GOAL", "DISALLOWED")],
         source_url=None,  # Sportmonks has no public match pages
         squad=parse_squad(x),
     )
@@ -279,8 +282,9 @@ def parse_live(rows: list[dict[str, Any]], system: str) -> list[LiveGame]:
 
 
 def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
-    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page: its snapshot, and each side's
-    starting eleven once the clubs have published them, attackers first, the home side's then the away side's."""
+    """A fixture with everything (MATCH_INCLUDE) -> the game for its match page, live, to come or over: its
+    snapshot with every goal and card, and each side's starting eleven once the clubs have published them,
+    attackers first, the home side's then the away side's."""
     fixtures = parse_fixtures([x])
     if not fixtures:
         return None
@@ -291,7 +295,7 @@ def parse_game(x: dict[str, Any], system: str) -> LiveGame | None:
         PlayerRef(system=system, athlete_id=str(r["player_id"]), name=r["player_name"], team_ids=[team], team_names=[teams.get(team, "")])
         for team in f.team_ids for r in sorted((r for r in starters if str(r.get("team_id")) == team), key=lambda r: _UPFRONT.get(r.get("position_id"), 2))
     ]
-    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x), players=players, teams=f.team_names)
+    return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=parse_match(x, every=True), players=players, teams=f.team_names)
 
 
 def parse_squad(x: dict[str, Any]) -> dict[str, str]:
@@ -405,7 +409,7 @@ def parse_sidelined(teams: list[dict[str, Any]], system: str = "sportmonks_footb
 
 class SportmonksFootball(Adapter):
     system = "sportmonks_football"
-    sport = "football"
+    sports = ("football",)
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Football"
@@ -470,6 +474,10 @@ class SportmonksFootball(Adapter):
     def history(self, ref: PlayerRef, page: dict[str, Any]) -> list[Fixture]:
         found = self._between(page["team"], date.fromisoformat(page["from"]), date.fromisoformat(page["to"]), ttl=24 * 3600)
         return [f for f in found if f.status == "final"]
+
+    def locator(self, source_id: str) -> dict[str, Any] | None:
+        """A match polled by its id alone, as a followed player's fixture of it is (matches.py)."""
+        return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         # A short cache lets every followed player in one match share each poll's fetch.

@@ -19,7 +19,7 @@ PASSWORD = "correct horse battery staple"
 
 def sport_with_sources() -> sports.Sport:
     """A running sport with a running source (which one depends on the tokens this machine has)."""
-    return next(s for s in sports.ENABLED if any(a.sport == s.key for a in ADAPTERS.values()))
+    return next(s for s in sports.ENABLED if any(s.key in a.sports for a in ADAPTERS.values()))
 
 
 # ---------------------------------------------------------------- sports and sources, live
@@ -27,7 +27,7 @@ def sport_with_sources() -> sports.Sport:
 
 def test_a_sport_turned_off_stops_running_with_its_sources_and_comes_back():
     sport = sport_with_sources()
-    theirs = [system for system, a in ADAPTERS.items() if a.sport == sport.key]
+    theirs = [system for system, a in ADAPTERS.items() if a.sports == (sport.key,)]
     controls.turn_sport(sport.key, False)
     assert sport not in sports.ENABLED and not sports.on(sport.key)
     assert not any(system in ADAPTERS for system in theirs)
@@ -40,7 +40,7 @@ def test_a_source_turned_off_stops_running_and_the_next_one_serves_its_sport():
     first = next(iter(ADAPTERS.values()))
     controls.turn_source(first.system, False)
     assert first.system not in ADAPTERS and ADAPTERS.get(first.system) is None
-    assert adapters.for_sport(first.sport) is not first
+    assert adapters.for_sport(first.sports[0]) is not first
     controls.turn_source(first.system, True)
     assert ADAPTERS.get(first.system) is first
 

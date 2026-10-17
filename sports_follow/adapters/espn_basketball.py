@@ -139,6 +139,8 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
         clock_label=detail if status != "scheduled" else (kind.get("detail") or detail),
         state=state,
         lines=lines,
+        names={str(a["id"]): a["displayName"] for team in (data.get("boxscore") or {}).get("players") or [] for table in team.get("statistics") or []
+               for entry in table.get("athletes") or [] if (a := entry.get("athlete") or {}).get("id") and a.get("displayName")},
         source_url=next((l.get("href") for l in header.get("links") or [] if "summary" in (l.get("rel") or []) or "boxscore" in (l.get("rel") or [])), None)
         or f"https://www.espn.com/{'wnba' if 'wnba' in str(header.get('uid')) else 'nba'}/game/_/gameId/{header.get('id')}",
     )
@@ -174,7 +176,7 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
 
 class EspnBasketball(espn.EspnAdapter, Adapter):
     system = "espn_basketball"
-    sport = "basketball"
+    sports = ("basketball",)
     live_cadence = 10
     name = "ESPN"
     covers = "Basketball"

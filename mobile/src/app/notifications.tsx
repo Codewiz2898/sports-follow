@@ -69,7 +69,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
         <View key={label} style={{ gap: 10 }}>
           <Eyebrow>{label}</Eyebrow>
           <Card style={s.list}>
-            {items.map((item, i) => <LatestRow key={item.id} item={item} sport={sportOf(item.player_id)} fresh={item.id > seenAtOpen} last={i === items.length - 1} />)}
+            {items.map((item, i) => <LatestRow key={item.id} item={item} sport={item.player_id != null ? sportOf(item.player_id) : item.sport} fresh={item.id > seenAtOpen} last={i === items.length - 1} />)}
           </Card>
         </View>
       ))}
@@ -84,7 +84,8 @@ function LatestRow({ item, sport, fresh, last }: { item: ActivityItem; sport?: s
   const inside = item.url.startsWith('/') && !item.url.startsWith('//')
   return (
     <View style={[s.row, !last && s.line]}>
-      <Avatar name={item.player} sport={sport} size="sm" />
+      {/* A game's own moment (a game followed by itself, BHA-270) wears its sport, by the game's name. */}
+      <Avatar name={item.player ?? item.event ?? ''} sport={sport} size="sm" />
       <Pressable disabled={!inside} onPress={() => router.push(item.url as never)} style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text style={[t.title, item.level === 'minor' && { fontFamily: font[600] }]}>{item.title}</Text>
         {context ? <Text style={[t.small, t.muted]}>{context}</Text> : null}

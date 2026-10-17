@@ -56,7 +56,7 @@ def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str
     rows = db.execute(_highs(Moment.created_at >= since).join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))).all()
     games: dict[tuple[int, int | str], list[tuple[Moment, Player, str | None]]] = {}
     for m, player, title in rows:
-        games.setdefault((m.player_id, m.event_id if m.event_id is not None else f"m{m.id}"), []).append((m, player, title))
+        games.setdefault((player.id, m.event_id if m.event_id is not None else f"m{m.id}"), []).append((m, player, title))
     made = [made for game in games.values() if (made := _of_moments(game)) is not None]
     told = {(p["player_id"], p["event_id"]) for _, _, p in made}
     made += [f for f in _finished(db, fan, since) if (f[2]["player_id"], f[2]["event_id"]) not in told]

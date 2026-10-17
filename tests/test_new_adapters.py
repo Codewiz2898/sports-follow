@@ -231,6 +231,73 @@ def test_chess_single_game_round():
     assert snap.state["match"] is None
 
 
+def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
+    from sports_follow import sports
+
+    data = load("lichess/round-final")
+    single = {**data, "games": [data["games"][0]]}  # Carlsen–Lazavik 1-0, as if it were the round's only game
+    rnd, game_id = data["round"]["id"], data["games"][0]["id"]
+    with gzip.open(FIXTURES / "lichess" / "game-final.pgn.gz", "rt") as f:
+        pgn = f.read()  # that game's PGN, as Lichess exports a broadcast board (a study chapter)
+    asked = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url)
+        return pgn if url.endswith(".pgn") else single
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    game = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert asked == [f"{lichess_chess.API}broadcast/-/-/{rnd}", f"{lichess_chess.API}study/{rnd}/{game_id}.pgn"]  # the round, then the board's moves
+    assert game is not None and game.snapshot.status == "final" and not game.partial  # its round is over and its moves read: whole
+    state = game.snapshot.state
+    assert (len(state["moves"]), state["moves"][:2], state["moves"][-1]) == (86, [[1, "d4", "Nf6"], [2, "c4", "e6"]], [86, "Ke6", None])  # comments and side lines left out
+    assert (state["opening"], state["ending"]) == ("Queen's Gambit Declined: Ragozin Defense", "resigned")
+    chess = sports.get("chess")
+    page = chess.match_page(state, [], {}, {})
+    assert (page["moves"][0], page["moves"][-1], len(page["moves"]), page["game"]) == ("1. d4 Nf6", "86. Ke6", 86, None)
+    assert chess.verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Magnus Carlsen won"
+
+    # A game still being played: no moves asked for.
+    asked.clear()
+    playing = {**single, "games": [{**data["games"][0], "status": "*"}], "round": {**data["round"], "finished": False, "ongoing": True}}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: asked.append(url) or playing)
+    assert "moves" not in lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state and len(asked) == 1
+
+    # A decided game while its round is still on (a mini-match's next game may follow it): partial.
+    on = {**single, "round": {**data["round"], "finished": False, "ongoing": True}}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: pgn if url.endswith(".pgn") else on)
+    decided = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert decided.snapshot.status == "final" and decided.partial
+
+    # Its moves not read (Lichess timed out, or answered 5xx): partial, to be read again; refused, the read fails.
+    def failing(url, ttl, text=False):
+        if url.endswith(".pgn"):
+            raise AdapterError("Lichess HTTP 502")
+        return single
+
+    monkeypatch.setattr(lichess_chess, "get_json", failing)
+    unread = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert unread.partial and "moves" not in unread.snapshot.state
+
+    def refused(url, ttl, text=False):
+        if url.endswith(".pgn"):
+            raise lichess_chess.RateLimited("Lichess rate limit (429)")
+        return single
+
+    monkeypatch.setattr(lichess_chess, "get_json", refused)
+    with pytest.raises(lichess_chess.RateLimited):
+        lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+
+
+def test_a_games_moves_are_placed_by_their_move_numbers():
+    pgn = """[Event "x"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"]
+
+1... e5 2. Nf3 $1 Nc6 3. e8Q -- 4. 0-0 {castled} (4. d4 exd4) 4...0-0-0 5.Bb5 1/2-1/2"""
+    # A game set up with Black to move, a glyph, odd moves and zeros castling: each move on its own side.
+    assert lichess_chess.parse_pgn_game(pgn)["moves"] == [[1, None, "e5"], [2, "Nf3", "Nc6"], [3, "e8Q", "--"], [4, "O-O", "O-O-O"], [5, "Bb5", None]]
+
+
 def test_chess_rate_limit_fails_the_whole_read(monkeypatch):
     """A 429 mid-read must not return a fixture list with holes (the card would lose results)."""
     import pytest

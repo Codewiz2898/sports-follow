@@ -72,6 +72,7 @@ export interface UpcomingEvent {
   notes?: string | null
   status?: 'scheduled' | 'armed' | 'live' | 'postponed' | 'final'
   event_id?: number
+  match?: string | null  // its match page's address after /match/, where a source has the game
 }
 
 export interface RecentResult {
@@ -83,6 +84,7 @@ export interface RecentResult {
   competition?: string | null
   source_url?: string | null
   event_id?: number | null
+  match?: string | null  // its match page's address after /match/, where a source has the game
   scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
 }
 
@@ -193,10 +195,13 @@ export interface Pick { system: string; athlete_id: string; league?: string | nu
 export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
 
 /** Something worth telling a player's fans (sports_follow/moments.py). */
-export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number; event_id?: number | null; kind: string; level: 'key' | 'minor' }
+/** A moment as the stream brings it: a player's, or (player_id null) a game's own, for the fans following the
+ * game by itself (sports_follow/matches.py). */
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor' }
 
-/** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, pushed or not. */
-export interface ActivityItem extends PlayerMoment { priority: number; player: string; event: string | null; muted: boolean; at: string }
+/** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, and of the games
+ * they follow by themselves, pushed or not. A game's own has no player, and says its sport. */
+export interface ActivityItem extends PlayerMoment { priority: number; player: string | null; event: string | null; muted: boolean; at: string; sport?: string }
 
 /**
  * One of the fan's players' big moments this week, as its sport words it for a poster on Today (GET /api/me/week):
@@ -215,9 +220,11 @@ export interface WireRow { id: string; player_id: number | null; player: string;
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =
-  | { type: 'following'; players: Card[] }  // the fan stream's first frame on every connect: GET /api/me/following's players
+  // The fan stream's first frame on every connect: GET /api/me/following's players, and GET /api/me/matches's games.
+  | { type: 'following'; players: Card[]; matches?: FollowedMatch[] }
   | { type: 'card'; player_id: number; card: Card }
-  | { type: 'moment'; player_id: number; moment: PlayerMoment }
+  | { type: 'match'; event_id: number; match: FollowedMatch }  // a game followed by itself, as its poll found it
+  | { type: 'moment'; player_id: number | null; moment: PlayerMoment }
   | { type: 'progress'; player_id: number; message: string }
   | { type: 'moved'; from: number; to: number }
   | { type: 'live_error'; player_id: number; message: string }
@@ -262,6 +269,7 @@ export interface LiveGame {
 export interface LiveSport {
   key: string
   label: string
+  group?: string // the group it's one of ("esports" for each game)
   games: LiveGame[]
 }
 
@@ -296,14 +304,41 @@ export interface CampaignGame {
 /** Something found for a player followed in a game (moments.py): a goal, a fifty, a map won. */
 export interface MatchMoment { id: number; at: string; kind: string; level: 'key' | 'minor'; title: string; body: string; player_id: number }
 
+/** A match page's Follow button (sports_follow/matches.py): whether this fan follows the game by itself and on
+ * which event (a chess board's other address, maybe: stop it by that), whether its moments can reach them at
+ * all, whether its alerts are paused for now (its source busy with followed players' games), and why. */
+export interface MatchFollowState { following: boolean; event_id?: number | null; alerts: boolean; held?: boolean; note: string | null }
+
+/** A game the fan follows by itself (GET /api/me/matches): its address, when, where it's at, and its board as
+ * last polled, a live block like a card's (null before its first poll). Today shows it with the fan's games. */
+export interface FollowedMatch {
+  event_id: number
+  key: string
+  match: string  // its address after /match/
+  addresses?: string[]  // every address it has (a chess board is one per player): a card's live game at any is this one
+  held?: boolean  // its alerts are paused for now: its source is busy with followed players' games
+  sport: string  // a sport's key
+  title: string
+  competition: string
+  detail?: string | null
+  start_utc: string | null
+  status: 'scheduled' | 'armed' | 'live' | 'final' | 'postponed'
+  live: LiveStatus | null
+  alerts: AlertLevel
+}
+
 /** One side of a game and its players to follow, in the line-up's order; a game whose line-ups aren't in yet
  * offers the players on the app in it, as one side with no name. */
 export interface MatchSide { name: string; players: SearchResult[] }
 
+/** One of the fan's players in a game, with their line in it and, once it's over, their result from their side. */
+export interface MatchPlayer { player_id: number; name: string; sport: string; result: string | null; headline: string | null; stats: Stat[] }
+
 /** One game's match page (GET /api/match/<source>/<game id>, sports_follow/match.py), whoever follows anyone
  * in it: live, to come or over. Its board is a live block like a card's (null before a game has one), `page`
- * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps), drawn by the sport's
- * view, `moments` what was found for the players followed in it. */
+ * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps, a chess game's moves),
+ * drawn by the sport's view, `moments` what was found for the players followed in it, `yours` the fan's
+ * players in it with their lines. */
 export interface Match {
   key: string
   match: string  // its address after /match/
@@ -314,12 +349,15 @@ export interface Match {
   start_utc?: string | null
   status: 'scheduled' | 'armed' | 'live' | 'final' | 'postponed'
   live: LiveStatus | null
+  verdict?: string  // a finished game's: who won, as its sport says it ("Arsenal won", "Draw"); "" where the board says it
   page: Record<string, unknown>
   moments: MatchMoment[]
+  yours?: MatchPlayer[]
   sides: MatchSide[]
   event_ids: number[]
   fixtures: string[]
   refreshing: boolean  // a newer read is on its way: look again in a moment
+  follow?: MatchFollowState
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.
@@ -336,6 +374,7 @@ export interface LeagueGame {
   line: string  // "Arsenal beat Chelsea"; "" says the title
   why: string  // "1st v 3rd", "Final", "Tier S"
   event_ids: number[]  // the events it is here: a fan's player in one makes it theirs
+  match?: string | null  // its match page's address after /match/, where it has one
 }
 
 export interface League {
@@ -357,12 +396,17 @@ export interface SportInfo {
   pattern: string
   exclude: string
   alerts: { key: [brief: string, hint: string]; more: [brief: string, hint: string] }
+  // The same for a game followed by itself (Sport.game_alerts); "" more adds nothing. A server before it sends none.
+  game_alerts?: { key: [brief: string, hint: string]; more: [brief: string, hint: string] }
   stats_title: string // the Stats tab's first view: "Season" or "Overview"
   team_results: boolean // results are the team's: no player lines (esports)
   keeps_names: boolean // a player's sport is shown as written ("CS2")
+  group?: string // the group it's one of and drawn as (its board, line art): "esports" for each game; "" for none
   // The block colour, text on it, softer text on it, and the colour as text on ink; null: it wears ink. The web
   // app takes them from /api/sports.css instead; the Android app from here.
   colour: { sport: string; on: string; on_soft: string; ink: string } | null
 }
 
-export interface SportCatalog { sports: SportInfo[]; other: SportInfo }
+// sports: those the app lists, in order; groups: sports that stand for several of them and aren't listed (esports,
+// every game), as a name no listed sport has ("Esports", "Call of Duty: Mobile") is drawn; other: any other sport.
+export interface SportCatalog { sports: SportInfo[]; groups?: SportInfo[]; other: SportInfo }
