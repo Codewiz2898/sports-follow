@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, and_, delete, func, or_, select, update
+from sqlalchemy import CompoundSelect, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import array, distinct_on, insert
 from sqlalchemy.orm import Session
 
@@ -59,19 +59,26 @@ class Refused(Exception):
         self.message = message
 
 
-def watched() -> Select[int]:
-    """The events fans follow by themselves now: the poller arms and polls them as a followed player's."""
-    return select(MatchFollow.event_id).where(MatchFollow.until.is_(None))
+def watched() -> CompoundSelect[int]:
+    """The events fans follow by themselves now, or a team in (teams.py): the poller arms and polls them as a
+    followed player's."""
+    from . import teams  # a team's games are followed games (teams reads the boards of them here)
+
+    return select(MatchFollow.event_id).where(MatchFollow.until.is_(None)).union(teams.watched())
 
 
 def followed(db: Session, event_id: int) -> bool:
-    """Whether any fan follows this game by itself now."""
-    return db.scalar(select(MatchFollow.id).where(MatchFollow.event_id == event_id, MatchFollow.until.is_(None)).limit(1)) is not None
+    """Whether any fan follows this game by itself now, or a team in it."""
+    from . import teams
+
+    return db.scalar(select(MatchFollow.id).where(MatchFollow.event_id == event_id, MatchFollow.until.is_(None)).limit(1)) is not None or teams.followed(db, event_id)
 
 
 def rules(db: Session, event_id: int) -> list[dict[str, Any]]:
-    """The alert rules ({"level"}) of everyone following this game by itself now."""
-    return [r or {} for r in db.scalars(select(MatchFollow.alert_rules).where(MatchFollow.event_id == event_id, MatchFollow.until.is_(None)))]
+    """The alert rules ({"level"}) of everyone following this game by itself now, or a team in it."""
+    from . import teams
+
+    return [*(r or {} for r in db.scalars(select(MatchFollow.alert_rules).where(MatchFollow.event_id == event_id, MatchFollow.until.is_(None)))), *teams.rules(db, event_id)]
 
 
 def poller(system: str, fixture: str, events: list[Event]) -> dict[str, Any] | None:

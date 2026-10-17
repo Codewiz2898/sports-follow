@@ -195,6 +195,7 @@ class Football(Sport):
     names = ("soccer", "association football")
     kinds = ("football",)
     team = True
+    follow_teams = True
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
     athletes = 260_000
@@ -240,6 +241,15 @@ class Football(Sport):
         if goals[0] != goals[1]:
             return f"{(home if int(goals[0]) > int(goals[1]) else away).get('name') or 'They'} won"
         return "" if re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I) else "Draw"
+
+    def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
+        """As every sport's, but a game level on goals and settled on penalties, which the board's goals don't
+        say, isn't a draw: the game's own result is told instead."""
+        home, away = state.get("home") or {}, state.get("away") or {}
+        level = str(home.get("score") or "") == str(away.get("score") or "")
+        if level and not (home.get("winner") or away.get("winner")) and re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I):
+            return ""
+        return super().side_final(state, score, clock, team_id)
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """Every goal and card the source's events add, whoever's: a goal with what it did ("Saka puts Arsenal

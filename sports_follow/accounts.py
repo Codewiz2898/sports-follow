@@ -22,9 +22,9 @@ from sqlalchemy import case, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import matches, notify
+from . import matches, notify, teams
 from .db import session
-from .models import Account, AccountSession, Event, FanSource, Follow, MatchFollow, Notification, NotificationMute, PushSubscription
+from .models import Account, AccountSession, Event, FanSource, Follow, MatchFollow, Notification, NotificationMute, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 SESSION_COOKIE = "sf_session"
@@ -210,6 +210,7 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
         "until": case((or_(MatchFollow.until.is_(None), games.excluded.until.is_(None)), None), else_=func.greatest(MatchFollow.until, games.excluded.until)),
     }))
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
+    teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
     muted = insert(NotificationMute).from_select(
         ["fan_id", "event_id", "created_at"],
         select(literal(fan), NotificationMute.event_id, NotificationMute.created_at).where(NotificationMute.fan_id == anon),
@@ -257,7 +258,7 @@ def delete_account(db: Session, account_id: int) -> Deleted | None:
     if account is None:
         return None
     hashes = list(db.scalars(select(AccountSession.token_hash).where(AccountSession.account_id == account_id)))
-    for model in (Follow, MatchFollow, NotificationMute, Notification, PushSubscription, FanSource):
+    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource):
         db.execute(delete(model).where(model.fan_id == account.fan_id))
     db.execute(delete(Account).where(Account.id == account_id))  # its sessions go with it
     return Deleted(fan_id=account.fan_id, email=account.email, token_hashes=hashes)

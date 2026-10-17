@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -114,6 +114,11 @@ async def refresh_live(ctx, player_id: int) -> None:
 
 async def refresh_structured(ctx, player_id: int) -> None:
     await in_lane('refresh', structured.refresh, player_id)
+
+
+async def refresh_team(ctx, team_id: int) -> None:
+    """A followed team's games, read again from its source (teams.refresh); or a team page's nobody follows it from."""
+    await in_lane('refresh', teams.refresh, team_id)
 
 
 async def poll_event(ctx, event_id: int) -> None:
@@ -256,6 +261,22 @@ async def import_registry(ctx) -> None:
     await in_lane('import', _import_registry)
 
 
+TEAMS_DONE = "teams:imported"  # set once an import finishes; a worker starting without it queues one
+
+
+async def import_teams(ctx) -> None:
+    """The team registry from the running sources' lists of teams (teams.import_all): weekly, and when a worker
+    starts with no import in the last week (startup), say on a fresh server. A few requests a source, in the
+    import lane; one at a time."""
+    if not await ctx["redis"].set("teams:importing", "1", nx=True, ex=1800):
+        return
+    try:
+        await in_lane('import', teams.import_all)
+        await ctx["redis"].set(TEAMS_DONE, "1", ex=7 * 24 * 3600)
+    finally:
+        await ctx["redis"].delete("teams:importing")
+
+
 async def prune(ctx) -> None:
     """Rows and hot copies nothing reads any more, once a day (retention.py)."""
     await asyncio.to_thread(retention.prune)
@@ -293,6 +314,8 @@ async def startup(ctx) -> None:
     if redis is not None and not await redis.exists(STARTERS_DONE):
         # A deploy restarts the worker several times a day: only one that finds no recent refresh queues one.
         await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
+    if redis is not None and not await redis.exists(TEAMS_DONE):
+        await redis.enqueue_job("import_teams", _job_id="import_teams:startup")
 
 
 async def wind_down(ctx) -> None:
@@ -324,6 +347,8 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("build_card", player_id)
     for player_id in due.refreshes:
         await ctx["redis"].enqueue_job("refresh_structured", player_id)
+    for team_id in due.teams:
+        await ctx["redis"].enqueue_job("refresh_team", team_id)
     for event_id in due.polls:
         await ctx["redis"].enqueue_job("poll_event", event_id)
     for system in due.lanes:
@@ -338,19 +363,22 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
     if await _in_tick_pool(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
-    if due.builds or due.refreshes or due.polls or due.lanes or due.lives:
-        log.info("tick: %d builds, %d refreshes, %d polls, %d poll lanes, %d agent live checks", len(due.builds), len(due.refreshes), len(due.polls), len(due.lanes), len(due.lives))
+    if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives:
+        log.info("tick: %d builds, %d refreshes, %d team refreshes, %d polls, %d poll lanes, %d agent live checks",
+                 len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives))
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
+    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
+    functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
     cron_jobs = [
         cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
         cron(_logged(refresh_starters), hour=4, minute=40, second=0, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
         cron(_logged(import_registry, deep=False), weekday="mon", hour=3, minute=30, second=0, timeout=6 * 3600),
+        cron(_logged(import_teams), weekday="mon", hour=2, minute=50, second=0, timeout=1800),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
         cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
         # Before Europe's matchdays get going, and after most of the day's news is in.

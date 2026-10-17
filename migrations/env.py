@@ -24,7 +24,7 @@ def run_migrations_offline() -> None:
 
 # Indexes created by hand in migrations (trigram and JSONB GIN indexes) aren't in the models;
 # autogenerate must not offer to drop them.
-MANUAL_INDEXES = {"ix_player_alias_trgm", "ix_athlete_search_trgm", "ix_athlete_ids"}
+MANUAL_INDEXES = {"ix_player_alias_trgm", "ix_athlete_search_trgm", "ix_athlete_ids", "ix_team_search_trgm"}
 
 
 def include_object(obj, name, type_, reflected, compare_to):

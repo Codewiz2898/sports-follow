@@ -774,6 +774,7 @@ class Due:
     refreshes: list[int] = field(default_factory=list)  # bound players whose fixtures and stats are stale
     polls: list[int] = field(default_factory=list)  # events with a live binding that are armed or live
     lanes: list[str] = field(default_factory=list)  # sources whose armed and live events are polled together
+    teams: list[int] = field(default_factory=list)  # followed teams whose games are stale (teams.refresh)
 
 
 def rebuild_due(card: PlayerCard, now: datetime) -> bool:
@@ -801,9 +802,10 @@ def to_arm(games: Iterable[tuple[int, str | None, datetime | None, bool]], now: 
 
 
 def due_work(now: datetime | None = None) -> Due:
-    """What the scheduler should enqueue now. Only followed players get work, and games fans follow by
-    themselves (matches.py): those are polled as a followed player's are, and their follows lapse once
-    they're over.
+    """What the scheduler should enqueue now. Only followed players get work, games fans follow by
+    themselves (matches.py), and the teams fans follow (teams.py): a followed game is polled as a followed
+    player's is, and its follow lapses once it's over; a followed team's games are read again as a followed
+    player's are, and each is polled as a followed game.
 
     Events move scheduled -> armed at T-30 min, or earlier for a sport whose team sheets come out sooner
     (football's, at T-75 min: structured.arm_before). An armed or live event with a live binding gets one
@@ -814,6 +816,7 @@ def due_work(now: datetime | None = None) -> Due:
     keep failing waits longer each time (structured.retry_at), and none is refreshed while their
     source is down to what its live games need (structured.spare).
     """
+    from . import teams  # it reads search, which reads this
     from .config import FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
 
     now = now or _now()
@@ -843,6 +846,9 @@ def due_work(now: datetime | None = None) -> Due:
         # of a player their fan follows, where the game's here as several.
         matches.lapse(db, now)
         matches.settle(db)
+        # Followed teams' games, read again as often as a followed player's (teams.py): their events, linked to
+        # them, are polled below as games followed by themselves are.
+        due.teams = teams.due(db, now)
         # Each followed player's fixtures binding (structured.binding()'s pick: highest priority, newest),
         # of the sources running as this tick began: the admin panel may turn one off while it runs.
         running = dict(structured.ADAPTERS.items())
