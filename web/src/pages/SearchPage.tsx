@@ -31,8 +31,9 @@ export function SearchPage() {
     // Still showing the previous query's results: they aren't what was asked for.
     if (!fresh) return
     const first = data && sections(data)[0]?.items[0]
-    const team = data?.teams?.find((t) => fold(t.name) === fold(data.query))
-    if (team) actions.openTeam(team)  // "Arsenal": the team, first in the results
+    // "Arsenal", or "lakers" with no athlete called that: the team, first in the results.
+    const team = data?.teams?.find((t) => fold(t.name) === fold(data.query)) ?? (data && !data.results.length && data.teams?.length === 1 ? data.teams[0] : undefined)
+    if (team) actions.openTeam(team)
     else if (first && (first.exact || data.results.length === 1)) actions.open(first)
   }
 

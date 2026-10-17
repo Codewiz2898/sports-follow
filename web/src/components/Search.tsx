@@ -226,8 +226,9 @@ export function SearchResults({ data, query, loading, actions, activeKey, idFor 
   const exactName = namesakesName(data)
   const teams = data.teams ?? []
   const nothing = !data.results.length && !teams.length
-  // Teams come first when one is called just what was typed ("Arsenal"); else after the athletes.
-  const teamsFirst = teams.some((t) => fold(t.name) === fold(data.query))
+  // Teams come first when one is called just what was typed ("Arsenal"), or no athlete is ("lakers": before
+  // any spellings it might have meant); else after the athletes.
+  const teamsFirst = teams.some((t) => fold(t.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
   const teamSection = teams.length > 0 && (
     <section className="section" aria-label="Teams">
       <span className="eyebrow">Teams</span>
