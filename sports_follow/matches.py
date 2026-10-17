@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from . import sports, structured
 from .adapters import ADAPTERS, KNOWN, source_name
-from .models import Event, EventState, MatchFollow
+from .models import Event, EventPlayer, EventState, Follow, MatchFollow
 from .moments import DEFAULT_LEVEL
 
 if TYPE_CHECKING:
@@ -97,11 +97,13 @@ def offer(db: Session, fan: str | None, system: str, fixture: str, page: dict[st
     return {"following": following, "alerts": can, "note": None if can else NO_ALERTS}
 
 
-def _over(known: Said) -> bool:
-    """Whether the game's over: polled to its end here, or its own read found it over and settled (match.read: a
-    chess mini-match can go on after a read called it over), or, with neither, the league's card says so."""
+def _over(known: Said, now: datetime) -> bool:
+    """Whether the game's over: polled to its end here, or never started a day past its start (as lapse() has
+    it), or its own read found it over and settled (match.read: a chess mini-match can go on after a read called
+    it over), or, with neither, the league's card says so."""
     read_over = (known.game or {}).get("status") == "final" and bool((known.read or {}).get("settled"))
-    return any(e.status == "final" for e in known.events) or read_over or (not known.events and not known.game and (known.big or {}).get("status") == "final")
+    gone = any(e.status in ("scheduled", "postponed") and e.start_utc is not None and e.start_utc < now - LAPSE_AFTER for e in known.events)
+    return any(e.status == "final" for e in known.events) or gone or read_over or (not known.events and not known.game and (known.big or {}).get("status") == "final")
 
 
 def follow(db: Session, fan: str, system: str, fixture: str) -> int:
@@ -117,7 +119,7 @@ def follow(db: Session, fan: str, system: str, fixture: str) -> int:
     sport = known.sport(source)
     if not known.named(source) or not sports.on(sport):
         raise Refused(404, "No such game.")
-    if _over(known):
+    if _over(known, datetime.now(timezone.utc)):
         raise Refused(409, OVER)
     binding = poller(system, fixture, known.events)
     if binding is None:
@@ -133,7 +135,12 @@ def follow(db: Session, fan: str, system: str, fixture: str) -> int:
     if mine is not None:
         mine.until = None  # a lapsed follow of a game that's on again (postponed, then played)
         return mine.event_id
-    event = next((e for e in known.events if (e.live_binding or {}).get("adapter") == binding["adapter"]), None) or _event(db, system, fixture, known, sport, binding)
+    # A game here as several events (a chess board is a fixture of each of its players) is followed as the one
+    # of a player the fan follows in it: one notification for the game, its moments heard once, one board on Today.
+    polled = [e for e in known.events if (e.live_binding or {}).get("adapter") == binding["adapter"]]
+    theirs = set(db.scalars(select(EventPlayer.event_id).join(Follow, and_(Follow.player_id == EventPlayer.player_id, Follow.fan_id == fan))
+                            .where(EventPlayer.event_id.in_([e.id for e in polled])))) if len(polled) > 1 else set()
+    event = next((e for e in polled if e.id in theirs), None) or (polled[0] if polled else None) or _event(db, system, fixture, known, sport, binding)
     # From the database's clock, as its moments' times are: the activity list shows those since.
     db.execute(insert(MatchFollow).values(fan_id=fan, event_id=event.id, alert_rules={}).on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={"until": None}))
     return event.id

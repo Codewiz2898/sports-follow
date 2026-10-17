@@ -21,10 +21,12 @@ export function levelText(level: AlertLevel, sport: SportInfo): { brief: string;
   return { brief: 'Nothing for this player', hint: 'No notifications for this player' }
 }
 
-/** A level for a game followed by itself (sports_follow/matches.py), in full: its own moments, from both sides. */
-export function gameLevelText(level: AlertLevel): string {
-  if (level === 'key') return 'Its key moments from both sides, as they happen, and the result. Until it ends'
-  if (level === 'everything') return 'Key moments, plus the smaller ones (a yellow card, a set, an edge). Those arrive without sound'
+/** A level for a game followed by itself (sports_follow/matches.py), in full, as the game's sport says what a
+ * whole game's key moments are and what everything adds (its game_alerts). */
+export function gameLevelText(level: AlertLevel, sport: SportInfo): string {
+  const { key, more } = sport.game_alerts ?? { key: ['', 'Its key moments and the result'], more: ['', ''] }
+  if (level === 'key') return `${key[1]}, from both sides, until it ends`
+  if (level === 'everything') return more[1] ? `Key moments, plus ${more[1]}. Those arrive without sound` : `${key[1]}: every moment it tells is a key one`
   if (level === 'results') return 'Just the final result'
   return 'No notifications for this game'
 }

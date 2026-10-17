@@ -8,8 +8,8 @@ import { Avatar } from '../components/Blocks'
 import { ChevronIcon, UserIcon } from '../components/Icons'
 import { dayLabel, relative } from '../format'
 import { useFollowing } from '../following'
-import { DEVICE, gameLevelText } from '../alerts'
-import { AlertLevels, levelText, usePush } from '../notifications'
+import { DEVICE } from '../alerts'
+import { AlertLevels, gameLevelText, levelText, usePush } from '../notifications'
 
 /** Alerts: what's happened to your players (Latest), and what reaches this device (Settings). */
 export function NotificationsPage() {
@@ -216,7 +216,7 @@ function Settings() {
                   <Avatar name={m.title} sport={m.sport} size="sm" />
                   <span className="stack" style={{ gap: 0 }}>
                     <Link to={`/match/${m.match}`} className="title">{m.title}</Link>
-                    <span className="tiny muted">{gameLevelText(m.alerts)}</span>
+                    <span className="tiny muted">{gameLevelText(m.alerts, m.sport)}</span>
                   </span>
                 </span>
                 <AlertLevels label={`Alerts for ${m.title}`} value={m.alerts} onChange={(l) => chooseGame(m.event_id, l)} />

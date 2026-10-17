@@ -229,6 +229,10 @@ class Esports(Sport):
         "key": ("Starts, wins and results", "A series or lobby starting, winning a lobby match, going top, the result and transfers"),
         "more": ("every map and match", "each map or lobby match, a Dota player’s numbers each map, and milestones"),
     }
+    game_alerts = {
+        "key": ("Maps and the result", "Each map of a series or match of a lobby won, the start and the result"),
+        "more": ("", ""),
+    }
     stats_title = "Overview"
     keeps_names = True
 

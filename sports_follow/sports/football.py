@@ -209,6 +209,11 @@ class Football(Sport):
         "more": ("subs and yellow cards", "coming on, yellow cards and milestones"),
     }
 
+    game_alerts = {
+        "key": ("Goals, red cards and the result", "Every goal, whoever scores it, red cards, kick-off and the result"),
+        "more": ("yellow cards", "yellow cards"),
+    }
+
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""

@@ -50,6 +50,10 @@ class Basketball(Sport):
         "key": ("Big games and results", "30 points, triple-doubles, tip-off, the result, injuries and transfers"),
         "more": ("20 points and double-doubles", "20 points, double-doubles and milestones"),
     }
+    game_alerts = {
+        "key": ("30 points and the result", "Anyone reaching 30, 40 or 50 points, triple-doubles, tip-off and the result"),
+        "more": ("20 points and double-doubles", "anyone's 20 points and double-doubles"),
+    }
 
     def team_ok(self, label: str) -> bool:
         return not label.lower().endswith(" football")  # a club's football side (Real Madrid's)

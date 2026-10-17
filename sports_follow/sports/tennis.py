@@ -27,6 +27,10 @@ class Tennis(Sport):
         "key": ("Matches, upsets and results", "The match starting, beating a higher seed, the result and injuries"),
         "more": ("every set", "each set and milestones"),
     }
+    game_alerts = {
+        "key": ("The start and the result", "The match starting and the result"),
+        "more": ("every set", "each set"),
+    }
     stats_title = "Overview"
     games = ("match", "matches")
 

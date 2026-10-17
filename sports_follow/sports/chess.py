@@ -108,6 +108,11 @@ class Chess(Sport):
         "more": ("every edge", "a game edging better or worse, and milestones"),
     }
 
+    game_alerts = {
+        "key": ("The game turning and the result", "The game starting, turning (a side winning, a turnaround) and the result"),
+        "more": ("every edge", "the game edging one way or back to level"),
+    }
+
     def title_of(self, label: str) -> str | None:
         return TITLES.get(label)
 

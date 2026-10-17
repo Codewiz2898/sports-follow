@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
-import { gameLevelText, LEVELS } from '../alerts'
+import { LEVELS } from '../alerts'
 import { api, ApiError, type Match, type MatchFollowState } from '../api'
 import { useNow } from '../clock'
 import { GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
@@ -12,7 +12,7 @@ import { useFollowToggle } from '../components/Starters'
 import { dateOnly, dateTime, parseDate, relative } from '../format'
 import { useFollowing } from '../following'
 import { comingCard } from '../lines'
-import { AlertLevels } from '../notifications'
+import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
 const EVERY = 30_000  // a look again: a followed player's game is polled every few seconds, any other read once a minute
@@ -181,7 +181,7 @@ export function MatchPage() {
               <Link to="/notifications?tab=settings" className="link small">Settings</Link>
             </span>
             {followed && <AlertLevels label="Alerts for this game" value={level} onChange={(l) => { watch.attempt(() => watch.setMatchAlerts(followed.event_id, l)) }} />}
-            <span className="small muted">{gameLevelText(level)}</span>
+            <span className="small muted">{gameLevelText(level, match.sport)}</span>
             {eventId != null && (
               <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} aria-pressed={watch.muted.has(eventId)} onClick={() => { watch.attempt(() => watch.setMuted(eventId, !watch.muted.has(eventId))) }}>
                 {watch.muted.has(eventId) ? 'Unmute this game' : 'Mute this game'}

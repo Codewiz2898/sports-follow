@@ -393,6 +393,8 @@ export interface SportInfo {
   pattern: string
   exclude: string
   alerts: { key: [brief: string, hint: string]; more: [brief: string, hint: string] }
+  // The same for a game followed by itself (Sport.game_alerts); "" more adds nothing. A server before it sends none.
+  game_alerts?: { key: [brief: string, hint: string]; more: [brief: string, hint: string] }
   stats_title: string // the Stats tab's first view: "Season" or "Overview"
   team_results: boolean // results are the team's: no player lines (esports)
   keeps_names: boolean // a player's sport is shown as written ("CS2")

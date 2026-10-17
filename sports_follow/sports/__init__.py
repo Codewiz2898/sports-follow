@@ -156,7 +156,7 @@ def label(name: str | None) -> str:
 
 def shown(sport: Sport, live: bool) -> dict[str, Any]:
     """A sport as the app knows it (GET /api/sports): what it's called, which free-text names are it, what
-    its alert levels say, whether this build runs it and has live scores for it, the group it's drawn as
+    its alert levels say (for a player, and for a game followed by itself), whether this build runs it and has live scores for it, the group it's drawn as
     (its board and line art: "esports" for a game; "" for a sport drawn as itself), and its colours for an
     app that doesn't read /api/sports.css (the Android app): the block, text on it, softer text on it and
     the colour as text on ink, or None for a sport that wears ink."""
@@ -169,6 +169,7 @@ def shown(sport: Sport, live: bool) -> dict[str, Any]:
         "pattern": sport.pattern,
         "exclude": sport.exclude,
         "alerts": {level: list(words) for level, words in sport.alerts.items()},
+        "game_alerts": {level: list(words) for level, words in sport.game_alerts.items()},  # a game followed by itself
         "stats_title": sport.stats_title,
         "team_results": sport.team_moments,
         "keeps_names": sport.keeps_names,

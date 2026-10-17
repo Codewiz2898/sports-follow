@@ -891,7 +891,10 @@ def due_work(now: datetime | None = None) -> Due:
                 polls.add(event_id)
             elif pid not in bindings:
                 lives.add(pid)
-        # Games followed by themselves, nobody's player in them or not: polled the same way, by their source.
+        # Games followed by themselves, nobody's player in them or not: polled the same way, by their source. One
+        # of a source polled a request a game (not a lane) and nobody's player in it waits while that source is
+        # down to what its live games need (structured.spare): followed players' games keep the reserve.
+        theirs = {event_id for event_id, _, _ in armed}
         itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(matches.watched()))).all()
         for event_id, live_binding, sport in itself:
             source = (live_binding or {}).get("adapter")
@@ -899,7 +902,7 @@ def due_work(now: datetime | None = None) -> Due:
                 continue
             if structured.batched(source):
                 lanes.add(source)
-            else:
+            elif event_id in theirs or structured.spare(running[source]):
                 polls.add(event_id)
         due.polls = [e for e in sorted(polls) if not bus.is_locked(f"poll:{e}")]
         due.lanes = [s for s in sorted(lanes) if not bus.is_locked(f"lane:{s}")]

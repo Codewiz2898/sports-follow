@@ -22,9 +22,9 @@ from sqlalchemy import case, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import notify
+from . import matches, notify
 from .db import session
-from .models import Account, AccountSession, FanSource, Follow, MatchFollow, Notification, NotificationMute, PushSubscription
+from .models import Account, AccountSession, Event, FanSource, Follow, MatchFollow, Notification, NotificationMute, PushSubscription
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 SESSION_COOKIE = "sf_session"
@@ -190,10 +190,20 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
     db.execute(followed.on_conflict_do_update(index_elements=["fan_id", "player_id"], set_={"created_at": func.least(Follow.created_at, followed.excluded.created_at)}))
     db.execute(delete(Follow).where(Follow.fan_id == anon))
     # The games followed by themselves (matches.py), as players are: a game both follow keeps the account's
-    # level and the earlier date, and stays followed if either still did.
+    # level and the earlier date, and stays followed if either still did. The account follows at most
+    # matches.MAX games at once: of this device's others, the soonest that fit come over, and every lapsed one.
+    have = set(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan)))
+    room = matches.MAX - (db.scalar(select(func.count()).select_from(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))) or 0)
+    moving = []
+    for follow_id, event_id, until in db.execute(select(MatchFollow.id, MatchFollow.event_id, MatchFollow.until).join(Event, Event.id == MatchFollow.event_id)
+                                                 .where(MatchFollow.fan_id == anon).order_by(Event.start_utc.asc().nulls_last(), MatchFollow.id)):
+        counts = until is None and event_id not in have  # a game it doesn't follow yet, still on
+        if not counts or room > 0:
+            moving.append(follow_id)
+            room -= 1 if counts else 0
     games = insert(MatchFollow).from_select(
         ["fan_id", "event_id", "alert_rules", "created_at", "until"],
-        select(literal(fan), MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.created_at, MatchFollow.until).where(MatchFollow.fan_id == anon),
+        select(literal(fan), MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.created_at, MatchFollow.until).where(MatchFollow.id.in_(moving)),
     )
     db.execute(games.on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={
         "created_at": func.least(MatchFollow.created_at, games.excluded.created_at),

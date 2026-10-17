@@ -46,7 +46,6 @@ REFRESH_RETRY_MAX = 2 * 3600
 # or the source failing for a while. What changed meanwhile is old news, not a moment.
 POLL_GAP = 5 * 60
 PRE_MATCH = ("scheduled", "armed", "postponed")
-GAME_KEEP = 6 * 3600  # seconds Redis keeps a followed game's last poll, which its next one's moments are found against
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
 
@@ -929,9 +928,10 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
 def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, latest: EventState | None, recent: bool,
                   people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]]) -> list[int]:
     """The game's own moments since its last poll, for the fans following it by itself (matches.py), as its
-    sport finds them (Sport.game_moments), against that poll as Redis kept it. A first look (no earlier poll
-    kept, or polling had a gap) is the baseline, as a player's is: only a result is told from it. Returns the
-    new moments' ids."""
+    sport finds them (Sport.game_moments), against that poll as Redis kept it, for as long as a poll after it
+    is recent (_polled's gap): a copy from before a gap (nobody followed the game a while, though its players'
+    polls went on) would tell what happened meanwhile as new. A first look (no recent copy, or polling had a
+    gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids."""
     names = {**_roster_names(event), **snap.names, **{xid: people[pid][0] for pid, xid in watchers if pid in people}}
     now = sports.Played(snap.status, snap.state, snap.score_label, snap.clock_label, snap.moments,
                         {a: {"headline": ln.headline, "stats": ln.stats} for a, ln in snap.lines.items()}, names)
@@ -949,7 +949,8 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, l
     found = rules.game_moments(name, before, now, notify.told_game(db, event.id) if before else [])
     for f in found:
         f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
-    redis.set(key, json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str), ex=GAME_KEEP)
+    gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
+    redis.set(key, json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str), ex=gap)
     return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}")
 
 

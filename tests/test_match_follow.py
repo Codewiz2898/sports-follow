@@ -201,15 +201,27 @@ def db(monkeypatch):
 
 
 class Store(dict):
-    """Redis as a dict."""
+    """Redis as a dict, whose keys expire as they're told to by its own clock (seconds; a test moves it on)."""
+
+    def __init__(self):
+        super().__init__()
+        self.clock, self.expiry = 0.0, {}
+
+    def get(self, key, default=None):
+        if key in self.expiry and self.expiry[key] <= self.clock:
+            self.pop(key, None)
+            self.expiry.pop(key)
+        return super().get(key, default)
 
     def set(self, key: str, value: str, ex: int | None = None, nx: bool = False, get: bool = False):
         old = self.get(key)
         self[key] = value
+        if ex:
+            self.expiry[key] = self.clock + ex
         return old if get else True
 
     def exists(self, key: str) -> int:
-        return int(key in self)
+        return int(self.get(key) is not None)
 
 
 @pytest.fixture
@@ -231,9 +243,10 @@ def source(monkeypatch):
     return on
 
 
-def game(fixture: str = "100", status: str = "live", start: datetime = NOW) -> LiveGame:
+def game(fixture: str = "100", status: str = "live", start: datetime = NOW, fixtures: list[str] | None = None) -> LiveGame:
     return LiveGame(source_id=fixture, title="Arsenal vs Chelsea", competition="Premier League", start_utc=start,
-                    snapshot=Snapshot(status=status, score_label="Arsenal 0 – 0 Chelsea", clock_label="10'", state=football(0, 0)), teams=["Arsenal", "Chelsea"])
+                    snapshot=Snapshot(status=status, score_label="Arsenal 0 – 0 Chelsea", clock_label="10'", state=football(0, 0)), teams=["Arsenal", "Chelsea"],
+                    fixtures=fixtures or [])
 
 
 def named(source, fixture: str = "100", **kwargs) -> None:
@@ -308,6 +321,33 @@ def test_a_fan_follows_at_most_max_games_at_once(db, redis, source, monkeypatch)
 def snap(home: int, away: int, clock: str, events: list[dict], saka: int | None, status: str = "live") -> Snapshot:
     lines = {"7": Line(headline=f"{saka} goal" if saka else "Started", stats=[{"label": "Goals", "value": str(saka)}])} if saka is not None else {}
     return Snapshot(status, f"Arsenal {home} – {away} Chelsea", clock, football(home, away), lines=lines, moments=events)
+
+
+def listen(monkeypatch) -> list[tuple[str, str]]:
+    """Every push sent, as (fan, title), from polls applied at once: polled all along, sent in the foreground."""
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    monkeypatch.setattr(notify, "dispatch", notify.send)
+    monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: pushed.append((endpoint.rsplit("/", 1)[1], payload["title"])))
+    monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: None)
+    monkeypatch.setattr(notify.bus, "publish_match", lambda event_id, event: None)
+    monkeypatch.setattr(structured.bus, "publish_match", lambda event_id, event: None)
+    return pushed
+
+
+def saka_followed_by(db, event_id: int, *fans: str) -> None:
+    """Saka (player 5, "7" in the source) in the game, followed by these fans; every fan named here or later has a phone."""
+    if db.get(Player, 5) is None:
+        db.add_all([Player(id=5, slug="saka", name="Bukayo Saka", sport="Football"), PlayerIdentity(player_id=5, system="pitch", external_id="7", confidence=1.0)])
+        db.flush()
+        db.add(EventPlayer(event_id=event_id, player_id=5))
+    db.add_all([Follow(fan_id=f, player_id=5, alert_rules={}) for f in fans])
+    db.commit()
+
+
+def phones(db, *fans: str) -> None:
+    db.add_all([PushSubscription(fan_id=f, endpoint=f"https://fcm.googleapis.com/fcm/send/{f}", p256dh="k", auth="a") for f in fans])
+    db.commit()
 
 
 @needs_db
@@ -417,3 +457,98 @@ def test_the_game_moments_are_kept_apart_from_its_players_on_the_match_page(db, 
     page, _ = match.view(db, "fan", "pitch", "100", NOW)
     assert page is not None and page["moments"] == []  # its board and timeline say the game's own
     assert json.loads(redis["match:pitch:100"])["game"]["title"] == "Arsenal vs Chelsea"
+
+
+@needs_db
+def test_a_game_followed_again_after_a_while_doesnt_tell_what_happened_meanwhile(db, redis, source, monkeypatch):
+    # A fan follows the game, and unfollows; Saka's fans keep it polled. The game's own last poll, kept to find
+    # its next moments against, is too old by the time another fan follows it: that's a first look.
+    pushed = listen(monkeypatch)
+    named(source)
+    event_id = matches.follow(db, "first", "pitch", "100")
+    db.commit()
+    saka_followed_by(db, event_id, "saka")
+    phones(db, "first", "later", "saka")
+    binding = {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}
+    poll = lambda s: structured.apply_poll(event_id, binding, source.fake, [(5, "7")], s)  # noqa: E731
+    poll(snap(0, 0, "10'", [], 0))
+    matches.unfollow(db, "first", "pitch", "100")
+    db.commit()
+    poll(snap(1, 0, "23'", [goal("23'", "Saka", "7")], 1))
+    assert set(pushed) == {("saka", "Goal: Bukayo Saka puts Arsenal ahead")}
+    pushed.clear()
+    redis.clock += structured.POLL_GAP + 1
+    matches.follow(db, "later", "pitch", "100")
+    db.commit()
+    poll(snap(1, 0, "60'", [goal("23'", "Saka", "7")], 1))
+    poll(snap(2, 0, "61'", [goal("61'", "Kane", "9"), goal("23'", "Saka", "7")], 1))
+    assert pushed == [("later", "Arsenal v Chelsea: Kane scores")]  # what came since they followed, not before
+
+
+@needs_db
+def test_a_game_here_as_two_events_is_followed_as_the_fans_players(db, redis, source):
+    # A chess board is a fixture of each of its players: two events, one polled for each player's fans.
+    source.game = game("100", fixtures=["100", "101"])
+    match.read("pitch", "100", NOW)
+    binding = lambda f: {"adapter": "pitch", "locator": {"fixture": f}, "cadence": 15}  # noqa: E731
+    db.add_all([Event(id=1, key="pitch:100", sport="Football", title="A v B", status="live", live_binding=binding("100")),
+                Event(id=2, key="pitch:101", sport="Football", title="A v B", status="live", live_binding=binding("101")),
+                Player(id=5, slug="a", name="A", sport="Football"), Player(id=6, slug="b", name="B", sport="Football")])
+    db.flush()
+    db.add_all([EventPlayer(event_id=1, player_id=5), EventPlayer(event_id=2, player_id=6), Follow(fan_id="other", player_id=5, alert_rules={}), Follow(fan_id="fan", player_id=6, alert_rules={})])
+    db.commit()
+    assert matches.follow(db, "fan", "pitch", "100") == 2  # their player's: one notification, each moment once
+    assert matches.follow(db, "someone", "pitch", "100") == 1  # nobody's of theirs: the first
+
+
+@needs_db
+def test_a_followed_game_of_a_source_polled_together_joins_its_lane_and_one_polled_alone_waits_for_room(db, redis, source, monkeypatch):
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    source.fake.spare = lambda: False  # down to what its live games need
+    assert pipeline.due_work(NOW).polls == []  # nobody's player in it: it waits
+    saka_followed_by(db, event_id, "saka")
+    assert pipeline.due_work(NOW).polls == [event_id]  # a followed player's game keeps the reserve
+    monkeypatch.setattr(source.fake, "snapshots", lambda locators: {}, raising=False)
+    monkeypatch.setattr(source.fake, "spare", lambda: True)
+    db.execute(text("DELETE FROM follow"))
+    db.commit()
+    due = pipeline.due_work(NOW)
+    assert (due.lanes, due.polls) == (["pitch"], [])  # a source that fetches many games at once: its lane
+    assert structured.lane_events("pitch") == [event_id]
+
+
+@needs_db
+def test_the_alerts_list_pages_through_players_and_games_moments_alike(db, redis, source):
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.commit()
+    saka_followed_by(db, event_id, "fan")
+    for n in range(5):  # a player's moment, then a game's own, in turn, none the same as another
+        notify.record(db, 5, event_id, [sports.Found("assist", "key", f"Assist {n}", "", f"a{n}")])
+        notify.record_game(db, event_id, [sports.Found("red", "key", f"Red card {n}", "", f"r{n}", 80, ("99",))], "/match/pitch/100")
+    db.commit()
+    titles, before = [], None
+    while True:
+        page = server.activity(before, 3, "fan", db)
+        titles += [i["title"] for i in page["items"]]
+        if page["next"] is None:
+            break
+        before = page["next"]
+    assert titles == [t for n in reversed(range(5)) for t in (f"Red card {n}", f"Assist {n}")]
+
+
+@needs_db
+def test_an_accounts_followed_games_stay_within_max_when_a_device_brings_more(db, redis, source, monkeypatch):
+    monkeypatch.setattr(matches, "MAX", 2)
+    for fixture, hours in (("1", 3), ("2", 1), ("3", 2)):
+        named(source, fixture, start=NOW + timedelta(hours=hours), status="scheduled")
+    matches.follow(db, "anon", "pitch", "1")
+    matches.follow(db, "anon", "pitch", "2")
+    matches.follow(db, "acct-1", "pitch", "3")
+    db.add(Account(id=1, fan_id="acct-1", email="fan@example.com"))
+    db.commit()
+    accounts.adopt(db, "anon", 1, 0)
+    db.commit()
+    assert [m["key"] for m in matches.mine(db, "acct-1")] == ["pitch:2", "pitch:3"]  # the soonest that fit

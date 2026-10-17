@@ -243,6 +243,12 @@ class Sport:
         "key": ("Big news", "Injuries, transfers and retirements, from the news: no live source covers this sport yet"),
         "more": ("milestones", "milestones in the news"),
     }
+    # What a fan following a whole game hears at key moments, and what everything adds (game_moments): a line
+    # and in full; "" adds nothing.
+    game_alerts = {
+        "key": ("The start and the result", "The game starting and its result"),
+        "more": ("", ""),
+    }
     stats_title = "Season"  # the Stats tab's first view: a season's numbers, or an overview (ranking, form)
     keeps_names = False  # a player's sport is shown as written ("CS2"), not title-cased (esports' games)
 
