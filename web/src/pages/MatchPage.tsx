@@ -7,7 +7,7 @@ import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
-import { dateTime, relative } from '../format'
+import { dateOnly, dateTime, parseDate, relative } from '../format'
 import { comingCard } from '../lines'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
@@ -57,6 +57,19 @@ function useMatch(source: string, game: string): { match: Match | null; failed: 
   return { match, failed }
 }
 
+/** When a game to come (or about to start, armed, with no board yet) starts, under its title: its countdown
+ * within a day, else its day, as Coming up's cards say it; "Starting soon" once its start has passed without
+ * it (a delayed start), for a few hours; else nothing. */
+function startsIn(match: Match, now: number): string | null {
+  const at = parseDate(match.start_utc)?.getTime()
+  if (at == null) return null
+  // A day with no time yet: its day, whatever the hour.
+  if (at > now || dateOnly(match.start_utc)) return comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big
+  return now - at < LATE ? 'Starting soon' : null
+}
+
+const LATE = 6 * 36e5  // how long after its start a game that hasn't begun is still "starting soon"
+
 /** A game's board means something once it's under way: before, the head says when it starts instead. */
 const UNDER_WAY = ['live', 'final', 'armed']
 
@@ -94,8 +107,7 @@ export function MatchPage() {
   const view = viewOf(sportDrawn(match.sport)) // an esports game is drawn as esports
   const live = match.live
   const board = live && UNDER_WAY.includes(match.status) ? live : null
-  // To come (or about to start, armed, with no board yet): its countdown under the title.
-  const soon = !board && (match.status === 'scheduled' || match.status === 'armed') && match.start_utc ? comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big : null
+  const soon = !board && (match.status === 'scheduled' || match.status === 'armed') ? startsIn(match, now) : null
   const events = (match.page.events ?? []) as KeyEvent[]
   const yours = match.yours ?? []
 

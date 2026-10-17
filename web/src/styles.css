@@ -502,7 +502,7 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 @media (min-width: 640px) { .match-board .score { font-size: 80px; } }
 /* Over: who won, big under the board; to come: the countdown under the title. */
 .match-verdict { margin: 0; font-size: 36px; line-height: 1; overflow-wrap: anywhere; }
-.match-count { font-size: 56px; line-height: 1; white-space: nowrap; }
+.match-count { font-size: 56px; line-height: 1; overflow-wrap: anywhere; }
 @media (min-width: 640px) { .match-verdict { font-size: 44px; } }
 .match-sides { gap: 16px; }
 .match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }
