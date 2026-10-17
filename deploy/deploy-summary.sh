@@ -35,7 +35,7 @@ touches() {
       web/*) area=website ;;
       sports_follow/adapters/*) area="data sources" ;;
       sports_follow/*) area="API and worker" ;;
-      migrations/*) area=database ;;
+      migrations/* | alembic.ini) area=database ;;
       mobile/* | android/*) area="Android app" ;;
       .github/* | deploy/deploy-summary.sh) area="CI and deploys" ;;
       deploy/grafana/*) area=Grafana ;;
@@ -48,6 +48,8 @@ touches() {
 }
 
 # What a deploy doesn't do for the files (one a line) that need it: the step to run by hand after it.
+# Caddy and the backup container see their file through a bind mount of that one file, which the deploy's
+# checkout replaces, and `up` leaves both running; Alloy reloads its config but not its environment.
 by_hand() {
   local path
   while IFS= read -r path; do
@@ -55,6 +57,9 @@ by_hand() {
       deploy/grafana/dashboards/* | deploy/grafana/apply-dashboards.sh) echo deploy/grafana/apply-dashboards.sh ;;
       deploy/grafana/*) echo deploy/grafana/apply-alerts.sh ;;
       deploy/systemd/* | deploy/server-setup.sh) echo "deploy/server-setup.sh on the server" ;;
+      deploy/Caddyfile) echo "docker compose -f deploy/compose.yaml restart caddy on the server" ;;
+      deploy/backup.sh) echo "docker compose -f deploy/compose.yaml restart backup on the server" ;;
+      deploy/alloy/alloy.env) echo "sudo systemctl restart alloy on the server" ;;
     esac
   done | sort -u
 }
@@ -103,13 +108,13 @@ else
   for c in "$want" ${live:+"$live"}; do git cat-file -e "$c^{commit}" 2>/dev/null || git fetch --quiet origin "$c" || true; done
   range="" range_note=""
   if [ -z "$live" ] || ! git cat-file -e "$live^{commit}" 2>/dev/null; then
-    range_note="What's live is unknown, so the changes aren't listed."
+    range_note="What's live is unknown, so the changes, and what to check before approving, aren't listed."
   elif [ "$live" = "$want" ]; then
     range_note="It's the commit already live: approving it changes nothing."
   elif git merge-base --is-ancestor "$live" "$want"; then
     range="$live..$want"
   else
-    range_note="It's older than what's live (${live:0:7}): approving it takes the site back."
+    range_note="It's older than what's live (${live:0:7}): approving it takes the site back, and the newer migrations, if any, stay in the database."
   fi
 
   # Each change on main: its pull request's title, or the commit's own subject, and what it touches. The
@@ -137,12 +142,16 @@ else
     git diff --no-renames --name-only "$live" "$want" >"$files"
     migrations=$(git diff --no-renames --name-only --diff-filter=A "$live" "$want" -- migrations/versions |
       sed -E 's|.*/||; s|\.py$||; s|^[0-9a-f]+_||' | joined)
-    server=$(grep -E '^(Dockerfile|requirements\.txt|deploy/(compose\.yaml|Caddyfile|settings\.env|deploy\.sh|gateway/|alloy/))' "$files" | joined) || true
+    server=$(grep -E '^(Dockerfile|\.dockerignore|requirements\.txt|deploy/(compose\.yaml|settings\.env|gateway/|alloy/config\.alloy))' "$files" | joined) || true
+    secrets=$(grep -E '^deploy/(push|install)-secrets\.sh$' "$files" | joined) || true
     steps=$(by_hand <"$files" | joined)
     apps=$(joined <"$android")
     {
       [ -z "$migrations" ] || echo "- Database migration: $migrations. It runs before the new version starts, and a rollback leaves it in place."
+      [ -z "$secrets" ] || echo "- The secrets scripts changed ($secrets): if a change needs a new key, run deploy/push-secrets.sh from the Mac before approving."
       [ -z "$server" ] || echo "- Server changes this deploy applies: $server."
+      # The server runs the deploy.sh it has: deploy.sh reads all of itself before checking out the new commit.
+      ! grep -qx deploy/deploy.sh "$files" || echo "- deploy/deploy.sh changed: this deploy still runs the old one, and the new one runs from the next deploy or rollback."
       [ -z "$steps" ] || echo "- Not done by the deploy; run after it: $steps."
       [ -z "$apps" ] || echo "- Android app changes ($apps) reach phones with the next app build, not with this deploy."
     } >"$checks"
@@ -214,9 +223,13 @@ if [ -n "${RESEND_KEY:-}" ] && [ -n "${DEPLOY_SUMMARY_TO:-}" ]; then
   sent=1
 fi
 if [ -n "${DEPLOY_SUMMARY_URL:-}" ]; then
-  # ntfy: the notification opens the run, and its button is the way to approve.
+  # ntfy: the notification opens the run, and its button is the way to approve. ntfy keeps 4,096 bytes
+  # as a message; past that, the summary is cut at a line and the rest is on the run's page.
+  push="$tmp/push"
+  if [ "$(wc -c <"$body")" -le 4000 ]; then cp "$body" "$push"
+  else { head -c 3900 "$body" | sed '$d'; echo "…"; echo; echo "The rest: $run_url"; } >"$push"; fi
   curl -fsS -m 20 --retry 3 -o /dev/null -H "Title: $title" -H "Tags: rocket" -H "Click: $run_url" \
-    -H "Actions: view, Approve or reject, $run_url" --data-binary @"$body" "$DEPLOY_SUMMARY_URL"
+    -H "Actions: view, Approve or reject, $run_url" --data-binary @"$push" "$DEPLOY_SUMMARY_URL"
   echo "Pushed it." >&2
   sent=1
 fi

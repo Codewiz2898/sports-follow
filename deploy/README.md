@@ -398,10 +398,11 @@ the site.
   stops before it waits. A deploy that's running is never stopped: the next run waits behind it, then for
   approval.
 - **What it brings** is on the run's page, above the approval button (`deploy-summary.sh`). It starts
-  with what to look at before approving: a database migration (a rollback leaves it in place), server
-  changes the deploy applies (`compose.yaml`, `Caddyfile`, `settings.env`, the image), a step the deploy
-  doesn't take (`apply-alerts.sh`, `server-setup.sh`), and Android changes, which reach phones with the
-  next app build instead. Then the changes since the live commit, each linked and with what it touches
+  with what to look at before approving: a database migration (a rollback leaves it in place), changed
+  secrets scripts (push a new key first), server changes the deploy applies (`compose.yaml`,
+  `settings.env`, the image), a step it doesn't take (`apply-alerts.sh`, `server-setup.sh`, restarting
+  Caddy after a `Caddyfile` change), and Android changes, which reach phones with the next app build
+  instead. Then the changes since the live commit, each linked and with what it touches
   (website, API and worker, data sources, database, …), the BHA issues they close, and whether CI
   passed. The first deploy to wait since the last one went out is also sent to you at once, and every
   morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`; Actions → Deploy summary →
