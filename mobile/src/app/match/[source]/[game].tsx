@@ -181,7 +181,7 @@ export default function MatchScreen() {
           </View>
         ) : null}
         <View style={{ gap: 10 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <Status match={match} tone={tone} />
             <Text style={[t.tag, { color: tone.onSoft, flexShrink: 1 }]}>{[match.competition, match.detail].filter(Boolean).join(' · ') || sports.name(match.sport)}</Text>
           </View>
