@@ -6,17 +6,19 @@ it stands for never happens (18 Oct 2026). This blocks a Bash call that would ge
 
 - approving or rejecting a waiting deploy: text naming `pending_deployments` (or
   `deployment_protection_rule`) that also sends something: `approved`, `rejected`, POST, a body from a
-  file or stdin. Or GraphQL's approveDeployments / rejectDeployments sent to the GraphQL API, inline or
-  from a file the call reads;
+  file or stdin. Or GraphQL's approveDeployments / rejectDeployments with `graphql` in the call, inline
+  or in a file the call feeds in (`@q.graphql`, `--input`, `< q`, `cat q |`);
 - changing an environment (its required reviewers): a POST, PUT, PATCH, DELETE or fields to
   `repos/<owner>/<repo>/environments/...`;
-- running `deploy.sh deploy` or `rollback`: here, through ssh, `bash -c`, `eval` or `xargs`, or the deploy
-  key's forced command (`ssh -i deploy_key deploy@host deploy`).
+- running `deploy.sh` other than `status`: a command line naming it may only read (grep, git, ls, cat and
+  the like); anything that could run it (a shell, ssh, sudo, xargs, `.`, python) stops the line, though
+  ssh, `-c` and `eval` scripts are judged the same way. And `ssh … deploy` or `rollback`, which the
+  deploy key's forced command hands to deploy.sh.
 
-The first two read the raw command, so no wrapper, variable or spelling of a flag gets past them; the
-cost is that a commit message or comment naming them in the command itself is stopped too (pass the text
-in a file). Reading goes through (`gh api .../pending_deployments`, `deploy.sh status`), and so does
-starting a Deploy run (`gh workflow run deploy.yml`), which waits for his approval like any other.
+These read the raw command, so no wrapper, variable or spelling of a flag gets past them; the cost is
+that a commit message or comment naming them in the command itself is stopped too (pass the text in a
+file). Reading goes through (`gh api .../pending_deployments`, `deploy.sh status`), and so does starting a
+Deploy run (`gh workflow run deploy.yml`), which waits for his approval like any other.
 
 It stops a session that sets out to approve or deploy the usual ways. It isn't a sandbox: a script
 written to get round it would, and CLAUDE.md says not to. Clicks in a browser aren't Bash calls.
@@ -41,43 +43,25 @@ TELL = ("Approving or rejecting a production deploy, changing its environment, a
         "(If the command only mentions these in text, such as a commit message, pass the text in a file.)")
 
 GATE = re.compile(r"pending_deployments|deployment_protection_rule")
-SENDS = re.compile(r"\b(approved|rejected)\b|(\b|-X)post\b|--input|@", re.IGNORECASE)
+SENDS = re.compile(r"\b(approved|rejected)\b|(\b|-X)post\b|--input|(=|\s)@", re.IGNORECASE)
 MUTATIONS = re.compile(r"\b(approve|reject)Deployments\b", re.IGNORECASE)
-GRAPHQL_CALL = re.compile(r"\bapi\s+graphql\b|api\.github\.com/graphql", re.IGNORECASE)
+GRAPHQL = re.compile(r"\bgraphql\b", re.IGNORECASE)
+CALLS_API = re.compile(r"\bgh\b.*\bapi\b|\bcurl\b|\bwget\b|\bhttp\b|requests|urllib|fetch\(", re.IGNORECASE | re.DOTALL)
+FED = re.compile(r"(?:(?:=|\s)@|--input[=\s]+|<\s*|\bcat\s+)([^\s'\"|;&()<>]+)")  # files a call feeds in
 ENVIRONMENT = re.compile(r"repos/[^/\s'\"]+/[^/\s'\"]+/environments\b")
 CHANGES = re.compile(r"(\b|-X)(post|put|patch|delete)\b|(^|\s)(-[fF]\S*|--field|--raw-field|--input)", re.IGNORECASE)
-DEPLOY_TEXT = re.compile(r"deploy\.sh\W+(deploy|rollback)\b")  # when a command can't be read
+NAMES_DEPLOY = re.compile(r"(?<![\w-])deploy\.sh\b(?![\s'\"]+(status|help|-h|--help)\b)")
+FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)")  # when unreadable
 
+# Commands that only read or tidy files: a line naming deploy.sh may run these and nothing else.
+READ_ONLY = {"grep", "egrep", "fgrep", "rg", "ag", "ls", "cat", "bat", "less", "more", "head", "tail", "wc", "sed",
+             "sort", "uniq", "cut", "tr", "diff", "cmp", "file", "stat", "git", "gh", "echo", "printf", "jq", "yq",
+             "cd", "test", "[", "true", "false", ":", "basename", "dirname", "realpath", "readlink", "shellcheck",
+             "chmod", "cp", "mv", "mkdir", "touch", "column", "nl", "shasum", "md5", "dig"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 REMOTES = {"ssh", "mosh"}
-WRAPPERS = {"env", "sudo", "doas", "timeout", "nice", "ionice", "nohup", "xargs", "caffeinate", "command", "exec",
-            "time", "stdbuf"}
 READS = {"status", "help", "-h", "--help"}
 SSH_OPTION_ARGS = set("BbcDEeFIiJLlmOoPpQRSWw")  # ssh's options that take a value: -o X, -i key, -p 22
-
-
-def unwrap(words: list[str]) -> tuple[list[str], bool]:
-    """The command a line runs, past `env -i X=1`, `sudo -E`, `timeout 30`, `xargs -n1` and the like, and
-    whether xargs feeds it arguments of its own."""
-    fed = False
-    while words:
-        name = os.path.basename(words[0])
-        if name in WRAPPERS:
-            fed = fed or name == "xargs"
-            words = words[1:]
-            if name == "timeout" and words and re.fullmatch(r"[\d.]+[smhd]?", words[0]):
-                words = words[1:]
-        elif words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]) or words[0].isdigit():
-            words = words[1:]  # a wrapper's option, a setting, nice's priority
-        else:
-            break
-    return words, fed
-
-
-def deploys(script: list[str], fed: bool) -> bool:
-    """Whether `deploy.sh <args>` deploys or rolls back (with xargs, whatever it's given may)."""
-    first = script[1] if len(script) > 1 else None
-    return first in ("deploy", "rollback") or (fed and first not in READS)
 
 
 def shell_parts(words: list[str]) -> tuple[str | None, list[str], bool]:
@@ -93,7 +77,7 @@ def shell_parts(words: list[str]) -> tuple[str | None, list[str], bool]:
         if w == "-c" or (w.startswith("-") and not w.startswith("--") and "c" in w[1:]):
             return (words[i + 1] if i + 1 < len(words) else ""), [], check
         if w.startswith("-") or w.startswith("+"):
-            check = check or (not w.startswith("--") and "n" in w[1:])
+            check = check or (w.startswith("-") and not w.startswith("--") and "n" in w[1:])
             continue
         return None, words[i:], check
     return None, [], check
@@ -111,42 +95,73 @@ def ssh_remote(words: list[str]) -> list[str]:
     return []
 
 
-def runs_deploy(command: str, depth: int = 0) -> bool:
-    """Whether a command line runs deploy.sh deploy or rollback, here or in a script it hands on."""
+def could_run_deploy(command: str, depth: int = 0) -> bool:
+    """For a line naming deploy.sh: whether anything in it could run it. Read-only commands can't; a shell
+    or ssh with no script of its own runs its stdin; anything else might."""
     if depth > 4:
-        return bool(DEPLOY_TEXT.search(command))
-    try:
-        parsed = parse(command)
-    except ValueError:
-        return bool(DEPLOY_TEXT.search(command))
-    for simple in parsed.commands:
-        words, fed = unwrap(simple.words)
-        if not words:
+        return True
+    for simple in parse(command).commands:
+        words = simple.words
+        name = os.path.basename(words[0]) if words else ""
+        if not words or name in READ_ONLY:
             continue
-        name = os.path.basename(words[0])
-        if name == "deploy.sh" and deploys(words, fed):
-            return True
+        if name == "deploy.sh" and (len(words) == 1 or words[1] in READS):
+            continue  # its usage, or status
         if name in SHELLS:
             script, args, check = shell_parts(words)
             if check:
                 continue
-            if script is not None and runs_deploy(script, depth + 1):
-                return True
-            if args and os.path.basename(args[0]) == "deploy.sh" and deploys(args, fed):
-                return True
-            if script is None and not args and any(runs_deploy(body, depth + 1) for body in parsed.heredocs):
-                return True  # `bash -s <<'EOF'`: the body is the script
+            if script is not None:
+                if could_run_deploy(script, depth + 1):
+                    return True
+                continue
+            if args and os.path.basename(args[0]) == "deploy.sh" and args[1:2] and args[1] in READS:
+                continue
+            return True  # a script file, or its stdin
         if name in REMOTES:
             remote = ssh_remote(words)
-            if remote[:1] in (["deploy"], ["rollback"]):
-                return True  # the deploy key's forced command runs deploy.sh with these
-            if remote and runs_deploy(" ".join(remote), depth + 1):
+            if not remote or could_run_deploy(" ".join(remote), depth + 1):
                 return True
-            if any(runs_deploy(body, depth + 1) for body in parsed.heredocs):
-                return True  # `ssh host bash -s <<'EOF'`
-        if name == "eval" and runs_deploy(" ".join(words[1:]), depth + 1):
+            continue
+        if name == "eval":
+            if could_run_deploy(" ".join(words[1:]), depth + 1):
+                return True
+            continue
+        return True
+    return False
+
+
+def forced_deploy(command: str, depth: int = 0) -> bool:
+    """`ssh … deploy` or `rollback`: with the deploy key, its forced command hands these to deploy.sh."""
+    if depth > 4:
+        return False
+    for simple in parse(command).commands:
+        words = simple.words
+        at = next((i for i, w in enumerate(words) if os.path.basename(w) in REMOTES), None)
+        if at is not None:
+            remote = " ".join(ssh_remote(words[at:])).split()
+            remote = remote[1:] if remote[:1] == ["--"] else remote
+            if remote[:1] in (["deploy"], ["rollback"]) or forced_deploy(" ".join(remote), depth + 1):
+                return True
+        if words and os.path.basename(words[0]) in SHELLS:
+            script = shell_parts(words)[0]
+            if script and forced_deploy(script, depth + 1):
+                return True
+        if words and words[0] == "eval" and forced_deploy(" ".join(words[1:]), depth + 1):
             return True
     return False
+
+
+def changes_environment(command: str) -> bool:
+    """A write to a repository's environments: judged on the command naming the path, so piping what it
+    reads through `grep -F` or `cut -f1` doesn't count."""
+    if not ENVIRONMENT.search(command):
+        return False
+    try:
+        texts = [" ".join(s.words) for s in parse(command).commands if ENVIRONMENT.search(" ".join(s.words))]
+    except ValueError:
+        texts = []
+    return any(CHANGES.search(t) for t in texts or [command])  # the path in a variable: the whole line
 
 
 def directories(command: str, cwd: str) -> list[str]:
@@ -161,37 +176,36 @@ def directories(command: str, cwd: str) -> list[str]:
     return found
 
 
-def files_read(command: str, cwd: str) -> list[str]:
-    """The text of each file a command names (query=@q.graphql, --input body.json, < q, cat q |)."""
+def files_fed(command: str, cwd: str) -> list[str]:
+    """The text of each file a call feeds in: query=@q.graphql, -d @body, --input body.json, < q, cat q |."""
     texts: list[str] = []
-    seen: set[str] = set()
-    for token in re.split(r"[\s'\"=@<>|;&()`$]+", command):
-        if not token or len(token) > 1024 or token.startswith("-"):
+    for name in dict.fromkeys(FED.findall(command)):
+        if name == "-":
             continue
         for folder in directories(command, cwd):
-            path = os.path.normpath(os.path.join(folder, os.path.expanduser(token)))
-            if path in seen or not os.path.isfile(path):
-                continue
-            seen.add(path)
-            try:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    texts.append(f.read(1 << 20))
-            except OSError:
-                continue
-            if len(seen) >= 30:
-                return texts
+            path = os.path.join(folder, os.path.expanduser(name))
+            if os.path.isfile(path):
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as f:
+                        texts.append(f.read(1 << 20))
+                except OSError:
+                    pass
+                break
     return texts
 
 
 def blocked(command: str, cwd: str) -> bool:
     if GATE.search(command) and SENDS.search(command):
         return True
-    if GRAPHQL_CALL.search(command) and (MUTATIONS.search(command)
-                                         or any(MUTATIONS.search(text) for text in files_read(command, cwd))):
+    if GRAPHQL.search(command) and (MUTATIONS.search(command) or (
+            CALLS_API.search(command) and any(MUTATIONS.search(text) for text in files_fed(command, cwd)))):
         return True
-    if ENVIRONMENT.search(command) and CHANGES.search(command):
+    if changes_environment(command):
         return True
-    return runs_deploy(command)
+    try:
+        return forced_deploy(command) or bool(NAMES_DEPLOY.search(command) and could_run_deploy(command))
+    except ValueError:  # a line the reader can't follow: stopped if it names deploy.sh at all
+        return bool(NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command))
 
 
 def main() -> int:
@@ -201,13 +215,13 @@ def main() -> int:
     except Exception:
         return 0
     lowered = command.lower()
-    if not ("deploy" in lowered or "environments" in lowered or "graphql" in lowered):
+    if not ("deploy" in lowered or "environments" in lowered or "graphql" in lowered or "rollback" in lowered):
         return 0
     try:
         stop = blocked(command, call.get("cwd") or os.getcwd())
-    except Exception:  # unreadable: stop it only if it plainly names a deploy
+    except Exception:  # anything else unexpected: stopped only if it plainly names a deploy
         stop = bool((GATE.search(command) and SENDS.search(command)) or MUTATIONS.search(command)
-                    or DEPLOY_TEXT.search(command))
+                    or NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command))
     if stop:
         print(TELL, file=sys.stderr)
         return 2

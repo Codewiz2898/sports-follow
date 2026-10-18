@@ -143,6 +143,7 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
     (tmp_path / "approve.graphql").write_text(mutation)
     (tmp_path / "body.json").write_text(json.dumps({"query": mutation}))
     (tmp_path / "viewer.graphql").write_text("query { viewer { login } }")
+    (tmp_path / "notes.md").write_text(f"The hook stops `gh api graphql` with {mutation}")
     run_path = "repos/Codewiz2898/sports-follow/actions/runs/39126691465"
     approve = f"gh api -X POST {run_path}/pending_deployments -f state=approved"
     passes = [
@@ -167,6 +168,14 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
         "gh pr create --body \"$(cat <<'EOF'\nBy hand: ssh deploy@h deploy/deploy.sh deploy\nEOF\n)\" && bash -n deploy/deploy.sh",
         "sed -n '/^## Deploying/,/^## Alerts/p' deploy/README.md",
         "gh api graphql -F query=@viewer.graphql",
+        "gh api repos/Codewiz2898/sports-follow/environments/production | grep -F required_reviewers",
+        "gh api repos/Codewiz2898/sports-follow/environments | jq -r '.environments[].name' | cut -f1",
+        "grep -n 'api graphql' notes.md",
+        "cat notes.md | grep -n 'api graphql'",
+        "gh run view 1 && echo 'see pending_deployments for deploy@stann.in'",
+        "ssh deploy@203.0.113.7 'grep -n usage /opt/sports-follow/deploy/deploy.sh'",
+        "ssh deploy@$(dig +short stann.in | head -1) 'grep -n usage /opt/sports-follow/deploy/deploy.sh'",
+        "bash deploy/predeploy.sh",
     ]
     stops = [
         approve,
@@ -217,6 +226,23 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
         "eval 'deploy/deploy.sh deploy'",
         "echo deploy | xargs deploy/deploy.sh",
         "echo $'don\\'t'; deploy/deploy.sh deploy",
+        "echo $'don\\'t'; ssh -i deploy_key deploy@203.0.113.7 deploy",
+        f"gh api -H 'Accept: application/json' graphql -f query='{mutation}'",
+        f"gh api --paginate graphql -f query='{mutation}'",
+        f"gh api /graphql -f query='{mutation}'",
+        "ssh deploy@203.0.113.7 'sudo -u deploy /opt/sports-follow/deploy/deploy.sh deploy'",
+        "ssh deploy@203.0.113.7 'timeout -s KILL 900 /opt/sports-follow/deploy/deploy.sh deploy'",
+        "echo deploy | xargs -I {} deploy/deploy.sh {}",
+        "echo 'cd /opt/sports-follow && deploy/deploy.sh deploy' | ssh deploy@203.0.113.7 bash",
+        "echo 'cd /opt/sports-follow && deploy/deploy.sh deploy' | ssh deploy@203.0.113.7",
+        "echo 'deploy/deploy.sh deploy' | bash",
+        ". deploy/deploy.sh deploy",
+        "ssh deploy@203.0.113.7 'cd /opt/sports-follow && source deploy/deploy.sh deploy'",
+        "python3 -c \"import os; os.system('ssh deploy@203.0.113.7 /opt/sports-follow/deploy/deploy.sh deploy')\"",
+        "ssh -i deploy_key deploy@203.0.113.7 'deploy 437573e'",
+        "ssh -i deploy_key deploy@203.0.113.7 \"deploy $(git rev-parse origin/main)\"",
+        "ssh -i deploy_key deploy@203.0.113.7 -- deploy",
+        "bash +n deploy/deploy.sh deploy",
     ]
     assert [c for c in passes if run("deploy_gate.py", c, tmp_path) != 0] == []
     assert [c for c in stops if run("deploy_gate.py", c, tmp_path) != 2] == []
