@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -176,11 +177,12 @@ def test_a_message_too_big_for_fcm_loses_its_story_before_its_text():
     assert bigger["story"] == "" and bigger["body"].endswith("…") and len(json.dumps(bigger, ensure_ascii=False).encode()) <= fcm.DATA_BYTES
 
 
-def test_the_app_makes_the_channels_the_server_sends_on():
-    app = (ROOT / "mobile" / "src" / "push.ts").read_text()
-    assert f"LOUD_CHANNEL = '{fcm.LOUD_CHANNEL}'" in app and f"QUIET_CHANNEL = '{fcm.QUIET_CHANNEL}'" in app
-    # And a push on a channel the app hasn't made falls back to the quiet one, not to FCM's own, which rings.
-    assert f"defaultChannel: '{fcm.QUIET_CHANNEL}'" in (ROOT / "mobile" / "app.config.ts").read_text()
+def test_a_push_the_app_doesnt_draw_falls_back_to_its_quiet_channel():
+    """A message FCM shows itself (one from an older server) on a channel the app hasn't made lands on the app's
+    quiet channel, not on FCM's own fallback, which rings."""
+    channels = (ROOT / "mobile" / "modules" / "stann-notifications" / "android" / "src" / "main" / "java" / "io" / "stann" / "notifications" / "Channels.kt").read_text()
+    quiet = re.search(r'const val QUIET = "([^"]+)"', channels)
+    assert quiet and f"defaultChannel: '{quiet[1]}'" in (ROOT / "mobile" / "app.config.ts").read_text()
 
 
 def test_tokens_are_checked_before_they_are_stored():

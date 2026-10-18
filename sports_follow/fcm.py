@@ -49,10 +49,8 @@ KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_FCM_KEY_FILE", Path.home() / ".con
 SEND_URL = "https://fcm.googleapis.com/v1/projects/{project}/messages:send"
 SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
-# The Android app's notification channels (mobile/src/push.ts makes them with these ids): it draws a loud moment
-# on "key" and every other push on "other". A data-only message names neither; the app picks by "loud".
-LOUD_CHANNEL = "key"
-QUIET_CHANNEL = "other"  # "quiet" was a low-importance one, hidden from most lock screens: no longer drawn on
+# A data-only message names no notification channel: the app picks one by "loud" (a loud moment on "key", the
+# rest on "other", a live card on "live": mobile/modules/stann-notifications, Channels.kt).
 VERSION = "2"  # data["v"]: a message the app draws itself, from its data (1 was FCM's own notification)
 # The app's blue and white on it: a push about no sport (the test push), or a sport without a colour of its own.
 COLOUR, INK = "#1f5bef", "#ffffff"
