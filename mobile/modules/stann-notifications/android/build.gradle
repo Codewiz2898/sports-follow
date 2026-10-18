@@ -1,0 +1,37 @@
+// The app's notifications, drawn by the app itself (src/main/java/io/stann/notifications): an Expo module of
+// this app's own, linked like any other (expo-module.config.json).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'io.stann'
+version = '1.0.0'
+
+android {
+  namespace "io.stann.notifications"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+  // The display type the notifications draw their words and scores in (Type.kt): copied from the files the
+  // app already ships (assets/fonts, and the Anton package expo-font bundles), never a second copy in the repo.
+  sourceSets.main.res.srcDirs += "$buildDir/generated/stann-fonts/res"
+}
+
+def appRoot = file("../../..")
+tasks.register("stannFonts", Copy) {
+  from("$appRoot/assets/fonts/AntonSlanted.ttf") { rename { "stann_anton_slanted.ttf" } }
+  from("$appRoot/node_modules/@expo-google-fonts/anton/400Regular/Anton_400Regular.ttf") { rename { "stann_anton.ttf" } }
+  into("$buildDir/generated/stann-fonts/res/font")
+}
+preBuild.dependsOn("stannFonts")
+
+// expo-notifications' FirebaseMessagingService, which ours extends: the build the app has (Expo links its
+// modules as prebuilt libraries, by their package's version).
+def notifications = new groovy.json.JsonSlurper().parse(file("$appRoot/node_modules/expo-notifications/package.json")).version
+
+dependencies {
+  implementation "host.exp.exponent:expo.modules.notifications:$notifications"
+  implementation 'com.google.firebase:firebase-messaging:25.0.1'  // as expo-notifications has it
+}

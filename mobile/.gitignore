@@ -39,6 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+# and what Gradle builds of the app's own native module (modules/stann-notifications)
+modules/*/android/build/
 
 # The app's Firebase config (app.config.ts): the Firebase project's, never in the repo
 google-services.json

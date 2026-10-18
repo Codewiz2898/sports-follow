@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A live card, expanded (design C): the live tag and the competition, the board, how far along the game is,
+     and the fan's own players in it under the block. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:orientation="vertical">
+  <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+    <ImageView
+      android:id="@+id/stann_bg"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:importantForAccessibility="no"
+      android:scaleType="fitXY"
+      android:src="@drawable/stann_block" />
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:paddingStart="14dp"
+      android:paddingTop="12dp"
+      android:paddingEnd="14dp"
+      android:paddingBottom="12dp">
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal" android:layout_marginBottom="8dp">
+        <TextView android:id="@+id/stann_tag" style="@style/StannTag" />
+        <TextView android:id="@+id/stann_league" style="@style/StannSmall" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="10dp" android:gravity="end" android:textSize="12sp" />
+      </LinearLayout>
+      <include layout="@layout/stann_board" />
+      <ProgressBar android:id="@+id/stann_bar_dark" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="10dp" android:max="1000" android:progressDrawable="@drawable/stann_bar_dark" android:visibility="gone" />
+      <ProgressBar android:id="@+id/stann_bar_light" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="10dp" android:max="1000" android:progressDrawable="@drawable/stann_bar_light" android:visibility="gone" />
+    </LinearLayout>
+  </FrameLayout>
+  <TextView android:id="@+id/stann_player1" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:singleLine="true" android:ellipsize="end" android:textAppearance="@style/StannStory" android:visibility="gone" />
+  <TextView android:id="@+id/stann_player2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:singleLine="true" android:ellipsize="end" android:textAppearance="@style/StannStory" android:visibility="gone" />
+</LinearLayout>
