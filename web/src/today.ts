@@ -1,12 +1,12 @@
-// What Today shows, worked out from the fan's players: their live games, results, the games coming up, the
-// order of their pills, and how each piece says when; and which of the games on now are theirs. Shared by the web app (pages/TodayPage.tsx and its
+// What Today shows, worked out from the fan's players and teams: their live games, results, the games coming up,
+// the order of their pills, and how each piece says when; and which of the games on now are theirs. Shared by the web app (pages/TodayPage.tsx and its
 // components) and the Android app (mobile/), so it touches nothing of a browser's. A sport is passed by
 // its key (each app finds it its own way).
 
 import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { drawable } from './sports/facts'
-import type { ActivityItem, Card, FollowedMatch, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
+import type { ActivityItem, Card, FollowedMatch, FollowedTeam, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
 
 export const FEW = 3  // until a fan follows this many, Today keeps offering starters
 export const AHEAD_DAYS = 14  // how far Coming up looks
@@ -39,13 +39,14 @@ export function latestIn(items: ActivityItem[], group: Card[], seen: number): La
   return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen && !m.muted } : null
 }
 
-/** A game coming up: its fan's players in it, and its sport where none of theirs is (a game followed by itself). */
-export interface Coming { key: string; event: UpcomingEvent; players: Card[]; sport?: string }
+/** A game coming up: its fan's players in it, the teams of theirs that play it (by name), and its sport where
+ * none of their players is (a game followed by itself, or a team's). */
+export interface Coming { key: string; event: UpcomingEvent; players: Card[]; sport?: string; teams?: string[] }
 
-/** Every game of the fan's players in the next two weeks, soonest first, each once with everyone of theirs
- * who plays in it, and the games they follow by themselves (`matches`) that none of their players is in. One
+/** Every game of the fan's players and teams in the next two weeks, soonest first, each once with everyone of
+ * theirs who plays in it, and the games they follow by themselves (`matches`) that none of those is in. One
  * that has started has left: it's live, or it's a result. */
-export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = []): Coming[] {
+export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = [], teams: FollowedTeam[] = []): Coming[] {
   const soon = (s: string | null | undefined) => {
     const start = parseDate(s)
     return start && ahead(s, now) && start.getTime() - now <= AHEAD_DAYS * 864e5 ? start : null
@@ -59,6 +60,16 @@ export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = 
       const found = merged.get(key)
       if (!found) merged.set(key, { key, event: u, players: [c] })
       else if (!found.players.includes(c)) found.players.push(c)
+    }
+  }
+  for (const t of teams) {
+    for (const u of t.upcoming ?? []) {
+      const start = soon(u.start_utc)
+      if (!start || u.event_id == null) continue
+      const key = `event:${u.event_id}`
+      const found = merged.get(key)
+      if (!found) merged.set(key, { key, event: u, players: [], sport: t.sport, teams: [t.name] })
+      else if (!(found.teams ?? []).includes(t.name)) found.teams = [...(found.teams ?? []), t.name]
     }
   }
   for (const m of matches) {
@@ -79,13 +90,34 @@ export function followedLive(matches: FollowedMatch[], cards: Card[]): FollowedM
   return matches.filter((m) => m.live?.is_live && !events.has(m.event_id) && !(m.addresses ?? []).some((a) => addresses.has(a)))
 }
 
+/** A team's game on now, on Today: its board, once, with the fan's teams in it by name. */
+export interface TeamGame { key: string; live: LiveStatus; sport: string; names: string[]; team_id: number }
+
+/** The games of the fan's teams that are on now, none their players are in or that they follow by themselves
+ * (those are on Today as such already), each once with every team of theirs in it, in the order they follow them. */
+export function teamsLive(teams: FollowedTeam[], cards: Card[], matches: FollowedMatch[]): TeamGame[] {
+  const shown = new Set([
+    ...cards.filter((c) => c.live.is_live).flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])),
+    ...matches.filter((m) => m.live?.is_live).map((m) => m.event_id),
+  ])
+  const games = new Map<number, TeamGame>()
+  for (const t of teams) {
+    const live = t.live
+    if (!live?.is_live || live.event_id == null || shown.has(live.event_id)) continue
+    const found = games.get(live.event_id)
+    if (found) found.names.push(t.name)
+    else games.set(live.event_id, { key: `event:${live.event_id}`, live, sport: t.sport, names: [t.name], team_id: t.team_id })
+  }
+  return [...games.values()]
+}
+
 /**
  * The fan's results for the rail: every game of their players since yesterday where the fan is, else the
  * latest day that had any (`day`, its date; null since yesterday). A game two of their players were in is one card. The biggest
  * lines go first (a triple-double or a hundred, then any game with the player's numbers), then the newest.
  * Each card carries all its results (the follow list sends them), and the stream updates it as a game ends.
  */
-export function results(cards: Card[], now: number, keyOf: (sport?: string | null) => string): { games: GameResult[]; day: string | null } | null {
+export function results(cards: Card[], now: number, keyOf: (sport?: string | null) => string, teams: FollowedTeam[] = []): { games: GameResult[]; day: string | null } | null {
   // How big a player's line is: the sport has a word for it (a triple-double, a hundred), it's numbers, or neither.
   const weight = (p: GameResult['players'][number]) => {
     const line = p.result.player_contribution
@@ -95,8 +127,13 @@ export function results(cards: Card[], now: number, keyOf: (sport?: string | nul
   const all = cards.flatMap((c) => (c.recent_results ?? []).flatMap((r) => {
     // A game dated after today (an agent's slip) isn't a result yet.
     const days = daysAgo(playedOn(r), today)
-    return days != null && days >= 0 ? [{ days, player: { result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport, teams: c.player.teams } }] : []
+    return days != null && days >= 0 ? [{ days, player: { result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport, teams: c.player.teams } as GameResult['players'][number] }] : []
   }))
+  // And each of their teams' last result, from its side ("Won 2–1"), the team standing in its card for a player.
+  for (const t of teams) {
+    const days = t.last ? daysAgo(playedOn(t.last), today) : null
+    if (t.last && days != null && days >= 0) all.push({ days, player: { result: { ...t.last, player_id: 0, player_name: t.name }, sport: t.sport, teams: [t.name], team: t.team_id } })
+  }
   if (!all.length) return null
   const latest = Math.min(...all.map((x) => x.days))
   const shown = latest <= 1 ? all.filter((x) => x.days <= 1) : all.filter((x) => x.days === latest)
@@ -105,14 +142,21 @@ export function results(cards: Card[], now: number, keyOf: (sport?: string | nul
     const r = player.result
     const key = r.event_id != null ? `event:${r.event_id}` : `${r.title.toLowerCase()}|${parseDate(playedOn(r))!.toDateString()}`
     const game = games.get(key)
+    const who = (p: GameResult['players'][number]) => (p.team != null ? `team:${p.team}` : `player:${p.result.player_id}`)
     if (!game) games.set(key, { key, players: [player] })
-    else if (!game.players.some((p) => p.result.player_id === r.player_id)) game.players.push(player)
+    else if (!game.players.some((p) => who(p) === who(player))) game.players.push(player)
   }
   const time = (g: GameResult) => Math.max(...g.players.map((p) => parseDate(playedOn(p.result))?.getTime() ?? 0))
   for (const g of games.values()) g.players.sort((a, b) => weight(b) - weight(a))
   const ranked = [...games.values()].sort((a, b) => weight(b.players[0]) - weight(a.players[0]) || time(b) - time(a))
   const day = latest <= 1 ? null : parseDate(playedOn(shown[0].player.result))!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
   return { games: ranked, day }
+}
+
+/** The fan's teams as Today's strip shows them, as its players: live first, then whichever plays soonest. */
+export function teamOrder(teams: FollowedTeam[], now: number): FollowedTeam[] {
+  const nextAt = (t: FollowedTeam) => Math.min(Infinity, ...(t.upcoming ?? []).filter((u) => ahead(u.start_utc, now)).map((u) => parseDate(u.start_utc)!.getTime()))
+  return [...teams].sort((a, b) => Number(Boolean(b.live?.is_live)) - Number(Boolean(a.live?.is_live)) || nextAt(a) - nextAt(b))
 }
 
 /** The fan's players as Today's strip and the Following page show them: live first, then whoever plays
@@ -129,11 +173,21 @@ export function liveShort(live: LiveStatus): string {
   return (facts && live.state ? facts.short?.(live.state as never, live) : null) || live.headline || ''
 }
 
+/** When a team's next game is, in a pill, as a player's (nextWhen). */
+export function teamNextWhen(team: FollowedTeam, now: number): string {
+  const starts = (team.upcoming ?? []).map((u) => u.start_utc).filter((s): s is string => ahead(s, now))
+  return starts.length ? whenIn(starts, now) : ''
+}
+
 /** When a player's next game is, in a pill: the time if it's today ("21:00"), the day within the week
  * ("Sat"), else the date ("12 Nov"). Nothing when no game is known. */
 export function nextWhen(card: Card, now: number): string {
   const starts = (card.upcoming ?? []).map((u) => u.start_utc).filter((s): s is string => ahead(s, now))
-  if (!starts.length) return ''
+  return starts.length ? whenIn(starts, now) : ''
+}
+
+/** The soonest of some starts, in a pill: the time if it's today, the day within the week, else the date. */
+function whenIn(starts: string[], now: number): string {
   const at = (s: string) => parseDate(s)!.getTime()
   const next = starts.reduce((a, b) => (at(b) < at(a) ? b : a))
   const d = parseDate(next)!
@@ -219,13 +273,12 @@ export function moreOn(count: number, theirsOn: boolean): string {
 
 // ---------------------------------------------------------------- the big games (GET /api/league)
 
-/** The events the fan's players are in: a league game that's one of them is theirs, and shows once, as theirs. */
-export function theirEvents(cards: Card[]): Set<number> {
-  const ids = cards.flatMap((c) => [
-    ...(c.recent_results ?? []).map((r) => r.event_id),
-    ...(c.upcoming ?? []).map((u) => u.event_id),
-    c.live.event_id,
-  ])
+/** The events the fan's players and teams are in: a league game that's one of them is theirs, and shows once, as theirs. */
+export function theirEvents(cards: Card[], teams: FollowedTeam[] = []): Set<number> {
+  const ids = [
+    ...cards.flatMap((c) => [...(c.recent_results ?? []).map((r) => r.event_id), ...(c.upcoming ?? []).map((u) => u.event_id), c.live.event_id]),
+    ...teams.flatMap((t) => [...(t.upcoming ?? []).map((u) => u.event_id), t.last?.event_id, t.live?.event_id]),
+  ]
   return new Set(ids.filter((id): id is number => id != null))
 }
 

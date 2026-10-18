@@ -183,12 +183,13 @@ export interface TeamSummary {
   next?: { title?: string | null; start_utc?: string | null; status?: string | null; match?: string | null; versus?: string | null } | null
 }
 
-/** A team the fan follows (GET /api/me/following's teams): with their level, its last result from its side, and
- * its game on now as last polled (a live block like a card's), if any. */
+/** A team the fan follows (GET /api/me/following's teams): with their level, its last result from its side, its
+ * games to come, and its game on now as last polled (a live block like a card's), if any. */
 export interface FollowedTeam extends TeamSummary {
   alerts: AlertLevel
   last?: (RecentResult & { versus?: string | null }) | null
   live?: LiveStatus | null
+  upcoming?: (UpcomingEvent & { versus?: string | null })[]  // its games to come, as last read (Today's Coming up)
 }
 
 /** A team's page (GET /api/teams/<id>): who it is, whether this fan follows it and at what level, whether it can
@@ -381,6 +382,10 @@ export interface MatchPlayer { player_id: number; name: string; sport: string; r
  * is what its sport shows under it (Sport.match_page: a timeline, a scorecard, maps, a chess game's moves),
  * drawn by the sport's view, `moments` what was found for the players followed in it, `yours` the fan's
  * players in it with their lines. */
+/** One of a game's teams to follow, as its match page offers it (sports_follow/teams.py in_game): whether this
+ * fan follows it, and whether it can be followed now (its source runs). */
+export interface GameTeam { team_id: number; name: string; sport: string; following: boolean; can_follow: boolean }
+
 export interface Match {
   key: string
   match: string  // its address after /match/
@@ -396,6 +401,7 @@ export interface Match {
   moments: MatchMoment[]
   yours?: MatchPlayer[]
   sides: MatchSide[]
+  teams?: GameTeam[]  // its sides as the team registry has them, to follow
   event_ids: number[]
   fixtures: string[]
   refreshing: boolean  // a newer read is on its way: look again in a moment

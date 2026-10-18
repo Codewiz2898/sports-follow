@@ -93,8 +93,9 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
   const badge = c.wl ? <WL mark={c.wl} on={tone.on} block={tone.sport} /> : null
   const line = (text: string, strong?: boolean) => <Text key={text} style={[b.resultLine, { color: tone.on, fontFamily: strong ? font[800] : font[700] }]} numberOfLines={2}>{text}</Text>
   const page = game.players.find((p) => p.result.match)?.result.match
+  const lead = game.players[0]
   return (
-    <Pressable onPress={openMatch(page, `/player/${c.r.player_id}`)} style={[b.result, hero && b.resultHero, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
+    <Pressable onPress={openMatch(page, lead.team != null ? `/team/${lead.team}` : `/player/${c.r.player_id}`)} style={[b.result, hero && b.resultHero, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
       <Backdrop sport={tone.key} seed={game.key} colour={tone.on} />
       <View style={b.row}>
         {hero ? <Pill label={c.when} bg={tone.on} color={tone.sport} /> : <Eyebrow color={tone.onSoft} lines={1} style={{ flexShrink: 1 }}>{[c.when, c.r.competition].filter(Boolean).join(' · ')}</Eyebrow>}
@@ -105,7 +106,7 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
         <Dsp size={hero ? 40 : 26} color={tone.on}>{c.who}</Dsp>
         {c.stats ? (
           <View style={{ gap: 4 }}>
-            {c.several ? <Text style={[t.tag, { color: tone.onSoft }]}>{shortName(c.r.player_name)}</Text> : null}
+            {c.several ? <Text style={[t.tag, { color: tone.onSoft }]}>{lead.team != null ? c.r.player_name : shortName(c.r.player_name)}</Text> : null}
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {c.stats.map((x) => (
                 <View key={x.label} style={{ flex: 1, gap: 2 }}>
@@ -130,10 +131,10 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
 }
 
 /** One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it, or
- * saying they follow the game itself (`sport`: its sport, with no players). It opens the game's match page (the
- * line-ups as they come, both sides' players), else the first player's page. */
-export function ComingCard({ event, players, seed, sport, fill }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string } & RailCard) {
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's teams and players in
+ * it, or saying they follow the game itself (`sport`: its sport, with no players). It opens the game's match page
+ * (the line-ups as they come, both sides' players), else the first player's page. */
+export function ComingCard({ event, players, seed, sport, teams = [], fill }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[] } & RailCard) {
   const now = useNow()
   const tone = useTone(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
@@ -144,7 +145,7 @@ export function ComingCard({ event, players, seed, sport, fill }: { event: Upcom
       <Dsp size={44} color={tone.ink}>{big}</Dsp>
       <View style={{ gap: 6 }}>
         <Text style={[b.resultLine, { color: colour.bg }]} numberOfLines={2}>{event.title}</Text>
-        <Pill small label={players.length ? players.map((c) => shortName(c.player.name)).join(' · ') : 'Following this game'} bg={tone.sport} color={tone.on} />
+        <Pill small label={[...teams, ...players.map((c) => shortName(c.player.name))].join(' · ') || 'Following this game'} bg={tone.sport} color={tone.on} />
       </View>
     </Pressable>
   )

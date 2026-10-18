@@ -99,7 +99,9 @@ export function playerLine(live: LiveStatus): { lead: Stat; rest: Stat[]; headli
 /** One finished game on Today: each of the fan's players in it, the one with the biggest line first. */
 export interface GameResult {
   key: string  // the game: its event id, else its title and day
-  players: { result: LatestResult; sport?: string | null; teams?: string[] }[]
+  // The fan's players in it, each with their result; a team of theirs stands in as one, by its id (`team`), its
+  // result from its side and its name as the player's.
+  players: { result: LatestResult; sport?: string | null; teams?: string[]; team?: number }[]
 }
 
 /** The big word's size in a result card: as large as the card's width takes it in a line or two. */
@@ -107,6 +109,9 @@ export function wordSize(word: string, hero?: boolean): number {
   const steps = hero ? [64, 50, 40, 32] : [46, 36, 28, 22]
   return steps[word.length <= 10 ? 0 : word.length <= 16 ? 1 : word.length <= 24 ? 2 : 3]
 }
+
+/** How a result card names one of the fan's in it: a player by their surname, a team by its whole name. */
+const nameOf = (p: GameResult['players'][number]) => (p.team != null ? p.result.player_name : shortName(p.result.player_name))
 
 /**
  * What a result card on Today says: one big word (the sport's word for the line, a hat-trick or a hundred,
@@ -139,9 +144,9 @@ export function resultCard(game: GameResult, hero: boolean, now: number, key: st
     const mark = marks[i]
     const how = split ? (mark ? WON[mark] : p.result.result) : null
     const said = [how, line].filter(Boolean).join(' · ')
-    return said ? [several ? `${shortName(p.result.player_name)}: ${said}` : said] : []
+    return said ? [several ? `${nameOf(p)}: ${said}` : said] : []
   })
-  return { r, several, word, wl, when, stats, match, lines, who: game.players.map((p) => shortName(p.result.player_name)).join(' · ') }
+  return { r, several, word, wl, when, stats, match, lines, who: game.players.map(nameOf).join(' · ') }
 }
 
 /** What a coming game's card on Today says: big, the countdown once it's less than a day away (else the

@@ -436,6 +436,36 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
 
 
 @needs_db
+def test_a_match_page_offers_its_teams_and_today_has_a_followed_teams_games(db, redis, source, monkeypatch):
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    source.fixtures[ARS] = [fixture("100", NOW + timedelta(days=2)), fixture("50", NOW - timedelta(days=1), "final", TOT, ARS, (0, 3))]
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    event = db.scalars(select(Event).where(Event.key == "pitch:100")).one()
+    # Before kick-off, from its fixture's sides (no board yet), in the game's order, Arsenal followed.
+    offered = teams.in_game(db, "gooner", "pitch", {}, [event.id])
+    assert [(t["name"], t["following"], t["can_follow"]) for t in offered] == [("Arsenal", True, True), ("Chelsea", False, True)]
+    # Once it has a board, from its sides there; a side the registry doesn't have isn't offered.
+    board = {"kind": "football", "home": {"id": CHE, "name": "Chelsea", "score": "0"}, "away": {"id": "999", "name": "Nobody FC", "score": "0"}}
+    assert [t["team_id"] for t in teams.in_game(db, None, "pitch", board, [])] == [chelsea.id]
+    stranger = teams.in_game(db, "someone", "pitch", {}, [event.id])
+    assert not any(t["following"] for t in stranger) and len(stranger) == 2
+    # A sport whose teams can't be followed now isn't offered.
+    monkeypatch.setattr(sports, "ENABLED", [x for x in sports.ALL if x.key != "football"])
+    assert teams.in_game(db, "gooner", "pitch", {}, [event.id]) == []
+    monkeypatch.setattr(sports, "ENABLED", list(sports.ALL))
+    # Following lists its games to come, which Today's Coming up shows, and its last result, Today's Results.
+    [mine] = teams.mine(db, "gooner")
+    assert [(u["title"], u["versus"]) for u in mine["upcoming"]] == [("Arsenal vs Chelsea", "Chelsea")]
+    assert (mine["last"]["result"], mine["last"]["versus"]) == ("Won 3–0", "Tottenham Hotspur")
+
+
+@needs_db
 def test_a_fans_team_follows_move_with_their_account_and_go_with_it(db, redis, source, monkeypatch):
     teams.import_teams(source.fake, NOW)
     monkeypatch.setattr(teams, "MAX", 2)

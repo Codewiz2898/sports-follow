@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
 import { LEVELS } from '../alerts'
-import { api, ApiError, type Match, type MatchFollowState } from '../api'
+import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../api'
 import { useNow } from '../clock'
-import { GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
+import { Avatar, GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
@@ -99,11 +99,57 @@ function useFollowGame(match: Match | null) {
 }
 
 /**
+ * The game's teams to follow (sports_follow/teams.py): each its name, opening its page, and Follow, which
+ * follows every game of the team from now on, not this one only. This app's word on following one shows over
+ * the page's last look; a tap shows at once.
+ */
+function GameTeams({ teams }: { teams: GameTeam[] }) {
+  const following = useFollowing()
+  const [busy, setBusy] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const follows = (t: GameTeam) => (following.loaded ? following.isFollowingTeam(t.team_id) : t.following)
+  const toggle = async (t: GameTeam) => {
+    setBusy(t.team_id)
+    setError(null)
+    try { await following.followTeam(t.team_id, !follows(t)) } catch (e) { setError((e as Error).message) } finally { setBusy(null) }
+  }
+  return (
+    <section className="section" aria-label="Teams">
+      <SectionHead title="Teams" />
+      <ul className="card list results">
+        {teams.map((t) => {
+          const on = follows(t)
+          return (
+            <li key={t.team_id} className="result">
+              <Link to={`/team/${t.team_id}`} className="result-main">
+                <Avatar name={t.name} sport={t.sport} />
+                <span className="stack">
+                  <span className="title">{t.name}</span>
+                  <span className="small muted">{on ? 'Every game of theirs, from both sides' : 'Follow every game of theirs'}</span>
+                </span>
+              </Link>
+              {(t.can_follow || on) && (
+                <button type="button" className={`btn${on ? '' : ' primary'}`} disabled={busy != null} onClick={() => { void toggle(t) }} aria-pressed={on} aria-label={`${on ? 'Following' : 'Follow'} ${t.name}`}>
+                  {busy === t.team_id ? <span className="spinner" /> : on ? <CheckIcon width={16} height={16} /> : <PlusIcon width={16} height={16} />}
+                  {on ? 'Following' : 'Follow'}
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {error && <div className="error-box" role="alert">{error}</div>}
+    </section>
+  )
+}
+
+/**
  * One game, whoever follows anyone in it, live, to come or over (sports_follow/match.py): a head in its sport's
  * colour with the competition and its board (the sides and the big score, as its sport draws them), and over
  * a finished game's board who won, big; a game to come has its countdown there instead. Then what its sport
  * shows under the board (a timeline, a scorecard, its maps, a chess game's moves), the fan's players in it with
- * their lines, what was found for the players followed in it, and both sides' players to follow with a tap.
+ * their lines, its teams to follow, what was found for the players followed in it, and both sides' players to
+ * follow with a tap.
  * Every game on Today opens it, live, over or to come, and so does a game on a player's Matches tab.
  */
 export function MatchPage() {
@@ -193,6 +239,12 @@ export function MatchPage() {
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
       {head.note && <p className="small muted" role="status">{head.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
+
+      {(match.teams ?? []).length > 0 && (
+        <ErrorBoundary fallback={<BlockError />} resetKey={match.teams}>
+          <GameTeams teams={match.teams ?? []} />
+        </ErrorBoundary>
+      )}
 
       {yours.length > 0 && (
         <section className="section" aria-label="Your players">

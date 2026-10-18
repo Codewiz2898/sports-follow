@@ -43,6 +43,7 @@ from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
 from .sports.base import Found
+from .sports.base import sides as sports_sides
 
 log = logging.getLogger("sports_follow.teams")
 
@@ -608,8 +609,8 @@ def event_ids(db: Session, fan: str, now: datetime | None = None) -> list[int]:
 
 
 def mine(db: Session, fan: str) -> list[dict[str, Any]]:
-    """The teams this fan follows, as Following lists them: each with their level, its next game, its last result,
-    and its game on now as last polled."""
+    """The teams this fan follows, as Following and Today list them: each with their level, its next game and its
+    games to come (Today's Coming up), its last result, and its game on now as last polled."""
     rows = db.execute(select(Team, TeamFollow.alert_rules).join(TeamFollow, TeamFollow.team_id == Team.id).where(TeamFollow.fan_id == fan).order_by(TeamFollow.created_at, Team.id)).all()
     boards = _boards(db, [t.id for t, _ in rows])
     out = []
@@ -617,7 +618,8 @@ def mine(db: Session, fan: str) -> list[dict[str, Any]]:
         if not sports.on(team.sport):
             continue  # a sport turned off: its follow stays, unseen, for when it's back
         last = next(iter((team.card or {}).get("recent") or []), None)
-        out.append({**summary(team, following=True), "alerts": (rules_ or {}).get("level", moments.DEFAULT_LEVEL), "last": last, "live": boards.get(team.id)})
+        out.append({**summary(team, following=True), "alerts": (rules_ or {}).get("level", moments.DEFAULT_LEVEL), "last": last, "live": boards.get(team.id),
+                    "upcoming": (team.card or {}).get("upcoming") or []})
     return out
 
 
@@ -651,6 +653,35 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
         "source": card.get("source") or source_name(team.system),
         "fetched_at": card.get("fetched_at"),
     }
+
+
+def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], event_ids: list[int]) -> list[dict[str, Any]]:
+    """The teams a game's match page offers to follow (match.view): its sides as the registry has them, by their ids
+    on its board (Sport's sides(); a source whose team ids say more than its boards' maps them, Adapter.board_id),
+    else as its events' fixtures named them (Event.participants: a game to come has no board yet), and the teams
+    its events are linked to (event_team), in the game's order; each with whether this fan follows it, and whether
+    it can be followed now (its sport runs, its source can say its games). Teams of a sport whose teams can't be
+    followed, and sides the registry doesn't have, aren't offered."""
+    on_board = [str(side.get("id")) for side in sports_sides(state) if side.get("id") not in (None, "")]
+    if not on_board and event_ids:
+        named = db.scalars(select(Event.participants).where(Event.id.in_(event_ids), Event.key.startswith(f"{system}:"))).all()
+        on_board = list(dict.fromkeys(str(x) for ids in named for x in ids or [] if x not in (None, "")))
+    board_id = getattr(KNOWN.get(system), "board_id", None)
+    found: dict[int, Team] = {}
+    if on_board:
+        maybe = or_(Team.external_id.in_(on_board), *[Team.external_id.like(f"%:{i}") for i in on_board]) if callable(board_id) else Team.external_id.in_(on_board)
+        for team in db.scalars(select(Team).where(Team.system == system, maybe)):
+            if team.external_id in on_board or (callable(board_id) and str(board_id(team.external_id)) in on_board):
+                found[team.id] = team
+    if event_ids:
+        for team in db.scalars(select(Team).join(EventTeam, EventTeam.team_id == Team.id).where(EventTeam.event_id.in_(event_ids))):
+            found.setdefault(team.id, team)
+    shown = [t for t in found.values() if followable(t.sport)]
+    side_of = {i: n for n, i in enumerate(on_board)}
+    shown.sort(key=lambda t: (side_of.get(t.external_id, side_of.get(str(board_id(t.external_id)) if callable(board_id) else "", len(side_of))), t.id))
+    theirs = _following(db, fan, [t.id for t in shown])
+    can = readable(ADAPTERS.get(system))
+    return [{"team_id": t.id, "name": t.name, "sport": t.sport, "following": t.id in theirs, "can_follow": can} for t in shown]
 
 
 def look_again(team: Team) -> bool:
