@@ -55,8 +55,10 @@ Notifications.setNotificationHandler({
   },
 })
 
-// Both are public on the lock screen (the server marks each push public too, for a channel made before this
-// was): a score is no secret, and the lock screen is where a fan looks first.
+// Both say public for the lock screen, though what counts is each push's own visibility, which the server sets
+// public (fcm.message): a score is no secret, and the lock screen is where a fan looks first. A moment that
+// arrives with the app open is shown by expo-notifications, which sets none, so it stays private until the
+// game's next push replaces it.
 async function makeChannels(): Promise<void> {
   await Notifications.setNotificationChannelAsync(LOUD_CHANNEL, {
     name: 'Key moments',
