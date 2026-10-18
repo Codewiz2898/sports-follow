@@ -168,3 +168,43 @@ def test_a_fans_android_devices_and_browsers_share_the_cap(db, fake_fcm):  # noq
     register(db, "fan-a")
     kept = devices(db)
     assert len(kept) == notify.MAX_DEVICES and PHONE in kept and f"{BROWSER}-0" not in kept  # the oldest browser made room
+
+
+def live(db) -> dict[str, tuple]:
+    db.expire_all()
+    return {d.endpoint: (d.live_cards, d.live_stopped) for d in db.scalars(select(PushSubscription))}
+
+
+def test_the_apps_live_scores_switch_comes_with_its_registration(db, fake_fcm):  # noqa: F811
+    register(db, "fan-a")
+    assert live(db) == {PHONE: (True, [])}  # on unless the app says
+    register(db, "fan-a", live_cards=False)
+    assert live(db) == {PHONE: (False, [])}
+    # A build from before the switch reached the server sends none, or something that isn't one: it stays as it was.
+    register(db, "fan-a")
+    register(db, "fan-a", live_cards="no")
+    assert live(db) == {PHONE: (False, [])}
+    # FCM gave the app a new token: the switch and the stopped games come along, as its quiet hours do.
+    server.stop_live_card(1, body={"token": PHONE}, fan="fan-a", db=db)
+    server.register_fcm(body={"token": OTHER_PHONE, "previous_token": PHONE}, fan="fan-a", signed=None, db=db)
+    assert live(db) == {OTHER_PHONE: (False, [1])}
+    server.register_fcm(body={"token": OTHER_PHONE, "live_cards": True}, fan="fan-a", signed=None, db=db)
+    assert live(db) == {OTHER_PHONE: (True, [1])}
+
+
+def test_stop_live_card_reaches_the_server_for_that_phone_and_game(db, fake_fcm):  # noqa: F811
+    register(db, "fan-a")
+    server.register_fcm(body={"token": OTHER_PHONE}, fan="fan-b", signed=None, db=db)
+    db.add_all([Event(id=n, key=f"e{n}", sport="football", title=f"Game {n}", status="live") for n in range(2, server.LIVE_STOPS_KEPT + 3)])
+    db.commit()
+    assert server.stop_live_card(1, body={"token": PHONE}, fan="fan-a", db=db) == {"event_id": 1, "stopped": True}
+    assert live(db) == {PHONE: (True, [1]), OTHER_PHONE: (True, [])}  # the fan's other phones keep the card
+    for refused, (event_id, body, fan) in ((400, (1, {"token": "nope"}, "fan-a")), (404, (99, {"token": PHONE}, "fan-a")), (404, (1, {"token": OTHER_PHONE}, "fan-a"))):
+        with pytest.raises(HTTPException) as answer:
+            server.stop_live_card(event_id, body=body, fan=fan, db=db)  # not a token, no such game, another fan's phone
+        assert answer.value.status_code == refused
+    # The newest LIVE_STOPS_KEPT games, as the app keeps them: older ones are long over.
+    for event_id in [*range(2, server.LIVE_STOPS_KEPT + 3), 5]:
+        server.stop_live_card(event_id, body={"token": PHONE}, fan="fan-a", db=db)
+    stopped = live(db)[PHONE][1]
+    assert len(stopped) == server.LIVE_STOPS_KEPT and stopped[-2:] == [server.LIVE_STOPS_KEPT + 2, 5] and 1 not in stopped and stopped.count(5) == 1

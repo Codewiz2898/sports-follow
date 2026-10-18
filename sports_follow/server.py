@@ -1624,7 +1624,8 @@ def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
 @app.post("/api/push/fcm")
 def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
     """The Android app turns notifications on for this device with its FCM token (or updates its quiet
-    hours), as a browser does with its subscription. Signed in, the device belongs to this session.
+    hours, or its live cards: `live_cards`, Alerts' Live scores), as a browser does with its subscription.
+    Signed in, the device belongs to this session.
 
     The token is the device's alone (no other app, page or person is shown it, and this server never logs
     it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
@@ -1635,19 +1636,26 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
     if not fcm.valid_token(token):
         raise HTTPException(400, "That isn't an FCM token.")
     tz, start, end = _device_settings(body)
+    # A build of the app from before live cards could be turned off sends none: the device keeps what it has.
+    live = body.get("live_cards") if isinstance(body.get("live_cards"), bool) else None
+    stopped: list[int] = []
     previous = body.get("previous_token")
     if fcm.valid_token(previous) and previous != token:
-        # FCM gave the app a new token: the old one goes, and its quiet hours carry over unless new ones came.
+        # FCM gave the app a new token: the old one goes, and its quiet hours and live cards carry over unless
+        # new ones came.
         old = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == previous, PushSubscription.transport == "fcm"))
         if old is not None:
             if "quiet_start" not in body:
                 start, end = old.quiet_start, old.quiet_end
+            live = old.live_cards if live is None else live
+            stopped = old.live_stopped
             db.delete(old)
     session_id = signed.session_id if signed else None
-    stmt = insert(PushSubscription).values(fan_id=fan, transport="fcm", endpoint=token, p256dh=None, auth=None, timezone=tz, quiet_start=start, quiet_end=end, session_id=session_id)
+    stmt = insert(PushSubscription).values(fan_id=fan, transport="fcm", endpoint=token, p256dh=None, auth=None, timezone=tz, quiet_start=start, quiet_end=end, session_id=session_id,
+                                           live_cards=True if live is None else live, live_stopped=stopped)
     stmt = stmt.on_conflict_do_update(
         index_elements=["endpoint"],
-        set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id},
+        set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id, **({} if live is None else {"live_cards": live})},
         where=PushSubscription.transport == "fcm",
     )
     if db.execute(stmt.returning(PushSubscription.id)).first() is None:
@@ -1655,6 +1663,27 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
     notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
     db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
+
+
+LIVE_STOPS_KEPT = 30  # the games a phone stopped the live card of that are kept: the newest, as the app keeps them
+
+
+@app.put("/api/push/fcm/stopped/{event_id}")
+def stop_live_card(event_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """"Stop live card" on the Android app's card of a game: this phone (its token, which only it has) gets no more
+    of the game's cards (livecards.android); its moments still come, and the fan's other phones keep the card. The
+    app remembers the stop too, so a card already on its way, or every card if this never arrives, isn't shown."""
+    token = body.get("token")
+    if not fcm.valid_token(token):
+        raise HTTPException(400, "That isn't an FCM token.")
+    if db.get(Event, event_id) is None:
+        raise HTTPException(404, "No such game.")
+    device = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == token, PushSubscription.transport == "fcm").with_for_update())
+    if device is None:
+        raise HTTPException(404, "That device isn't getting notifications.")
+    device.live_stopped = [*(e for e in device.live_stopped if e != event_id), event_id][-LIVE_STOPS_KEPT:]
+    db.commit()
+    return {"event_id": event_id, "stopped": True}
 
 
 @app.delete("/api/push/fcm")

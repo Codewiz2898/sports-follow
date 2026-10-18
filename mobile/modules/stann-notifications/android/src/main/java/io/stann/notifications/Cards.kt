@@ -165,7 +165,7 @@ internal object Cards {
     text(big, R.id.stann_player2, players.getOrNull(1).orEmpty())
 
     val match = d["match"].orEmpty()
-    if (promoted(c)) return post(c, liveTag(event), liveUpdate(c, d, look, sides, players, status))
+    if (promoted(c)) return postLive(c, event, liveUpdate(c, d, look, sides, players, status))
     val builder = base(c, d, Channels.LIVE, look, small, big)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
@@ -174,7 +174,13 @@ internal object Cards {
       .setContentIntent(open(c, match, null))
     if (match.isNotBlank()) builder.addAction(0, "Match page", open(c, match, null))
     builder.addAction(0, "Stop live card", button(c, ActionReceiver.STOP, event, liveTag(event)))
-    post(c, liveTag(event), builder)
+    postLive(c, event, builder)
+  }
+
+  /** A game's live card, unless the fan stopped it or turned live cards off while it was being drawn: they took
+   *  it down then, and the server sends this phone no end to take down one posted after (livecards.android). */
+  private fun postLive(c: Context, event: String, builder: NotificationCompat.Builder) {
+    if (Settings.liveCards(c) && !Settings.stopped(c, event)) post(c, liveTag(event), builder)
   }
 
   /** Whether Android lets this app's live cards be Live Updates (Android 16, and the fan hasn't said no). */

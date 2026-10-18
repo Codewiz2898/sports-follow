@@ -6,7 +6,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.lang.ref.WeakReference
 
 /** What the app's JavaScript asks of its notifications (src/push.ts): make the channels, say where the API is
- *  (a button calls it while the app's closed), turn live cards on or off; and it hears each moment that
+ *  and the token the app registered with it (a button calls it while the app's closed), turn live cards on or off; and it hears each moment that
  *  arrives while it runs ("onMoment"), as it heard expo-notifications' before the app drew them itself. */
 class StannNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -18,6 +18,7 @@ class StannNotificationsModule : Module() {
 
     Function("makeChannels") { Channels.make(context) }
     Function("configure") { api: String -> Settings.setApi(context, api) }
+    Function("registered") { token: String? -> Settings.setToken(context, token) }
     Function("liveCards") { Settings.liveCards(context) }
     Function("setLiveCards") { on: Boolean ->
       Settings.setLiveCards(context, on)

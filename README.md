@@ -669,7 +669,9 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
   for in 20), ongoing and silent, and taken down at the end. Cards aren't collapsible FCM messages: FCM lets a
   phone have a burst of 20 of those, then one every 3 minutes, and a moment would wait behind them. On an Android 16 phone that allows it, a live
   card is a Live Update instead: first on the lock screen, with the score in the status bar. Alerts' Settings has
-  a switch for them, and each card a Stop button.
+  a switch for them (Live scores), and each card a Stop button; the phone tells the server either, which then
+  sends it none it would throw away: the switch with its registration, a stop by `PUT /api/push/fcm/stopped/<event>`
+  with its token (the newest 30 games each, kept on the phone too, so a card already on its way isn't shown).
 
 The drawing is the app's own Expo module, `mobile/modules/stann-notifications` (Kotlin): it takes every FCM
 message ahead of expo-notifications, which still asks for permission and gives the token. Android can't load the
@@ -680,8 +682,9 @@ phones leave off it). Android 14 and earlier bundle four or more of an app's not
 their plain titles unless each is in a group, so each is in its own; Android 16 bundles them all the same. It
 asks to notify the first time the fan follows someone or a game (Android 13 and later); then Alerts'
 Settings turns them on and off for the phone, with its quiet hours and a test alert, as on the web. While
-they're on, it registers its FCM token with the API (`POST /api/push/fcm`, with its timezone and quiet
-hours) at every start, after a sign-in or out, and whenever FCM replaces the token; a tap opens the
+they're on, it registers its FCM token with the API (`POST /api/push/fcm`, with its timezone, quiet
+hours and `live_cards`) at every start, after a sign-in or out, whenever FCM replaces the token, and when
+its quiet hours or Live scores change; a tap opens the
 player's page, or for a game followed by itself, its match page, by the app's own link (`stann://player/7?n=31`,
 n the notification, which the app counts as opened). Without the Firebase project's files there are no notifications and nothing else changes. To turn them
 on, once:

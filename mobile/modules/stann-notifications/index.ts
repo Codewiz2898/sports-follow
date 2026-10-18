@@ -14,6 +14,8 @@ declare class StannNotifications extends NativeModule<Events> {
   makeChannels(): void
   /** Where the API is, for a button that calls it while the app is closed (Mute this game). */
   configure(api: string): void
+  /** The FCM token the app registered with the API (null once it's off), for a button that names this phone. */
+  registered(token: string | null): void
   /** Whether live cards show, on this phone. */
   liveCards(): boolean
   setLiveCards(on: boolean): void
