@@ -54,7 +54,9 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The folder, not the file: a checkout replaces the Caddyfile, and a mount of the file itself would
+      # keep showing the old one. deploy.sh has Caddy reload it after each deploy.
+      - ./caddy:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
@@ -146,6 +148,7 @@ services:
     env_file:
       - ${SECRETS_DIR:-/etc/sports-follow}/postgres.env
     volumes:
+      # The file itself: after a checkout replaces it, deploy.sh sees this copy differ and restarts the service.
       - ./backup.sh:/backup.sh:ro
       - ${BACKUP_DIR:-/var/backups/sports-follow}:/backups
     depends_on:
