@@ -656,7 +656,9 @@ npm run typecheck                                   # what CI checks
 **Notifications** come through Firebase Cloud Messaging, planned as the web's are (one notification a
 game, replaced as its moments come; sound only for a key moment outside quiet hours). The server sends
 them itself with FCM's HTTP v1 API (`sports_follow/fcm.py`), with no Expo push service in between. The
-app (`mobile/src/push.ts`) makes two channels, "Key moments" with sound and "Other moments" without. It
+app (`mobile/src/push.ts`) makes two channels, "Key moments" with sound and "Other moments" without; both
+show on the lock screen, whole (every push is public, and "Other moments" is default importance, not the
+low "silent" kind most phones leave off it). It
 asks to notify the first time the fan follows someone or a game (Android 13 and later); then Alerts'
 Settings turns them on and off for the phone, with its quiet hours and a test alert, as on the web. While
 they're on, it registers its FCM token with the API (`POST /api/push/fcm`, with its timezone and quiet

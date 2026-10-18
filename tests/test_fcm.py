@@ -139,12 +139,13 @@ def test_a_push_is_its_games_notification_on_the_channel_its_sound_needs():
         "notification": {"title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'"},
         # Strings only, as FCM takes them: what the app needs to open the player's page and count the open.
         "data": {"id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"},
-        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "sound": "default", "tag": "e1"}},
+        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "visibility": "PUBLIC", "sound": "default", "tag": "e1"}},
     }
-    # Quiet hours, or a moment that makes no sound: the same notification, silently, without waking the phone.
+    # Quiet hours, or a moment that makes no sound: the same notification, silently, without waking the phone,
+    # still public and on a channel the lock screen shows.
     for quiet in ({**GOAL, "quiet": True}, {**GOAL, "loud": False}):
         android = fcm.message(TOKEN, quiet, 600)["android"]
-        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "quiet", "tag": "e1"})
+        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "other", "visibility": "PUBLIC", "tag": "e1"})
     # A player's news, outside any game, has the player's tag; a push with no tag still has one per moment.
     assert fcm.message(TOKEN, {**GOAL, "tag": "p7", "event_id": None}, 60)["data"] == {"id": "31", "url": "/player/7", "player_id": "7", "kind": "goal", "tag": "p7"}
     assert fcm.message(TOKEN, {**GOAL, "tag": None}, 60)["android"]["notification"]["tag"] == "moment-31"

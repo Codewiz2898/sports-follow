@@ -26,9 +26,12 @@ import { useAccount } from './account'
 import { api } from './api'
 
 // The channels the server sends on (fcm.LOUD_CHANNEL, fcm.QUIET_CHANNEL; tests/test_fcm.py holds them equal).
-// Once made, only Android's settings change a channel's sound: a new sound needs a new id.
+// Once made, only Android's settings change a channel's sound or importance: a new one needs a new id.
 export const LOUD_CHANNEL = 'key'
-export const QUIET_CHANNEL = 'quiet'
+export const QUIET_CHANNEL = 'other'
+// The quiet channel's id before it moved up to default importance: a low one is "silent", and most phones
+// leave silent notifications off the lock screen. Deleted, so Android's settings don't list it twice.
+const OLD_QUIET_CHANNEL = 'quiet'
 
 const TOKEN = 'stann.push-token' // the token last registered, so a new one can replace it on the server
 const ASKED = 'stann.push-asked' // the app asked Android's prompt on a follow: not again unless Alerts asks
@@ -52,19 +55,24 @@ Notifications.setNotificationHandler({
   },
 })
 
+// Both are public on the lock screen (the server marks each push public too, for a channel made before this
+// was): a score is no secret, and the lock screen is where a fan looks first.
 async function makeChannels(): Promise<void> {
   await Notifications.setNotificationChannelAsync(LOUD_CHANNEL, {
     name: 'Key moments',
     description: 'Your players’ key moments and results, with sound',
     importance: Notifications.AndroidImportance.HIGH, // and no `sound`: the phone's own (a name would be a sound file)
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   })
   await Notifications.setNotificationChannelAsync(QUIET_CHANNEL, {
     name: 'Other moments',
-    description: 'Everything else, and anything in your quiet hours, without sound',
-    importance: Notifications.AndroidImportance.LOW,
+    description: 'Everything else, and anything in your quiet hours, without sound but on the lock screen',
+    importance: Notifications.AndroidImportance.DEFAULT, // not LOW: Android hides "silent" ones from most lock screens
     sound: null,
     enableVibrate: false,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   })
+  await Notifications.deleteNotificationChannelAsync(OLD_QUIET_CHANNEL)
 }
 
 async function stored<T>(key: string): Promise<T | null> {

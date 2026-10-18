@@ -97,7 +97,7 @@ def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, 
     assert sent["token"] == PHONE
     assert sent["notification"] == {"title": "Goal: Mohamed Salah puts Egypt ahead", "body": "Egypt 1 – 0 South Africa · 23'"}
     assert sent["data"] == {"id": str(row.id), "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"}
-    assert sent["android"]["notification"] == {"channel_id": "key", "sound": "default", "tag": "e1"} and sent["android"]["priority"] == "high"
+    assert sent["android"]["notification"] == {"channel_id": "key", "visibility": "PUBLIC", "sound": "default", "tag": "e1"} and sent["android"]["priority"] == "high"
     assert browser == [("e1", "Goal: Mohamed Salah puts Egypt ahead", "e1")]  # the same push, by Web Push
     assert db.scalar(select(PushSubscription.last_ok_at).where(PushSubscription.endpoint == PHONE)) is not None
 
@@ -107,7 +107,7 @@ def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, 
     register(db, "fan-a", quiet_start=f"{india - timedelta(minutes=30):%H:%M}", quiet_end=f"{india + timedelta(minutes=30):%H:%M}")
     assert notify.send(goal(db, "goal@140", "Egypt 2 – 0 South Africa · 40'")) == 2
     second = fake_fcm.sent[-1]
-    assert second["android"]["notification"] == {"channel_id": "quiet", "tag": "e1"} and second["android"]["priority"] == "normal"
+    assert second["android"]["notification"] == {"channel_id": "other", "visibility": "PUBLIC", "tag": "e1"} and second["android"]["priority"] == "normal"
     assert second["notification"]["body"].startswith("Egypt 2 – 0 South Africa · 40'")
 
     # Uninstalled: FCM no longer knows the token, and the device goes. The browser stays.
