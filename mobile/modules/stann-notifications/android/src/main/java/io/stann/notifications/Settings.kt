@@ -3,10 +3,11 @@ package io.stann.notifications
 import android.content.Context
 
 /** What the notifications keep on the phone, for when the app isn't running: where the API is (for a button
- *  that calls it), whether live cards are on, and the games whose live card the fan stopped. */
+ *  that calls it), whether live cards are on, and the games whose live card the fan stopped. The server is told
+ *  both (src/push.ts, ActionReceiver) and sends no card the phone would throw away; these catch any that come. */
 internal object Settings {
   private const val DEFAULT_API = "https://stann.in"
-  private const val STOPPED_KEPT = 30 // the newest games stopped; older ones are long over
+  private const val STOPPED_KEPT = 30 // the newest games stopped; older ones are long over (the server keeps as many)
 
   private fun prefs(c: Context) = c.getSharedPreferences("io.stann.notifications", Context.MODE_PRIVATE)
 

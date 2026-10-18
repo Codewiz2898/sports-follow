@@ -14,9 +14,10 @@ one: structured.finish), its end goes, once. Redis keeps what each game's card l
 Who gets a game's card: the fans who'd hear its key moments (a level of key or everything, not results only or
 off) by a player in it they follow, by the game itself (matches.py, not lapsed) or by a team in it (teams.py),
 and haven't muted it; on their Android devices only (a browser's push can't be updated in place), the newest
-notify.MAX_DEVICES each, as a moment's push goes. Each card names the fan's own players in the game, with their
-line so far. A game's end goes to every fan who follows it any of those ways, whatever their level: it only
-takes a card down.
+notify.MAX_DEVICES each, as a moment's push goes, less a phone with live cards off (Alerts' Live scores) or that
+stopped this game's (Stop live card on it): the app would throw its cards away (android). Each card names the
+fan's own players in the game, with their line so far. A game's end goes to every fan who follows it any of
+those ways, whatever their level, on the same phones: it only takes a card down.
 
 None of this is an alert: no notification rows, no sound, nothing in the push metrics. A device FCM says is gone
 is removed, as after a moment's push (notify.settle), but another failure isn't counted against it: cards come
@@ -248,7 +249,7 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None) -> int:
             made = {**made, "live": "0"}  # it's over, or no longer polled live, whatever its last poll said
         fans = audience(db, event_id, live)
         theirs = lines(db, event_id, fans) if live else {}
-        devices = android(db, list(fans))
+        devices = android(db, list(fans), event_id)
     futures = []
     for fan, mine in devices.items():
         data = {**made, "players": theirs.get(fan, [])} if live else made
@@ -303,14 +304,18 @@ def lines(db: Session, event_id: int, fans: dict[str, list[int]]) -> dict[str, l
     return out
 
 
-def android(db: Session, fans: list[str]) -> dict[str, list[tuple[int, str]]]:
-    """These fans' Android devices (id, FCM token), the newest notify.MAX_DEVICES each, as a moment's push goes."""
+def android(db: Session, fans: list[str], event_id: int) -> dict[str, list[tuple[int, str]]]:
+    """These fans' Android devices (id, FCM token) that show a game's live card: of the newest notify.MAX_DEVICES
+    each, as a moment's push goes, those with live cards on that haven't stopped this game's (the app's Live scores
+    and Stop live card: server.register_fcm, stop_live_card). A card sent to one of the others would wake it to
+    be thrown away."""
     out: dict[str, list[tuple[int, str]]] = {}
     if not fans:
         return out
-    for device_id, fan, token in db.execute(select(PushSubscription.id, PushSubscription.fan_id, PushSubscription.endpoint)
-                                            .where(PushSubscription.fan_id.in_(fans), PushSubscription.transport == "fcm").order_by(PushSubscription.id.desc())):
-        mine = out.setdefault(fan, [])
-        if len(mine) < notify.MAX_DEVICES:
-            mine.append((device_id, token))
+    newest: dict[str, int] = {}
+    for device_id, fan, token, on, stopped in db.execute(select(PushSubscription.id, PushSubscription.fan_id, PushSubscription.endpoint, PushSubscription.live_cards, PushSubscription.live_stopped)
+                                                         .where(PushSubscription.fan_id.in_(fans), PushSubscription.transport == "fcm").order_by(PushSubscription.id.desc())):
+        newest[fan] = newest.get(fan, 0) + 1
+        if newest[fan] <= notify.MAX_DEVICES and on and event_id not in (stopped or []):
+            out.setdefault(fan, []).append((device_id, token))
     return out

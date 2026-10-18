@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, livecards, notify, structured
+from sports_follow import bus, livecards, notify, server, structured
 from sports_follow.adapters.base import Line, Snapshot
 from sports_follow.models import (Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerLine,
                                   PushSubscription, Team, TeamFollow)
@@ -135,6 +135,46 @@ def test_a_fans_newest_phones_get_the_card_and_one_uninstalled_goes(db, fake_fcm
     db.expire_all()
     assert phone("many", notify.MAX_DEVICES + 1) not in set(db.scalars(select(PushSubscription.endpoint)))  # uninstalled: removed
     assert db.scalar(select(func.count()).select_from(Notification)) == 0  # a card is no alert
+
+
+def test_a_phone_with_live_scores_off_or_that_stopped_the_game_gets_none_of_its_cards(db, fake_fcm):  # noqa: F811
+    """Alerts' Live scores and a card's Stop button reach the server (server.register_fcm, stop_live_card): the
+    phone would throw the game's cards away, so none goes to it, nor its end. The fan's other phones keep them."""
+    fans(db)
+    db.add_all([PushSubscription(fan_id="keen", transport="fcm", endpoint=phone("keen", 1)), PushSubscription(fan_id="gooner", transport="fcm", endpoint=phone("gooner", 1))])
+    db.commit()
+    card = {"type": "live", "tag": "live-e1", "event_id": 1}
+
+    def to() -> set[str]:
+        tokens = {m["token"].split(":")[0] for m in fake_fcm.sent}
+        fake_fcm.sent.clear()
+        return tokens
+
+    # The app sends the switch with every registration: off, the phone gets no card; the fan's other phone does.
+    server.register_fcm(body={"token": phone("keen"), "live_cards": False}, fan="keen", signed=None, db=db)
+    # Stop live card on a game's card: that phone gets no more of it.
+    server.stop_live_card(1, body={"token": phone("gooner", 1)}, fan="gooner", db=db)
+    assert livecards.send(1, "live", card) == 3
+    assert to() == {"keen-1", "off-0", "gooner-0"}
+    assert livecards.send(1, "end") == 6
+    assert to() == {"keen-1", "results-0", "off-0", "muted-0", "lapsed-0", "gooner-0"}
+
+    # Registering again without it (a build from before) changes nothing; turned back on, the cards come again.
+    server.register_fcm(body={"token": phone("keen")}, fan="keen", signed=None, db=db)
+    assert livecards.send(1, "live", card) == 3
+    assert to() == {"keen-1", "off-0", "gooner-0"}
+    server.register_fcm(body={"token": phone("keen"), "live_cards": True}, fan="keen", signed=None, db=db)
+    assert livecards.send(1, "live", card) == 4
+    assert to() == {"keen-0", "keen-1", "off-0", "gooner-0"}
+
+
+def test_a_phone_that_stopped_another_game_still_gets_this_ones_card(db, fake_fcm):  # noqa: F811
+    db.add(Event(id=2, key="espn_soccer:740002", sport="Football", title="Spurs vs Fulham", status="live"))
+    db.add(MatchFollow(fan_id="fan", event_id=1, alert_rules={}))
+    db.add(PushSubscription(fan_id="fan", transport="fcm", endpoint=phone("fan")))
+    db.commit()
+    server.stop_live_card(2, body={"token": phone("fan")}, fan="fan", db=db)
+    assert livecards.send(1, "live", {"type": "live", "tag": "live-e1", "event_id": 1}) == 1
 
 
 def test_a_card_fcm_fails_isnt_counted_against_the_phone(db, fake_fcm):  # noqa: F811

@@ -50,7 +50,7 @@ export const api = {
   sports: () => request<SportCatalog>('/api/sports'),
   // Notifications on this phone (push.ts): its FCM token, as the web's pushSubscribe sends a browser's
   // subscription, and a tapped notification (the web's service worker reports its own).
-  registerPush: (device: { token: string; timezone: string; quiet_start?: string | null; quiet_end?: string | null; previous_token: string | null }) =>
+  registerPush: (device: { token: string; timezone: string; quiet_start?: string | null; quiet_end?: string | null; live_cards: boolean; previous_token: string | null }) =>
     request<PushSettings>('/api/push/fcm', json('POST', device)),
   unregisterPush: (token: string) => request<{ ok: boolean }>('/api/push/fcm', json('DELETE', { token })),
   opened: (notificationId: number) => request<{ ok: boolean }>(`/api/notifications/${notificationId}/opened`, { method: 'POST' }),

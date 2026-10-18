@@ -587,6 +587,10 @@ class PushSubscription(Base):
     created_at: Mapped[datetime] = _now()
     last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failures: Mapped[int] = mapped_column(Integer, default=0)
+    # The Android app's live cards (livecards.py), as the phone says (server.register_fcm, stop_live_card): whether
+    # it shows them (Alerts' Live scores), and the games whose card it stopped, newest last: none goes to it.
+    live_cards: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    live_stopped: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     # The signed-in session that turned it on: signing that device out removes it (accounts.py).
     session_id: Mapped[int | None] = mapped_column(ForeignKey("account_session.id", ondelete="CASCADE"), index=True)
 

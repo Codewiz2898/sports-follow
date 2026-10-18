@@ -8,9 +8,10 @@
 // The app makes its channels, and the first time the fan follows someone it asks to notify them (Android
 // 13 and later ask the fan; earlier ones don't); after that, Alerts' Settings turns them on and off here, as
 // on the web. While they're on, it registers the phone's FCM token with the API (POST /api/push/fcm) with its
-// timezone and quiet hours: at every start, after a sign-in or out (the cookie is another fan then), and
-// whenever FCM replaces the token, so the phone belongs to whoever the app is now and one the server dropped
-// comes back. Turned off here or in Android's settings, the phone comes off the server (FCM would go on
+// timezone, quiet hours and whether it shows live cards: at every start, after a sign-in or out (the cookie is
+// another fan then), whenever FCM replaces the token, and when the fan changes either setting, so the phone
+// belongs to whoever the app is now, one the server dropped comes back, and the server sends no live card the
+// phone would throw away. Turned off here or in Android's settings, the phone comes off the server (FCM would go on
 // taking its pushes). A tap opens the player's page, or a game's own moment its match page (the
 // notification opens the app's own link to it), and tells the server it was opened.
 //
@@ -63,7 +64,8 @@ async function unavailable(): Promise<string | null> {
 }
 
 /** Registers this phone's token with the API, replacing `previous` if FCM gave it a new one. Quiet hours go
- * when the app has them; without, a replaced token's carry over on the server. */
+ * when the app has them; without, a replaced token's carry over on the server. Live cards go as the phone has
+ * them (a card its "Stop live card" stopped the module tells the server itself: ActionReceiver.kt). */
 async function register(token: string, previous: string | null): Promise<void> {
   const quiet = await stored<Quiet>(QUIET)
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -71,6 +73,7 @@ async function register(token: string, previous: string | null): Promise<void> {
     token,
     timezone,
     ...(quiet ? { quiet_start: quiet.start, quiet_end: quiet.end } : {}),
+    live_cards: StannNotifications?.liveCards() ?? false,
     previous_token: previous && previous !== token ? previous : null,
   })
   await AsyncStorage.setItem(TOKEN, JSON.stringify(token))
@@ -255,11 +258,14 @@ export function usePush() {
     setMessage(testSaid(sent))
   })
 
-  // A live card for each game the fan follows while it's on: this phone's alone, kept by the app's notifications.
-  const saveLive = (next: boolean) => {
+  // A live card for each game the fan follows while it's on, this phone's alone: kept by the app's notifications,
+  // which take them down at once when it's off, and told to the server, which then sends this phone none.
+  const saveLive = (next: boolean) => run(async () => {
     StannNotifications?.setLiveCards(next)
     setLive(next)
-  }
+    const token = await stored<string>(TOKEN)
+    if (on && token) await register(token, null)
+  })()
 
   return { unavailable: why, on, quiet, busy, message, enable, disable, saveQuiet, test, live: StannNotifications ? live : null, saveLive }
 }
