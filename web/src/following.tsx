@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
+import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
 
 interface FollowingState {
@@ -23,6 +23,12 @@ interface FollowingState {
   matchesLoaded: boolean
   followMatch: (address: string, on: boolean, eventId?: number | null) => Promise<void>  // stopped by its event where known
   setMatchAlerts: (eventId: number, level: AlertLevel) => Promise<void>
+  // The teams the fan follows (sports_follow/teams.py), each with its next game, last result and game on now;
+  // following one or stopping, and its level.
+  teams: FollowedTeam[]
+  followTeam: (teamId: number, on: boolean) => Promise<void>
+  isFollowingTeam: (teamId: number) => boolean
+  setTeamAlerts: (teamId: number, level: AlertLevel) => Promise<void>
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -31,6 +37,41 @@ const TOAST_MS = 8000
 const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
 const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's players' of its kind in the game is that one
+
+/** A team's tag, as a game's own moment told from its side names it (PlayerMoment.sides). */
+const teamTag = (teamId: number) => `team:${teamId}`
+
+/** The level a game's own moment reaches the fan at, as alerts.plan has it for a push: the game's, followed by
+ * itself, else the loudest of their teams' in it (the moment says which teams fans follow in it); null where they
+ * follow neither, for a result told from a side that isn't theirs (or one they set to off), and for the game's own
+ * result where their team's side tells it too: theirs comes instead. */
+export function gameLevel(m: PlayerMoment, matches: FollowedMatch[], teams: FollowedTeam[]): AlertLevel | null {
+  const heard = new Set(teams.filter((t) => t.alerts !== 'off').map((t) => teamTag(t.team_id)))
+  if (m.sides?.length && !m.sides.some((s) => heard.has(s))) return null
+  if (m.told_by?.some((s) => heard.has(s))) return null
+  const game = matches.find((g) => g.event_id === m.event_id)?.alerts
+  if (game) return game  // the game's own follow sets its level, as notify._plan's does
+  const order: AlertLevel[] = ['off', 'results', 'key', 'everything']
+  const levels = teams.filter((t) => m.teams?.includes(teamTag(t.team_id))).map((t) => t.alerts)
+  return levels.length ? levels.reduce((a, b) => (order.indexOf(b) > order.indexOf(a) ? b : a)) : null
+}
+
+// A team's games this soon are on the fan stream: the server's 36 h (sports_follow/teams.event_ids), less an hour
+// here, so a clock running fast never connects again before the server counts the game.
+const STREAM_AHEAD_MS = 35 * 3600_000
+
+/** The games of the fan's teams the stream carries now: each team's next game (its game on now, while it's on)
+ * from a day and a half before it starts. A game ending changes nothing here, so its result still comes on the
+ * stream it's on; the list moves on when Following next loads (the stream's next connect, a follow). */
+export function streamedGames(teams: FollowedTeam[], now: number): string[] {
+  return teams.map((t) => t.next).filter((n) => n?.match && (n.status === 'live' || n.status === 'armed' || (Date.parse(n.start_utc ?? '') - now < STREAM_AHEAD_MS))).map((n) => n!.match!).sort()
+}
+
+/** When the soonest of the fan's teams' next games comes within the stream's reach, or null: then it connects again. */
+export function nextInReach(teams: FollowedTeam[], now: number): number | null {
+  const at = teams.map((t) => Date.parse(t.next?.start_utc ?? '') - STREAM_AHEAD_MS).filter((ms) => Number.isFinite(ms) && ms > now)
+  return at.length ? Math.min(...at) : null
+}
 
 /** The fan's players as the server lists them, and any this app followed that the list doesn't have yet. */
 function withLocal(players: Card[], prev: Card[]): Card[] {
@@ -51,12 +92,26 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [heard, setHeard] = useState(0)
   const [matches, setMatches] = useState<FollowedMatch[]>([])
   const [matchesLoaded, setMatchesLoaded] = useState(false)
+  const [teams, setTeams] = useState<FollowedTeam[]>([])
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const gamesKey = matches.map((m) => m.event_id).sort((a, b) => a - b).join(',')
+  // A followed team's games are on the stream from a day and a half before (teams.event_ids): a follow, or one of
+  // its games coming within reach (a timer for the soonest), connects it again; a game ending doesn't.
+  const [reach, setReach] = useState(0)
+  // `reach` is the timer's tick: the games in reach are worked out again by the clock then.
+  const teamsKey = useMemo(() => (teams.length ? `${teams.map((t) => t.team_id).sort((a, b) => a - b).join(',')}|${streamedGames(teams, Date.now()).join(',')}|${reach}` : ''), [teams, reach])
+  useEffect(() => {
+    const at = nextInReach(teams, Date.now())
+    if (at == null) return
+    const timer = window.setTimeout(() => setReach((n) => n + 1), Math.min(at - Date.now() + 1000, 2 ** 31 - 1))
+    return () => window.clearTimeout(timer)
+  }, [teams, reach])
   const cardsRef = useRef(cards)
   cardsRef.current = cards
   const matchesRef = useRef(matches)
   matchesRef.current = matches
+  const teamsRef = useRef(teams)
+  teamsRef.current = teams
   const toasted = useRef<{ event: number | null; kind: string; at: number }[]>([])
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
@@ -65,6 +120,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(() => api.following().then((r) => {
     setCards((prev) => withLocal(r.players, prev))
+    setTeams(r.teams ?? [])
     setLoaded(true)
     setFailed(false)
   }, () => setFailed(true)), [])
@@ -113,10 +169,19 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       }))
       setProgress((p) => ({ ...p, ...Object.fromEntries(e.players.filter((c) => c.status !== 'building').map((c) => [c.player_id, []])) }))
       if (e.matches) { setMatches(e.matches); setMatchesLoaded(true) }
+      // Each team's games and results as they are now; its level as this app has it.
+      if (e.teams) {
+        const theirs = new Map(e.teams.map((t) => [t.team_id, t]))
+        setTeams((prev) => (loadedRef.current ? prev.map((t) => { const f = theirs.get(t.team_id); return f ? { ...t, ...f, alerts: t.alerts } : t }) : e.teams ?? prev))
+      }
       setHeard((n) => n + 1)
     } else if (e.type === 'match') {
       // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
       setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, live: e.match.live, status: e.match.status } : m)))
+      // And a followed team's, on now or about to be: its board, until it's over.
+      setTeams((prev) => prev.map((t) => (t.live?.event_id === e.event_id || (t.next?.match != null && t.next.match === e.match.match)
+        ? { ...t, live: e.match.status === 'live' || e.match.status === 'armed' ? e.match.live : null }
+        : t)))
     } else if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
@@ -125,8 +190,12 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       // With the app in front the service worker skips the system notification, so the toast
       // follows the same level the push does: the player's, or the game's for a game's own moment.
       const m = e.moment
-      const level = (m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts : matchesRef.current.find((g) => g.event_id === m.event_id)?.alerts) ?? 'key'
-      if (!wanted(level, m)) return
+      const level = m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts ?? 'key' : gameLevel(m, matchesRef.current, teamsRef.current)
+      if (level == null || !wanted(level, m)) return
+      // A result told from both sides the fan follows shows once.
+      const sideFinal = m.kind === 'final' && Boolean(m.sides?.length)
+      if (sideFinal && toasted.current.some((t) => t.event === (m.event_id ?? null) && t.kind === 'final:side')) return
+      if (sideFinal) toasted.current.push({ event: m.event_id ?? null, kind: 'final:side', at: Date.now() })
       // One the fan's player's said a moment ago (their goal, the result) shows once, as theirs: the push does too.
       const now = Date.now()
       toasted.current = toasted.current.filter((t) => now - t.at < SAME_MS)
@@ -151,11 +220,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     return () => { listeners.current.delete(onEvent) }
   }, [])
 
-  // The stream's channels are the fan's players and followed games as it connects: a change reconnects it.
+  // The stream's channels are the fan's players, followed games and teams' games as it connects: a change reconnects it.
   useEffect(() => {
-    if (!idsKey && !gamesKey) return
+    if (!idsKey && !gamesKey && !teamsKey) return
     return subscribe('/api/me/stream', apply)
-  }, [idsKey, gamesKey, apply])
+  }, [idsKey, gamesKey, teamsKey, apply])
 
   const followMatch = useCallback(async (address: string, on: boolean, eventId?: number | null) => {
     const at = address.indexOf('/')
@@ -170,6 +239,19 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     const show = (value: AlertLevel) => setMatches((prev) => prev.map((m) => (m.event_id === eventId ? { ...m, alerts: value } : m)))
     show(level)
     try { await api.setMatchAlerts(eventId, level) } catch (e) { show(was); throw e }
+  }, [])
+
+  const followTeam = useCallback(async (teamId: number, on: boolean) => {
+    await api.followTeam(teamId, on)
+    if (!on) setTeams((prev) => prev.filter((t) => t.team_id !== teamId))
+    await reload()
+  }, [reload])
+
+  const setTeamAlerts = useCallback(async (teamId: number, level: AlertLevel) => {
+    const was = teamsRef.current.find((t) => t.team_id === teamId)?.alerts ?? 'key'
+    const show = (value: AlertLevel) => setTeams((prev) => prev.map((t) => (t.team_id === teamId ? { ...t, alerts: value } : t)))
+    show(level)
+    try { await api.setTeamAlerts(teamId, level) } catch (e) { show(was); throw e }
   }, [])
 
   const follow = useCallback(async (target: FollowTarget) => {
@@ -229,7 +311,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     matchesLoaded,
     followMatch,
     setMatchAlerts,
-  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen, matches, matchesLoaded, followMatch, setMatchAlerts])
+    teams,
+    followTeam,
+    isFollowingTeam: (id) => teamsRef.current.some((t) => t.team_id === id),
+    setTeamAlerts,
+  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen, matches, matchesLoaded, followMatch, setMatchAlerts, teams, followTeam, setTeamAlerts])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

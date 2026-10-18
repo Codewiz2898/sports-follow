@@ -212,6 +212,8 @@ def pending(now: datetime | None = None) -> list[int]:
 
 def send(moment_ids: list[int], now: datetime | None = None) -> int:
     """Push a batch of moments to everyone who should hear about them. Returns how many devices took a push."""
+    from . import teams  # whose teams are in a game (teams reads the pipeline that sends through here)
+
     now = now or datetime.now(timezone.utc)
     with session() as db:
         # Claim first: whichever sender gets here first sends; the other finds nothing to do.
@@ -222,18 +224,34 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         items = as_items(rows)
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
+        # The followed teams in each of the batch's games, for the app's toasts (below).
+        followed = teams.followed_in(db, {i.event_id for i in items if i.player_id is None and i.event_id is not None})
         # A correction's toast follows its moment's: one sent in an earlier batch (not taken back before it went).
         corrects = {i.corrects for i in items if i.corrects is not None}
         toasted = set(db.scalars(select(Moment.id).where(Moment.id.in_(corrects), Moment.id.not_in(claimed), Moment.sent_at.is_not(None))).all()) if corrects else set()
     # The app shows them too, as toasts, to anyone with it open; it filters by the fan's level itself. A game's
-    # own go to the fans following the game.
-    for item in items:
-        if item.id not in taken_back and (item.corrects is None or item.corrects in toasted) and (now - item.created_at).total_seconds() <= alerts.ttl(item.kind):
-            told_ = {"type": "moment", "player_id": item.player_id, "moment": {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}}
-            if item.player_id is not None:
-                bus.publish(item.player_id, told_)
-            elif item.event_id is not None:
-                bus.publish_match(item.event_id, told_)
+    # own go to the fans following the game, or a team in it: each says which of its teams fans follow (teams), so
+    # the app finds the fan's level by their team, as a push does; one from a team's side says whose (sides), and
+    # the game's own result whose sides tell it too (told_by), so the app shows each fan their team's.
+    shown = [i for i in items if i.id not in taken_back and (i.corrects is None or i.corrects in toasted) and (now - i.created_at).total_seconds() <= alerts.ttl(i.kind)]
+    told_by: dict[int | None, set[str]] = {}
+    for item in shown:
+        if item.player_id is None and item.kind == "final":
+            told_by.setdefault(item.event_id, set()).update(alerts.sided(item))
+    for item in shown:
+        moment: dict[str, Any] = {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}
+        if item.player_id is None and item.event_id is not None:
+            sides = alerts.sided(item)
+            moment["teams"] = followed.get(item.event_id, [])
+            if sides:
+                moment["sides"] = sorted(sides)
+            elif item.kind == "final" and told_by.get(item.event_id):
+                moment["told_by"] = sorted(told_by[item.event_id])
+        told_ = {"type": "moment", "player_id": item.player_id, "moment": moment}
+        if item.player_id is not None:
+            bus.publish(item.player_id, told_)
+        elif item.event_id is not None:
+            bus.publish_match(item.event_id, told_)
     if not jobs:
         return 0
     futures = [(notification_id, device, _wire.submit(logs.carried(deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]

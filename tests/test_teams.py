@@ -336,7 +336,8 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: pushed.append((endpoint.rsplit("/", 1)[1], payload["title"])))
     monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: None)
     monkeypatch.setattr(structured.bus, "publish_match", lambda event_id, event: None)
-    monkeypatch.setattr(notify.bus, "publish_match", lambda event_id, event: None)
+    toasts: list[dict] = []
+    monkeypatch.setattr(notify.bus, "publish_match", lambda event_id, event: toasts.append(event["moment"]) if "moment" in event else None)
 
     def heard() -> set[tuple[str, str]]:
         out = set(pushed)
@@ -371,6 +372,8 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
 
     poll(board(0, 0, "10'", [], 0))
     assert heard() == set()  # a first look
+    # The fan stream carries a team's games on now and soon: this one, live, for its fans.
+    assert teams.event_ids(db, "gooner") == [event.id] and teams.event_ids(db, "match") == []
     saka = goal("23'", "Saka", "7")
     poll(board(1, 0, "23'", [saka], 1))
     goal_23 = "Arsenal v Chelsea: Saka puts Arsenal ahead"
@@ -384,6 +387,15 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
     poll(board(2, 1, "FT", [goal("88'", "Saka", "7"), goal("60'", "Palmer", "20", CHE), saka], 2, status="final"))
     assert heard() == {("gooner", "Arsenal won 2–1 v Chelsea"), ("sides", "Arsenal won 2–1 v Chelsea"), ("saka", "Bukayo Saka: Arsenal 2 – 1 Chelsea"), ("quiet", "Arsenal won 2–1 v Chelsea"),
                        ("half", "Chelsea lost 1–2 v Arsenal"), ("match", "Arsenal v Chelsea: Arsenal won")}  # half set Arsenal to off: Chelsea's side
+    # The app's toasts, on the game's channel: the result from each side says whose, and the game's own whose sides
+    # tell it too, so the app shows each fan theirs, as the push did.
+    finals = {m["title"]: m for m in toasts if m["kind"] == "final"}
+    assert finals["Arsenal won 2–1 v Chelsea"]["sides"] == [f"team:{arsenal.id}"] and finals["Chelsea lost 1–2 v Arsenal"]["sides"] == [f"team:{chelsea.id}"]
+    assert finals["Arsenal v Chelsea: Arsenal won"]["told_by"] == sorted([f"team:{arsenal.id}", f"team:{chelsea.id}"])
+    goal_told = next(m for m in toasts if m["kind"] == "goal")
+    assert "sides" not in goal_told and "told_by" not in goal_told
+    assert goal_told["teams"] == [f"team:{arsenal.id}", f"team:{chelsea.id}"]  # whose fans follow the game: the app's level for it
+    assert teams.event_ids(db, "gooner") == []  # over: off the fan stream
     # The alerts list: the game's own moments since the follow, the result from their side.
     assert [i["title"] for i in server.activity(None, 50, "gooner", db)["items"]][:2] == ["Arsenal won 2–1 v Chelsea", "Arsenal v Chelsea: Late goal: Saka puts Arsenal ahead"]
     blue = [i["title"] for i in server.activity(None, 50, "blue", db)["items"]]
@@ -397,6 +409,30 @@ def test_a_followed_teams_games_tell_its_fans_their_moments_and_its_result_from_
     assert finals == ["Arsenal won 2–1 v Chelsea"]
     assert [i["title"] for i in server.activity(None, 50, "half", db)["items"] if i["kind"] == "final"] == ["Chelsea lost 1–2 v Arsenal"]
     assert all(n.player_id is None or n.fan_id == "saka" for n in db.scalars(select(Notification)))
+
+
+@needs_db
+def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_start(db, redis, source, monkeypatch):
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    source.fixtures[ARS] = [fixture("100", NOW + timedelta(hours=35)), fixture("101", NOW + timedelta(hours=37), home=TOT, away=ARS),
+                            fixture("50", NOW - timedelta(days=2), "final", ARS, TOT, (1, 0))]
+    arsenal = team(db, ARS)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    teams.refresh(arsenal.id)
+    key = {e.key: e.id for e in db.scalars(select(Event))}
+    assert teams.event_ids(db, "gooner", NOW) == [key["pitch:100"]]  # not the one in 37 hours, nor last week's
+    assert teams.event_ids(db, "gooner", NOW + timedelta(hours=2)) == sorted([key["pitch:100"], key["pitch:101"]])
+    assert teams.event_ids(db, "someone", NOW) == []
+
+    # And the stream subscribes to those games' channels, with the fan's teams in its first frame.
+    subscribed: list[list[str]] = []
+    monkeypatch.setattr(server, "_stream", lambda channels, first, request: subscribed.append(channels) or "stream")
+    monkeypatch.setattr(server, "_sse", lambda body: body)
+    assert asyncio.run(server.my_stream(SimpleNamespace(), fan="gooner")) == "stream"
+    assert subscribed == [[f"match:{key['pitch:100']}"]]
 
 
 @needs_db

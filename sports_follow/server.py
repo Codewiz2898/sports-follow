@@ -2001,8 +2001,10 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     """One connection for every player the fan follows: browsers cap connections per origin, so one per player won't scale.
     It opens with what /api/me/following returns, and the games they follow by themselves (/api/me/matches),
     so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
-    missed; then each followed game's board as it's polled, and its own moments (bus.match_channel)."""
-    ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(), matches.event_ids(db, fan)))
+    missed; then each followed game's board as it's polled, and its own moments (bus.match_channel): of the games
+    they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
+    ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
+                                         list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
     if not ids and not games:
         async def idle():
             while not await request.is_disconnected():
@@ -2011,7 +2013,7 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
         return _sse(idle())
 
     async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan)}]
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
     return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request))
 
