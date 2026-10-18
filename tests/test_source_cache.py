@@ -225,3 +225,25 @@ def test_a_deploy_doesnt_empty_what_a_source_answered(monkeypatch, source_budget
     assert sportmonks.get_json("/football/players/7", 3 * 3600, include="teams") == first and len(sent) == 1
     spent = source_budgets.keys("budget:use:sportmonks:*:sent:h*")
     assert [source_budgets.get(key) for key in spent] == [1]  # and only the request sent was counted
+
+
+def test_the_redis_store_writes_through_its_script_and_reads_the_hash():
+    # The calls production makes, to a stand-in for redis-py's client: the script gets the key, the request's
+    # time exactly, the document and the expiry; a key with no copy (or half of one) is a miss.
+    asked: list[tuple[list[str], list[Any]]] = []
+
+    class Client:
+        def register_script(self, script: str) -> Any:
+            assert "HSET" in script and "EXPIRE" in script
+            return lambda keys, args: asked.append((keys, args)) or 1
+
+        def hmget(self, key: str, *fields: str) -> list[bytes | None]:
+            assert fields == ("at", "doc")
+            return [b"1800000000.25", b"made up"] if key == "src:example:kept" else [None, None]
+
+    store = cache.RedisStore()
+    store._client, store._put = Client(), Client().register_script(cache._PUT)
+    assert store.put("src:example:kept", 1_800_000_000.123456, b"made up", 86400) is True
+    assert asked == [(["src:example:kept"], ["1800000000.123456", b"made up", 86400])]
+    assert store.get("src:example:kept") == (1_800_000_000.25, b"made up")
+    assert store.get("src:example:missing") is None
