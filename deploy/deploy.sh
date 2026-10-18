@@ -100,9 +100,9 @@ do_rollback() {
   # Not the migrate service: the older code doesn't know the newer migrations, and the database keeps them.
   c up -d --no-build --no-deps caddy api worker gateway backup
   wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
-  pick_up_files || die "${to:0:7} is running again, but Caddy or the backup container didn't take its files"
   echo "$to" >"$STATE/live"
   rm -f "$STATE/previous"   # a second rollback would only go back to the bad deploy
+  pick_up_files || die "${to:0:7} is live again, but Caddy or the backup container didn't take its files"
   say "${to:0:7} is live again; ${was:0:7}'s migrations, if it had any, are still applied"
 }
 

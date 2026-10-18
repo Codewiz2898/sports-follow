@@ -432,9 +432,10 @@ new worker starts them again as soon as it's up.
 - **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
   by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
   config until then.
-- **It's healthy but wrong:** `rollback` starts the previous deploy's image again. The newer migrations
-  stay in the database; if the older code can't run with them, undo them first, while the newer image
-  is still live: `docker compose -f deploy/compose.yaml run --rm migrate alembic downgrade <revision>`.
+- **It's healthy but wrong:** `rollback` starts the previous deploy's image again, with its Caddyfile
+  and backup script. The newer migrations stay in the database; if the older code can't run with them,
+  undo them first, while the newer image is still live:
+  `docker compose -f deploy/compose.yaml run --rm migrate alembic downgrade <revision>`.
 
 The live image and the previous one are kept; older ones are removed.
 
