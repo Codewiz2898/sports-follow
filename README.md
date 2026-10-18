@@ -363,6 +363,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   following), `refresh`, `history` and `import`. The background lanes stop at the reserve; a fan loop on
   Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.
+- **One cache for every source** (`sports_follow/adapters/cache.py`). Each client reads through a `Cache`
+  named after its budget: this process's copy, then Redis, then the source, and only a request sent is
+  counted. A response is kept as the source sent it, with when it was fetched, and each caller judges it
+  by its own ttl (the same match at 5 s while it's live, 24 h once it's over); a ttl of 0 is never kept.
+  "Fetched" is when the request went out, and Redis keeps the latest: a slow answer to an earlier request
+  never replaces a newer one.
+  Threads asking for the same thing at once send one request. The Redis is shared by the API and the
+  worker and outlives deploys: `SPORTS_FOLLOW_CACHE_REDIS_URL`, in production a capped Redis of its own
+  that evicts the least recently used key. While it's down, each process keeps its own copy, as before.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -520,6 +529,7 @@ that build too: turn them on under Alerts. Always pass
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow` | |
 | `REDIS_URL` | `redis://127.0.0.1:6380/0` | |
+| `SPORTS_FOLLOW_CACHE_REDIS_URL` | `REDIS_URL` | where the data sources' answers are cached (`adapters/cache.py`), shared by the API and the worker and kept across deploys. In production a Redis of its own, capped and evicting the least recently used key (deploy/compose.yaml); locally, `docker compose --profile cache up -d` and `redis://127.0.0.1:6382/0` run it as production does |
 | `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |
 | `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a card is rebuilt |

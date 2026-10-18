@@ -317,7 +317,6 @@ def test_the_token_goes_in_a_header_and_a_429_pauses_reads(monkeypatch):
 
     monkeypatch.setattr(pandascore, "_client", httpx.Client(transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(pandascore, "token", lambda: "secret-token")
-    monkeypatch.setattr(pandascore, "_cache", {})
     assert pandascore.get_json("/matches", 0, **{"filter[id]": "1"}) == [{"id": 1}]
     assert seen[0].headers["authorization"] == "Bearer secret-token" and "secret-token" not in str(seen[0].url)
     assert budget.left(pandascore.BUDGET) == 412  # what PandaScore says is left, shared by every process

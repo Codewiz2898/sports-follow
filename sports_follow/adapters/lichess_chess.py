@@ -30,7 +30,7 @@ import httpx
 
 from .. import bus, naming
 from ..config import USER_AGENT
-from . import budget
+from . import budget, cache
 from .base import Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, SearchResult, Snapshot
 
 log = logging.getLogger(__name__)
@@ -44,7 +44,6 @@ PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a 
 STALE_PAGE = 7 * 24 * 3600  # what the last copy read listed, kept in Redis while Lichess refuses a new one
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
-_cache: dict[str, tuple[float, Any]] = {}
 _lock = threading.Lock()  # one request at a time from each process, as Lichess asks
 _state = {"last": 0.0}
 SPACING = 1.0  # seconds between requests; bursts of ~25 at 0.3 s drew a 429
@@ -78,6 +77,8 @@ FIDE = budget.Budget("lichess-fide", windows=(budget.Window(60, 10, margin=1),),
 # The research agent's requests (tools.fetch_url) carry no token, so Lichess holds them to its limit
 # without one: with a token they're counted apart, and a 429 they get doesn't pause our own polls.
 ANONYMOUS = budget.Budget("lichess-anonymous", windows=(budget.Window(60, 10, margin=1),), urls=(API,)) if token() else BUDGET
+# Every response, under the main budget's name whichever budget it spent (cache.py).
+_cache = cache.Cache(BUDGET.name, size=1000)
 
 
 def _spends(url: str) -> budget.Budget:
@@ -99,18 +100,17 @@ RateLimited = budget.RateLimited
 
 
 def get_json(url: str, ttl: float, text: bool = False) -> Any:
-    """GET a Lichess API document (or, with text=True, a page), cached for ttl seconds."""
-    now = time.time()
-    hit = _cache.get(url)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+    """GET a Lichess API document (or, with text=True, a page), cached for ttl seconds (0: fetched every
+    time and never kept), in Redis too (cache.py)."""
+    return _cache.read(url, ttl, lambda: _fetch(url, text))
+
+
+def _fetch(url: str, text: bool) -> Any:
     with _lock:
-        hit = _cache.get(url)  # another thread may have fetched it while this one waited
-        if hit and time.time() - hit[0] < ttl:
-            return hit[1]
         spends = _spends(url)
         budget.take(spends)
         time.sleep(max(0.0, _state["last"] + SPACING - time.time()))
+        cache.sending()  # its answer is as old as now, not as the wait for the request line
         try:
             res = _client.get(url, headers=_headers(url, text))
         except httpx.HTTPError as exc:
@@ -132,17 +132,12 @@ def get_json(url: str, ttl: float, text: bool = False) -> Any:
             raise AdapterError(f"Lichess returned non-JSON for {url}") from exc
         if not text and not isinstance(data, (dict, list)):
             raise AdapterError(f"Lichess returned {type(data).__name__} for {url}")
-        _cache[url] = (time.time(), data)
-        if len(_cache) > 1000:
-            for key, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:250]:
-                _cache.pop(key, None)
         return data
 
 
 def peek(url: str, ttl: float) -> Any:
     """A cached response younger than ttl seconds, or None, without waiting for the request line."""
-    hit = _cache.get(url)
-    return hit[1] if hit and time.time() - hit[0] < ttl else None
+    return _cache.peek(url, ttl)
 
 
 def _dt(ms: Any) -> datetime | None:

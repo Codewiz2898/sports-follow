@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from sports_follow.adapters import budget, espn_basketball, espn_tennis, lichess_chess
+from sports_follow.adapters import budget, cache, espn_basketball, espn_tennis, lichess_chess
 from sports_follow.adapters.base import AdapterError, PlayerRef
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -351,7 +351,6 @@ CARLSEN_PAGE = "https://lichess.org/fide/1503014/Carlsen_Magnus"
 def lichess_answering(monkeypatch, answers: dict[str, httpx.Response]) -> None:
     """Lichess as a fake: each URL's answer, an empty one for the rest; nothing cached, no spacing."""
     monkeypatch.setattr(lichess_chess, "_client", httpx.Client(transport=httpx.MockTransport(lambda request: answers.get(str(request.url)) or httpx.Response(200, json={"games": []}))))
-    monkeypatch.setattr(lichess_chess, "_cache", {})
     monkeypatch.setattr(lichess_chess, "SPACING", 0.0)
 
 
@@ -403,7 +402,7 @@ def test_lichess_reads_fide_records_through_search_by_id(monkeypatch):
     assert urls[-2:] == ["https://lichess.org/api/fide/player?q=1", "https://lichess.org/api/fide/player/1"]
 
 
-def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_events(monkeypatch):
+def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_events(monkeypatch, source_cache):
     page = '<a href="/broadcast/tata-steel-2026/round-1/abcdefgh">Tata Steel 2026</a>'
     answers = {CARLSEN_PAGE: httpx.Response(200, text=page)}
     lichess_answering(monkeypatch, answers)
@@ -414,7 +413,8 @@ def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_ev
     ref = PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"], CARLSEN_PAGE)
     assert chess._page_rounds(ref) == ["abcdefgh"]
     assert kept == {f"lichess:fide-page:{CARLSEN}": ('["abcdefgh"]', lichess_chess.STALE_PAGE)}
-    lichess_chess._cache.clear()  # a restart: nothing read in this process
+    cache.forget()  # a restart once the page's copy is gone from the source cache too: nothing read is fresh
+    source_cache.data.clear()
     answers[CARLSEN_PAGE] = httpx.Response(429, text="Too many requests.")
     assert chess._page_rounds(ref) == ["abcdefgh"]  # what the last copy listed stands in
     kept.clear()

@@ -16,8 +16,6 @@ own database are allowed; reselling it is not. Logos and player photos are not l
 from __future__ import annotations
 
 import os
-import threading
-import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,7 +24,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
-from . import budget
+from . import budget, cache
 from .base import AdapterError, Provider
 
 BASE = "https://api.sportmonks.com/v3"
@@ -42,8 +40,7 @@ TEAMS = "Team"  # the football entity a season's teams, and who of theirs is out
 BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
-_cache: dict[str, tuple[float, Any]] = {}
-_lock = threading.Lock()
+_cache = cache.Cache(BUDGET.name)
 
 
 PROVIDER = Provider(
@@ -67,12 +64,13 @@ def token() -> str | None:
 
 
 def get_json(path: str, ttl: float, **params: Any) -> Any:
-    """GET a Sportmonks document, cached for ttl seconds (0: fetched every time and never kept): a
-    football path after /v3 ("/football/fixtures/1") or a full cricket URL (f"{CRICKET}/fixtures/1")."""
-    key = f"{path}?{urlencode(sorted(params.items()))}"
-    hit = _cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
+    """GET a Sportmonks document, cached for ttl seconds (0: fetched every time and never kept), in Redis
+    too (cache.py): a football path after /v3 ("/football/fixtures/1") or a full cricket URL
+    (f"{CRICKET}/fixtures/1")."""
+    return _cache.read(f"{path}?{urlencode(sorted(params.items()))}", ttl, lambda: _fetch(path, params))
+
+
+def _fetch(path: str, params: dict[str, Any]) -> dict[str, Any]:
     if not token():
         raise AdapterError("no Sportmonks token (~/.config/sports-follow/sportmonks-token)")
     bucket = _bucket(path)
@@ -106,13 +104,6 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
     elif res.headers.get("x-ratelimit-remaining", "").isdigit():
         # Cricket doesn't say when its hour resets: at the latest an hour after this answer.
         budget.observe(BUDGET, bucket, int(res.headers["x-ratelimit-remaining"]), 3600)
-    if ttl <= 0:
-        return data
-    with _lock:
-        _cache[key] = (time.time(), data)
-        if len(_cache) > 2000:
-            for old, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:500]:
-                _cache.pop(old, None)
     return data
 
 

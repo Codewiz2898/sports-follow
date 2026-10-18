@@ -10,6 +10,10 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow"
 )
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
+# Where the data sources' answers are cached (adapters/cache.py), shared by the API and the worker and kept
+# across deploys. In production a Redis of its own, capped and evicting the least recently used key, so a
+# full cache never pushes out a job, a lock or a budget (deploy/compose.yaml). Unset: the Redis above.
+CACHE_REDIS_URL = os.environ.get("SPORTS_FOLLOW_CACHE_REDIS_URL", "").strip() or REDIS_URL
 
 # The app's name as fans see it ("stann"). It's written once, in app.json next to this file, because the
 # web build (web/vite.config.ts) and the Android app (android/generate.mjs) read it there too: the page

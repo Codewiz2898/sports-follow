@@ -48,7 +48,7 @@ a fan's id or email, or a client's address, in an issue, PR, commit or chat summ
 | Get in | `ssh deploy@$(dig +short stann.in \| head -1)`, then `cd /opt/sports-follow` and define `c() { docker compose -f deploy/compose.yaml "$@"; }` | this checkout; `docker compose up -d` for Postgres and Redis |
 | Logs | `c logs --since 2h api worker` (JSON lines), or Grafana (below) | the terminals running the API (`uvicorn … --port 8421`) and the worker (`arq sports_follow.worker.WorkerSettings`), as text lines `HH:MM:SS LEVEL logger: message  [rid=… fan=… job=…]` |
 | `psql_ro`, read-only | `psql_ro() { c exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres psql -U sports sports_follow "$@"; }` | `psql_ro() { docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on' sports-follow-postgres psql -U sports sports_follow "$@"; }` |
-| Redis | `c exec -T redis redis-cli` | `docker exec -i sports-follow-redis redis-cli` |
+| Redis | `c exec -T redis redis-cli`; the sources' cache: `c exec -T cache redis-cli` | `docker exec -i sports-follow-redis redis-cli` (the cache is there too, unless `SPORTS_FOLLOW_CACHE_REDIS_URL` names `sports-follow-cache`) |
 | A command of the app's | `c exec -T worker python -m sports_follow.<module> …` | `.venv/bin/python -m sports_follow.<module> …` |
 | What's deployed | `deploy/deploy.sh status`, or from anywhere `curl -s https://stann.in/api/health` (its `commit`); the Deploy workflow's runs (`gh run list --workflow deploy.yml`), and one waiting for Bharath's approval (`--status waiting`) | `git log -1` |
 

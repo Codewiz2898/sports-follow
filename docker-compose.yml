@@ -1,4 +1,5 @@
-# Local dev stack. Ports are offset (5433, 6380) so it never collides with other projects' containers.
+# Local dev stack. Ports are offset (5433, 6380, and 6382 for the optional cache) so it never collides with other projects' containers
+# (6381 is an isolated stack's Redis: .claude/skills/isolated-stack).
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,6 +23,21 @@ services:
     container_name: sports-follow-redis
     ports:
       - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The sources' cache as production runs it (deploy/compose.yaml), only with `--profile cache`; then set
+  # SPORTS_FOLLOW_CACHE_REDIS_URL=redis://127.0.0.1:6382/0. Without them, the cache shares the Redis above.
+  cache:
+    image: redis:7-alpine
+    container_name: sports-follow-cache
+    profiles: ["cache"]
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6382:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

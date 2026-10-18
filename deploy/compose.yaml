@@ -1,7 +1,7 @@
 # Production: everything on one server. Run from the repo root:
 #   docker compose -f deploy/compose.yaml up -d --build
 # DOMAIN and SECRETS_DIR come from deploy/.env on the server (see README.md). Only Caddy is reachable
-# from outside (ports 80 and 443); Postgres, Redis, the gateway and the API talk on the compose network.
+# from outside (ports 80 and 443); Postgres, the two Redis, the gateway and the API talk on the compose network.
 name: sports-follow
 
 x-app: &app
@@ -21,6 +21,7 @@ x-app: &app
       required: false
   environment:
     REDIS_URL: redis://redis:6379/0
+    SPORTS_FOLLOW_CACHE_REDIS_URL: redis://cache:6379/0   # what the sources answered (adapters/cache.py)
     LLM_GATEWAY_URL: http://gateway:8787
     SPORTS_FOLLOW_SITE_URL: https://${DOMAIN}   # who the app is to push services and data sources
     SPORTS_FOLLOW_SPORTMONKS_TOKEN_FILE: /run/secrets/sportmonks-token
@@ -42,6 +43,8 @@ x-app: &app
       condition: service_healthy
     redis:
       condition: service_healthy
+    cache:
+      condition: service_started   # reads go on without it: each process keeps its own copy
 
 services:
   caddy:
@@ -134,6 +137,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # What the data sources answered (adapters/cache.py), shared by the API and the worker. A Redis of its
+  # own: capped, and evicting the least recently used key when full, which the one above must never do (a
+  # lock or a budget count evicted is a job run twice or a quota overspent). Its snapshot keeps it through a
+  # restart; it isn't the only copy of anything, so losing it costs requests, nothing more.
+  cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "${CACHE_REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru", "--save", "300", "100", "--appendonly", "no"]
+    volumes:
+      - cache-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
   backup:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -155,5 +174,6 @@ services:
 volumes:
   pgdata:
   redis-data:
+  cache-data:
   caddy-data:
   caddy-config:

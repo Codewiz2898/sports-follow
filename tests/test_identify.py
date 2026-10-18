@@ -80,7 +80,6 @@ def web(monkeypatch) -> Iterator[Recorded]:
     recorded = Recorded()
     for module in (espn, lichess_chess):
         monkeypatch.setattr(module, "_client", httpx.Client(transport=httpx.MockTransport(recorded)))
-        monkeypatch.setattr(module, "_cache", {})
     monkeypatch.setattr(lichess_chess, "SPACING", 0)
     monkeypatch.setattr(adapters, "ADAPTERS", lineup(espn.PROVIDER, lichess_chess.PROVIDER))
     yield recorded
