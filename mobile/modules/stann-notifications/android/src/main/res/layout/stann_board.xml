@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A game's two sides on a block (Cards.board), in the display type (pictures, Type.kt): one row when both
+     scores are short ("ARSENAL 2–1 CHELSEA"), else a row each ("INDIA 245/3" over "AUSTRALIA"), else the score
+     line as the source wrote it. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:orientation="vertical">
+  <LinearLayout
+    android:id="@+id/stann_one_row"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+    <ImageView android:id="@+id/stann_side_a" style="@style/StannType" />
+    <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+    <ImageView android:id="@+id/stann_score_big" style="@style/StannType" android:layout_marginStart="8dp" android:layout_marginEnd="8dp" />
+    <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+    <ImageView android:id="@+id/stann_side_b" style="@style/StannType" />
+  </LinearLayout>
+  <LinearLayout
+    android:id="@+id/stann_two_rows"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:visibility="gone">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+      <ImageView android:id="@+id/stann_name_a" style="@style/StannType" />
+      <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+      <ImageView android:id="@+id/stann_score_a" style="@style/StannType" android:layout_marginStart="8dp" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="2dp">
+      <ImageView android:id="@+id/stann_name_b" style="@style/StannType" />
+      <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+      <ImageView android:id="@+id/stann_score_b" style="@style/StannType" android:layout_marginStart="8dp" />
+    </LinearLayout>
+  </LinearLayout>
+  <TextView android:id="@+id/stann_score_line" style="@style/StannSmall" android:textSize="13sp" android:visibility="gone" />
+</LinearLayout>

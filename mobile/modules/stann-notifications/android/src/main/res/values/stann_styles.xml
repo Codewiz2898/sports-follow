@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notifications' type. Android draws a notification's layout in its own process, which can't load the
+     app's fonts, so the display type (Anton: the moment's word, scores, sides) is drawn by the app as pictures
+     (Type.kt) shown by StannType views, and the lines are the phone's own type, bold. -->
+<resources>
+  <style name="StannType">
+    <item name="android:layout_width">wrap_content</item>
+    <item name="android:layout_height">wrap_content</item>
+    <item name="android:adjustViewBounds">true</item>
+    <item name="android:scaleType">fitStart</item>
+  </style>
+  <style name="StannLine">
+    <item name="android:layout_width">match_parent</item>
+    <item name="android:layout_height">wrap_content</item>
+    <item name="android:fontFamily">sans-serif</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:ellipsize">end</item>
+  </style>
+  <style name="StannSmall">
+    <item name="android:layout_width">match_parent</item>
+    <item name="android:layout_height">wrap_content</item>
+    <item name="android:fontFamily">sans-serif-medium</item>
+    <item name="android:singleLine">true</item>
+    <item name="android:ellipsize">end</item>
+  </style>
+  <style name="StannTag">
+    <item name="android:layout_width">wrap_content</item>
+    <item name="android:layout_height">wrap_content</item>
+    <item name="android:background">@drawable/stann_pill</item>
+    <item name="android:fontFamily">sans-serif</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:textSize">10sp</item>
+    <item name="android:textColor">#FFFFFFFF</item>
+    <item name="android:letterSpacing">0.06</item>
+    <item name="android:textAllCaps">true</item>
+    <item name="android:singleLine">true</item>
+    <item name="android:drawablePadding">5dp</item>
+    <item name="android:gravity">center_vertical</item>
+    <item name="android:paddingStart">9dp</item>
+    <item name="android:paddingEnd">10dp</item>
+    <item name="android:paddingTop">4dp</item>
+    <item name="android:paddingBottom">4dp</item>
+  </style>
+  <!-- Under the block, on the notification's own ground: the system's secondary text, so dark mode reads too. -->
+  <style name="StannStory" parent="TextAppearance.Compat.Notification.Line2">
+    <item name="android:fontFamily">sans-serif-medium</item>
+    <item name="android:textSize">13sp</item>
+  </style>
+</resources>

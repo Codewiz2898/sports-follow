@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Fact, Found, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
+from .base import Fact, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -28,6 +28,11 @@ ROUT, GOALS = 3, 6  # a win by this many goals, or this many in the game
 # Who's out, on the Wire (out_fact): an injury and a ban are news; being ineligible (not registered for the
 # competition) isn't. How each is over, said of the player.
 BACK = {"injury": "is fit again", "suspension": "is back from suspension"}
+# A notification's game at a glance (glance): the clock's short words as the long ones (ESPN's as Sportmonks'), and
+# where a clock without a minute stands, of how many, in lower case: a break, extra time's or the shootout's.
+CLOCK_WORDS = {"FT": "Full time", "HT": "Half-time", "AET": "After extra time", "FT-Pens": "After penalties"}
+BREAKS = {"half-time": (45, 90), "halftime": (45, 90), "break": (90, 120), "extra-time break": (105, 120), "before penalties": (120, 120), "penalties": (120, 120)}
+EXTRA = re.compile(r"\bextra|\bpen|\baet\b", re.I)  # a clock or board past 90 minutes: extra time, penalties
 # The few of the sources' words for what's wrong that don't read as one on the Wire, lower case.
 SAID = {"unknown injury": "injury", "fitness": "lacking fitness", "ill": "illness", "indirect card suspension": "yellow card suspension",
         "suspension through sports court": "banned by a sports court"}
@@ -214,6 +219,7 @@ class Football(Sport):
         "key": ("Goals, red cards and the result", "Every goal, whoever scores it, red cards, kick-off and the result"),
         "more": ("yellow cards", "yellow cards"),
     }
+    kind_words = {"goal": "Goal", "red": "Red card"}
 
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
@@ -230,6 +236,32 @@ class Football(Sport):
                 side = 1 - side
             timeline.append({"clock": e.get("clock"), "kind": e.get("kind"), "text": e.get("text"), "side": side})
         return {"timeline": timeline} if timeline else {}
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """Home and away with their goals, the clock ("67'", "Half-time", "Full time"), the minute of 90 (of 120 in
+        extra time, a minute past 90 that isn't added time; a break where it stands), and each goal at its minute
+        for the side it counts for, as the match page's timeline has them (an own goal the other side's; a goal VAR
+        ruled out, DISALLOWED, isn't one)."""
+        seen = super().glance(state, score, clock, status, events)
+        played = re.fullmatch(r"(\d+)(?:\+(\d+))?'", clock or "")
+        extra = bool(EXTRA.search(f"{clock} {state.get('detail') or ''}"))
+        if played:
+            of = 120 if extra or int(played[1]) > 90 else 90
+            seen.progress = (min(int(played[1]) + int(played[2] or 0), of), of)
+        elif status == "final":
+            seen.progress = (120, 120) if extra else (90, 90)
+        else:
+            seen.progress = BREAKS.get((clock or "").lower())
+        of = seen.progress[1] if seen.progress else 120 if extra else 90
+        ids = [str((state.get(side) or {}).get("id")) for side in ("home", "away")]
+        for e in events:
+            minute = _minute(e.get("clock"))
+            if e.get("kind") == "GOAL" and str(e.get("team_id")) in ids and minute != math.inf:
+                side = ids.index(str(e.get("team_id")))
+                seen.marks.append((min(minute, of), 1 - side if e.get("own_goal") else side))
+        seen.marks.sort()
+        seen.status = CLOCK_WORDS.get(clock, clock) or ("Full time" if status == "final" else "")
+        return seen
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """The side with more goals won; level is a draw, but for a game settled on penalties, which the

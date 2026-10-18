@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- Android 16's Live Updates: a live card at the top of the lock screen with its score in the status bar. -->
+  <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+  <application>
+    <!-- Ahead of expo-notifications' own (priority -1), which it extends: FCM hands each message to the
+         highest. A message the server drew for (data "v" 2) is drawn here; anything else goes on to Expo. -->
+    <service
+      android:name="io.stann.notifications.StannMessagingService"
+      android:exported="false">
+      <intent-filter android:priority="1">
+        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+    </service>
+    <!-- A notification's buttons that do something without opening the app: mute a game, stop its live card. -->
+    <receiver
+      android:name="io.stann.notifications.ActionReceiver"
+      android:exported="false" />
+  </application>
+</manifest>

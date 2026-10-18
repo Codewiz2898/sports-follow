@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A live card's progress (the match clock, the overs) on a block whose ink is dark. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <item android:id="@android:id/background">
+    <shape><corners android:radius="3dp" /><solid android:color="#38000000" /></shape>
+  </item>
+  <item android:id="@android:id/progress">
+    <scale android:scaleWidth="100%">
+      <shape><corners android:radius="3dp" /><solid android:color="#E6000000" /></shape>
+    </scale>
+  </item>
+</layer-list>

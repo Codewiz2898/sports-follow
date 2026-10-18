@@ -192,7 +192,8 @@ function Settings() {
   )
 }
 
-/** On or off for this phone, its quiet hours, and a test alert (the web's "On this device"). */
+/** On or off for this phone, its quiet hours, its live cards, and a test alert (the web's "On this device"; live
+ * cards are the app's alone). */
 function Device() {
   const push = usePush()
   const [start, setStart] = useState(push.quiet.start ?? '22:00')
@@ -227,6 +228,15 @@ function Device() {
               <TimeField label="Quiet until" value={end} onChange={(time) => { setEnd(time); if (quietOn) push.saveQuiet({ start, end: time }) }} />
             </View>
           </View>
+          {push.live === null ? null : (
+            <View style={[s.setting, s.line]}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={t.title}>Live scores</Text>
+                <Text style={[t.small, t.muted]}>A card on your lock screen for each game you follow while it’s on, kept up to date, without sound.</Text>
+              </View>
+              <Switch label="Live scores" on={push.live} onChange={push.saveLive} />
+            </View>
+          )}
           <Btn kind="link" label="Send a test alert" disabled={push.busy} onPress={push.test} style={{ height: 48 }} />
         </>
       ) : null}

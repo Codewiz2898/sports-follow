@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Line, Notable, Poster, Seen, Sport, crossed, joined, number, spaced, stage, stat, undecided, values
+from .base import ORDINAL, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, joined, number, short, spaced, stage, stat, undecided, values
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -97,6 +97,22 @@ MARKS = (50, 100, 150, 200)  # the batting milestones told
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
 
+# Overs a side in a limited-overs format, by the words its sources give it ("ODI", "T20I", "List A", ESPN's "Other
+# T20", "Twenty20", "Other OD"): a Test, a first-class match or one no word says has no set length.
+_LENGTHS = ((re.compile(r"\bt10\b", re.I), 10), (re.compile(r"t20|twenty20", re.I), 20), (re.compile(r"\bodi\b|\blist a\b|\bod\b", re.I), 50))
+
+
+def overs_a_side(fmt: str | None) -> int | None:
+    """How many overs a side bats in a match of this format, or None for one without a set length."""
+    return next((overs for pattern, overs in _LENGTHS if pattern.search(fmt or "")), None)
+
+
+def _balls(overs: Any) -> int | None:
+    """Balls bowled in an innings from its overs as the board has them (38.2, "38.2", 50): 230, 300."""
+    whole, _, part = str(overs if overs is not None else "").partition(".")
+    return int(whole) * 6 + int(part or 0) if whole.isdigit() and (part or "0").isdigit() else None
+
+
 def _haul(wickets: int) -> int:
     """A wicket haul's priority: a five-for is near a hundred."""
     return 90 if wickets >= 5 else 75 if wickets == 4 else 70
@@ -152,6 +168,7 @@ class Cricket(Sport):
         "key": ("Wickets, fifties and the result", "Every wicket, fifties and hundreds, three wickets or more in a spell, the start and the result"),
         "more": ("", ""),
     }
+    kind_words = {"out": "Out"}
     stats_title = "Overview"
 
     def lineup_title(self, who: str, starting: bool) -> str:
@@ -181,6 +198,26 @@ class Cricket(Sport):
         batted = [s for s in dict.fromkeys([*(i.get("team") for i in state.get("innings") or []), *sides]) if s in batting]
         card = [{"team": s, "score": scores.get(s, ""), "batting": batting[s], "bowling": bowling[s]} for s in batted if batting[s] or bowling[s]]
         return {"scorecard": card} if card else {}
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """Each team's short name and score, as the board has it, without what the source adds in brackets ("300/2
+        (41.4/50 ov, target 296)" is 300/2; a Test's "240 & 291/7" stays); the batting innings' overs ("38.2 ov"),
+        else the clock (a break, stumps), "Result" once it's over; and that innings' balls of its format's (300 in
+        an ODI, 120 in a T20; the latest innings' between innings), none for a Test or a format no word says."""
+        teams = [t for t in state.get("teams") or [] if isinstance(t, dict)]
+        sides = [(short(t), re.sub(r"\s*\(.*?\)", "", str(t.get("score") or "")).strip()) for t in teams] if len(teams) == 2 else []
+        innings = [i for i in state.get("innings") or [] if isinstance(i, dict)]
+        batting = next((i for i in innings if i.get("batting")), None)
+        latest = batting or (innings[-1] if innings else None)
+        balls, overs = _balls((latest or {}).get("overs")), overs_a_side(state.get("format"))
+        progress = (min(balls, overs * 6), overs * 6) if balls is not None and overs else None
+        if status == "final":
+            where = "Result"
+        elif batting and _balls(batting.get("overs")) is not None:
+            where = f"{str(batting['overs']).removesuffix('.0')} ov"
+        else:
+            where = clock or ""
+        return Glance(sides, where, progress)
 
     def result_text(self, score: str, clock: str) -> str:
         return clock  # "India won by 57 runs"

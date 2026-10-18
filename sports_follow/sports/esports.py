@@ -234,6 +234,7 @@ class Esports(Sport):
         "key": ("Maps and the result", "Each map of a series or match of a lobby won, the start and the result"),
         "more": ("", ""),
     }
+    kind_words = {"map": "Map"}
     stats_title = "Overview"
     keeps_names = True
 

@@ -31,10 +31,10 @@ VIEWS = "sports/"  # web/src/sports/<sport>.tsx: each sport's own view
 SOURCE_LIMITS: dict[str, int] = {}
 
 
-def named(wanted: set[str], root: Path = WEB) -> dict[str, list[tuple[int, str]]]:
+def named(wanted: set[str], root: Path = WEB, suffixes: tuple[str, ...] = (".ts", ".tsx")) -> dict[str, list[tuple[int, str]]]:
     """Each file's quoted strings under root (web/src) that are one of the wanted names, with their lines."""
     found = {}
-    for path in sorted(p for p in root.rglob("*") if p.suffix in (".ts", ".tsx")):
+    for path in sorted(p for p in root.rglob("*") if p.suffix in suffixes and "build" not in p.relative_to(root).parts):
         text = path.read_text()
         hits = [(text.count("\n", 0, m.start()) + 1, m[2]) for m in TOKENS.finditer(text) if m[1] and m[2].lower() in wanted]
         if hits:
@@ -98,6 +98,7 @@ def test_wording_a_page_by_a_sources_name_is_caught(tmp_path):
 
 
 MOBILE = WEB.parent.parent / "mobile" / "src"
+MODULES = MOBILE.parent / "modules"  # the app's own native code (its notifications: Kotlin and layouts)
 
 
 def test_the_android_app_names_no_sport_and_no_source():
@@ -107,3 +108,10 @@ def test_the_android_app_names_no_sport_and_no_source():
     wanted = set().union(*(names_of(s) for s in EVERY)) | source_names()
     found = named(wanted, MOBILE)
     assert MOBILE.is_dir() and not found, "\n".join(f"mobile/src/{rel}:{line} names {s!r}; take it from the API instead" for rel, hits in found.items() for line, s in hits)
+
+
+def test_the_android_apps_native_code_names_no_sport_and_no_source():
+    """Its notifications (mobile/modules) draw what the server sends: the sport's colours and words come with it."""
+    wanted = set().union(*(names_of(s) for s in EVERY)) | source_names()
+    found = named(wanted, MODULES, (".ts", ".kt", ".xml"))
+    assert MODULES.is_dir() and not found, "\n".join(f"mobile/modules/{rel}:{line} names {s!r}; send it from the server instead" for rel, hits in found.items() for line, s in hits)

@@ -12,6 +12,11 @@ Each device gets its push by its own transport (deliver()): Web Push for browser
 and iPhone home-screen apps (push(), below), and FCM for the Android app (fcm.py). A fan's quiet hours
 don't drop a moment: it arrives silently. Devices the push service says are gone are removed.
 
+The Android app draws a push itself, as a scorecard (scorecard()): its game as every push about it shows it
+(livecards.py: the sport's colours, the sides and where it's at), a big word over the moment's line, the story
+under it and the player's photo. Those are looked up once a batch, and only Android devices are sent them: a
+browser's push stays as it was.
+
     .venv/bin/python -m sports_follow.notify keys        # make this server's VAPID keys, once
     .venv/bin/python -m sports_follow.notify stats [7]   # what was sent in the last days, and opened
 """
@@ -30,7 +35,7 @@ from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -38,11 +43,14 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import alerts, bus, fcm, logs, metrics
+from . import alerts, bus, fcm, logs, metrics, sports
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
-from .models import Event, Follow, MatchFollow, Moment, Notification, NotificationMute, PlayerIdentity, PushSubscription
+from .models import Event, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerCard, PlayerIdentity, PushSubscription
+
+if TYPE_CHECKING:
+    from . import livecards
 
 log = logging.getLogger("sports_follow.notify")
 
@@ -63,6 +71,12 @@ SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was hande
 # and refuse more with a 413; encryption adds about 100, so this keeps a push under 3.5 KB. A longer
 # body (then title) is cut short.
 PAYLOAD_BYTES = 3400
+# An Android scorecard's big word by its moment's kind, for the kinds every sport has, where neither its sport
+# (Sport.high: "Hundred"; Sport.kind_words for its own kinds: "Goal") nor its title ("Red card: Saka") says one.
+# A title's own word is at most WORD_CHARS long: past that it's a sentence.
+WORDS = {"final": "Result", "start": "Live", "lineup": "Line-up", "news": "News"}
+WORD_CHARS = 20
+STORY_LINES, STORY_CHARS = 3, 80  # the earlier lines under a scorecard's, each cut to this
 
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
 _wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")  # one push to one device each
@@ -351,6 +365,14 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     followed = {e for watches in games.values() for e in watches}
     earlier_ids = {m for fan in games for s in sent.get(fan, []) if s.event_id in followed for m in s.moment_ids}
     told = {i.id: i for i in for_games(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
+    # What the Android app draws each push with, looked up once for the batch, should any of these fans have it.
+    # It reads every source's stored boards: one it can't read sends the batch plain, never not at all.
+    drawn = None
+    if any(d.transport == "fcm" for mine in devices.values() for d in mine):
+        try:
+            drawn = _drawn(db, items)
+        except Exception:
+            log.exception("moments %s: no scorecards, sent plain", [i.id for i in items])
     jobs = []
     for fan, fan_devices in devices.items():
         heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) for m in s.moment_ids if m in told]
@@ -359,9 +381,76 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             db.add(row)
             db.flush()
             payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
+            android = {**payload, **_scorecard_or_none(p, drawn)}
             for d in fan_devices:
-                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
     return jobs
+
+
+def _scorecard_or_none(p: alerts.Push, drawn: Drawn | None) -> dict[str, Any]:
+    """A push's scorecard keys (scorecard), or none, and so a plain push, where its board can't be read."""
+    if drawn is None:
+        return {}
+    try:
+        return scorecard(p, *drawn)
+    except Exception:
+        log.exception("no scorecard for a push of event %s", p.event_id)
+        return {}
+
+
+# What a batch's Android scorecards are drawn from (_drawn).
+Drawn = tuple[dict[int, alerts.Item], dict[int, "livecards.Board"], dict[int, tuple[str, str, str]]]
+
+
+def _drawn(db: Session, items: list[alerts.Item]) -> Drawn:
+    """What a batch's Android scorecards are drawn from (scorecard): its moments by id; its games as Android pushes
+    show them (livecards.boards); and its players' names, sports and photos (the one their card shows: photos.py)."""
+    from . import livecards  # a game as Android pushes show it (livecards sends through here)
+
+    players = {i.player_id for i in items if i.player_id is not None}
+    photo = PlayerCard.card["player"]["photo"]["url"].astext
+    who = {pid: (name, sport or "", url or "") for pid, name, sport, url in db.execute(
+        select(Player.id, Player.name, Player.sport, photo).outerjoin(PlayerCard, PlayerCard.player_id == Player.id).where(Player.id.in_(players)))} if players else {}
+    return {i.id: i for i in items}, livecards.boards(db, {i.event_id for i in items if i.event_id}), who
+
+
+def scorecard(p: alerts.Push, items: dict[int, alerts.Item], boards: dict[int, livecards.Board], players: dict[int, tuple[str, str, str]]) -> dict[str, Any]:
+    """What the Android app draws a push with beside its title and body (fcm.py): its game as every push about it
+    shows it (livecards.Board: the sport's colours, its sides and where it's at; a player's news, their sport's
+    alone); the big word over the lead moment's line (word_and_line); the story under it, the push's other lines and then
+    the game's earlier ones, newest first, at most STORY_LINES of STORY_CHARS; and the player's photo, by its full
+    address (none without SITE_URL, as in development). A game's own moments are read without the game's name
+    their titles start with ("Arsenal v Chelsea: …"): the sides say it."""
+    from . import livecards  # a game as Android pushes show it (livecards sends through here)
+
+    lead = items.get(p.moment_ids[0]) if p.moment_ids else None
+    who, sport_name, photo = players.get(p.player_id, ("", "", "")) if p.player_id is not None else ("", "", "")
+    board = boards.get(p.event_id) if p.event_id is not None else None
+    sport = board.sport if board is not None else sports.of(sport_name)
+
+    def bare(line: str) -> str:
+        name = next((n for n in board.names if line.startswith(f"{n}: ")), None) if board is not None else None
+        return line[len(name) + 2:] if name else line
+
+    word, line = word_and_line(sport, lead, bare(p.title), who)
+    story = [s if len(s) <= STORY_CHARS else s[:STORY_CHARS - 1].rstrip() + "…" for s in map(bare, [*p.lines[1:], *p.story])][:STORY_LINES]
+    return {**(board.keys if board is not None else livecards.keys(sport)), "word": word, "line": line, "story": story,
+            "photo": f"{SITE_URL}{photo}" if SITE_URL and photo else ""}
+
+
+def word_and_line(sport: sports.Sport, lead: alerts.Item | None, title: str, who: str) -> tuple[str, str]:
+    """A push's big word on an Android scorecard, and the line under it: the word its sport has for its lead moment
+    (Sport.high: "Hundred", "Late equaliser"), else its title's own before ": " ("Goal", "Red card"; not the player's
+    name, which "Jokić: 20 points" starts with), else its kind's (its sport's kind_words, then WORDS), else none. A word is at most WORD_CHARS
+    and never the whole title. The line is the title without the word's lead ("Goal: Saka" is "Saka"), else the
+    title."""
+    high = sport.high(Found(lead.kind, lead.level, title, lead.body, lead.detail, lead.priority), "") if lead is not None else None
+    head, said, _ = title.partition(": ")
+    kind = lead.kind if lead is not None else ""
+    words = [high.word if high is not None else "", head if said and head.casefold() != who.casefold() else "", sport.kind_words.get(kind, ""), WORDS.get(kind, "")]
+    chosen = next((w for w in words if w and len(w) <= WORD_CHARS and w != title), "")
+    lead_in = f"{chosen}: "
+    return chosen, title[len(lead_in):] if chosen and title.casefold().startswith(lead_in.casefold()) else title
 
 
 def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
@@ -467,12 +556,19 @@ def send_test(fan_id: str) -> int:
     with session() as db:
         newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
         devices = [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
+    # On Android, a moment of no sport, in the app's blue (fcm.message).
     payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
     results = [(device[0], deliver(device, payload, 600)) for device in devices]
+    settle(results)
+    return sum(1 for _, error in results if error is None)
+
+
+def settle(results: list[tuple[int, int | str | None]]) -> None:
+    """Write back each device's health after pushes that log no notification row (a test push, a game's live card:
+    livecards.py), as _settle does after a batch's: (device id, what its push service said)."""
     with session() as db:
         for device_id, error in results:
             _health(db, device_id, error)
-    return sum(1 for _, error in results if error is None)
 
 
 def trim_devices(db: Session, fan_id: str, keep: Any, room: int) -> None:
