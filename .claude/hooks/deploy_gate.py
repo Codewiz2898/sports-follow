@@ -40,15 +40,16 @@ TELL = ("Approving or rejecting a production deploy, changing its environment, a
         "rollback are Bharath's. Give him the Deploy run's link "
         "(https://github.com/Codewiz2898/sports-follow/actions/workflows/deploy.yml) and what it brings: every "
         "merge since the live commit, and any migration, secrets or server change. He approves it there. "
-        "(If the command only mentions these in text, such as a commit message, pass the text in a file.)")
+        "(If the command only mentions these in text, such as a commit message, pass the text in a file, or run "
+        "the other commands in it on their own.)")
 
 GATE = re.compile(r"pending_deployments|deployment_protection_rule")
 SENDS = re.compile(r"\b(approved|rejected)\b|(\b|-X)post\b|--input|(=|\s)@", re.IGNORECASE)
 MUTATIONS = re.compile(r"\b(approve|reject)Deployments\b", re.IGNORECASE)
 GRAPHQL = re.compile(r"\bgraphql\b", re.IGNORECASE)
 CALLS_API = re.compile(r"\bgh\b.*\bapi\b|\bcurl\b|\bwget\b|\bhttp\b|requests|urllib|fetch\(", re.IGNORECASE | re.DOTALL)
-FED = re.compile(r"(?:(?:=|\s)@|--input[=\s]+|<\s*|\bcat\s+)([^\s'\"|;&()<>]+)")  # files a call feeds in
-ENVIRONMENT = re.compile(r"repos/[^/\s'\"]+/[^/\s'\"]+/environments\b")
+FED = re.compile(r"(?:(?:=|\s)@|--input[=\s]+|<\s*|\bcat\s+)['\"]?([^\s'\"|;&()<>]+)")  # files a call feeds in
+ENVIRONMENT = re.compile(r"repos/\S+/environments\b")  # repos/o/r/, repos/$GITHUB_REPOSITORY/
 CHANGES = re.compile(r"(\b|-X)(post|put|patch|delete)\b|(^|\s)(-[fF]\S*|--field|--raw-field|--input)", re.IGNORECASE)
 NAMES_DEPLOY = re.compile(r"(?<![\w-])deploy\.sh\b(?![\s'\"]+(status|help|-h|--help)\b)")
 FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)")  # when unreadable
@@ -57,7 +58,9 @@ FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['
 READ_ONLY = {"grep", "egrep", "fgrep", "rg", "ag", "ls", "cat", "bat", "less", "more", "head", "tail", "wc", "sed",
              "sort", "uniq", "cut", "tr", "diff", "cmp", "file", "stat", "git", "gh", "echo", "printf", "jq", "yq",
              "cd", "test", "[", "true", "false", ":", "basename", "dirname", "realpath", "readlink", "shellcheck",
-             "chmod", "cp", "mv", "mkdir", "touch", "column", "nl", "shasum", "md5", "dig"}
+             "chmod", "cp", "mv", "mkdir", "touch", "column", "nl", "shasum", "md5", "dig", "xxd", "od", "hexdump",
+             "tree"}
+RUNS = re.compile(r"\bsystem\b|-exec|-execdir|-ok\b|-okdir|-delete")  # what makes awk or find run or remove things
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 REMOTES = {"ssh", "mosh"}
 READS = {"status", "help", "-h", "--help"}
@@ -103,7 +106,7 @@ def could_run_deploy(command: str, depth: int = 0) -> bool:
     for simple in parse(command).commands:
         words = simple.words
         name = os.path.basename(words[0]) if words else ""
-        if not words or name in READ_ONLY:
+        if not words or name in READ_ONLY or (name in ("awk", "find") and not RUNS.search(" ".join(words))):
             continue
         if name == "deploy.sh" and (len(words) == 1 or words[1] in READS):
             continue  # its usage, or status
@@ -137,6 +140,8 @@ def forced_deploy(command: str, depth: int = 0) -> bool:
         return False
     for simple in parse(command).commands:
         words = simple.words
+        if not words or os.path.basename(words[0]) in READ_ONLY:
+            continue  # `grep -rn ssh README.md deploy` only reads
         at = next((i for i, w in enumerate(words) if os.path.basename(w) in REMOTES), None)
         if at is not None:
             remote = " ".join(ssh_remote(words[at:])).split()
@@ -202,10 +207,16 @@ def blocked(command: str, cwd: str) -> bool:
         return True
     if changes_environment(command):
         return True
+    if "SSH_ORIGINAL_COMMAND" in command and "deploy.sh" in command:
+        return True  # deploy.sh takes its arguments from it: `SSH_ORIGINAL_COMMAND=deploy deploy.sh status`
     try:
-        return forced_deploy(command) or bool(NAMES_DEPLOY.search(command) and could_run_deploy(command))
+        if forced_deploy(command) or (NAMES_DEPLOY.search(command) and could_run_deploy(command)):
+            return True
+        names = {os.path.basename(s.words[0]) for s in parse(command).commands if s.words}
     except ValueError:  # a line the reader can't follow: stopped if it names deploy.sh at all
         return bool(NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command))
+    # A script sent to a shell or to ssh on stdin (`ssh host 'bash -s' < release.sh`) is read for deploy.sh too.
+    return bool(names & (SHELLS | REMOTES)) and any(NAMES_DEPLOY.search(text) for text in files_fed(command, cwd))
 
 
 def main() -> int:

@@ -144,6 +144,7 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
     (tmp_path / "body.json").write_text(json.dumps({"query": mutation}))
     (tmp_path / "viewer.graphql").write_text("query { viewer { login } }")
     (tmp_path / "notes.md").write_text(f"The hook stops `gh api graphql` with {mutation}")
+    (tmp_path / "release.sh").write_text("cd /opt/sports-follow\ndeploy/deploy.sh deploy\n")
     run_path = "repos/Codewiz2898/sports-follow/actions/runs/39126691465"
     approve = f"gh api -X POST {run_path}/pending_deployments -f state=approved"
     passes = [
@@ -176,6 +177,16 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
         "ssh deploy@203.0.113.7 'grep -n usage /opt/sports-follow/deploy/deploy.sh'",
         "ssh deploy@$(dig +short stann.in | head -1) 'grep -n usage /opt/sports-follow/deploy/deploy.sh'",
         "bash deploy/predeploy.sh",
+        "grep -rn ssh README.md deploy",
+        "rg -n ssh -g '*.md' deploy",
+        "awk '/^do_deploy/,/^}/' deploy/deploy.sh",
+        "find deploy -name 'deploy.sh' -newer README.md",
+        "xxd deploy/deploy.sh | head",
+        "gh api repos/$GITHUB_REPOSITORY/environments/production --jq .protection_rules",
+        "ssh deploy@203.0.113.7 'cd /opt/sports-follow && deploy/deploy.sh status && docker compose -f deploy/compose.yaml ps'",
+        "gh run list --workflow deploy.yml --status waiting",
+        "git log -- deploy/deploy.sh",
+        "echo 'rollback is by hand'",
     ]
     stops = [
         approve,
@@ -243,6 +254,21 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
         "ssh -i deploy_key deploy@203.0.113.7 \"deploy $(git rev-parse origin/main)\"",
         "ssh -i deploy_key deploy@203.0.113.7 -- deploy",
         "bash +n deploy/deploy.sh deploy",
+        "ssh deploy@203.0.113.7 'SSH_ORIGINAL_COMMAND=deploy /opt/sports-follow/deploy/deploy.sh'",
+        "ssh deploy@203.0.113.7 'SSH_ORIGINAL_COMMAND=rollback /opt/sports-follow/deploy/deploy.sh status'",
+        "ssh deploy@203.0.113.7 'env SSH_ORIGINAL_COMMAND=deploy /opt/sports-follow/deploy/deploy.sh'",
+        'gh api graphql -F query=@"approve.graphql"',
+        f'gh api graphql -F query=@"{tmp_path}/approve.graphql"',
+        'gh api graphql --input "body.json"',
+        'gh api graphql -F query=@- < "approve.graphql"',
+        'gh api graphql -f query="$(cat "approve.graphql")"',
+        "R=Codewiz2898/sports-follow; gh api -X PUT repos/$R/environments/production --input env.json",
+        'gh api -X PUT "repos/$GITHUB_REPOSITORY/environments/production" -F wait_timer=0',
+        "ssh deploy@203.0.113.7 'bash -s' < release.sh",
+        "ssh deploy@203.0.113.7 bash < release.sh",
+        "cat release.sh | ssh deploy@203.0.113.7",
+        "find deploy -name deploy.sh -exec {} deploy \\;",
+        "awk 'BEGIN { system(\"deploy/deploy.sh deploy\") }' deploy/deploy.sh",
     ]
     assert [c for c in passes if run("deploy_gate.py", c, tmp_path) != 0] == []
     assert [c for c in stops if run("deploy_gate.py", c, tmp_path) != 2] == []
