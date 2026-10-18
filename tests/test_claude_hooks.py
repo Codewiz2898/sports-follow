@@ -137,6 +137,48 @@ def test_a_pull_request_waits_for_a_review(tmp_path):
     assert [c for c in stops if run("pr_reviewed.py", c, tmp_path) != 2] == []
 
 
+def test_approving_a_production_deploy_is_bharaths(tmp_path):
+    # 18 Oct: a session approved a waiting deploy with `gh api`, which runs as Bharath, so it counted as his review.
+    (tmp_path / "approve.graphql").write_text("mutation { approveDeployments(input: {}) { clientMutationId } }")
+    (tmp_path / "viewer.graphql").write_text("query { viewer { login } }")
+    run_path = "repos/Codewiz2898/sports-follow/actions/runs/39126691465"
+    passes = [
+        f"gh api {run_path}/pending_deployments --jq '.[] | .environment.name'",
+        f"gh api -X GET {run_path}/pending_deployments",
+        "gh api repos/Codewiz2898/sports-follow/environments/production",
+        "gh workflow run deploy.yml -f action=deploy",  # starts a run that waits for his approval
+        "gh run list --workflow deploy.yml --limit 5",
+        "gh run watch 39126691465 --exit-status",
+        "ssh deploy@203.0.113.7 /opt/sports-follow/deploy/deploy.sh status",
+        "ssh deploy@203.0.113.7 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml ps'",
+        "grep -n 'deploy.sh deploy' deploy/README.md",
+        "git commit -m \"docs: by hand, ssh deploy@<server> deploy.sh deploy\"",
+        "sed -n '/^## Deploying/,/^## Alerts/p' deploy/README.md",
+        f"cd {tmp_path} && gh api graphql -F query=@viewer.graphql",
+    ]
+    stops = [
+        f'gh api -X POST {run_path}/pending_deployments -F "environment_ids[]=24321060570" -f state=approved',
+        f"gh api {run_path}/pending_deployments -f state=rejected -F environment_ids[]=1",
+        f"gh api --method=POST {run_path}/pending_deployments --input approve.json",
+        f"echo ok && gh api -XPOST /{run_path}/pending_deployments",
+        f"gh api -X POST {run_path}/deployment_protection_rule -f state=approved",
+        "gh api graphql -f query='mutation { approveDeployments(input: {workflowRunId: \"x\"}) { clientMutationId } }'",
+        "gh api graphql -F query=@- <<'EOF'\nmutation { rejectDeployments(input: {}) { clientMutationId } }\nEOF",
+        f"cd {tmp_path} && gh api graphql -F query=@approve.graphql",
+        "gh api -X PUT repos/Codewiz2898/sports-follow/environments/production -F reviewers[][id]=1",
+        "gh api -X DELETE repos/Codewiz2898/sports-follow/environments/production",
+        f"curl -s -X POST -H 'Authorization: Bearer x' https://api.github.com/{run_path}/pending_deployments -d '{{}}'",
+        "ssh deploy@203.0.113.7 /opt/sports-follow/deploy/deploy.sh deploy",
+        "ssh -o BatchMode=yes deploy@$(dig +short stann.in | head -1) /opt/sports-follow/deploy/deploy.sh rollback",
+        "ssh deploy@203.0.113.7 'cd /opt/sports-follow && deploy/deploy.sh deploy 437573e'",
+        "ssh deploy@203.0.113.7 bash -s <<'EOF'\ncd /opt/sports-follow\ndeploy/deploy.sh deploy\nEOF",
+        "cd /opt/sports-follow && deploy/deploy.sh deploy",
+        'bash -c "deploy/deploy.sh rollback"',
+    ]
+    assert [c for c in passes if run("deploy_gate.py", c, tmp_path) != 0] == []
+    assert [c for c in stops if run("deploy_gate.py", c, tmp_path) != 2] == []
+
+
 @pytest.mark.parametrize("command, blocked", [
     ("curl -s localhost:18421/api/health", False),
     ("docker exec sports-follow-postgres psql -U sports -d sports_follow_r2 -c 'select 1'", False),
