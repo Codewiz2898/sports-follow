@@ -350,7 +350,8 @@ class Adapter:
         raise NotImplementedError
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        """The event now. final=True may serve a cached copy: a finished match doesn't change."""
+        """The event now. final=True may serve a cached copy: a finished match doesn't change. Called from
+        several threads at once: a refresh reads a player's recent finals side by side."""
         raise NotImplementedError
 
     # Optional, for a source that fetches many events in one request (Sportmonks football):

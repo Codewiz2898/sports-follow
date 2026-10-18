@@ -2,8 +2,8 @@
 // under a result, and what the research agent's allowance says. Shared by the web app (components/Search.tsx)
 // and the Android app (mobile/), so it touches nothing of a browser's.
 
-import { relative } from './format'
-import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport } from './types'
+import { ahead, relative } from './format'
+import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport, TeamSummary } from './types'
 
 export interface Section { key: string; title: string; items: SearchResult[] }
 
@@ -38,6 +38,33 @@ export function highlightParts(name: string, query: string): { text: string; bol
     while (n < part.length && fold(part.slice(0, n)).length < hit.length) n++
     return [{ text: part.slice(0, n), bold: true }, { text: part.slice(n), bold: false }]
   })
+}
+
+/** A team result's next game, in one line: "Live now · v Chelsea", "Next v Chelsea · in 2 days". A team nobody
+ * follows has its games from its last read, which may be old: a game past its start isn't coming up, and one read
+ * live is live only within a few hours of its start. */
+export function teamNext(t: TeamSummary, now = Date.now()): { text: string; live: boolean } | null {
+  const n = t.next
+  if (!n) return null
+  const who = n.versus ? `v ${n.versus}` : n.title ?? ''
+  const start = Date.parse(n.start_utc ?? '')
+  if (n.status === 'live' && Number.isFinite(start) && start <= now && now - start < 6 * 3600_000) return { text: `Live now · ${who}`, live: true }
+  if (!ahead(n.start_utc, now)) return null
+  return { text: ['Next', who, `· ${relative(n.start_utc, now)}`].filter(Boolean).join(' '), live: false }
+}
+
+/** Whether search shows its teams first: one is called just what was typed ("Arsenal"), or no athlete is
+ * ("lakers": before the spellings it might have meant). Else they come after the athletes. */
+export function teamsFirst(data: SearchResponse): boolean {
+  const teams = data.teams ?? []
+  return teams.some((t) => fold(t.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
+}
+
+/** The team Enter (or the keyboard's search key) opens, if any: one called just what was typed ("Arsenal"), or the
+ * only team when no athlete has the name ("lakers"). */
+export function enterTeam(data: SearchResponse): TeamSummary | undefined {
+  const teams = data.teams ?? []
+  return teams.find((t) => fold(t.name) === fold(data.query)) ?? (!data.results.length && teams.length === 1 ? teams[0] : undefined)
 }
 
 /** The line under a result: its page being set up, its game on now, or its next game. */

@@ -42,6 +42,8 @@ class Db:
         return Rows(FOLLOWS if stmt.get_final_froms() else [(1,)])  # the fan's follows, or health's select(1)
 
     def scalars(self, stmt):
+        if "team_follow" in str(stmt):
+            return Rows([])  # the fan's teams' games: none
         if "match_follow" in str(stmt):
             return Rows(self.games)
         return Rows(player_id for player_id, _ in FOLLOWS)
@@ -137,8 +139,8 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     event, held = first_frame(response, api)
     assert event["type"] == "following"
     assert [(p["player_id"], p["version"], p["live"]["score"], p["alerts"]) for p in event["players"]] == [(1, 4, "1-0", "key"), (2, 9, "2-2", "off")]
-    assert event["matches"] == []
-    assert held == 0 and api.opened == ["thread"] * 3  # the follow ids, the players, the followed games: each closed at once
+    assert event["matches"] == [] and event["teams"] == []
+    assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap.
     assert api.redis.log == ["subscribe player:1 player:2", "get card:1", "get card:2", "unsubscribe"]
 

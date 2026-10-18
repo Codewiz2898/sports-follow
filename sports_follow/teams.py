@@ -56,6 +56,7 @@ LIMIT = 6  # teams a search answers with
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
 READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
+STREAM_AHEAD = timedelta(hours=36)  # a fan's teams' games this soon are on their stream (event_ids)
 NO_SOURCE = "This team's games can't be followed now: its source isn't running."
 TAG = "team:"  # a game's own moment from one team's side is about TAG + the team's id here (Moment.about)
 
@@ -550,6 +551,16 @@ def activity(fan: str, taken: Any, days: int) -> Select[Moment, str, bool, str]:
     )
 
 
+def followed_in(db: Session, events: set[int]) -> dict[int, list[str]]:
+    """The teams fans follow in each of these games, by tag: the fan stream's toasts say them, so the app finds a
+    fan's level for a game's own moment by their team in it, as alerts.plan does for a push."""
+    out: dict[int, list[str]] = {}
+    if events:
+        for event_id, team_id in db.execute(select(EventTeam.event_id, EventTeam.team_id).where(EventTeam.event_id.in_(events), EventTeam.team_id.in_(select(TeamFollow.team_id))).order_by(EventTeam.team_id)):
+            out.setdefault(event_id, []).append(tag(team_id))
+    return out
+
+
 def side_finals(db: Session, event: Event, rules_: sports.Sport, state: dict[str, Any], score: str, clock: str) -> list[Found]:
     """A finished game's result from the side of each team fans follow in it (Sport.side_final), for those fans
     (alerts.plan: in place of the game's own): "Arsenal won 2–1 v Chelsea". About the whole game, so a fan who
@@ -584,6 +595,16 @@ def _boards(db: Session, team_ids: list[int]) -> dict[int, dict[str, Any]]:
             continue
         out[team_id] = matches.board(event, s.status, s.score_label, s.clock_label, s.state or {}, s.source_url, s.as_of)
     return out
+
+
+def event_ids(db: Session, fan: str, now: datetime | None = None) -> list[int]:
+    """The games of this fan's teams on now or starting within STREAM_AHEAD, by event: the fan stream's channels
+    (bus.match_channel), its board as it's polled and its own moments. A stream connects again often enough (a
+    phone back from the lock screen, a follow) that a game further off is on one by the time it starts."""
+    now = now or _now()
+    soon = or_(Event.status.in_(("armed", "live")), and_(Event.status == "scheduled", Event.start_utc.is_not(None), Event.start_utc <= now + STREAM_AHEAD, Event.start_utc >= now - timedelta(hours=6)))
+    return list(db.scalars(select(EventTeam.event_id).distinct().join(Event, Event.id == EventTeam.event_id)
+                           .join(TeamFollow, and_(TeamFollow.team_id == EventTeam.team_id, TeamFollow.fan_id == fan)).where(soon)))
 
 
 def mine(db: Session, fan: str) -> list[dict[str, Any]]:
