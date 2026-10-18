@@ -139,7 +139,7 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
                 <Avatar name={x.name} sport={x.sport} />
                 <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                   <Text style={t.title}>{x.name}</Text>
-                  <Text style={[t.small, t.muted]}>{on ? 'Every game of theirs, from both sides' : 'Follow every game of theirs'}</Text>
+                  <Text style={[t.small, t.muted]}>{on ? 'Every game of theirs, from both sides' : x.can_follow ? 'Follow every game of theirs' : "Its games can't be followed here now"}</Text>
                 </View>
               </Pressable>
               {x.can_follow || on ? (

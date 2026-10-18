@@ -114,7 +114,7 @@ function TeamsLive({ games }: { games: TeamGame[] }) {
     <>
       {games.map((g) => (
         <Link key={g.key} to={g.live.match ? `/match/${g.live.match}` : `/team/${g.team_id}`} className="stack" style={{ gap: 8 }}>
-          <LiveScoreboard live={g.live} playerName="" sport={g.sport} compact seed={g.key} />
+          <LiveScoreboard live={g.live} playerName="" sport={g.sport} teams={g.names} compact seed={g.key} />
           <span className="tiny muted" style={{ fontWeight: 700 }}>Following {g.names.join(' and ')}</span>
         </Link>
       ))}

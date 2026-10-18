@@ -38,7 +38,7 @@ from sqlalchemy import ColumnElement, Select, Text, and_, delete, func, or_, sel
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session, aliased
 
-from . import bus, logs, matches, moments, registry, search, sports, structured
+from . import bus, logs, matches, moments, naming, registry, search, sports, structured
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, serving, source_name
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
@@ -657,31 +657,45 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
 
 def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], event_ids: list[int]) -> list[dict[str, Any]]:
     """The teams a game's match page offers to follow (match.view): its sides as the registry has them, by their ids
-    on its board (Sport's sides(); a source whose team ids say more than its boards' maps them, Adapter.board_id),
-    else as its events' fixtures named them (Event.participants: a game to come has no board yet), and the teams
-    its events are linked to (event_team), in the game's order; each with whether this fan follows it, and whether
-    it can be followed now (its sport runs, its source can say its games). Teams of a sport whose teams can't be
-    followed, and sides the registry doesn't have, aren't offered."""
-    on_board = [str(side.get("id")) for side in sports_sides(state) if side.get("id") not in (None, "")]
-    if not on_board and event_ids:
+    on its board (Sport's sides()), else as its events' fixtures named them (Event.participants: a game to come has
+    no board yet), and the teams its events are linked to (event_team), in the game's order; each with whether this
+    fan follows it, and whether it can be followed now (its sport runs, its source can say its games). A source whose
+    team ids say more than its boards' (Adapter.board_id: ESPN basketball's carry the league, so "5" is the Cavaliers
+    and the Fever) has a side's team told by its name, on the board or in the game's title; one it can't tell isn't
+    offered. Teams of a sport whose teams can't be followed, and sides the registry doesn't have, aren't offered."""
+    pairs = [(str(side.get("id")), str(side.get("name") or "")) for side in sports_sides(state) if side.get("id") not in (None, "")]
+    if not pairs and event_ids:
         named = db.scalars(select(Event.participants).where(Event.id.in_(event_ids), Event.key.startswith(f"{system}:"))).all()
-        on_board = list(dict.fromkeys(str(x) for ids in named for x in ids or [] if x not in (None, "")))
+        pairs = [(i, "") for i in dict.fromkeys(str(x) for ids in named for x in ids or [] if x not in (None, ""))]
+    titles = " | ".join(naming.fold(t) for t in db.scalars(select(Event.title).where(Event.id.in_(event_ids)))) if event_ids else ""
     board_id = getattr(KNOWN.get(system), "board_id", None)
     found: dict[int, Team] = {}
-    if on_board:
-        maybe = or_(Team.external_id.in_(on_board), *[Team.external_id.like(f"%:{i}") for i in on_board]) if callable(board_id) else Team.external_id.in_(on_board)
-        for team in db.scalars(select(Team).where(Team.system == system, maybe)):
-            if team.external_id in on_board or (callable(board_id) and str(board_id(team.external_id)) in on_board):
-                found[team.id] = team
+    order: dict[int, int] = {}
+    for n, (side, name) in enumerate(pairs):
+        exact = db.scalar(select(Team).where(Team.system == system, Team.external_id == side))
+        if exact is not None:
+            found[exact.id], order[exact.id] = exact, n
+            continue
+        if not callable(board_id):
+            continue
+        maybe = [t for t in db.scalars(select(Team).where(Team.system == system, Team.external_id.like(f"%:{side}"))) if str(board_id(t.external_id)) == side]
+        if len(maybe) > 1:  # one number, several teams: the one this side names
+            maybe = [t for t in maybe if (name and naming.team_key(t.name) == naming.team_key(name)) or (not name and naming.fold(t.name) in titles)]
+        if len(maybe) == 1:
+            found[maybe[0].id], order[maybe[0].id] = maybe[0], n
     if event_ids:
         for team in db.scalars(select(Team).join(EventTeam, EventTeam.team_id == Team.id).where(EventTeam.event_id.in_(event_ids))):
             found.setdefault(team.id, team)
-    shown = [t for t in found.values() if followable(t.sport)]
-    side_of = {i: n for n, i in enumerate(on_board)}
-    shown.sort(key=lambda t: (side_of.get(t.external_id, side_of.get(str(board_id(t.external_id)) if callable(board_id) else "", len(side_of))), t.id))
+    shown = sorted((t for t in found.values() if followable(t.sport)), key=lambda t: (order.get(t.id, len(pairs)), t.id))
     theirs = _following(db, fan, [t.id for t in shown])
     can = readable(ADAPTERS.get(system))
     return [{"team_id": t.id, "name": t.name, "sport": t.sport, "following": t.id in theirs, "can_follow": can} for t in shown]
+
+
+def ended(db: Session, event_id: int) -> None:
+    """A game of followed teams just ended (its last poll, structured._game_moments): their games are read again at
+    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon."""
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id))).values(fetched_at=None))
 
 
 def look_again(team: Team) -> bool:

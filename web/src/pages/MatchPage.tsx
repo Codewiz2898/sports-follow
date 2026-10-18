@@ -125,7 +125,7 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
                 <Avatar name={t.name} sport={t.sport} />
                 <span className="stack">
                   <span className="title">{t.name}</span>
-                  <span className="small muted">{on ? 'Every game of theirs, from both sides' : 'Follow every game of theirs'}</span>
+                  <span className="small muted">{on ? 'Every game of theirs, from both sides' : t.can_follow ? 'Follow every game of theirs' : "Its games can't be followed here now"}</span>
                 </span>
               </Link>
               {(t.can_follow || on) && (

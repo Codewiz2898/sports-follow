@@ -110,7 +110,7 @@ function BigGames({ league, now }: { league: League | null; now: number }) {
 function TeamsLive({ games }: { games: TeamGame[] }) {
   return games.map((g) => (
     <Pressable key={g.key} onPress={openMatch(g.live.match, `/team/${g.team_id}`)} accessibilityRole="link" style={{ gap: 8 }}>
-      <LiveScoreboard live={g.live} playerName="" sport={g.sport} compact seed={g.key} />
+      <LiveScoreboard live={g.live} playerName="" sport={g.sport} teams={g.names} compact seed={g.key} />
       <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Following {g.names.join(' and ')}</Text>
     </Pressable>
   ))

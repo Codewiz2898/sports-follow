@@ -466,6 +466,45 @@ def test_a_match_page_offers_its_teams_and_today_has_a_followed_teams_games(db, 
 
 
 @needs_db
+def test_a_match_page_tells_apart_two_teams_its_source_numbers_alike(db, redis, source, monkeypatch):
+    # A source whose team ids carry more than its boards' (ESPN basketball's carry the league): "5" on a board is
+    # the Cavaliers in one league and the Fever in the other, told apart by the side's name, or the game's title.
+    monkeypatch.setattr(source.fake, "board_id", lambda team_id: team_id.rpartition(":")[2], raising=False)
+    for team_id, name in (("nba:5", "Cleveland Cavaliers"), ("wnba:5", "Indiana Fever"), ("wnba:17", "Las Vegas Aces")):
+        teams.upsert(db, "pitch", SourceTeam("pitch", team_id, name), "basketball", NOW)
+    db.commit()
+    board = {"kind": "basketball", "home": {"id": "5", "name": "Indiana Fever", "score": "80"}, "away": {"id": "17", "name": "Las Vegas Aces", "score": "90"}}
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", board, [])] == ["Indiana Fever", "Las Vegas Aces"]
+    db.add(Event(key="pitch:777", sport="Basketball", title="Indiana Fever at Las Vegas Aces", participants=["5", "17"], status="scheduled"))
+    db.commit()
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:777"))
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", {}, [event_id])] == ["Indiana Fever", "Las Vegas Aces"]  # before tip-off, by its title
+    nameless = {"kind": "basketball", "home": {"id": "5", "score": "80"}, "away": {"id": "17", "name": "Las Vegas Aces", "score": "90"}}
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", nameless, [])] == ["Las Vegas Aces"]  # one it can't tell isn't offered
+
+
+@needs_db
+def test_a_followed_teams_game_ending_has_its_games_read_again_at_the_next_tick(db, redis, source, monkeypatch):
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    source.fixtures[TOT] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    arsenal, spurs = team(db, ARS), team(db, TOT)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    teams.refresh(arsenal.id)
+    teams.refresh(spurs.id)  # read by a page, followed by nobody
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:100"))
+    assert event_id is not None and pipeline.due_work(NOW).teams == []
+    teams.ended(db, event_id)
+    db.commit()
+    db.expire_all()
+    assert (team(db, ARS).fetched_at, team(db, TOT).fetched_at is not None) == (None, True)
+    assert pipeline.due_work(NOW).teams == [arsenal.id]
+
+
+@needs_db
 def test_a_fans_team_follows_move_with_their_account_and_go_with_it(db, redis, source, monkeypatch):
     teams.import_teams(source.fake, NOW)
     monkeypatch.setattr(teams, "MAX", 2)

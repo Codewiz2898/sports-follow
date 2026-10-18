@@ -981,8 +981,10 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     name = rules.matchup(snap.state) or event.title
     found = rules.game_moments(name, before, now, notify.told_game(db, event.id) if before else [])
     if any(f.kind == "final" for f in found):
-        # And from the side of each team fans follow in it, for them (teams.py): "Arsenal won 2–1 v Chelsea".
+        # And from the side of each team fans follow in it, for them (teams.py): "Arsenal won 2–1 v Chelsea"; and
+        # their games read again soon, so the result reaches their Following and Today.
         found += teams.side_finals(db, event, rules, snap.state, snap.score_label, snap.clock_label)
+        teams.ended(db, event.id)
     for f in found:
         f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
