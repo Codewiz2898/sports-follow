@@ -62,6 +62,44 @@ def test_freshness_is_each_callers_ttl_against_when_it_was_fetched(clock):
     assert worker.read("/fixtures/1", 100, source)["data"]["read"] == 2 and source.fetched == 2
 
 
+def test_an_older_read_that_finishes_late_never_replaces_a_newer_one(clock):
+    # The API's match page asks for a match just before full time and its answer is slow; the worker's live
+    # poll asks a moment later, sees full time and is kept first. The slower, older answer must not replace
+    # it: a final read (a refresh after a deploy) would take the in-play state for a day.
+    api, worker = cache.Cache("example"), cache.Cache("example")
+
+    def full_time() -> dict[str, Any]:
+        clock["t"] += 0.3
+        return {"data": {"state": "FT"}}
+
+    def in_play() -> dict[str, Any]:
+        clock["t"] += 0.2
+        poll = threading.Thread(target=worker.read, args=("/fixtures/1", 5, full_time))  # another process
+        poll.start()
+        poll.join(5)
+        clock["t"] += 0.9
+        return {"data": {"state": "INPLAY_2ND_HALF"}}
+
+    assert api.read("/fixtures/1", 30, in_play)["data"]["state"] == "INPLAY_2ND_HALF"  # what the API itself was told
+    assert cache.Cache("example").read("/fixtures/1", 24 * 3600, Source()) == {"data": {"state": "FT"}}
+    assert api.read("/fixtures/1", 24 * 3600, Source()) == {"data": {"state": "FT"}}  # and the API from then on
+
+
+def test_a_fetch_that_waits_for_its_turn_is_as_old_as_its_request(clock):
+    # A source taking one request at a time (Lichess): the wait for the line doesn't age the answer.
+    reads = cache.Cache("example")
+
+    def queued() -> dict[str, Any]:
+        clock["t"] += 4  # behind other requests
+        cache.sending()
+        clock["t"] += 0.5
+        return {"data": "made up"}
+
+    reads.read("/broadcast/round/1", 5, queued)
+    assert reads.entries["/broadcast/round/1"][0] == clock["t"] - 0.5
+    assert reads.read("/broadcast/round/1", 5, Source()) == {"data": "made up"}  # still fresh for a 5 s ttl
+
+
 def test_a_ttl_of_0_is_fetched_every_time_and_never_kept(source_cache):
     reads, source = cache.Cache("example"), Source()
     reads.read("/livescores", 0, source)
@@ -133,11 +171,11 @@ def test_a_redis_outage_never_fails_a_read(monkeypatch, clock, source_cache):
     class Down:
         calls = 0
 
-        def get(self, key: str) -> bytes | None:
+        def get(self, key: str) -> tuple[float, bytes] | None:
             Down.calls += 1
             raise ConnectionError("made up: no route to the cache")
 
-        def set(self, key: str, value: bytes, ex: int) -> None:
+        def put(self, key: str, at: float, doc: bytes, ex: int) -> bool:
             Down.calls += 1
             raise ConnectionError("made up: no route to the cache")
 
@@ -158,7 +196,8 @@ def test_kept_in_redis_compressed_under_the_sources_name_with_an_expiry(source_c
     reads.read("/fixtures/1", 5, Source())
     reads.read("/seasons/2", 7 * 24 * 3600, Source())
     live, season = _key("example", "/fixtures/1"), _key("example", "/seasons/2")
-    assert json.loads(zlib.decompress(source_cache.data[live][0])) == [clock["t"], {"data": {"id": 1, "read": 1}}]
+    at, doc, _ = source_cache.data[live]
+    assert at == clock["t"] and json.loads(zlib.decompress(doc)) == {"data": {"id": 1, "read": 1}}
     # A live poll's copy outlives its 5 s, for a caller with a longer ttl; a longer ttl keeps it longer.
     assert source_cache.expiry == {live: cache.KEEP, season: 7 * 24 * 3600}
     clock["t"] += cache.KEEP + 1
@@ -170,7 +209,7 @@ def test_each_source_keeps_its_answers_under_its_budgets_name(module):
     assert module._cache.namespace == module.BUDGET.name
 
 
-def test_a_deploy_doesnt_empty_what_a_source_answered(monkeypatch):
+def test_a_deploy_doesnt_empty_what_a_source_answered(monkeypatch, source_budgets):
     # The worker read a player a second after the API had: each process asked Sportmonks, about a second
     # from the server each time. Now the second read, and any after a deploy, is Redis's.
     sent: list[str] = []
@@ -184,3 +223,5 @@ def test_a_deploy_doesnt_empty_what_a_source_answered(monkeypatch):
     first = sportmonks.get_json("/football/players/7", 3 * 3600, include="teams")
     cache.forget()  # a deploy: every process starts with nothing of its own
     assert sportmonks.get_json("/football/players/7", 3 * 3600, include="teams") == first and len(sent) == 1
+    spent = source_budgets.keys("budget:use:sportmonks:*:sent:h*")
+    assert [source_budgets.get(key) for key in spent] == [1]  # and only the request sent was counted

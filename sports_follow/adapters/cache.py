@@ -8,13 +8,17 @@ judges freshness by its own ttl against that time: the same match is read with 5
 24 h once it's over. A ttl of 0 is fetched every time and never kept. Threads of one process asking for
 the same thing at once send one request between them: the first fetches, the others take what it kept.
 
+"When it was fetched" is when the request went out, not when its answer came back, and Redis keeps only
+the latest of those: an answer that took longer, sent before another process's, never replaces the
+newer one (a match page's in-play read, overtaken by a live poll that saw full time).
+
 The Redis is SPORTS_FOLLOW_CACHE_REDIS_URL (config.CACHE_REDIS_URL): in production one of its own, capped
 and evicting the least recently used key, so a full cache never pushes out a job, a lock or a budget
 (deploy/compose.yaml). A read never fails because of it: while it can't be reached, each process keeps its
 own copy, as before, and tries Redis again every RETRY seconds.
 
-Keys: src:<budget name>:<sha1 of the request>, holding zlib-compressed JSON [fetched at, document], kept
-KEEP seconds after they're written, or the ttl if that's longer.
+Keys: src:<budget name>:<sha1 of the request>, a hash of `at` (when its request went out, epoch seconds)
+and `doc` (zlib-compressed JSON), kept KEEP seconds after it's written, or the ttl if that's longer.
 """
 
 from __future__ import annotations
@@ -38,12 +42,22 @@ KEEP = 24 * 3600
 RETRY = 30  # seconds between tries while Redis can't be reached
 T = TypeVar("T")
 
+# Write a copy only over an older one (or none), in one step, so two processes' writes can't interleave.
+_PUT = """
+local at = redis.call('HGET', KEYS[1], 'at')
+if at and tonumber(at) >= tonumber(ARGV[1]) then return 0 end
+redis.call('HSET', KEYS[1], 'at', ARGV[1], 'doc', ARGV[2])
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+return 1
+"""
+
 
 class RedisStore:
     """The cache Redis, connected on first use. Its timeouts are short: a cache that's slow to answer is skipped."""
 
     def __init__(self) -> None:
         self._client: Any = None
+        self._put: Any = None
 
     def _redis(self) -> Any:
         if self._client is None:
@@ -52,49 +66,70 @@ class RedisStore:
             from ..config import CACHE_REDIS_URL
 
             self._client = redis.Redis.from_url(CACHE_REDIS_URL, socket_timeout=1, socket_connect_timeout=1)
+            self._put = self._client.register_script(_PUT)
         return self._client
 
-    def get(self, key: str) -> bytes | None:
-        return self._redis().get(key)
+    def get(self, key: str) -> tuple[float, bytes] | None:
+        at, doc = self._redis().hmget(key, "at", "doc")
+        return (float(at), doc) if at is not None and doc is not None else None
 
-    def set(self, key: str, value: bytes, ex: int) -> None:
-        self._redis().set(key, value, ex=ex)
+    def put(self, key: str, at: float, doc: bytes, ex: int) -> bool:
+        self._redis()
+        return bool(self._put(keys=[key], args=[repr(at), doc, ex]))
 
 
 class MemoryStore:
     """Redis's part, in memory: for tests. Two Caches of one name over one store are two processes."""
 
     def __init__(self) -> None:
-        self.data: dict[str, tuple[bytes, float]] = {}  # key -> (value, when it expires)
+        self.data: dict[str, tuple[float, bytes, float]] = {}  # key -> (at, doc, when it expires)
         self.expiry: dict[str, int] = {}  # key -> the seconds it was last kept for
+        self._guard = threading.Lock()
 
-    def get(self, key: str) -> bytes | None:
+    def get(self, key: str) -> tuple[float, bytes] | None:
         hit = self.data.get(key)
-        return hit[0] if hit and hit[1] > time.time() else None
+        return (hit[0], hit[1]) if hit and hit[2] > time.time() else None
 
-    def set(self, key: str, value: bytes, ex: int) -> None:
-        self.data[key] = (value, time.time() + ex)
-        self.expiry[key] = ex
+    def put(self, key: str, at: float, doc: bytes, ex: int) -> bool:
+        with self._guard:
+            kept = self.get(key)
+            if kept and kept[0] >= at:
+                return False
+            self.data[key] = (at, doc, time.time() + ex)
+            self.expiry[key] = ex
+            return True
 
 
 STORE: Any = RedisStore()
 _down = {"until": 0.0, "warned": 0.0}
 
 
-def _store(method: str, *args: Any, **kwargs: Any) -> Any:
+def _store(method: str, *args: Any) -> Any:
     """A call to Redis; None while it can't be reached, and for RETRY seconds after: the cache goes on in
     each process alone."""
     now = time.time()
     if _down["until"] > now:
         return None
     try:
-        return getattr(STORE, method)(*args, **kwargs)
+        return getattr(STORE, method)(*args)
     except Exception as exc:
         _down["until"] = now + RETRY
         if now - _down["warned"] > 60:
             log.warning("source cache: Redis unreachable (%s); each process keeps its own copy until it's back", exc)
             _down["warned"] = now
         return None
+
+
+# This thread's fetches under way, innermost last: [when its request went out] each (sending).
+_fetching = threading.local()
+
+
+def sending() -> None:
+    """Said by a fetch that may wait before its request goes out (a source taking one request at a time):
+    its answer is as old as this moment, not as old as the wait."""
+    stack = getattr(_fetching, "stack", None)
+    if stack:
+        stack[-1][0] = time.time()
 
 
 _caches: weakref.WeakSet[Cache] = weakref.WeakSet()
@@ -124,8 +159,14 @@ class Cache:
             hit = self._local(key, ttl) or self._shared(key, ttl)
             if hit is not None:
                 return hit[1]
-            data = fetch()
-            self._keep(key, time.time(), data, ttl)
+            sent = [time.time()]  # when its request goes out, unless the fetch says later (sending)
+            stack = _fetching.__dict__.setdefault("stack", [])
+            stack.append(sent)
+            try:
+                data = fetch()
+            finally:
+                stack.pop()
+            self._keep(key, sent[0], data, ttl)
             return data
 
     def peek(self, key: str, ttl: float) -> Any:
@@ -138,25 +179,27 @@ class Cache:
         return hit if hit is not None and time.time() - hit[0] < ttl else None
 
     def _shared(self, key: str, ttl: float) -> tuple[float, Any] | None:
-        raw = _store("get", self._key(key))
-        if not raw:
+        kept = _store("get", self._key(key))
+        if not kept or time.time() - kept[0] >= ttl:
             return None
         try:
-            at, data = json.loads(zlib.decompress(raw))
+            data = json.loads(zlib.decompress(kept[1]))
         except (zlib.error, ValueError, TypeError):  # not one of ours: as good as missing
             return None
-        if time.time() - at >= ttl:
-            return None
-        self._put(key, (at, data))  # judged by when it was fetched, not when this process read it
-        return at, data
+        self._put(key, (kept[0], data))  # judged by when it was fetched, not when this process read it
+        return kept[0], data
 
     def _keep(self, key: str, at: float, data: Any, ttl: float) -> None:
         self._put(key, (at, data))
         try:
-            raw = zlib.compress(json.dumps([at, data], separators=(",", ":")).encode())
+            doc = zlib.compress(json.dumps(data, separators=(",", ":")).encode())
         except (TypeError, ValueError):  # not JSON: kept in this process only
             return
-        _store("set", self._key(key), raw, ex=max(math.ceil(ttl), KEEP))
+        if _store("put", self._key(key), at, doc, max(math.ceil(ttl), KEEP)) is False:
+            # Redis has a copy whose request went out later: this process's next read takes that one.
+            with self._guard:
+                if self.entries.get(key, (None,))[0] == at:
+                    del self.entries[key]
 
     def _put(self, key: str, entry: tuple[float, Any]) -> None:
         with self._guard:

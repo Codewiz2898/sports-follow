@@ -110,6 +110,7 @@ def _fetch(url: str, text: bool) -> Any:
         spends = _spends(url)
         budget.take(spends)
         time.sleep(max(0.0, _state["last"] + SPACING - time.time()))
+        cache.sending()  # its answer is as old as now, not as the wait for the request line
         try:
             res = _client.get(url, headers=_headers(url, text))
         except httpx.HTTPError as exc:
