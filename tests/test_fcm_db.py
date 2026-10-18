@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import moments, notify, server
-from sports_follow.models import Event, Follow, Notification, Player, PushSubscription
+from sports_follow.models import Event, EventState, Follow, Notification, Player, PlayerCard, PushSubscription
 
 from .test_fcm import TOKEN, fake_fcm  # noqa: F401  (the fixture)
 
@@ -85,20 +85,33 @@ def goal(db, detail: str, body: str) -> list[int]:
 
 def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, monkeypatch):  # noqa: F811
     browser = []
-    monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: browser.append((payload["tag"], payload["title"], topic)))
+    monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: browser.append((payload["tag"], payload["title"], topic, set(payload))))
+    monkeypatch.setattr(notify, "SITE_URL", "https://stann.example")
     assert register(db, "fan-a") == {"ok": True, "timezone": "Asia/Kolkata", "quiet_start": None, "quiet_end": None}
     db.add(PushSubscription(fan_id="fan-a", endpoint=BROWSER, p256dh="k", auth="a"))
+    # The game as its last poll had it, and Salah's card with his photo.
+    db.get(Event, 1).competition = "Africa Cup of Nations"
+    board = {"kind": "football", "home": {"id": "1", "name": "Egypt", "abbr": "EGY", "score": "1"}, "away": {"id": "2", "name": "South Africa", "abbr": "RSA", "score": "0"}}
+    db.add(EventState(event_id=1, as_of=datetime.now(timezone.utc), status="live", score_label="Egypt 1 – 0 South Africa", clock_label="23'", state=board))
+    db.add(PlayerCard(player_id=7, status="ready", card={"player": {"name": "Mohamed Salah", "photo": {"url": "/api/photos/0123.jpg", "credit": "…"}}}))
     db.commit()
 
     assert notify.send(goal(db, "goal@101", "Egypt 1 – 0 South Africa · 23'")) == 2
     [row] = db.scalars(select(Notification)).all()
     assert (row.devices, row.delivered, row.loud) == (2, 2, True)
     [sent] = fake_fcm.sent
-    assert sent["token"] == PHONE
-    assert sent["notification"] == {"title": "Goal: Mohamed Salah puts Egypt ahead", "body": "Egypt 1 – 0 South Africa · 23'"}
-    assert sent["data"] == {"id": str(row.id), "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"}
-    assert sent["android"]["notification"] == {"channel_id": "key", "visibility": "PUBLIC", "sound": "default", "tag": "e1"} and sent["android"]["priority"] == "high"
-    assert browser == [("e1", "Goal: Mohamed Salah puts Egypt ahead", "e1")]  # the same push, by Web Push
+    assert sent["token"] == PHONE and "notification" not in sent  # the app draws it
+    assert sent["data"] == {
+        "v": "2", "type": "moment", "tag": "e1", "loud": "1", "id": str(row.id), "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal",
+        "title": "Goal: Mohamed Salah puts Egypt ahead", "body": "Egypt 1 – 0 South Africa · 23'",
+        # Its scorecard: the game as its last poll had it, in football's colours, and the moment's word over its line.
+        "sport": "football", "colour": "#12c46c", "ink": "#0b1a10", "league": "Africa Cup of Nations", "match": "",
+        "sides": '[["EGY","1"],["RSA","0"]]', "status": "23'", "live": "1",
+        "word": "Goal", "line": "Mohamed Salah puts Egypt ahead", "story": "", "photo": "https://stann.example/api/photos/0123.jpg",
+    }
+    assert sent["android"] == {"priority": "high", "ttl": "900s", "collapse_key": "e1"}
+    # The same push by Web Push, no bigger than it was.
+    assert browser == [("e1", "Goal: Mohamed Salah puts Egypt ahead", "e1", {"id", "title", "body", "url", "tag", "event_id", "player_id", "kind", "loud", "quiet"})]
     assert db.scalar(select(PushSubscription.last_ok_at).where(PushSubscription.endpoint == PHONE)) is not None
 
     # The next goal of the game replaces that notification (its tag); during the phone's quiet hours (from
@@ -107,8 +120,8 @@ def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, 
     register(db, "fan-a", quiet_start=f"{india - timedelta(minutes=30):%H:%M}", quiet_end=f"{india + timedelta(minutes=30):%H:%M}")
     assert notify.send(goal(db, "goal@140", "Egypt 2 – 0 South Africa · 40'")) == 2
     second = fake_fcm.sent[-1]
-    assert second["android"]["notification"] == {"channel_id": "other", "visibility": "PUBLIC", "tag": "e1"} and second["android"]["priority"] == "normal"
-    assert second["notification"]["body"].startswith("Egypt 2 – 0 South Africa · 40'")
+    assert (second["android"]["priority"], second["data"]["loud"], second["data"]["tag"]) == ("normal", "0", "e1")
+    assert second["data"]["body"].startswith("Egypt 2 – 0 South Africa · 40'")
 
     # Uninstalled: FCM no longer knows the token, and the device goes. The browser stays.
     fake_fcm.gone.add(PHONE)

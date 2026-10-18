@@ -125,6 +125,19 @@ class Fact:
     line: str
 
 
+@dataclass
+class Glance:
+    """A game at a glance, as an Android notification draws it (livecards.py): its two sides, each a short name
+    and its score (none for a lobby of more), where it's at in a word or two ("67'", "38.2 ov", "Set 2", "Full
+    time"), how far along it is (done, of) where its sport can say, and where along that it turned, for which
+    side (0 the first, 1 the second): a goal at 23' for the away side is (23, 1)."""
+
+    sides: list[tuple[str, str]] = field(default_factory=list)
+    status: str = ""
+    progress: tuple[float, float] | None = None
+    marks: list[tuple[float, int]] = field(default_factory=list)
+
+
 # How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
 # final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
 # those are read first.
@@ -164,6 +177,12 @@ def sides(state: dict[str, Any]) -> list[dict[str, Any]]:
     basketball), or its two teams (cricket, an esports series); [] for a board of more or fewer (a lobby)."""
     pair: list[Any] = [state.get("home"), state.get("away")] if state.get("home") or state.get("away") else list(state.get("teams") or [])
     return pair if len(pair) == 2 and all(isinstance(s, dict) for s in pair) else []
+
+
+def short(side: dict[str, Any]) -> str:
+    """A side's name as a few letters where its board has them: its abbreviation ("ARS"), else its short name, else
+    its name."""
+    return str(side.get("abbr") or side.get("short") or side.get("name") or "")
 
 
 def stat(line: dict[str, Any] | None, label: str) -> str | None:
@@ -512,6 +531,14 @@ class Sport:
         return ""
 
     # ---- live games and cards (structured.py)
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """A game at a glance as an Android notification draws it (livecards.py: a moment's scorecard, a live
+        card), from its scoreboard (Snapshot.state), its score and clock lines, its status (live, final…) and the
+        source's key events, newest first (none where only the stored state is at hand). By default its board's two
+        sides (sides()), each by its abbreviation, else short name, else name, with its score as the board has it,
+        and the clock line as where it's at: no progress, no marks."""
+        return Glance([(short(s), "" if s.get("score") is None else str(s["score"])) for s in sides(state)], clock or "")
 
     def result_text(self, score: str, clock: str) -> str:
         """A finished game's result as a line: its score ("2–1"); cricket's is its summary."""

@@ -25,7 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
+from . import bus, engine, livecards, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -456,6 +456,7 @@ def finish(unfinished: dict[int, Snapshot | None]) -> None:
         cleared = close_live(db, unseen)
     for player_id, card in cleared:
         bus.store_card(player_id, card)
+    livecards.ended(unseen)  # and their live cards on Android phones come down
 
 
 def close_live(db: Session, event_ids: list[int]) -> list[tuple[int, dict[str, Any]]]:
@@ -873,7 +874,8 @@ def poll_once(event_id: int) -> tuple[str, int, bool]:
 
 def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, watchers: list[tuple[int, str]], snap: Snapshot) -> tuple[str, int, bool]:
     """Append what changed in a fetched snapshot and update every followed player's card in the event
-    (poll_once's second half, shared with the lanes). Returns as poll_once does."""
+    (poll_once's second half, shared with the lanes); once that's committed, send its moments, and its live card
+    on Android phones (livecards.py). Returns as poll_once does."""
     now = _now()
     published: list[tuple[int, dict[str, Any]]] = []
     published_game: dict[str, Any] | None = None
@@ -946,6 +948,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     if published_game is not None:
         bus.publish_match(event_id, {"type": "match", "event_id": event_id, "match": published_game})
     notify.dispatch(new_moments)
+    livecards.polled(event, snap)  # its live card on Android phones, or its end
     if published:
         log.info("poll %s: %s | %s -> %d card(s)", event_id, snap.score_label, snap.clock_label, len(published))
     wait = int(live_binding.get("cadence") or 10) if snap.status == "live" else 60

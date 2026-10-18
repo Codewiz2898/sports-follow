@@ -6,16 +6,23 @@ secret files), never through Expo's push service. Without a key the transport is
 (GET /api/push answers "fcm": false), the app's devices aren't registered, and none already registered
 are sent to or counted as failing.
 
-Each push is an FCM notification message, so Android shows it itself while the app is closed:
-- tagged with the game (alerts.Plan.tag), so a new moment replaces that game's notification rather than
-  stacking another, as a browser's does;
-- on one of two channels the app makes (mobile/src/push.ts): "key" with sound, "other" without. A loud push
-  outside the device's quiet hours goes on "key"; every other one arrives without a sound. "other" is
-  Android's default importance, not low: a low one is "silent", and most phones leave those off the lock
-  screen;
-- public, so the lock screen shows it whole even on a phone that hides what notifications say while it's
-  locked: a score is no secret;
-- with the notification's id and the player's page in its data, for the app to open on a tap.
+Each push is an FCM data-only message (no notification block; "v": "2" in its data): the app's own messaging
+service draws it (its notifications module, in mobile/modules/), even while the app is closed, so it can look
+like the app rather than a line of text. Its data is strings only, every key the app draws with (BHA-290,
+BHA-232):
+- what it is ("type"): a moment, as a scorecard (notify.py), a followed game's live card while it's played, or
+  that card's end once it's over (livecards.py);
+- its tag (the game's, alerts.Push.tag, or "live-e{event}" for a live card), so a new one replaces the game's
+  notification rather than stacking another; and FCM's collapse key, which replaces one still waiting for an
+  offline phone, as Web Push's Topic does;
+- its game as the app draws it, from its sport and its board (livecards.keys): the sport, its colours (the
+  app's blue without one), the league, its match page, its sides and where it's at, whether it's live;
+- for a moment, whether it makes a sound ("loud": a loud moment outside the device's quiet hours), its title
+  and body as before (the fallback text), its big word and line, the story under it and the player's photo;
+  for a live card, its score line, the progress bar and the fan's own players' lines.
+A moment that makes a sound goes at high priority, to wake a dozing phone; everything else at normal. The app
+draws a loud moment on its "key" channel and every other push on "other", without a sound (both public, so a
+locked phone shows a score). The data is kept under FCM's 4 KB (fit).
 """
 
 from __future__ import annotations
@@ -42,9 +49,19 @@ KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_FCM_KEY_FILE", Path.home() / ".con
 SEND_URL = "https://fcm.googleapis.com/v1/projects/{project}/messages:send"
 SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
-# The Android app's notification channels (mobile/src/push.ts makes them with these ids).
+# The Android app's notification channels (mobile/src/push.ts makes them with these ids): it draws a loud moment
+# on "key" and every other push on "other". A data-only message names neither; the app picks by "loud".
 LOUD_CHANNEL = "key"
-QUIET_CHANNEL = "other"  # "quiet" was a low-importance one, hidden from most lock screens: no longer sent on
+QUIET_CHANNEL = "other"  # "quiet" was a low-importance one, hidden from most lock screens: no longer drawn on
+VERSION = "2"  # data["v"]: a message the app draws itself, from its data (1 was FCM's own notification)
+# The app's blue and white on it: a push about no sport (the test push), or a sport without a colour of its own.
+COLOUR, INK = "#1f5bef", "#ffffff"
+# What every message says of its game (livecards.keys), as one about no game says it.
+COMMON = {"sport": "", "colour": COLOUR, "ink": INK, "league": "", "match": "", "sides": "", "status": "", "live": "0"}
+# The keys of notify's payload a moment's message carries: its own, and its game's (livecards.keys).
+MOMENT = ("id", "url", "event_id", "player_id", "kind", "word", "line", "story", "photo", "sport", "colour", "ink", "league", "match", "sides", "status", "live")
+# FCM takes 4,096 bytes of data. Its JSON (quotes, escapes and all, so more than FCM counts) is kept under this.
+DATA_BYTES = 4000
 # What a push answers for a refusal that is this server's (its key, or FCM off): not the device's fault,
 # so notify._health doesn't count it against the device.
 OURS = 401
@@ -166,32 +183,71 @@ def _pause() -> bool:
 
 
 def message(token: str, payload: dict[str, Any], ttl: int) -> dict[str, Any]:
-    """The FCM message for one push (notify's payload, already cut to fit): its notification, tagged with
-    the game and on the channel its sound needs, and what the app needs on a tap. FCM's data is strings only."""
-    loud = payload.get("loud", True) and not payload.get("quiet")
-    tag = payload.get("tag") or (f"moment-{payload['id']}" if payload.get("id") else None)
-    data = {k: str(payload[k]) for k in ("id", "url", "event_id", "player_id", "kind") if payload.get(k) is not None}
-    notification: dict[str, Any] = {"channel_id": LOUD_CHANNEL if loud else QUIET_CHANNEL, "visibility": "PUBLIC"}
-    android: dict[str, Any] = {"priority": "high" if loud else "normal", "ttl": f"{max(0, ttl)}s", "notification": notification}
-    if loud:
-        notification["sound"] = "default"  # before Android 8, which has no channels
-    if tag:
-        # The tag replaces the game's notification on the phone; the collapse key replaces one still
-        # waiting for an offline phone, as Web Push's Topic does.
-        notification["tag"] = data["tag"] = android["collapse_key"] = tag
-    return {
-        "token": token,
-        "notification": {"title": payload.get("title") or APP_NAME, "body": payload.get("body") or ""},
-        "data": data,
-        "android": android,
-    }
+    """The FCM message for one moment (notify's payload, already cut to fit): tagged with the game, at the
+    priority its sound needs, with everything the app draws it with and opens on a tap. The line is the title
+    where notify gave none (the test push)."""
+    loud = bool(payload.get("loud", True)) and not payload.get("quiet")
+    title = payload.get("title") or APP_NAME
+    data = {"type": "moment", "tag": payload.get("tag") or (f"moment-{payload['id']}" if payload.get("id") else ""), "loud": "1" if loud else "0",
+            "title": title, "body": payload.get("body") or "", "word": "", "line": title, "story": "", "photo": "",
+            **{k: payload[k] for k in MOMENT if payload.get(k) is not None}}
+    return data_message(token, data, ttl, urgent=loud)
+
+
+def data_message(token: str, data: dict[str, Any], ttl: int, urgent: bool = False) -> dict[str, Any]:
+    """A data-only FCM message the app draws itself (the module docstring): `data` as strings (a list as its JSON,
+    an empty one as ""), with the version, and what a message about no game says (COMMON) where it says nothing,
+    kept under FCM's 4 KB (fit). High priority only when `urgent` (a moment that makes a sound); collapsed by its
+    tag."""
+    strings = fit({"v": VERSION, **COMMON, **{k: _text(v) for k, v in data.items() if v is not None}})
+    android: dict[str, Any] = {"priority": "high" if urgent else "normal", "ttl": f"{max(0, ttl)}s"}
+    if strings.get("tag"):
+        android["collapse_key"] = strings["tag"]
+    return {"token": token, "data": strings, "android": android}
+
+
+def _text(value: Any) -> str:
+    """A data value as FCM takes it: a string; a list (sides, a story) as its JSON, "" for none."""
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if value else ""
+    return str(value)
+
+
+def fit(data: dict[str, str]) -> dict[str, str]:
+    """A message's data at most DATA_BYTES as JSON: its story's oldest lines, then its players' last, dropped; then
+    its body, title and line cut short on a whole character. notify._fit has already cut a moment's to fit a Web
+    Push, so this is rarely needed."""
+    def size() -> int:
+        return len(json.dumps(data, ensure_ascii=False).encode())
+
+    data = dict(data)
+    for key in ("story", "players"):
+        lines = json.loads(data[key]) if data.get(key) else []
+        while lines and size() > DATA_BYTES:
+            lines.pop()
+            data[key] = _text(lines)
+    for key in ("body", "title", "line"):
+        over = size() - DATA_BYTES
+        if over <= 0:
+            break
+        # A character cut saves at least its UTF-8 bytes in the JSON (escaping only adds), so this is enough.
+        raw = data.get(key, "").encode()
+        keep = len(raw) - over - len("…".encode())
+        data[key] = raw[:keep].decode(errors="ignore").rstrip() + "…" if keep > 0 else ""
+    return data
 
 
 def push(token: str, payload: dict[str, Any], ttl: int) -> int | str | None:
-    """One push to one Android device. Returns None when FCM took it, else what notify._health reads: 404
-    for a token FCM no longer knows (the app was uninstalled), 410 for one of another Firebase project
-    (it never will work), OURS when the refusal is this server's own key, else FCM's status code (or the
-    error, if it never answered)."""
+    """One moment to one Android device (message). Returns as send() does."""
+    return send(message(token, payload, ttl))
+
+
+def send(msg: dict[str, Any]) -> int | str | None:
+    """One ready message (message, data_message) to its device. Returns None when FCM took it, else what
+    notify._health reads: 404 for a token FCM no longer knows (the app was uninstalled), 410 for one of another
+    Firebase project (it never will work), OURS when the refusal is this server's own key, else FCM's status
+    code (or the error, if it never answered)."""
+    token = msg["token"]
     acc = account()
     if acc is None:
         return OURS
@@ -203,7 +259,7 @@ def push(token: str, payload: dict[str, Any], ttl: int) -> int | str | None:
         log.error("fcm: no access token for %s, so no Android pushes for %ss: %s", acc.client_email, PAUSE, str(exc)[:200], extra={"push_service": "fcm"})
         return OURS
     try:
-        answer = _client.post(SEND_URL.format(project=acc.project_id), headers={"authorization": f"Bearer {bearer}"}, json={"message": message(token, payload, ttl)})
+        answer = _client.post(SEND_URL.format(project=acc.project_id), headers={"authorization": f"Bearer {bearer}"}, json={"message": msg})
     except Exception as exc:  # a timeout or a refused connection is that device's failure, not the batch's
         log.warning("push to fcm %s… failed: %s", token[:8], exc, extra={"push_service": "fcm"})
         return str(exc)[:100]

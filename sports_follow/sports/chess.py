@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Played, Poster, Seen, Sport, stat
+from .base import Found, Glance, Line, Played, Poster, Seen, Sport, stat
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -202,6 +202,27 @@ class Chess(Sport):
         if not pairs:
             return {}
         return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": (state.get("match") or {}).get("games")}
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """White and Black by name, each with their points: of a mini-match so far (state["match"]: its score is
+        from the side its score line names first), else of the game once it has a result ("1-0", "½-½"). Where it's
+        at: the move, or the game's result; of a mini-match, its game and move ("Game 2 · move 34"), "Final" once
+        it's decided."""
+        white, black = state.get("white") or {}, state.get("black") or {}
+        if not (white.get("name") and black.get("name")):
+            return Glance([], clock or "")
+        match, result, move = state.get("match") or {}, state.get("result") or "", state.get("move")
+        points = ["", ""]
+        if match.get("score") and "–" in match["score"]:
+            first, _, second = match["score"].partition("–")
+            points = [second, first] if score.startswith(black["name"]) and not score.startswith(white["name"]) else [first, second]
+        elif "-" in result:
+            points = result.split("-", 1)
+        if match:
+            where = "Final" if status == "final" else f"Game {(match.get('games') or 0) + (0 if result else 1)}" + (f" · move {move}" if move and not result else "")
+        else:
+            where = result.replace("-", "–") if result else f"Move {move}" if move else clock or ""
+        return Glance([(white["name"], points[0]), (black["name"], points[1])], where)
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         return clock  # its source's words for a finished board: "Magnus Carlsen won", "Draw", "Match drawn (4 games)"
