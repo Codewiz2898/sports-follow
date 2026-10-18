@@ -574,9 +574,13 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 
 /* ---------------------------------------------------------------- lists */
 /* Fixtures: the day and time in a block on the left. */
-.when-block { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 64px; flex-shrink: 0; }
+/* min-width, not width: a time wider than the column (a long AM/PM in some language) widens it before it breaks. */
+.when-block { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 64px; flex-shrink: 0; }
+.when-block.with-period { min-width: 72px; }
 .when-block .tag { color: var(--muted); }
-.when-block .num { font-size: 22px; }
+.when-block .num { display: flex; align-items: baseline; gap: 3px; font-size: 22px; white-space: nowrap; }
+/* The period is the day's tag, in the body type (Anton has no bold), not the time's. */
+.when-block .num .tag { font-family: var(--body); }
 .fixture { display: flex; align-items: center; gap: 12px; }
 
 .list > li.game-row { padding: 0; }
