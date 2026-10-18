@@ -48,8 +48,7 @@ touches() {
 }
 
 # What a deploy doesn't do for the files (one a line) that need it: the step to run by hand after it.
-# Caddy and the backup container see their file through a bind mount of that one file, which the deploy's
-# checkout replaces, and `up` leaves both running; Alloy reloads its config but not its environment.
+# Alloy reloads its config but not its environment.
 by_hand() {
   local path
   while IFS= read -r path; do
@@ -57,8 +56,6 @@ by_hand() {
       deploy/grafana/dashboards/* | deploy/grafana/apply-dashboards.sh) echo deploy/grafana/apply-dashboards.sh ;;
       deploy/grafana/*) echo deploy/grafana/apply-alerts.sh ;;
       deploy/systemd/* | deploy/server-setup.sh) echo "deploy/server-setup.sh on the server" ;;
-      deploy/Caddyfile) echo "docker compose -f deploy/compose.yaml restart caddy on the server" ;;
-      deploy/backup.sh) echo "docker compose -f deploy/compose.yaml restart backup on the server" ;;
       deploy/alloy/alloy.env) echo "sudo systemctl restart alloy on the server" ;;
     esac
   done | sort -u
@@ -142,7 +139,7 @@ else
     git diff --no-renames --name-only "$live" "$want" >"$files"
     migrations=$(git diff --no-renames --name-only --diff-filter=A "$live" "$want" -- migrations/versions |
       sed -E 's|.*/||; s|\.py$||; s|^[0-9a-f]+_||' | joined)
-    server=$(grep -E '^(Dockerfile|\.dockerignore|requirements\.txt|deploy/(compose\.yaml|settings\.env|gateway/|alloy/config\.alloy))' "$files" | joined) || true
+    server=$(grep -E '^(Dockerfile|\.dockerignore|requirements\.txt|deploy/(compose\.yaml|settings\.env|caddy/|backup\.sh|gateway/|alloy/config\.alloy))' "$files" | joined) || true
     secrets=$(grep -E '^deploy/(push|install)-secrets\.sh$' "$files" | joined) || true
     steps=$(by_hand <"$files" | joined)
     apps=$(joined <"$android")

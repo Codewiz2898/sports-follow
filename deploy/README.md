@@ -24,7 +24,7 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 | File | What |
 |---|---|
 | `compose.yaml` | The stack. `x-app` is the one image the API, worker and migration share (`../Dockerfile`). |
-| `Caddyfile` | HTTPS for `$DOMAIN`; live streams pass through unbuffered and uncompressed. |
+| `caddy/Caddyfile` | HTTPS for `$DOMAIN`; live streams pass through unbuffered and uncompressed. |
 | `gateway/` | The llm-providers gateway image, pinned to a tag and built from its own lockfile, and its config: OpenRouter only, this app only, $5 a day. |
 | `settings.env` | Non-secret settings for the public build. |
 | `server-setup.sh` | Server setup: updates, firewall, swap, Docker, the `deploy` user, SSH keys only, fail2ban, the timers, this repo in `/opt/sports-follow`. Safe to run again. |
@@ -405,14 +405,14 @@ the site.
 - **What it brings** is on the run's page, above the approval button (`deploy-summary.sh`). It starts
   with what to look at before approving: a database migration (a rollback leaves it in place), changed
   secrets scripts (push a new key first), server changes the deploy applies (`compose.yaml`,
-  `settings.env`, the image), a step it doesn't take (`apply-alerts.sh`, `server-setup.sh`, restarting
-  Caddy after a `Caddyfile` change), and Android changes, which reach phones with the next app build
-  instead. Then the changes since the live commit, each linked and with what it touches
-  (website, API and worker, data sources, database, …), the BHA issues they close, and whether CI
-  passed. The first deploy to wait since the last one went out is also sent to you at once, and every
-  morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`; Actions → Deploy summary →
-  Run workflow sends it now). Several merges in a day make one waiting deploy, one message when it
-  starts and the morning's.
+  `settings.env`, the image, Caddy's config, the backup script), a step it doesn't take
+  (`apply-alerts.sh`, `server-setup.sh`, restarting Alloy for its environment), and Android changes,
+  which reach phones with the next app build instead. Then the changes since the live commit, each
+  linked and with what it touches (website, API and worker, data sources, database, …), the BHA issues
+  they close, and whether CI passed. The first deploy to wait since the last one went out is also sent
+  to you at once, and every morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`;
+  Actions → Deploy summary → Run workflow sends it now). Several merges in a day make one waiting
+  deploy, one message when it starts and the morning's.
 - **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
 
 **From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
@@ -427,15 +427,20 @@ is still there. Deploys never run for pull requests: a fork's PR must not reach 
 
 What a deploy does: fetches main from GitHub (a commit that isn't on main is refused), builds the image
 on the server and tags it with the commit, runs the migrations on their own, then swaps the containers
-and waits until the API is healthy and the worker hasn't crashed. Fans see about two seconds of errors
-during the swap. The old worker's jobs (a live poll, a card build) stop and free their locks within
-five seconds, and the new worker starts them again as soon as it's up.
+and waits until the API is healthy and the worker hasn't crashed. Then Caddy reloads
+`caddy/Caddyfile` (nothing happens if it's unchanged, and HTTPS doesn't drop if it has), and the backup
+container restarts if `backup.sh` changed. Fans see about two seconds of errors during the swap. The
+old worker's jobs (a live poll, a card build) stop and free their locks within five seconds, and the
+new worker starts them again as soon as it's up.
 
 - **A migration fails:** nothing is replaced; the old version keeps serving.
-- **The new version doesn't get healthy:** the previous one comes back by itself, and the deploy fails.
-- **It's healthy but wrong:** `rollback` starts the previous deploy's image again. The newer migrations
-  stay in the database; if the older code can't run with them, undo them first, while the newer image
-  is still live: `docker compose -f deploy/compose.yaml run --rm migrate alembic downgrade <revision>`.
+- **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
+  by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
+  config until then.
+- **It's healthy but wrong:** `rollback` starts the previous deploy's image again, with its Caddyfile
+  and backup script. The newer migrations stay in the database; if the older code can't run with them,
+  undo them first, while the newer image is still live:
+  `docker compose -f deploy/compose.yaml run --rm migrate alembic downgrade <revision>`.
 
 The live image and the previous one are kept; older ones are removed.
 

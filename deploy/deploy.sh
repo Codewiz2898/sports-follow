@@ -66,7 +66,7 @@ do_deploy() {
   # From here a rollback goes back to what was live before this deploy, whatever happens next.
   if [ -n "$was" ] && [ "$was" != "$sha" ]; then echo "$was" >"$STATE/previous"; fi
   echo "$sha" >"$STATE/live"
-  if ! c up -d --remove-orphans || ! wait_healthy; then
+  if ! c up -d --remove-orphans || ! wait_healthy || ! pick_up_files; then
     # Its migrations are in by now, so going back is no riskier than a rollback by hand, and it's sooner.
     [ -n "$was" ] && [ "$was" != "$sha" ] || die "${sha:0:7} didn't start, and there's no earlier deploy to go back to"
     say "${sha:0:7} didn't start; going back to ${was:0:7}"
@@ -102,6 +102,7 @@ do_rollback() {
   wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
   echo "$to" >"$STATE/live"
   rm -f "$STATE/previous"   # a second rollback would only go back to the bad deploy
+  pick_up_files || die "${to:0:7} is live again, but Caddy or the backup container didn't take its files"
   say "${to:0:7} is live again; ${was:0:7}'s migrations, if it had any, are still applied"
 }
 
@@ -134,6 +135,23 @@ wait_healthy() {
 container() {
   docker inspect -f '{{.State.Status}},{{.RestartCount}},{{if .State.Health}}{{.State.Health.Status}}{{end}}' \
     "$(c ps -aq "$1" | head -1)" 2>/dev/null || echo "missing,0,"
+}
+
+# Caddy's config and the backup script come from this checkout, and `up` recreates neither container when
+# only that file changed. Caddy reloads its Caddyfile, from a mount of its folder (compose.yaml): nothing
+# happens when it's unchanged, and one it refuses leaves the running config serving. The backup container
+# mounts its one file, which a checkout replaces, so it sees the old one until it restarts.
+pick_up_files() {
+  local out
+  if ! out=$(c exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile </dev/null 2>&1); then
+    echo "$out" >&2
+    echo "deploy: Caddy didn't reload deploy/caddy/Caddyfile" >&2
+    return 1
+  fi
+  if ! c exec -T backup cat /backup.sh </dev/null 2>/dev/null | cmp -s - deploy/backup.sh; then
+    say "deploy/backup.sh changed: restarting the backup container"
+    c restart backup || return 1
+  fi
 }
 
 main "$@"; exit $?
