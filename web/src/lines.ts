@@ -49,6 +49,13 @@ export function teamLine(team: FollowedTeam, now: number): string {
   return team.detail
 }
 
+/** A team tile's name size: the tile's 30 px, smaller as its longest word grows past what fits a phone's half
+ * width, so a long name ("Mönchengladbach") is never broken inside a word. */
+export function teamNameSize(name: string): number {
+  const longest = Math.max(...name.split(/\s+/).map((w) => w.length))
+  return longest <= 9 ? 30 : longest <= 12 ? 24 : 19
+}
+
 /** A stat in words: "3 shots", "1 key pass"; an abbreviation stays as it is ("22 PTS", "2 4s"), and a value
  * that isn't a number follows its label ("Colour Black"). */
 export function statWords(s: Stat): string {
