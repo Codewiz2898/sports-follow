@@ -9,8 +9,12 @@ are sent to or counted as failing.
 Each push is an FCM notification message, so Android shows it itself while the app is closed:
 - tagged with the game (alerts.Plan.tag), so a new moment replaces that game's notification rather than
   stacking another, as a browser's does;
-- on one of two channels the app makes (mobile/src/push.ts): "key" with sound, "quiet" without. A loud push
-  outside the device's quiet hours goes on "key"; every other one arrives silently;
+- on one of two channels the app makes (mobile/src/push.ts): "key" with sound, "other" without. A loud push
+  outside the device's quiet hours goes on "key"; every other one arrives without a sound. "other" is
+  Android's default importance, not low: a low one is "silent", and most phones leave those off the lock
+  screen;
+- public, so the lock screen shows it whole even on a phone that hides what notifications say while it's
+  locked: a score is no secret;
 - with the notification's id and the player's page in its data, for the app to open on a tap.
 """
 
@@ -40,7 +44,7 @@ SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 # The Android app's notification channels (mobile/src/push.ts makes them with these ids).
 LOUD_CHANNEL = "key"
-QUIET_CHANNEL = "quiet"
+QUIET_CHANNEL = "other"  # "quiet" was a low-importance one, hidden from most lock screens: no longer sent on
 # What a push answers for a refusal that is this server's (its key, or FCM off): not the device's fault,
 # so notify._health doesn't count it against the device.
 OURS = 401
@@ -167,7 +171,7 @@ def message(token: str, payload: dict[str, Any], ttl: int) -> dict[str, Any]:
     loud = payload.get("loud", True) and not payload.get("quiet")
     tag = payload.get("tag") or (f"moment-{payload['id']}" if payload.get("id") else None)
     data = {k: str(payload[k]) for k in ("id", "url", "event_id", "player_id", "kind") if payload.get(k) is not None}
-    notification: dict[str, Any] = {"channel_id": LOUD_CHANNEL if loud else QUIET_CHANNEL}
+    notification: dict[str, Any] = {"channel_id": LOUD_CHANNEL if loud else QUIET_CHANNEL, "visibility": "PUBLIC"}
     android: dict[str, Any] = {"priority": "high" if loud else "normal", "ttl": f"{max(0, ttl)}s", "notification": notification}
     if loud:
         notification["sound"] = "default"  # before Android 8, which has no channels

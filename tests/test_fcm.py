@@ -139,12 +139,13 @@ def test_a_push_is_its_games_notification_on_the_channel_its_sound_needs():
         "notification": {"title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'"},
         # Strings only, as FCM takes them: what the app needs to open the player's page and count the open.
         "data": {"id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"},
-        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "sound": "default", "tag": "e1"}},
+        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "visibility": "PUBLIC", "sound": "default", "tag": "e1"}},
     }
-    # Quiet hours, or a moment that makes no sound: the same notification, silently, without waking the phone.
+    # Quiet hours, or a moment that makes no sound: the same notification without a sound, at normal priority
+    # (FCM doesn't wake a dozing phone for it), still public and on a channel the lock screen shows.
     for quiet in ({**GOAL, "quiet": True}, {**GOAL, "loud": False}):
         android = fcm.message(TOKEN, quiet, 600)["android"]
-        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "quiet", "tag": "e1"})
+        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "other", "visibility": "PUBLIC", "tag": "e1"})
     # A player's news, outside any game, has the player's tag; a push with no tag still has one per moment.
     assert fcm.message(TOKEN, {**GOAL, "tag": "p7", "event_id": None}, 60)["data"] == {"id": "31", "url": "/player/7", "player_id": "7", "kind": "goal", "tag": "p7"}
     assert fcm.message(TOKEN, {**GOAL, "tag": None}, 60)["android"]["notification"]["tag"] == "moment-31"
@@ -152,7 +153,9 @@ def test_a_push_is_its_games_notification_on_the_channel_its_sound_needs():
 
 def test_the_app_makes_the_channels_the_server_sends_on():
     app = (ROOT / "mobile" / "src" / "push.ts").read_text()
-    assert f"'{fcm.LOUD_CHANNEL}'" in app and f"'{fcm.QUIET_CHANNEL}'" in app
+    assert f"LOUD_CHANNEL = '{fcm.LOUD_CHANNEL}'" in app and f"QUIET_CHANNEL = '{fcm.QUIET_CHANNEL}'" in app
+    # And a push on a channel the app hasn't made falls back to the quiet one, not to FCM's own, which rings.
+    assert f"defaultChannel: '{fcm.QUIET_CHANNEL}'" in (ROOT / "mobile" / "app.config.ts").read_text()
 
 
 def test_tokens_are_checked_before_they_are_stored():

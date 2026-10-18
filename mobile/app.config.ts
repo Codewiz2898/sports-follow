@@ -67,8 +67,10 @@ export default (): ExpoConfig => ({
     'expo-router',
     // The badge on paper while the first screen waits for the sports (catalog.tsx).
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
-    // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue.
-    ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE }],
+    // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue. A push on
+    // a channel this build hasn't made lands on the quiet one (src/push.ts's QUIET_CHANNEL), not on FCM's own
+    // fallback, which rings: a server and an app a channel apart stay silent.
+    ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE, defaultChannel: 'other' }],
     // The web app's typefaces (styles.css): Anton for display, Manrope for text, Fredoka for the name. Anton
     // comes twice: upright for numbers (.num), and leaning as .dsp does, made by scripts/slant_font.py.
     ['expo-font', {

@@ -277,7 +277,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
-  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Quiet hours are per device and make notifications arrive silently.
+  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
   list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
   `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.
@@ -656,7 +656,9 @@ npm run typecheck                                   # what CI checks
 **Notifications** come through Firebase Cloud Messaging, planned as the web's are (one notification a
 game, replaced as its moments come; sound only for a key moment outside quiet hours). The server sends
 them itself with FCM's HTTP v1 API (`sports_follow/fcm.py`), with no Expo push service in between. The
-app (`mobile/src/push.ts`) makes two channels, "Key moments" with sound and "Other moments" without. It
+app (`mobile/src/push.ts`) makes two channels, "Key moments" with sound and "Other moments" without; both
+show on the lock screen, whole (every push is public, and "Other moments" is default importance, not the
+low "silent" kind most phones leave off it). It
 asks to notify the first time the fan follows someone or a game (Android 13 and later); then Alerts'
 Settings turns them on and off for the phone, with its quiet hours and a test alert, as on the web. While
 they're on, it registers its FCM token with the API (`POST /api/push/fcm`, with its timezone and quiet
