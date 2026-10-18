@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import ORDINAL, Found, Line, Played, Poster, Seen, Sport, num, number, stat, values
+from .base import ORDINAL, Found, Glance, Line, Played, Poster, Seen, Sport, num, number, short, stat, values
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -49,6 +49,14 @@ class Tennis(Sport):
     def final(self, who: str, now: Seen) -> Found:
         head = (now.line or {}).get("headline") or ""
         return Found("final", "key", f"{who}: {head or 'result'}", now.score)
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """Each player's short name and their games in each set ("6 2"), and the set being played ("Set 2"), or
+        "Final" once it's over."""
+        players = [p for p in state.get("players") or [] if isinstance(p, dict)]
+        sides = [(short(p), " ".join(str(s["games"]) for s in p.get("sets") or [] if isinstance(s, dict) and s.get("games") is not None)) for p in players]
+        where = "Final" if status == "final" else f"Set {state['set']}" if state.get("set") else clock or ""
+        return Glance(sides if len(sides) == 2 else [], where)
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)

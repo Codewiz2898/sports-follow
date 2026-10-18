@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Line, Poster, Seen, Sport, crossed, num, number, stat, values
+from .base import Found, Glance, Line, Poster, Seen, Sport, crossed, num, number, stat, values
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -64,6 +64,13 @@ class Basketball(Sport):
 
     def search_detail(self, athlete: Athlete) -> list[str]:
         return [*list(athlete.teams or [])[:1], (athlete.league or "").upper() if athlete.current else ""]
+
+    def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
+        """As every sport's (each side's abbreviation and points, the clock: "7:32 - 3rd", "Halftime"), but away
+        first, as US leagues write a game, and its score line and board say it."""
+        seen = super().glance(state, score, clock, status, events)
+        seen.sides.reverse()
+        return seen
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """The side the source marks the winner, else the one with more points."""
