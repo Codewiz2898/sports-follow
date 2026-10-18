@@ -38,11 +38,12 @@ from sqlalchemy import ColumnElement, Select, Text, and_, delete, func, or_, sel
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session, aliased
 
-from . import bus, logs, matches, moments, registry, search, sports, structured
+from . import bus, logs, matches, moments, naming, registry, search, sports, structured
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, serving, source_name
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
 from .sports.base import Found
+from .sports.base import sides as sports_sides
 
 log = logging.getLogger("sports_follow.teams")
 
@@ -412,8 +413,17 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
         events = {f.source_id: structured.upsert_game(db, adapter, label, f) for f in [*finals, *ahead]}
         for event in events.values():
             db.execute(insert(EventTeam).values(event_id=event.id, team_id=team.id).on_conflict_do_nothing())
+        last = _final_boards(db, [events[f.source_id].id for f in finals if not f.result])
         for f in finals:
             item = result(adapter, f, events[f.source_id], external)
+            # A schedule kept a while (the source cache) can still have a game our poller saw finish as on, with no
+            # result: its last board says it, from the team's side, else as the game's own. A result with nothing
+            # to say isn't kept; a later read has it.
+            if not item["result"] and (s := last.get(events[f.source_id].id)):
+                rules_, score, clock = sports.of_state(s.state), s.score_label or "", s.clock_label or ""
+                item["result"] = rules_.side_result(s.state or {}, score, clock, on_board(adapter, external)) or rules_.result_text(score, clock)
+            if not item["result"]:
+                continue
             db.execute(update(EventTeam).where(EventTeam.event_id == events[f.source_id].id, EventTeam.team_id == team.id).values(result=item))
         # Its last results from every one kept (EventTeam.result), not only this read's: a source that answers
         # with nothing doesn't empty the page; nor its games to come, of which those still to come stand till one
@@ -451,6 +461,20 @@ def result(adapter: Adapter, f: Fixture, event: Event, external: str) -> dict[st
     return {"title": f"{f.title} · {f.detail}" if f.detail else f.title, "result": adapter.result_label(f, [external]) or "",
             "date": f.start_utc.date().isoformat() if f.start_utc else None, "start_utc": f.start_utc.isoformat() if f.start_utc else None,
             "competition": f.competition, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external)}
+
+
+def on_board(adapter: Any, external: str) -> str:
+    """A team's id as its source's boards have it, where the team's own says more (Adapter.board_id: "nba:13" is 13)."""
+    board_id = getattr(adapter, "board_id", None)
+    return str(board_id(external)) if callable(board_id) else external
+
+
+def _final_boards(db: Session, event_ids: list[int]) -> dict[int, EventState]:
+    """Each of these games' last board, as the poll that saw it finish had it; none for a game not polled to its end."""
+    if not event_ids:
+        return {}
+    return {s.event_id: s for s in db.scalars(select(EventState).where(EventState.event_id.in_(event_ids), EventState.status == "final")
+                                              .ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))}
 
 
 def _health(team_id: int, ok: bool, error: str | None = None, db: Session | None = None) -> None:
@@ -566,12 +590,10 @@ def side_finals(db: Session, event: Event, rules_: sports.Sport, state: dict[str
     (alerts.plan: in place of the game's own): "Arsenal won 2–1 v Chelsea". About the whole game, so a fan who
     follows a player in it hears the result once, and about the team (tag)."""
     system = (event.key or "").partition(":")[0]
-    # Its source's id for the team as its boards have it, where a team's id says more (Adapter.board_id).
-    board_id = getattr(KNOWN.get(system), "board_id", None)
     found = []
     for team_id, external in db.execute(select(Team.id, Team.external_id).join(EventTeam, EventTeam.team_id == Team.id)
                                         .where(EventTeam.event_id == event.id, Team.system == system, Team.id.in_(select(TeamFollow.team_id))).order_by(Team.id)):
-        said = rules_.side_final(state, score, clock, str(board_id(external)) if callable(board_id) else external)
+        said = rules_.side_final(state, score, clock, on_board(KNOWN.get(system), external))
         if said:
             found.append(Found("final", "key", said, score, f"team{team_id}", 80, ("*", tag(team_id))))
     return found
@@ -608,8 +630,8 @@ def event_ids(db: Session, fan: str, now: datetime | None = None) -> list[int]:
 
 
 def mine(db: Session, fan: str) -> list[dict[str, Any]]:
-    """The teams this fan follows, as Following lists them: each with their level, its next game, its last result,
-    and its game on now as last polled."""
+    """The teams this fan follows, as Following and Today list them: each with their level, its next game and its
+    games to come (Today's Coming up), its last result, and its game on now as last polled."""
     rows = db.execute(select(Team, TeamFollow.alert_rules).join(TeamFollow, TeamFollow.team_id == Team.id).where(TeamFollow.fan_id == fan).order_by(TeamFollow.created_at, Team.id)).all()
     boards = _boards(db, [t.id for t, _ in rows])
     out = []
@@ -617,7 +639,8 @@ def mine(db: Session, fan: str) -> list[dict[str, Any]]:
         if not sports.on(team.sport):
             continue  # a sport turned off: its follow stays, unseen, for when it's back
         last = next(iter((team.card or {}).get("recent") or []), None)
-        out.append({**summary(team, following=True), "alerts": (rules_ or {}).get("level", moments.DEFAULT_LEVEL), "last": last, "live": boards.get(team.id)})
+        out.append({**summary(team, following=True), "alerts": (rules_ or {}).get("level", moments.DEFAULT_LEVEL), "last": last, "live": boards.get(team.id),
+                    "upcoming": (team.card or {}).get("upcoming") or []})
     return out
 
 
@@ -651,6 +674,49 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
         "source": card.get("source") or source_name(team.system),
         "fetched_at": card.get("fetched_at"),
     }
+
+
+def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], event_ids: list[int]) -> list[dict[str, Any]]:
+    """The teams a game's match page offers to follow (match.view): its sides as the registry has them, by their ids
+    on its board (Sport's sides()), else as its events' fixtures named them (Event.participants: a game to come has
+    no board yet), and the teams its events are linked to (event_team), in the game's order; each with whether this
+    fan follows it, and whether it can be followed now (its sport runs, its source can say its games). A source whose
+    team ids say more than its boards' (Adapter.board_id: ESPN basketball's carry the league, so "5" is the Cavaliers
+    and the Fever) has a side's team told by its name, on the board or in the game's title; one it can't tell isn't
+    offered. Teams of a sport whose teams can't be followed, and sides the registry doesn't have, aren't offered."""
+    pairs = [(str(side.get("id")), str(side.get("name") or "")) for side in sports_sides(state) if side.get("id") not in (None, "")]
+    if not pairs and event_ids:
+        named = db.scalars(select(Event.participants).where(Event.id.in_(event_ids), Event.key.startswith(f"{system}:"))).all()
+        pairs = [(i, "") for i in dict.fromkeys(str(x) for ids in named for x in ids or [] if x not in (None, ""))]
+    titles = " | ".join(naming.fold(t) for t in db.scalars(select(Event.title).where(Event.id.in_(event_ids)))) if event_ids else ""
+    board_id = getattr(KNOWN.get(system), "board_id", None)
+    found: dict[int, Team] = {}
+    order: dict[int, int] = {}
+    for n, (side, name) in enumerate(pairs):
+        exact = db.scalar(select(Team).where(Team.system == system, Team.external_id == side))
+        if exact is not None:
+            found[exact.id], order[exact.id] = exact, n
+            continue
+        if not callable(board_id):
+            continue
+        maybe = [t for t in db.scalars(select(Team).where(Team.system == system, Team.external_id.like(f"%:{side}"))) if str(board_id(t.external_id)) == side]
+        if len(maybe) > 1:  # one number, several teams: the one this side names
+            maybe = [t for t in maybe if (name and naming.team_key(t.name) == naming.team_key(name)) or (not name and naming.fold(t.name) in titles)]
+        if len(maybe) == 1:
+            found[maybe[0].id], order[maybe[0].id] = maybe[0], n
+    if event_ids:
+        for team in db.scalars(select(Team).join(EventTeam, EventTeam.team_id == Team.id).where(EventTeam.event_id.in_(event_ids))):
+            found.setdefault(team.id, team)
+    shown = sorted((t for t in found.values() if followable(t.sport)), key=lambda t: (order.get(t.id, len(pairs)), t.id))
+    theirs = _following(db, fan, [t.id for t in shown])
+    can = readable(ADAPTERS.get(system))
+    return [{"team_id": t.id, "name": t.name, "sport": t.sport, "following": t.id in theirs, "can_follow": can} for t in shown]
+
+
+def ended(db: Session, event_id: int) -> None:
+    """A game of followed teams just ended (its last poll, structured._game_moments): their games are read again at
+    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon."""
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id))).values(fetched_at=None))
 
 
 def look_again(team: Team) -> bool:

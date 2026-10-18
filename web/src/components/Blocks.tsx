@@ -98,8 +98,9 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
   const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, sportDrawn(game.players[0].sport))
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   const page = game.players.find((p) => p.result.match)?.result.match
+  const lead = game.players[0]
   return (
-    <Link to={page ? `/match/${page}` : `/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
+    <Link to={page ? `/match/${page}` : lead.team != null ? `/team/${lead.team}` : `/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
       <Backdrop sport={key} seed={game.key} />
       {hero ? (
         <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
@@ -111,7 +112,7 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
         <span className="dsp who">{who}</span>
         {stats && (
           <span className="stack" style={{ gap: 4 }}>
-            {several && <span className="tag soft">{shortName(r.player_name)}</span>}
+            {several && <span className="tag soft">{lead.team != null ? r.player_name : shortName(r.player_name)}</span>}
             <span className="hero-stats" style={{ '--n': stats.length } as CSSProperties}>
               {stats.map((s) => <span key={s.label} className="stack" style={{ gap: 2 }}><span className="dsp">{s.value}</span><span className="tag soft">{s.label}</span></span>)}
             </span>
@@ -132,11 +133,11 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
 
 /**
  * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's players in it, or
- * saying they follow the game itself. It opens the game's match page (the line-ups as they come, both sides'
- * players), else the first player's page.
+ * once it's less than a day away (else the day), then the game and a chip naming the fan's teams and players in
+ * it, or saying they follow the game itself. It opens the game's match page (the line-ups as they come, both
+ * sides' players), else the first player's page.
  */
-export function ComingCard({ event, players, seed, sport }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string }) {
+export function ComingCard({ event, players, seed, sport, teams = [] }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[] }) {
   const now = useNow()
   const key = sportKey(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
@@ -147,7 +148,7 @@ export function ComingCard({ event, players, seed, sport }: { event: UpcomingEve
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
-        <span className="player-chip">{players.length ? players.map((c) => shortName(c.player.name)).join(' · ') : 'Following this game'}</span>
+        <span className="player-chip">{[...teams, ...players.map((c) => shortName(c.player.name))].join(' · ') || 'Following this game'}</span>
       </span>
     </Link>
   )

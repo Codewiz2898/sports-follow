@@ -14,14 +14,14 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
 from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import (Account, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
+from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
                                   PushSubscription, Team, TeamFollow, TeamOverride)
 from sports_follow.sports.football import result_label
 
@@ -52,6 +52,9 @@ def test_a_result_is_told_from_each_sides_view():
     assert basketball is not None
     board = {"kind": "basketball", "home": {"id": "13", "name": "Lakers", "score": "99", "winner": False}, "away": {"id": "2", "name": "Celtics", "score": "104", "winner": True}}
     assert basketball.side_final(board, "", "Final", "13") == "Lakers lost 99–104 v Celtics"
+    # As a result card says it, where a schedule has no result yet (teams._refresh).
+    assert [rules.side_result(football(2, 1), "", "FT", ARS), rules.side_result(football(1, 1), "", "FT", CHE), basketball.side_result(board, "", "Final", "13")] == ["Won 2–1", "Drew 1–1", "Lost 99–104"]
+    assert rules.side_result(football(2, 1), "", "FT", TOT) == ""
 
 
 def test_cricket_says_the_margin_and_esports_the_maps_or_the_forfeit():
@@ -71,6 +74,7 @@ def test_cricket_says_the_margin_and_esports_the_maps_or_the_forfeit():
     assert lol.side_final(sweep, "", "", "126061") == "T1 won 2–0 v Gen.G"  # a sweep's 0 is a score, flagged winner or not
     assert lol.side_final({**series, "forfeit": True}, "", "", "126061") == "T1 won by forfeit v Gen.G"
     assert lol.side_final({"kind": "battle_royale", "standings": []}, "", "", "1") == ""  # a lobby has no two sides
+    assert [cricket.side_result(board, "", "India won by 57 runs", "5"), lol.side_result({**series, "forfeit": True}, "", "", "2")] == ["Lost by 57 runs", "Lost by forfeit"]
 
 
 def test_only_team_sports_have_teams_to_follow():
@@ -433,6 +437,87 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
     monkeypatch.setattr(server, "_sse", lambda body: body)
     assert asyncio.run(server.my_stream(SimpleNamespace(), fan="gooner")) == "stream"
     assert subscribed == [[f"match:{key['pitch:100']}"]]
+
+
+@needs_db
+def test_a_match_page_offers_its_teams_and_today_has_a_followed_teams_games(db, redis, source, monkeypatch):
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    source.fixtures[ARS] = [fixture("100", NOW + timedelta(days=2)), fixture("50", NOW - timedelta(days=1), "final", TOT, ARS, (0, 3))]
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    event = db.scalars(select(Event).where(Event.key == "pitch:100")).one()
+    # Before kick-off, from its fixture's sides (no board yet), in the game's order, Arsenal followed.
+    offered = teams.in_game(db, "gooner", "pitch", {}, [event.id])
+    assert [(t["name"], t["following"], t["can_follow"]) for t in offered] == [("Arsenal", True, True), ("Chelsea", False, True)]
+    # Once it has a board, from its sides there; a side the registry doesn't have isn't offered.
+    board = {"kind": "football", "home": {"id": CHE, "name": "Chelsea", "score": "0"}, "away": {"id": "999", "name": "Nobody FC", "score": "0"}}
+    assert [t["team_id"] for t in teams.in_game(db, None, "pitch", board, [])] == [chelsea.id]
+    stranger = teams.in_game(db, "someone", "pitch", {}, [event.id])
+    assert not any(t["following"] for t in stranger) and len(stranger) == 2
+    # A sport whose teams can't be followed now isn't offered.
+    monkeypatch.setattr(sports, "ENABLED", [x for x in sports.ALL if x.key != "football"])
+    assert teams.in_game(db, "gooner", "pitch", {}, [event.id]) == []
+    monkeypatch.setattr(sports, "ENABLED", list(sports.ALL))
+    # Following lists its games to come, which Today's Coming up shows, and its last result, Today's Results.
+    [mine] = teams.mine(db, "gooner")
+    assert [(u["title"], u["versus"]) for u in mine["upcoming"]] == [("Arsenal vs Chelsea", "Chelsea")]
+    assert (mine["last"]["result"], mine["last"]["versus"]) == ("Won 3–0", "Tottenham Hotspur")
+
+
+@needs_db
+def test_a_match_page_tells_apart_two_teams_its_source_numbers_alike(db, redis, source, monkeypatch):
+    # A source whose team ids carry more than its boards' (ESPN basketball's carry the league): "5" on a board is
+    # the Cavaliers in one league and the Fever in the other, told apart by the side's name, or the game's title.
+    monkeypatch.setattr(source.fake, "board_id", lambda team_id: team_id.rpartition(":")[2], raising=False)
+    for team_id, name in (("nba:5", "Cleveland Cavaliers"), ("wnba:5", "Indiana Fever"), ("wnba:17", "Las Vegas Aces")):
+        teams.upsert(db, "pitch", SourceTeam("pitch", team_id, name), "basketball", NOW)
+    db.commit()
+    board = {"kind": "basketball", "home": {"id": "5", "name": "Indiana Fever", "score": "80"}, "away": {"id": "17", "name": "Las Vegas Aces", "score": "90"}}
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", board, [])] == ["Indiana Fever", "Las Vegas Aces"]
+    db.add(Event(key="pitch:777", sport="Basketball", title="Indiana Fever at Las Vegas Aces", participants=["5", "17"], status="scheduled"))
+    db.commit()
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:777"))
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", {}, [event_id])] == ["Indiana Fever", "Las Vegas Aces"]  # before tip-off, by its title
+    nameless = {"kind": "basketball", "home": {"id": "5", "score": "80"}, "away": {"id": "17", "name": "Las Vegas Aces", "score": "90"}}
+    assert [t["name"] for t in teams.in_game(db, None, "pitch", nameless, [])] == ["Las Vegas Aces"]  # one it can't tell isn't offered
+
+
+@needs_db
+def test_a_followed_teams_game_ending_has_its_games_read_again_at_the_next_tick(db, redis, source, monkeypatch):
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    source.fixtures[TOT] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    arsenal, spurs = team(db, ARS), team(db, TOT)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    teams.refresh(arsenal.id)
+    teams.refresh(spurs.id)  # read by a page, followed by nobody
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:100"))
+    assert event_id is not None and pipeline.due_work(NOW).teams == []
+    teams.ended(db, event_id)
+    db.commit()
+    db.expire_all()
+    assert (team(db, ARS).fetched_at, team(db, TOT).fetched_at is not None) == (None, True)
+    assert pipeline.due_work(NOW).teams == [arsenal.id]
+    # That read's schedule is the cache's, which still has the game on, with no result: it isn't kept blank, and
+    # once the poll that saw it finish has its board, the result is that board's, from Arsenal's side.
+    db.execute(update(Event).where(Event.id == event_id).values(status="final"))
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert teams.mine(db, "gooner")[0]["last"] is None
+    db.add(EventState(event_id=event_id, as_of=NOW, status="final", score_label="Arsenal 2 – 1 Chelsea", clock_label="FT", state=football(2, 1), source_url=None))
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert teams.mine(db, "gooner")[0]["last"]["result"] == "Won 2–1"
 
 
 @needs_db

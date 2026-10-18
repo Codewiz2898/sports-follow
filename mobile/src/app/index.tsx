@@ -10,7 +10,7 @@ import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
-import { AHEAD_DAYS, comingUp, FEW, followedLive, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, theirEvents } from '../../../web/src/today'
+import { AHEAD_DAYS, comingUp, FEW, followedLive, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type TeamGame } from '../../../web/src/today'
 import type { FollowedMatch, League } from '../api'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
@@ -61,10 +61,10 @@ function Head({ now }: { now: number }) {
 /** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
 function SaveNudge() {
   const { me } = useAccount()
-  const { cards } = useFollowing()
+  const { cards, teams } = useFollowing()
   const [hidden, setHidden] = useState(true)
   useEffect(() => { AsyncStorage.getItem(NUDGE).then((v) => setHidden(v === 'dismissed')).catch(() => {}) }, [])
-  if (hidden || !me || me.signed_in || cards.length === 0) return null
+  if (hidden || !me || me.signed_in || cards.length + teams.length === 0) return null
   const dismiss = () => { setHidden(true); AsyncStorage.setItem(NUDGE, 'dismissed').catch(() => {}) }
   return (
     <Notice>
@@ -105,6 +105,17 @@ function BigGames({ league, now }: { league: League | null; now: number }) {
   )
 }
 
+/** The games of the fan's teams that are on now and none of their players is in, nor followed by itself, each its
+ * board, opening its match page (the web's TeamsLive). */
+function TeamsLive({ games }: { games: TeamGame[] }) {
+  return games.map((g) => (
+    <Pressable key={g.key} onPress={openMatch(g.live.match, `/team/${g.team_id}`)} accessibilityRole="link" style={{ gap: 8 }}>
+      <LiveScoreboard live={g.live} playerName="" sport={g.sport} teams={g.names} compact seed={g.key} />
+      <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Following {g.names.join(' and ')}</Text>
+    </Pressable>
+  ))
+}
+
 /** The games the fan follows by themselves that are on now and none of their players is in, each its board,
  * opening its match page. */
 function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
@@ -118,19 +129,19 @@ function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
 
 export default function TodayScreen() {
   const following = useFollowing()
-  const { cards, loaded, failed, matches, matchesLoaded } = following
+  const { cards, loaded, failed, matches, matchesLoaded, teams } = following
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
-  const theirKey = useMemo(() => (loaded ? [...theirEvents(cards)].sort((a, b) => a - b).join(',') : null), [cards, loaded])
+  const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
   const now = useNow()
   const sports = useSports()
   const welcomed = useWelcomed()
   const [refreshing, setRefreshing] = useState(false)
 
-  // A fan who follows only games by themselves has a Today of their own too.
-  const nobody = loaded && matchesLoaded && cards.length === 0 && matches.length === 0
+  // A fan who follows only games by themselves, or only teams, has a Today of their own too.
+  const nobody = loaded && matchesLoaded && cards.length === 0 && matches.length === 0 && teams.length === 0
   // A new fan: the welcome first, once.
   useEffect(() => {
     if (nobody && welcomed === false) router.replace('/welcome')
@@ -162,13 +173,14 @@ export default function TodayScreen() {
 
   const games = liveGames(cards)
   const followed = followedLive(matches, cards)
-  const done = results(cards, now, sports.drawn)
-  const coming = comingUp(cards, now, matches)
+  const teamGames = teamsLive(teams, cards, matches)
+  const done = results(cards, now, sports.drawn, teams)
+  const coming = comingUp(cards, now, matches, teams)
   // After the fan's own, the big games none of their players are in, outlined. Once the follow list has
   // answered: a rail of only big games that the fan's own then come in front of would stay on the big ones
   // (a snapped row keeps its card in view), and one of the fan's own would show as a big game until then.
   // The games they follow by themselves are theirs too: on Today as such, not again among the big ones.
-  const theirs = new Set([...theirEvents(cards), ...matches.map((m) => m.event_id)])
+  const theirs = new Set([...theirEvents(cards, teams), ...matches.map((m) => m.event_id)])
   const big = loaded || failed ? league : null
   const bigDone = big ? notTheirs(big.results.games, theirs) : []
   const bigComing = big ? leagueComingUp(big.coming.games, theirs, now) : []
@@ -181,7 +193,7 @@ export default function TodayScreen() {
   return (
     <Page onRefresh={refresh} refreshing={refreshing}>
       <Head now={now} />
-      {cards.length > 0 ? <PlayersStrip cards={cards} now={now} /> : null}
+      {cards.length + teams.length > 0 ? <PlayersStrip cards={cards} teams={teams} now={now} /> : null}
       {failed && !loaded ? <LoadFailed /> : null}
 
       {/* Each opens its match page; a live score the research agent read names no game, and opens the player's page. */}
@@ -193,6 +205,8 @@ export default function TodayScreen() {
       ))}
       {/* Then the games they follow by themselves, nobody of theirs in them. */}
       <FollowedLive matches={followed} />
+      {/* And their teams' games, nobody of theirs in them, not followed by themselves. */}
+      <TeamsLive games={teamGames} />
       {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. Once the
           follow list has answered, so a game of the fan's is never counted as another. */}
       {loaded || failed ? <MoreLive mine={games.flatMap(([, group]) => group)} /> : null}
@@ -214,7 +228,7 @@ export default function TodayScreen() {
         <Rail title={coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
           all={`Every ${coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${coming.length && bigComing.length ? ', and the big ones' : ''}`} max={coming.length + TAIL}>
           {[
-            ...coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} />),
+            ...coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} />),
             ...bigComing.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />),
           ]}
         </Rail>

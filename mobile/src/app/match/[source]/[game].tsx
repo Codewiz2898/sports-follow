@@ -13,8 +13,8 @@ import { gameLevelText, LEVELS } from '../../../../../web/src/alerts'
 import { dateTime, relative } from '../../../../../web/src/format'
 import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn } from '../../../../../web/src/match'
 import { useActivity } from '../../../activity'
-import { api, ApiError, type Match, type MatchFollowState } from '../../../api'
-import { b as blocks, GameBoard, PlainScore, StatGrid } from '../../../blocks'
+import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../../../api'
+import { Avatar, b as blocks, GameBoard, PlainScore, StatGrid } from '../../../blocks'
 import { toneOf, useSports, type Tone } from '../../../catalog'
 import { useNow } from '../../../clock'
 import { useFollowing } from '../../../following'
@@ -114,6 +114,47 @@ function Status({ match, tone }: { match: Match; tone: Tone }) {
 
 const back = () => (router.canGoBack() ? router.back() : router.replace('/'))
 
+/** The game's teams to follow (the web's GameTeams): each its name, opening its page, and Follow, which follows
+ * every game of the team from now on, not this one only. This app's word on following one shows over the page's
+ * last look; a tap shows at once. */
+function GameTeams({ teams }: { teams: GameTeam[] }) {
+  const following = useFollowing()
+  const [busy, setBusy] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const follows = (x: GameTeam) => (following.loaded ? following.isFollowingTeam(x.team_id) : x.following)
+  const toggle = async (x: GameTeam) => {
+    setBusy(x.team_id)
+    setError(null)
+    try { await following.followTeam(x.team_id, !follows(x)) } catch (e) { setError((e as Error).message) } finally { setBusy(null) }
+  }
+  return (
+    <View style={s.section}>
+      <SectionHead title="Teams" />
+      <ListCard>
+        {teams.map((x) => {
+          const on = follows(x)
+          return (
+            <View key={x.team_id} style={s.row}>
+              <Pressable onPress={() => router.push(`/team/${x.team_id}`)} accessibilityRole="link" style={[s.row, { flex: 1, justifyContent: 'flex-start' }]}>
+                <Avatar name={x.name} sport={x.sport} />
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text style={t.title}>{x.name}</Text>
+                  <Text style={[t.small, t.muted]}>{on ? 'Every game of theirs, from both sides' : x.can_follow ? 'Follow every game of theirs' : "Its games can't be followed here now"}</Text>
+                </View>
+              </Pressable>
+              {x.can_follow || on ? (
+                <Btn kind={on ? 'outline' : 'primary'} label={on ? 'Following' : 'Follow'} accessibilityLabel={`${on ? 'Following' : 'Follow'} ${x.name}`}
+                  icon={on ? <CheckIcon size={16} /> : <PlusIcon size={16} color={colour.bg} />} busy={busy === x.team_id} disabled={busy != null && busy !== x.team_id} onPress={() => { void toggle(x) }} />
+              ) : null}
+            </View>
+          )
+        })}
+      </ListCard>
+      {error ? <ErrorBox>{error}</ErrorBox> : null}
+    </View>
+  )
+}
+
 export default function MatchScreen() {
   const params = useLocalSearchParams<{ source: string; game: string }>()
   const { match, failed } = useMatch(params.source ?? '', params.game ?? '')
@@ -204,6 +245,12 @@ export default function MatchScreen() {
       {watch.error ? <ErrorBox>{watch.error}</ErrorBox> : null}
       {head.note ? <Text style={[t.small, t.muted]}>{head.note}</Text> : null}
       {failed ? <Notice><Text style={[t.small, { flex: 1 }]}>Couldn't update this game: {failed}</Text></Notice> : null}
+
+      {(match.teams ?? []).length > 0 ? (
+        <ErrorBoundary resetKey={match.teams}>
+          <GameTeams teams={match.teams ?? []} />
+        </ErrorBoundary>
+      ) : null}
 
       {yours.length > 0 ? (
         <View style={s.section}>

@@ -1,12 +1,12 @@
-// The fan's players along the top of Today (the web's PlayersStrip.tsx): one row of pills in each player's
-// sport colour, in the order the Following page has them, then "+ Follow". Its heading, all of it, opens the
+// The fan's teams and players along the top of Today (the web's PlayersStrip.tsx): one row of pills in each one's
+// sport colour, teams first as the Following page has them, then "+ Follow". Its heading, all of it, opens the
 // Following page.
 
 import { router } from 'expo-router'
 import { Pressable, StyleSheet, Text } from 'react-native'
 import { shortName } from '../../../web/src/format'
-import { liveShort, nextWhen, tileOrder } from '../../../web/src/today'
-import type { Card } from '../api'
+import { liveShort, nextWhen, teamNextWhen, teamOrder, tileOrder } from '../../../web/src/today'
+import type { Card, FollowedTeam } from '../api'
 import { toneOf, useSports } from '../catalog'
 import { ChevronIcon } from '../icons'
 import { Rail } from '../rail'
@@ -30,16 +30,33 @@ function PlayerPill({ card, now }: { card: Card; now: number }) {
   )
 }
 
-export function PlayersStrip({ cards, now }: { cards: Card[]; now: number }) {
+/** One followed team, as a player's pill: its name in its sport's colour, the score while it plays (a pulsing
+ * dot), else when it next does. */
+function TeamPill({ team, now }: { team: FollowedTeam; now: number }) {
+  const tone = toneOf(useSports(), team.sport)
+  const live = Boolean(team.live?.is_live)
+  const said = live && team.live ? liveShort(team.live) : teamNextWhen(team, now)
+  return (
+    <Pressable onPress={() => router.push(`/team/${team.team_id}`)} accessibilityLabel={`${team.name}${live ? ', live' : ''}`} style={[s.pill, { backgroundColor: tone.sport }]}>
+      {live ? <LiveDot ring={tone.on} /> : null}
+      <Text style={[dsp(19), { color: tone.on, lineHeight: 20 }]}>{team.name}</Text>
+      {said ? <Text style={[s.when, { color: tone.on }]} numberOfLines={1}>{said}</Text> : null}
+    </Pressable>
+  )
+}
+
+export function PlayersStrip({ cards, teams = [], now }: { cards: Card[]; teams?: FollowedTeam[]; now: number }) {
+  const title = teams.length ? 'Following' : 'Your players'
   const head = (
-    <Pressable onPress={() => router.push('/following')} accessibilityRole="link" accessibilityLabel={`Your players, ${cards.length}, see them all`} style={s.head}>
-      <Text style={s.headText}>Your players · {cards.length}</Text>
+    <Pressable onPress={() => router.push('/following')} accessibilityRole="link" accessibilityLabel={`${title}, ${cards.length + teams.length}, see them all`} style={s.head}>
+      <Text style={s.headText}>{title} · {cards.length + teams.length}</Text>
       <ChevronIcon size={18} strokeWidth={2.6} />
     </Pressable>
   )
   return (
-    <Rail title="Your players" head={head} gap={8}>
+    <Rail title={title} head={head} gap={8}>
       {[
+        ...teamOrder(teams, now).map((x) => <TeamPill key={`team-${x.team_id}`} team={x} now={now} />),
         ...tileOrder(cards, now).map((c) => <PlayerPill key={c.player_id} card={c} now={now} />),
         <Pressable key="add" onPress={() => router.push('/search')} accessibilityLabel="Follow another player" style={[s.pill, s.add]}>
           <Text style={[dsp(19), { lineHeight: 20 }]}>+ Follow</Text>

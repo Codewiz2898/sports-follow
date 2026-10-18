@@ -499,6 +499,13 @@ class Sport:
         tally = f" {mine}–{against}" if mine and against else ""
         return f"{name} {word}{tally} v {other}"
 
+    def side_result(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
+        """A finished game's result from one side's as a result card says it ("Won 2–1", "Lost by 57 runs"), from
+        its last board: a followed team's game the poller saw finish while its source's schedule, kept a while, has
+        no result for it yet (teams.py). By default side_final's without the sides' names; "" where that's ""."""
+        said = re.match(r"^.+? (won|lost|drew)(.*?) v .+$", self.side_final(state, score, clock, team_id))
+        return f"{said[1].capitalize()}{said[2]}" if said else ""
+
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """By default, every named player's moments as the player rules find them (during: a fifty, out, a
         wicket haul, 30 points), each about that player, in the same words and detail a fan of theirs gets. A

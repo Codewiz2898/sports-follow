@@ -302,6 +302,8 @@ def find(db: Session, system: str, fixture: str) -> Said:
 def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime | None = None) -> tuple[dict[str, Any] | None, bool]:
     """A game's match page, and whether to ask its source for a new read; None when no source has named the
     game here (on Live now, among the league's big games, in a read, or a followed player's)."""
+    from . import teams  # its teams to follow (teams reads search and the pipeline, which read this)
+
     now = now or datetime.now(timezone.utc)
     known = find(db, system, fixture)
     read_, game, listed, big, fixtures, events = known.read, known.game, known.listed, known.big, known.fixtures, known.events
@@ -356,6 +358,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         "moments": _moments(db, [e.id for e in events]),
         "yours": _yours(db, fan, system, [e.id for e in events], (game or {}).get("lines") or {}),
         "sides": _sides(db, fan, rules, system, roster, (game or {}).get("teams") or [], [e.id for e in events]),
+        # Its teams to follow (teams.py): each side the team registry has.
+        "teams": teams.in_game(db, fan, system, state, [e.id for e in events]),
         "event_ids": [e.id for e in events],
         "fixtures": fixtures,
     }, ask

@@ -59,6 +59,7 @@ export function gameLevel(m: PlayerMoment, matches: FollowedMatch[], teams: Foll
 // A team's games this soon are on the fan stream: the server's 36 h (sports_follow/teams.event_ids), less an hour
 // here, so a clock running fast never connects again before the server counts the game.
 const STREAM_AHEAD_MS = 35 * 3600_000
+const RESULT_AFTER_MS = 90_000  // a team's game over: its result is in Following by the server's next tick or two
 
 /** The games of the fan's teams the stream carries now: each team's next game (its game on now, while it's on)
  * from a day and a half before it starts. A game ending changes nothing here, so its result still comes on the
@@ -112,6 +113,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   matchesRef.current = matches
   const teamsRef = useRef(teams)
   teamsRef.current = teams
+  const ended = useRef(new Set<number>())  // the team games whose end has asked for Following again
   const toasted = useRef<{ event: number | null; kind: string; at: number }[]>([])
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
@@ -126,6 +128,8 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   }, () => setFailed(true)), [])
 
   useEffect(() => { reload() }, [reload])
+  const reloadRef = useRef(reload)
+  reloadRef.current = reload
 
   const reloadMatches = useCallback(() => api.matches().then((r) => setMatches(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [])
   useEffect(() => { reloadMatches() }, [reloadMatches])
@@ -178,10 +182,14 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     } else if (e.type === 'match') {
       // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
       setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, live: e.match.live, status: e.match.status } : m)))
-      // And a followed team's, on now or about to be: its board, until it's over.
-      setTeams((prev) => prev.map((t) => (t.live?.event_id === e.event_id || (t.next?.match != null && t.next.match === e.match.match)
-        ? { ...t, live: e.match.status === 'live' || e.match.status === 'armed' ? e.match.live : null }
-        : t)))
+      // And a followed team's, on now or about to be: its board, until it's over. Then its result reaches Following
+      // once the server has read the team's games again (teams.ended: the next tick), so the list loads again then.
+      const ofTeam = (t: FollowedTeam) => t.live?.event_id === e.event_id || (t.next?.match != null && t.next.match === e.match.match)
+      setTeams((prev) => prev.map((t) => (ofTeam(t) ? { ...t, live: e.match.status === 'live' || e.match.status === 'armed' ? e.match.live : null } : t)))
+      if (e.match.status === 'final' && teamsRef.current.some(ofTeam) && !ended.current.has(e.event_id)) {
+        ended.current.add(e.event_id)
+        window.setTimeout(() => { void reloadRef.current() }, RESULT_AFTER_MS)
+      }
     } else if (e.type === 'card') {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
