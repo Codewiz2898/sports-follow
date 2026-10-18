@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, FollowedTeam, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
@@ -333,11 +333,13 @@ export function UpcomingList({ items, who, empty }: { items: (UpcomingEvent & { 
       {items.map((u) => {
         const d = parseDate(u.start_utc)
         const timed = d && !dateOnly(u.start_utc)
+        const clock = timed ? clockPieces(d) : []
         return (
           <li key={`${u.title}-${u.start_utc ?? ''}`} className="fixture">
-            <span className="when-block">
+            {/* A 12-hour clock's AM/PM is set small beside the time, in a column a little wider, so the time never breaks. */}
+            <span className={clock.some((p) => p.period) ? 'when-block with-period' : 'when-block'}>
               <span className="tag">{d ? d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) : 'TBC'}</span>
-              <span className="num">{timed ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '–'}</span>
+              <span className="num">{timed ? clock.map((p) => (p.period ? <span key={p.text} className="tag">{p.text}</span> : p.text)) : '–'}</span>
             </span>
             <span className="stack" style={{ flex: 1 }}>
               <span className="title">{u.title}</span>

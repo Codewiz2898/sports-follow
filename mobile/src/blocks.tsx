@@ -7,7 +7,7 @@ import { useState, type ReactNode } from 'react'
 import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
-import { countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
@@ -361,11 +361,15 @@ export function UpcomingList({ items, who, empty }: { items: (UpcomingEvent & { 
       {items.map((u, i) => {
         const d = parseDate(u.start_utc)
         const timed = d && !dateOnly(u.start_utc)
+        const clock = timed ? clockPieces(d) : [{ text: '–', period: false }]
         return (
           <View key={`${u.title}-${u.start_utc ?? ''}`} style={[b.fixture, i < items.length - 1 && b.listLine]}>
-            <View style={b.when}>
+            {/* A 12-hour clock's AM/PM is set small beside the time, in a column a little wider, so the time never breaks. */}
+            <View style={[b.when, clock.some((p) => p.period) && b.whenPeriod]}>
               <Text style={[t.tag, t.muted]}>{d ? d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) : 'TBC'}</Text>
-              <Text style={num(22)}>{timed ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '–'}</Text>
+              <View style={b.clock}>
+                {clock.map((p) => <Text key={p.text} numberOfLines={1} style={p.period ? [t.tag, t.muted] : num(22)}>{p.text}</Text>)}
+              </View>
             </View>
             <View style={{ flex: 1, gap: 4 }}>
               <Text style={t.title}>{u.title}</Text>
@@ -541,7 +545,9 @@ export const b = StyleSheet.create({
   listItem: { paddingVertical: 14, minHeight: 44 },
   listLine: { borderBottomWidth: 1, borderBottomColor: colour.line },
   fixture: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
-  when: { width: 64, gap: 2, flexShrink: 0 },
+  when: { minWidth: 64, gap: 2, flexShrink: 0 },
+  whenPeriod: { minWidth: 72 },
+  clock: { flexDirection: 'row', alignItems: 'baseline', gap: 3 },
   errorBox: { paddingVertical: 14, paddingHorizontal: 16, borderRadius: 14, backgroundColor: colour.dangerBg },
   errorText: { fontFamily: font[600], fontSize: 14, color: colour.danger },
   primary: { alignSelf: 'flex-start', height: 44, paddingHorizontal: 18, borderRadius: 999, backgroundColor: colour.text, justifyContent: 'center' },

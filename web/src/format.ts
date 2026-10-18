@@ -52,6 +52,22 @@ export function dateTime(value?: string | null): string {
   return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+/**
+ * A start's time of day on the fan's clock, in pieces: "17:00" is one, "12:30 AM" is two ("12:30", then the
+ * period). A narrow column draws the period small beside the time, so the time never breaks inside itself.
+ * The pieces keep the locale's order (some write the period first) and carry no spaces of their own.
+ */
+export function clockPieces(d: Date): { text: string; period: boolean }[] {
+  const pieces: { text: string; period: boolean }[] = []
+  for (const p of new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).formatToParts(d)) {
+    const period = p.type === 'dayPeriod'
+    const last = pieces[pieces.length - 1]
+    if (last && !last.period && !period) last.text += p.value
+    else pieces.push({ text: p.value, period })
+  }
+  return pieces.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text)
+}
+
 export function day(value?: string | null): string {
   const d = parseDate(value)
   if (!d) return value ?? ''
