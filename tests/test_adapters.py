@@ -90,7 +90,7 @@ def test_a_200_that_isnt_the_json_asked_for_is_an_adapter_error(monkeypatch, mod
     # "except AdapterError" and stopped an esports lane or a refresh, recording no binding health.
     monkeypatch.setattr(module, "_client", httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=body))))
     monkeypatch.setattr(module, "token", lambda: "example", raising=False)
-    for name, value in (("_cache", {}), ("_memo", {}), ("_state", {"paused_until": 0.0, "last": 0.0}), ("_take", lambda: None), ("ENABLED", True)):
+    for name, value in (("_memo", {}), ("_state", {"paused_until": 0.0, "last": 0.0}), ("_take", lambda: None), ("ENABLED", True)):
         if hasattr(module, name):
             monkeypatch.setattr(module, name, value)
     with pytest.raises(AdapterError):

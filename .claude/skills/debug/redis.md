@@ -77,6 +77,21 @@ just said 429.
 `python -m sports_follow.usage` prints each source's sent and refused counts by lane, for the hour and the
 day. It only reads. The Sources dashboard shows the same, and the allowance used, left and paused.
 
+## Source cache: `src:*` (`adapters/cache.py`), in the cache Redis
+
+On production these live in a Redis of their own, `c exec -T cache redis-cli`, not the one above; locally
+in the main one unless `SPORTS_FOLLOW_CACHE_REDIS_URL` says otherwise.
+
+`src:<budget>:<sha1>`: one response as the source sent it, zlib-compressed JSON `[fetched at, document]`
+(binary, so `GET` shows noise). `<budget>` is the budget's name, as above (`sportmonks` for football and
+cricket); the sha1 is of the request: for Sportmonks, PandaScore and Liquipedia `<path>?<sorted params>`
+(`/football/players/7?include=teams`), for ESPN and Lichess the URL. Each key expires a day after it's
+written, or after its ttl if that's longer; `TTL` says how long it has left. Whether a copy is fresh is
+each caller's ttl against its fetched-at, so an old key isn't served as new.
+
+Deleting a key, or `FLUSHALL` on the cache, is safe for the data but spends quota: each response is read
+again from its source. On production, ask Bharath first. Never `FLUSHALL` the main Redis.
+
 ## The job queue (arq)
 
 - `arq:queue`: a zset of job id → due time (ms). A job stays in it while it runs. Ids are random, except:

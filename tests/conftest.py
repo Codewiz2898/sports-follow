@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sports_follow import bus, controls, registry, shutdown, tracing
-from sports_follow.adapters import budget
+from sports_follow.adapters import budget, cache
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +19,16 @@ def source_budgets(monkeypatch):
     spends what another counted."""
     store = budget.MemoryStore()
     monkeypatch.setattr(budget, "STORE", store)
+    return store
+
+
+@pytest.fixture(autouse=True)
+def source_cache(monkeypatch):
+    """What the sources answered (adapters/cache.py) is kept in memory, empty for each test, and so is each
+    process's copy: no test reaches Redis, or is answered from what another test read."""
+    store = cache.MemoryStore()
+    monkeypatch.setattr(cache, "STORE", store)
+    cache.forget()
     return store
 
 

@@ -210,7 +210,6 @@ def _serve(monkeypatch, answer) -> list[tuple[str, str | None]]:
         return SimpleNamespace(status_code=200, headers={}, json=lambda: doc)
 
     monkeypatch.setattr(sportmonks, "token", lambda: "example")
-    monkeypatch.setattr(sportmonks, "_cache", {})
     monkeypatch.setattr(sportmonks._client, "get", get)
     return sent
 
@@ -333,12 +332,11 @@ def test_one_live_match_may_come_back_as_an_object(monkeypatch):
 def test_an_uncached_read_is_not_kept(monkeypatch):
     response = SimpleNamespace(status_code=200, headers={}, json=lambda: {"data": []})
     monkeypatch.setattr(sportmonks, "token", lambda: "example")
-    monkeypatch.setattr(sportmonks, "_cache", {})
     monkeypatch.setattr(sportmonks._client, "get", lambda *args, **kwargs: response)
     sportmonks.get_json("/football/fixtures/multi/1,2", ttl=0)
-    assert sportmonks._cache == {}
+    assert sportmonks._cache.entries == {}
     sportmonks.get_json("/football/fixtures/1", ttl=5)
-    assert len(sportmonks._cache) == 1
+    assert len(sportmonks._cache.entries) == 1
 
 
 def _confirmed(value: bool) -> list[dict]:

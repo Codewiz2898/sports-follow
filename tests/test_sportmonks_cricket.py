@@ -261,7 +261,6 @@ class Sportmonks:
         monkeypatch.setattr(time, "time", lambda: self.now)
         monkeypatch.setattr(time, "monotonic", lambda: self.now)
         monkeypatch.setattr(sportmonks, "token", lambda: "example")
-        monkeypatch.setattr(sportmonks, "_cache", {})
         monkeypatch.setattr(sportmonks, "_client", self)
 
     def at(self) -> int:
@@ -434,7 +433,7 @@ def test_live_matches_come_in_one_livescores_request(monkeypatch):
     snaps = sc.SportmonksCricket().snapshots({1: LOC, 2: LOC, 3: {"fixture": "999"}})
     # Two events, one match, carried: one request for both; a match Sportmonks has no more is left out.
     assert set(snaps) == {1, 2} and snaps[1] == snaps[2] and snaps[1] is not snaps[2]
-    assert sm.requests() == ["/livescores", "/fixtures/999"] and sportmonks._cache == {}  # never cached
+    assert sm.requests() == ["/livescores", "/fixtures/999"] and sportmonks._cache.entries == {}  # never cached
 
 
 def test_a_quiet_match_read_on_its_own_is_read_once_a_minute(monkeypatch):

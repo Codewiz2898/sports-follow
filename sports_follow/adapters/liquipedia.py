@@ -14,8 +14,6 @@ Redis, shared by the API and the worker, and reads stop short of it.
 from __future__ import annotations
 
 import os
-import threading
-import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -24,7 +22,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
-from . import budget
+from . import budget, cache
 from .base import AdapterError, Provider
 
 BASE = "https://api.liquipedia.net/api/v3"
@@ -39,8 +37,7 @@ FANS = 10  # requests an hour fans' previews and follows may take: one follow is
 BUDGET = budget.Budget("liquipedia", windows=(budget.Window(3600, HOURLY, margin=MARGIN),), reserve=RESERVE, fan=FANS, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": f"{USER_AGENT} esports results", "accept": "application/json", "accept-encoding": "gzip"}, timeout=30)
-_cache: dict[str, tuple[float, Any]] = {}
-_lock = threading.Lock()
+_cache = cache.Cache(BUDGET.name, size=1000)
 
 
 PROVIDER = Provider(
@@ -72,11 +69,12 @@ def spare() -> bool:
 
 def get(datatype: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
     """The rows of one LiquipediaDB query ("match", "player"…), cached for ttl seconds (0: fetched every
-    time and never kept): get("match", 1800, wiki="pubgmobile", conditions="[[opponent::X]]", limit=100)."""
-    key = f"{datatype}?{urlencode(sorted(params.items()))}"
-    hit = _cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
+    time and never kept), in Redis too (cache.py):
+    get("match", 1800, wiki="pubgmobile", conditions="[[opponent::X]]", limit=100)."""
+    return _cache.read(f"{datatype}?{urlencode(sorted(params.items()))}", ttl, lambda: _fetch(datatype, params))
+
+
+def _fetch(datatype: str, params: dict[str, Any]) -> list[dict[str, Any]]:
     if not token():
         raise AdapterError("no Liquipedia key (~/.config/sports-follow/liquipedia-token)")
     budget.take(BUDGET)
@@ -102,12 +100,6 @@ def get(datatype: str, ttl: float, **params: Any) -> list[dict[str, Any]]:
     rows = data.get("result") or []
     if not isinstance(rows, list):
         raise AdapterError(f"Liquipedia returned no rows for {datatype}")
-    if ttl > 0:
-        with _lock:
-            _cache[key] = (time.time(), rows)
-            if len(_cache) > 1000:
-                for old, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:200]:
-                    _cache.pop(old, None)
     return rows
 
 

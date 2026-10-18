@@ -1,7 +1,7 @@
 """The shared ESPN client: public JSON endpoints behind espn.com and espncricinfo.com.
 
 ESPN's API refuses browser-like user agents (403) and serves plain clients, so requests identify
-this app honestly. Responses are cached in-process: live summaries for a few seconds, calendars
+this app honestly. Responses are cached (cache.py, shared through Redis): live summaries for a few seconds, calendars
 for minutes, finished matches for good. Unofficial endpoints can change or disappear without
 notice; that is what binding health and the agent fallback are for (design section 5).
 """
@@ -9,7 +9,6 @@ notice; that is what binding health and the agent fallback are for (design secti
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
@@ -18,7 +17,7 @@ import httpx
 
 from .. import naming, sports
 from ..config import USER_AGENT
-from . import budget
+from . import budget, cache
 from .base import AdapterError, LiveSearch, PlayerRef, Provider, SearchResult
 
 if TYPE_CHECKING:
@@ -31,17 +30,15 @@ WEB = "https://site.web.api.espn.com/apis"
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=15, follow_redirects=True)
 BUDGET = budget.Budget("espn", urls=("https://site.api.espn.com/", "https://site.web.api.espn.com/"))  # no published limit: counted, by lane, never refused
-_cache: dict[str, tuple[float, Any]] = {}
-_cache_lock = threading.Lock()
+_cache = cache.Cache(BUDGET.name)
 
 
 def get_json(url: str, ttl: float) -> Any:
-    """GET a JSON document, served from cache while younger than ttl seconds."""
-    now = time.time()
-    with _cache_lock:
-        hit = _cache.get(url)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+    """GET a JSON document, served from cache (this process's, then Redis: cache.py) while younger than ttl seconds."""
+    return _cache.read(url, ttl, lambda: _fetch(url))
+
+
+def _fetch(url: str) -> Any:
     res = None
     for attempt in range(2):
         # ESPN's edge answers the odd request with a 502; the same request a moment later works.
@@ -61,11 +58,6 @@ def get_json(url: str, ttl: float) -> Any:
         data = res.json()
     except ValueError as exc:
         raise AdapterError(f"ESPN returned non-JSON for {url}") from exc
-    with _cache_lock:
-        _cache[url] = (now, data)
-        if len(_cache) > 2000:  # keep memory bounded; oldest entries go first
-            for key, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:500]:
-                _cache.pop(key, None)
     return data
 
 

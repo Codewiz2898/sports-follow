@@ -368,7 +368,6 @@ def test_the_key_goes_in_a_header_and_the_hour_is_shared_and_never_overspent(mon
 
     monkeypatch.setattr(liquipedia, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=liquipedia._client.headers))
     monkeypatch.setattr(liquipedia, "token", lambda: "lp-key")
-    monkeypatch.setattr(liquipedia, "_cache", {})
     monkeypatch.setattr(liquipedia, "BUDGET", budget.Budget("liquipedia", windows=(budget.Window(3600, 8, margin=4),), reserve=2, fan=1))
     with budget.in_lane("live"):
         assert liquipedia.get("match", 0, wiki=WIKI, conditions="[[match2id::a]]") == [{"match2id": "a"}]

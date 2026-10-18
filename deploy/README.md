@@ -8,6 +8,7 @@ app's asset links share one origin.
             443 / 80
 phone ─────────────────▶ caddy ──▶ api (uvicorn, 2 workers) ──┬──▶ postgres
                                                               ├──▶ redis ◀── worker (arq, Stockfish)
+                                                              ├──▶ cache ◀────┤  the sources' answers, shared
                                    gateway (llm-providers) ◀──┴───────────────┘
                                         └──▶ OpenRouter
 backup: pg_dump once a day, 14 kept in /var/backups/sports-follow ──▶ sealed, to object storage hourly
@@ -16,7 +17,8 @@ systemd timers: server checks every 5 minutes, off-site backups hourly, Docker c
 alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the checks'; alert rules there email you
 ```
 
-Only Caddy is published. Postgres, Redis, the gateway and the API talk on the compose network. The
+Only Caddy is published. Postgres, the two Redis (`redis`: jobs, locks, budgets, cards; `cache`: what
+the data sources answered), the gateway and the API talk on the compose network. The
 build runs licensed sources only (`settings.env`): Sportmonks football and cricket, and Lichess.
 
 | File | What |
@@ -45,6 +47,9 @@ build runs licensed sources only (`settings.env`): Sportmonks football and crick
 
 The whole stack uses about 450 MB of memory at rest; the API is the largest (240 MB for two workers).
 A **2 vCPU / 4 GB** server leaves room for the weekly registry import, builds and the chess engine.
+The sources' cache (`cache` in `compose.yaml`) may grow to 256 MB, then drops the least recently used
+response; `CACHE_REDIS_MAXMEMORY` in `deploy/.env` changes that (`512mb`). On 18 October the server had
+2.3 GB available, and the main Redis used 4 MB.
 
 It runs on **AWS Lightsail in Sydney** (`ap-southeast-2`): the $24 plan, with 2 vCPU, 4 GB and an 80 GB
 SSD.
@@ -685,6 +690,7 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 | A shell in the database | `c exec postgres psql -U sports sports_follow` |
 | Registry import now | `c exec worker python -m sports_follow.registry` (one sport: `… registry chess`; every esports game: `… registry esports`, or one: `… registry valorant`) |
 | Sources' spend by lane | `c exec worker python -m sports_follow.usage` |
+| Sources' cache | `c exec cache redis-cli INFO memory` (keys: the `debug` skill's `redis.md`). Emptying it loses nothing but spends quota to fill again |
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
 | A campaign page (stann.in/gukesh) | `c exec worker python -m sports_follow.campaigns list` (`set`, `show`, `player add`, `team find`, `team add`, `game add`, `remove`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |

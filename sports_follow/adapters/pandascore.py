@@ -16,7 +16,6 @@ non-betting use only; whether a commercial app may use the free plan is still to
 from __future__ import annotations
 
 import os
-import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -26,7 +25,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import USER_AGENT
-from . import budget
+from . import budget, cache
 from .base import AdapterError, Provider
 
 BASE = "https://api.pandascore.co"
@@ -40,8 +39,7 @@ LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_PANDASCORE_RESERVE", 300))
 BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
-_cache: dict[str, tuple[float, Any]] = {}
-_lock = threading.Lock()
+_cache = cache.Cache(BUDGET.name)
 
 
 PROVIDER = Provider(
@@ -77,12 +75,12 @@ def _observe(res: httpx.Response) -> None:
 
 def get_json(path: str, ttl: float, **params: Any) -> Any:
     """GET a PandaScore document ("/players/123", "/matches"), cached for ttl seconds (0: fetched every
-    time and never kept). Filter, range and page parameters go as their bracketed names:
-    get_json("/matches", 60, **{"filter[id]": "1,2"})."""
-    key = f"{path}?{urlencode(sorted(params.items()))}"
-    hit = _cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
+    time and never kept), in Redis too (cache.py). Filter, range and page parameters go as their bracketed
+    names: get_json("/matches", 60, **{"filter[id]": "1,2"})."""
+    return _cache.read(f"{path}?{urlencode(sorted(params.items()))}", ttl, lambda: _fetch(path, params))
+
+
+def _fetch(path: str, params: dict[str, Any]) -> Any:
     if not token():
         raise AdapterError("no PandaScore token (~/.config/sports-follow/pandascore-token)")
     budget.take(BUDGET)
@@ -111,13 +109,6 @@ def get_json(path: str, ttl: float, **params: Any) -> Any:
         raise AdapterError(f"PandaScore returned non-JSON for {path}") from exc
     if not isinstance(data, (dict, list)):
         raise AdapterError(f"PandaScore returned {type(data).__name__} for {path}")
-    if ttl <= 0:
-        return data
-    with _lock:
-        _cache[key] = (time.time(), data)
-        if len(_cache) > 2000:
-            for old, _ in sorted(_cache.items(), key=lambda kv: kv[1][0])[:500]:
-                _cache.pop(old, None)
     return data
 
 
