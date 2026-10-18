@@ -77,6 +77,7 @@ async function register(token: string, previous: string | null): Promise<void> {
     previous_token: previous && previous !== token ? previous : null,
   })
   await AsyncStorage.setItem(TOKEN, JSON.stringify(token))
+  StannNotifications?.registered(token)
   changed()
 }
 
@@ -86,6 +87,7 @@ async function unregister(): Promise<void> {
   if (!token) return
   await api.unregisterPush(token)
   await AsyncStorage.removeItem(TOKEN)
+  StannNotifications?.registered(null)
   changed()
 }
 
