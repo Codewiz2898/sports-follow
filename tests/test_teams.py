@@ -14,14 +14,14 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
 from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import (Account, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
+from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
                                   PushSubscription, Team, TeamFollow, TeamOverride)
 from sports_follow.sports.football import result_label
 
@@ -52,6 +52,9 @@ def test_a_result_is_told_from_each_sides_view():
     assert basketball is not None
     board = {"kind": "basketball", "home": {"id": "13", "name": "Lakers", "score": "99", "winner": False}, "away": {"id": "2", "name": "Celtics", "score": "104", "winner": True}}
     assert basketball.side_final(board, "", "Final", "13") == "Lakers lost 99–104 v Celtics"
+    # As a result card says it, where a schedule has no result yet (teams._refresh).
+    assert [rules.side_result(football(2, 1), "", "FT", ARS), rules.side_result(football(1, 1), "", "FT", CHE), basketball.side_result(board, "", "Final", "13")] == ["Won 2–1", "Drew 1–1", "Lost 99–104"]
+    assert rules.side_result(football(2, 1), "", "FT", TOT) == ""
 
 
 def test_cricket_says_the_margin_and_esports_the_maps_or_the_forfeit():
@@ -71,6 +74,7 @@ def test_cricket_says_the_margin_and_esports_the_maps_or_the_forfeit():
     assert lol.side_final(sweep, "", "", "126061") == "T1 won 2–0 v Gen.G"  # a sweep's 0 is a score, flagged winner or not
     assert lol.side_final({**series, "forfeit": True}, "", "", "126061") == "T1 won by forfeit v Gen.G"
     assert lol.side_final({"kind": "battle_royale", "standings": []}, "", "", "1") == ""  # a lobby has no two sides
+    assert [cricket.side_result(board, "", "India won by 57 runs", "5"), lol.side_result({**series, "forfeit": True}, "", "", "2")] == ["Lost by 57 runs", "Lost by forfeit"]
 
 
 def test_only_team_sports_have_teams_to_follow():
@@ -502,6 +506,18 @@ def test_a_followed_teams_game_ending_has_its_games_read_again_at_the_next_tick(
     db.expire_all()
     assert (team(db, ARS).fetched_at, team(db, TOT).fetched_at is not None) == (None, True)
     assert pipeline.due_work(NOW).teams == [arsenal.id]
+    # That read's schedule is the cache's, which still has the game on, with no result: it isn't kept blank, and
+    # once the poll that saw it finish has its board, the result is that board's, from Arsenal's side.
+    db.execute(update(Event).where(Event.id == event_id).values(status="final"))
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert teams.mine(db, "gooner")[0]["last"] is None
+    db.add(EventState(event_id=event_id, as_of=NOW, status="final", score_label="Arsenal 2 – 1 Chelsea", clock_label="FT", state=football(2, 1), source_url=None))
+    db.commit()
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert teams.mine(db, "gooner")[0]["last"]["result"] == "Won 2–1"
 
 
 @needs_db
