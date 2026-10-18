@@ -665,7 +665,9 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
   `glance`) and the game's earlier moments, with Match page and Mute this game.
 - **A live card** for each game the fan follows while it's on (`sports_follow/livecards.py`): its board, how far
   along it is and the fan's own players in it, sent after a poll that changed it (at once for the score, else at
-  most every 20 s), ongoing and silent, and taken down at the end. On an Android 16 phone that allows it, a live
+  most every 20 s, and again every 10 minutes when nothing has, as the phone takes down a card nothing has come
+  for in 20), ongoing and silent, and taken down at the end. Cards aren't collapsible FCM messages: FCM lets a
+  phone have a burst of 20 of those, then one every 3 minutes, and a moment would wait behind them. On an Android 16 phone that allows it, a live
   card is a Live Update instead: first on the lock screen, with the score in the status bar. Alerts' Settings has
   a switch for them, and each card a Stop button.
 

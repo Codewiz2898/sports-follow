@@ -108,7 +108,8 @@ def test_a_live_card_reaches_the_fans_who_hear_the_games_key_moments(db, fake_fc
     # Each card names the fan's own players in the game (not one set to off), with their line so far.
     assert {fan: json.loads(m["data"]["players"] or "[]") for fan, m in sent.items()} == {"keen": ["Bukayo Saka · 1 goal", "Declan Rice"], "off": [], "gooner": []}
     keen = sent["keen"]
-    assert keen["android"] == {"priority": "normal", "ttl": "60s", "collapse_key": "live-e1"} and "notification" not in keen
+    # Not collapsible: FCM throttles a device's collapsible messages, and a game's moments are (by its tag).
+    assert keen["android"] == {"priority": "normal", "ttl": "60s"} and "notification" not in keen
     assert {k: keen["data"][k] for k in ("v", "type", "tag", "event_id", "sport", "colour", "league", "match", "title", "progress", "marks", "live")} == {
         "v": "2", "type": "live", "tag": "live-e1", "event_id": "1", "sport": "football", "colour": "#12c46c", "league": "Premier League",
         "match": "/match/espn_soccer/740001", "title": "Arsenal 1 – 0 Chelsea", "progress": "31/90", "marks": "[[12,0]]", "live": "1"}
@@ -134,6 +135,18 @@ def test_a_fans_newest_phones_get_the_card_and_one_uninstalled_goes(db, fake_fcm
     db.expire_all()
     assert phone("many", notify.MAX_DEVICES + 1) not in set(db.scalars(select(PushSubscription.endpoint)))  # uninstalled: removed
     assert db.scalar(select(func.count()).select_from(Notification)) == 0  # a card is no alert
+
+
+def test_a_card_fcm_fails_isnt_counted_against_the_phone(db, fake_fcm):  # noqa: F811
+    """Cards come every few seconds: a minute of trouble at FCM mustn't use up a phone's failures and remove it."""
+    db.add(MatchFollow(fan_id="fan", event_id=1, alert_rules={}))
+    db.add(PushSubscription(fan_id="fan", transport="fcm", endpoint=phone("fan"), failures=notify.MAX_FAILURES - 1))
+    db.commit()
+    fake_fcm.failing = 503
+    for _ in range(3):
+        assert livecards.send(1, "live", {"type": "live", "tag": "live-e1", "event_id": 1}) == 0
+    db.expire_all()
+    assert db.scalar(select(PushSubscription.failures).where(PushSubscription.endpoint == phone("fan"))) == notify.MAX_FAILURES - 1
 
 
 def test_the_poller_sends_a_live_card_and_its_end(db, fake_fcm, monkeypatch):  # noqa: F811

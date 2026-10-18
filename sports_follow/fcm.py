@@ -192,14 +192,15 @@ def message(token: str, payload: dict[str, Any], ttl: int) -> dict[str, Any]:
     return data_message(token, data, ttl, urgent=loud)
 
 
-def data_message(token: str, data: dict[str, Any], ttl: int, urgent: bool = False) -> dict[str, Any]:
+def data_message(token: str, data: dict[str, Any], ttl: int, urgent: bool = False, collapse: bool = True) -> dict[str, Any]:
     """A data-only FCM message the app draws itself (the module docstring): `data` as strings (a list as its JSON,
     an empty one as ""), with the version, and what a message about no game says (COMMON) where it says nothing,
     kept under FCM's 4 KB (fit). High priority only when `urgent` (a moment that makes a sound); collapsed by its
-    tag."""
+    tag unless not `collapse`: FCM lets a device have a burst of 20 collapsible messages, then one every 3
+    minutes, so a game's live cards, which come every few polls, aren't, and a moment never waits behind them."""
     strings = fit({"v": VERSION, **COMMON, **{k: _text(v) for k, v in data.items() if v is not None}})
     android: dict[str, Any] = {"priority": "high" if urgent else "normal", "ttl": f"{max(0, ttl)}s"}
-    if strings.get("tag"):
+    if strings.get("tag") and collapse:
         android["collapse_key"] = strings["tag"]
     return {"token": token, "data": strings, "android": android}
 

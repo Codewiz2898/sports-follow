@@ -71,9 +71,10 @@ SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was hande
 # and refuse more with a 413; encryption adds about 100, so this keeps a push under 3.5 KB. A longer
 # body (then title) is cut short.
 PAYLOAD_BYTES = 3400
-# An Android scorecard's big word by its moment's kind, where neither its sport (Sport.high: "Hundred") nor its
-# title ("Red card: Saka") says one. A title's own word is at most WORD_CHARS long: past that it's a sentence.
-WORDS = {"final": "Result", "start": "Live", "lineup": "Line-up", "news": "News", "goal": "Goal", "red": "Red card", "out": "Out", "set": "Set", "map": "Map"}
+# An Android scorecard's big word by its moment's kind, for the kinds every sport has, where neither its sport
+# (Sport.high: "Hundred"; Sport.kind_words for its own kinds: "Goal") nor its title ("Red card: Saka") says one.
+# A title's own word is at most WORD_CHARS long: past that it's a sentence.
+WORDS = {"final": "Result", "start": "Live", "lineup": "Line-up", "news": "News"}
 WORD_CHARS = 20
 STORY_LINES, STORY_CHARS = 3, 80  # the earlier lines under a scorecard's, each cut to this
 
@@ -365,7 +366,13 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     earlier_ids = {m for fan in games for s in sent.get(fan, []) if s.event_id in followed for m in s.moment_ids}
     told = {i.id: i for i in for_games(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
     # What the Android app draws each push with, looked up once for the batch, should any of these fans have it.
-    drawn = _drawn(db, items) if any(d.transport == "fcm" for mine in devices.values() for d in mine) else None
+    # It reads every source's stored boards: one it can't read sends the batch plain, never not at all.
+    drawn = None
+    if any(d.transport == "fcm" for mine in devices.values() for d in mine):
+        try:
+            drawn = _drawn(db, items)
+        except Exception:
+            log.exception("moments %s: no scorecards, sent plain", [i.id for i in items])
     jobs = []
     for fan, fan_devices in devices.items():
         heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) for m in s.moment_ids if m in told]
@@ -374,10 +381,21 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             db.add(row)
             db.flush()
             payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
-            android = {**payload, **scorecard(p, *drawn)} if drawn is not None else payload
+            android = {**payload, **_scorecard_or_none(p, drawn)}
             for d in fan_devices:
                 jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
     return jobs
+
+
+def _scorecard_or_none(p: alerts.Push, drawn: Drawn | None) -> dict[str, Any]:
+    """A push's scorecard keys (scorecard), or none, and so a plain push, where its board can't be read."""
+    if drawn is None:
+        return {}
+    try:
+        return scorecard(p, *drawn)
+    except Exception:
+        log.exception("no scorecard for a push of event %s", p.event_id)
+        return {}
 
 
 # What a batch's Android scorecards are drawn from (_drawn).
@@ -423,12 +441,13 @@ def scorecard(p: alerts.Push, items: dict[int, alerts.Item], boards: dict[int, l
 def word_and_line(sport: sports.Sport, lead: alerts.Item | None, title: str, who: str) -> tuple[str, str]:
     """A push's big word on an Android scorecard, and the line under it: the word its sport has for its lead moment
     (Sport.high: "Hundred", "Late equaliser"), else its title's own before ": " ("Goal", "Red card"; not the player's
-    name, which "Jokić: 20 points" starts with), else its kind's (WORDS), else none. A word is at most WORD_CHARS
+    name, which "Jokić: 20 points" starts with), else its kind's (its sport's kind_words, then WORDS), else none. A word is at most WORD_CHARS
     and never the whole title. The line is the title without the word's lead ("Goal: Saka" is "Saka"), else the
     title."""
     high = sport.high(Found(lead.kind, lead.level, title, lead.body, lead.detail, lead.priority), "") if lead is not None else None
     head, said, _ = title.partition(": ")
-    words = [high.word if high is not None else "", head if said and head.casefold() != who.casefold() else "", WORDS.get(lead.kind if lead is not None else "", "")]
+    kind = lead.kind if lead is not None else ""
+    words = [high.word if high is not None else "", head if said and head.casefold() != who.casefold() else "", sport.kind_words.get(kind, ""), WORDS.get(kind, "")]
     chosen = next((w for w in words if w and len(w) <= WORD_CHARS and w != title), "")
     lead_in = f"{chosen}: "
     return chosen, title[len(lead_in):] if chosen and title.casefold().startswith(lead_in.casefold()) else title

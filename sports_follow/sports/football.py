@@ -219,6 +219,7 @@ class Football(Sport):
         "key": ("Goals, red cards and the result", "Every goal, whoever scores it, red cards, kick-off and the result"),
         "more": ("yellow cards", "yellow cards"),
     }
+    kind_words = {"goal": "Goal", "red": "Red card"}
 
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]

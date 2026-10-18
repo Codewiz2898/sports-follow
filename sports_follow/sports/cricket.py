@@ -168,6 +168,7 @@ class Cricket(Sport):
         "key": ("Wickets, fifties and the result", "Every wicket, fifties and hundreds, three wickets or more in a spell, the start and the result"),
         "more": ("", ""),
     }
+    kind_words = {"out": "Out"}
     stats_title = "Overview"
 
     def lineup_title(self, who: str, starting: bool) -> str:

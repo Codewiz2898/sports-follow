@@ -90,6 +90,14 @@ def test_a_players_news_wears_their_sports_colour_and_their_photo(monkeypatch):
     assert notify.scorecard(push(news, player_id=7, event_id=None, kind="news"), {1: item(1, "news", news[0])}, {}, {7: ("Rohit Sharma", "Cricket", "/api/photos/ab.jpg")})["photo"] == ""
 
 
+def test_a_push_whose_scorecard_cant_be_drawn_goes_plain(monkeypatch, caplog):
+    """A board no rule can read (every source's, stored) mustn't fail the batch, browsers' pushes and all."""
+    monkeypatch.setattr(notify, "scorecard", lambda *args: 1 / 0)
+    push = SimpleNamespace(event_id=1)
+    assert notify._scorecard_or_none(push, ({}, {}, {})) == {} and "no scorecard" in caplog.text  # type: ignore[arg-type]
+    assert notify._scorecard_or_none(push, None) == {}  # type: ignore[arg-type]
+
+
 def test_the_test_push_is_a_moment_of_no_sport_in_stann_blue():
     message = notify.fcm.message("t" * 40, {"id": 0, "title": "Notifications are on", "body": "…", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}, 600)
     data = message["data"]
@@ -120,10 +128,10 @@ def redis(monkeypatch):
 
 @pytest.fixture
 def cards(monkeypatch):
-    """The cards livecards hands to its pool, as (event id, kind, card), sent nowhere; and its clock, moved by hand."""
+    """The cards livecards queues to send, as (event id, kind, card), sent nowhere; and its clock, moved by hand."""
     sent: list[tuple[int, str, dict | None]] = []
     clock = SimpleNamespace(now=1_000_000.0)
-    monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=lambda fn, event_id, kind, made: sent.append((event_id, kind, made))))
+    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made: sent.append((event_id, kind, made)))
     monkeypatch.setattr(livecards.time, "time", lambda: clock.now)
     return SimpleNamespace(sent=sent, clock=clock)
 
@@ -144,10 +152,10 @@ def test_a_live_games_card_goes_when_its_score_changes_and_its_clock_waits(fake_
     assert made == {"sport": "football", "colour": "#12c46c", "ink": "#0b1a10", "league": "Premier League", "match": "/match/espn_soccer/740001",
                     "sides": [["ARS", "0"], ["CHE", "1"]], "status": "23'", "live": "1", "type": "live", "tag": "live-e5", "event_id": 5,
                     "title": "Arsenal 0 – 1 Chelsea", "body": "23'", "progress": "23/90", "marks": [[23, 1]]}
-    # As strings, as FCM takes them.
-    data = livecards.fcm.data_message("t" * 40, {**made, "players": ["Bukayo Saka · Started"]}, livecards.LIVE_TTL)
+    # As strings, as FCM takes them; not collapsible, as livecards.send sends it (FCM throttles collapsible ones).
+    data = livecards.fcm.data_message("t" * 40, {**made, "players": ["Bukayo Saka · Started"]}, livecards.LIVE_TTL, collapse=False)
     assert (data["data"]["sides"], data["data"]["marks"], data["data"]["players"], data["android"]) == \
-        ('[["ARS","0"],["CHE","1"]]', "[[23,1]]", '["Bukayo Saka · Started"]', {"priority": "normal", "ttl": "60s", "collapse_key": "live-e5"})
+        ('[["ARS","0"],["CHE","1"]]', "[[23,1]]", '["Bukayo Saka · Started"]', {"priority": "normal", "ttl": "60s"})
 
     livecards.polled(EVENT, snap(0, 1, "23'", goals=[goal]))  # nothing new
     cards.clock.now += 5
@@ -161,6 +169,38 @@ def test_a_live_games_card_goes_when_its_score_changes_and_its_clock_waits(fake_
     cards.clock.now += livecards.THROTTLE
     livecards.polled(EVENT, snap(1, 1, "25'"))  # the clock that waited goes with a later poll
     assert len(cards.sent) == 3 and cards.sent[-1][2]["status"] == "25'"
+    # A long think, a break: nothing changes, but the card goes again before the phone takes it down as stale.
+    cards.clock.now += livecards.REFRESH - 1
+    livecards.polled(EVENT, snap(1, 1, "25'"))
+    assert len(cards.sent) == 3
+    cards.clock.now += 1
+    livecards.polled(EVENT, snap(1, 1, "25'"))
+    assert len(cards.sent) == 4 and cards.sent[-1][2]["status"] == "25'"
+
+
+def test_a_game_sends_its_newest_card_only_and_one_at_a_time(monkeypatch):
+    """Of a game's cards waiting to go only the newest goes, and one queued while the game's last is sending waits
+    for it: an end is never sent before the card it takes down, nor a passed score at all. Other games go alongside."""
+    went: list[tuple[int, str, str]] = []
+    threads: list = []
+    monkeypatch.setattr(livecards, "_waiting", {})
+    monkeypatch.setattr(livecards, "_sending", set())
+    monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=lambda fn, *args: threads.append((fn, args))))
+
+    def sending(event_id: int, kind: str, made: dict | None) -> None:
+        went.append((event_id, kind, (made or {}).get("status", "")))
+        if (event_id, kind) == (5, "live"):
+            livecards._queue(5, "end", None)  # the game ends while its last card is going out
+
+    monkeypatch.setattr(livecards, "_send_safely", sending)
+    livecards._queue(5, "live", {"status": "23'"})
+    livecards._queue(5, "live", {"status": "24'"})  # before the game's thread starts: it replaces 23'
+    livecards._queue(6, "live", {"status": "1st"})
+    assert len(threads) == 2  # a thread a game
+    for fn, args in threads:
+        fn(*args)
+    assert went == [(5, "live", "24'"), (5, "end", ""), (6, "live", "1st")]
+    assert len(threads) == 2 and livecards._sending == set() and livecards._waiting == {}
 
 
 def test_a_games_end_goes_once_and_only_after_its_card(fake_fcm, redis, cards):  # noqa: F811

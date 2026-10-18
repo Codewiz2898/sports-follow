@@ -278,6 +278,9 @@ class Sport:
         "key": ("The start and the result", "The game starting and its result"),
         "more": ("", ""),
     }
+    # The big word an Android scorecard gives a moment of one of its own kinds (notify.word_and_line), where neither
+    # high() nor the moment's title says one: football's "goal" is "Goal". The kinds every sport has are notify's.
+    kind_words: dict[str, str] = {}
     stats_title = "Season"  # the Stats tab's first view: a season's numbers, or an overview (ranking, form)
     keeps_names = False  # a player's sport is shown as written ("CS2"), not title-cased (esports' games)
 

@@ -7,7 +7,8 @@ down once the game is over ("end"; the result itself arrives as a moment, as bef
 poll here once it's committed (structured.apply_poll). A live game's card goes out when what it shows has
 changed: at once when the score (its sides) has, else at most every THROTTLE seconds a game, so a clock that
 ticks every poll doesn't send a card each time; a change that waited goes with a later poll, as polls go on
-while the game does. When a game whose card went out is over (a final poll, or the schedule closing it without
+while the game does. A card that hasn't changed goes again every REFRESH seconds, as the phone takes down a card
+nothing has come for in a while (a chess player's long think, a cricket innings break). When a game whose card went out is over (a final poll, or the schedule closing it without
 one: structured.finish), its end goes, once. Redis keeps what each game's card last showed, and when.
 
 Who gets a game's card: the fans who'd hear its key moments (a level of key or everything, not results only or
@@ -18,13 +19,16 @@ line so far. A game's end goes to every fan who follows it any of those ways, wh
 takes a card down.
 
 None of this is an alert: no notification rows, no sound, nothing in the push metrics. A device FCM says is gone
-is removed, as after a moment's push (notify.settle). Nothing at all without FCM (fcm.enabled()).
+is removed, as after a moment's push (notify.settle), but another failure isn't counted against it: cards come
+every few seconds, and a minute's trouble at FCM would otherwise remove a phone that's fine. A card isn't
+collapsible (fcm.data_message), an end is. Nothing at all without FCM (fcm.enabled()).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -46,16 +50,22 @@ if TYPE_CHECKING:
 log = logging.getLogger("sports_follow.livecards")
 
 THROTTLE = 20  # seconds between a game's cards while only its clock moves
+REFRESH = 600  # seconds after which an unchanged card goes again: the app takes one down after 20 minutes
 LIVE_TTL = 60  # a card a minute old is stale: FCM may drop it, the next is on its way
 END_TTL = 3600
 KEEP = 6 * 3600  # seconds Redis keeps what a game's card last showed: one quiet this long has its card sent afresh
 MAX_PLAYERS = 2  # lines on a card about the fan's own players in the game
 QUIET = ("results", "off")  # the levels that don't hear a game's key moments, so get no card of it
+GONE = (404, 410)  # what FCM says of a device that's gone (fcm.push): the only failure a card counts
 OVER = ("final", "postponed")  # a poll's statuses that end a game's card (a game called off mid-way too)
 
-# A game's card to all its fans: one card at a time, so a game's go out in the order its polls decided them (an end
-# never before the card it takes down), each one's pushes at once (_wire). The worker gives it a connection.
-_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="livecard")
+# Games' cards to all their fans, a few games at once; one game's one at a time, the newest waiting one only (_queue):
+# an end is never sent before the card it takes down, nor a score that's been passed. Each card's pushes go at once
+# (_wire). The worker gives each a connection.
+_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="livecard")
+_waiting: dict[int, tuple[str, dict[str, Any] | None]] = {}  # each game's newest card or end not yet sent
+_sending: set[int] = set()  # the games a thread is sending for
+_lock = threading.Lock()
 # One card to one device: apart from a moment's pushes (notify._wire), so a goal never waits behind a card.
 _wire = ThreadPoolExecutor(max_workers=8, thread_name_prefix="livecard-push")
 
@@ -173,12 +183,12 @@ def _live(event: Event, snap: Snapshot) -> None:
     redis = bus.sync_redis()
     last = json.loads(cast(str, redis.get(_key(event.id))) or "null") or {}
     now = time.time()
-    if last.get("shows") == shows:
-        return  # nothing new to show
+    if last.get("shows") == shows and now - float(last.get("at") or 0) < REFRESH:
+        return  # nothing new to show, and the phone still has it
     if last.get("sides") == made["sides"] and now - float(last.get("at") or 0) < THROTTLE:
         return  # only the clock moved, and a card went out a moment ago: a later poll sends it
     redis.set(_key(event.id), json.dumps({"at": now, "sides": made["sides"], "shows": shows}), ex=KEEP)
-    _pool.submit(logs.carried(_send_safely), event.id, "live", made)
+    _queue(event.id, "live", made)
 
 
 def ended(event_ids: list[int]) -> None:
@@ -190,9 +200,30 @@ def ended(event_ids: list[int]) -> None:
         redis = bus.sync_redis()
         for event_id in event_ids:
             if redis.delete(_key(event_id)):
-                _pool.submit(logs.carried(_send_safely), event_id, "end", None)
+                _queue(event_id, "end", None)
     except Exception:
         log.exception("ending live cards for events %s failed", event_ids)
+
+
+def _queue(event_id: int, kind: str, made: dict[str, Any] | None) -> None:
+    """Send a game's card or end once its last one has gone, in place of any of its own still waiting."""
+    with _lock:
+        _waiting[event_id] = (kind, made)
+        if event_id in _sending:
+            return  # the thread sending this game's last one sends this one next
+        _sending.add(event_id)
+    _pool.submit(logs.carried(_drain), event_id)
+
+
+def _drain(event_id: int) -> None:
+    """A game's waiting card or end, and whatever replaced it meanwhile, until none waits."""
+    while True:
+        with _lock:
+            job = _waiting.pop(event_id, None)
+            if job is None:
+                _sending.discard(event_id)
+                return
+        _send_safely(event_id, *job)
 
 
 def _send_safely(event_id: int, kind: str, made: dict[str, Any] | None) -> None:
@@ -222,11 +253,11 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None) -> int:
     for fan, mine in devices.items():
         data = {**made, "players": theirs.get(fan, [])} if live else made
         for device_id, token in mine:
-            futures.append((device_id, _wire.submit(logs.carried(fcm.send), fcm.data_message(token, data, LIVE_TTL if live else END_TTL))))
+            futures.append((device_id, _wire.submit(logs.carried(fcm.send), fcm.data_message(token, data, LIVE_TTL if live else END_TTL, collapse=not live))))
     results = [(device_id, future.result()) for device_id, future in futures]
     if not results:
         return 0
-    notify.settle(results)
+    notify.settle([(device_id, error) for device_id, error in results if error is None or error in GONE])
     sent = sum(1 for _, error in results if error is None)
     log.info("event %s: %s card to %d of %d device(s)", event_id, kind, sent, len(results), extra={"event_id": event_id, "devices": len(results), "delivered": sent})
     return sent

@@ -12,14 +12,15 @@ import kotlin.concurrent.thread
 
 /** A notification's buttons that work without opening the app. "Mute this game" tells the API, as the web's
  *  does (PUT /api/me/mutes/<event>), as this fan: their cookie is the app's, which React Native keeps in
- *  Android's cookie store. "Stop live card" is this phone's alone. Either takes the game's cards down at once. */
+ *  Android's cookie store; the server then sends the game nothing more, its live card included (a mute that
+ *  didn't reach it, offline, lets them come again). "Stop live card" is this phone's alone, and remembered.
+ *  Either takes the game's cards down at once. */
 class ActionReceiver : BroadcastReceiver() {
   override fun onReceive(c: Context, intent: Intent) {
     val event = intent.getStringExtra(EVENT) ?: return
     val manager = NotificationManagerCompat.from(c)
-    Settings.stop(c, event)
     manager.cancel(Cards.liveTag(event), Cards.ID)
-    if (intent.action != MUTE) return
+    if (intent.action != MUTE) return Settings.stop(c, event)
     intent.getStringExtra(TAG)?.let { manager.cancel(it, Cards.ID) }
     val pending = goAsync()
     thread {

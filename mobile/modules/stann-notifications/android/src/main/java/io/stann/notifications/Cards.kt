@@ -8,12 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.BitmapShader
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Shader
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -24,8 +19,6 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import org.json.JSONArray
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * The app's notifications, drawn from what the server sends (sports_follow/fcm.py's data message) to the
@@ -48,8 +41,7 @@ import java.net.URL
 internal object Cards {
   const val ID = 1 // each notification is told apart by its tag, which the server gives it
   private const val LOG = "StannNotifications"
-  private const val STALE = 20 * 60 * 1000L // a live card nobody updates for this long goes by itself
-  private const val PHOTO = 120 // pixels: the photo's circle at its largest
+  private const val STALE = 20 * 60 * 1000L // a live card nobody updates for this long goes by itself (the server resends every 10)
   private val BLUE = Color.parseColor("#1f5bef") // stann's own, for a push with no sport (a test)
   private val SHORT = Regex("\\d{1,3}") // a score the board can put side by side: "2", "104"
 
@@ -86,7 +78,17 @@ internal object Cards {
 
   // ---------------------------------------------------------------- a moment (B)
 
+  /** A moment at once, then again with the player's photo if it comes (Photos), without a second sound, unless
+   *  the fan has cleared it meanwhile. */
   private fun moment(c: Context, d: Map<String, String>) {
+    val tag = d["tag"] ?: "moment-${d["id"]}"
+    post(c, tag, moment(c, d, tag, null))
+    if (d["photo"].isNullOrBlank()) return
+    val photo = Photos.get(c, d["photo"]) ?: return
+    if (showing(c, tag)) post(c, tag, moment(c, d, tag, photo).setOnlyAlertOnce(true))
+  }
+
+  private fun moment(c: Context, d: Map<String, String>, tag: String, photo: Bitmap?): NotificationCompat.Builder {
     val look = Look(d)
     val type = Type(c)
     val sides = sides(d["sides"])
@@ -111,18 +113,23 @@ internal object Cards {
       text(big, R.id.stann_story1, story.getOrNull(0).orEmpty())
       text(big, R.id.stann_story2, story.getOrNull(1).orEmpty())
     }
-    photo(d["photo"])?.let {
+    photo?.let {
       big.setImageViewBitmap(R.id.stann_photo, it)
       big.setViewVisibility(R.id.stann_photo, View.VISIBLE)
     }
 
-    val tag = d["tag"] ?: "moment-${d["id"]}"
     val builder = base(c, d, if (d["loud"] == "1") Channels.LOUD else Channels.QUIET, look, small, big)
       .setAutoCancel(true)
       .setContentIntent(open(c, d["url"].orEmpty(), d["id"]))
     d["match"]?.takeIf { it.isNotBlank() }?.let { builder.addAction(0, "Match page", open(c, it, d["id"])) }
     d["event_id"]?.takeIf { it.isNotBlank() }?.let { builder.addAction(0, "Mute this game", button(c, ActionReceiver.MUTE, it, tag)) }
-    post(c, tag, builder)
+    return builder
+  }
+
+  /** Whether a notification with this tag is still up (Android 6 and later can tell). */
+  private fun showing(c: Context, tag: String): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+    return c.getSystemService(NotificationManager::class.java)?.activeNotifications?.any { it.tag == tag } != false
   }
 
   // ---------------------------------------------------------------- a live card (C)
@@ -346,35 +353,6 @@ internal object Cards {
     if (value.isNullOrBlank()) fallback else Color.parseColor(value)
   } catch (_: IllegalArgumentException) {
     fallback
-  }
-
-  /** The player's photo in a circle, fetched while the message is handled (FCM gives it a few seconds), or
-   *  null: no photo, or it didn't come in time. */
-  private fun photo(url: String?): Bitmap? {
-    if (url.isNullOrBlank() || !(url.startsWith("https://") || url.startsWith("http://"))) return null
-    return try {
-      val connection = URL(url).openConnection() as HttpURLConnection
-      connection.connectTimeout = 3000
-      connection.readTimeout = 3000
-      val image = connection.inputStream.use { BitmapFactory.decodeStream(it) }
-      connection.disconnect()
-      image?.let { circle(it) }
-    } catch (e: Exception) {
-      Log.w(LOG, "no photo from $url", e)
-      null
-    }
-  }
-
-  private fun circle(image: Bitmap): Bitmap {
-    val side = minOf(image.width, image.height)
-    val size = minOf(side, PHOTO)
-    // The square from the top centre: a portrait's face is nearer its top than its middle.
-    val square = Bitmap.createBitmap(image, (image.width - side) / 2, 0, side, side)
-    val scaled = Bitmap.createScaledBitmap(square, size, size, true)
-    val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
-    Canvas(out).drawCircle(size / 2f, size / 2f, size / 2f, paint)
-    return out
   }
 
   /** The status bar's mark: the badge expo-notifications' plugin made from app.config.ts's icon. */

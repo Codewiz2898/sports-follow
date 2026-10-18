@@ -31,6 +31,7 @@ class Tennis(Sport):
         "key": ("The start and the result", "The match starting and the result"),
         "more": ("every set", "each set"),
     }
+    kind_words = {"set": "Set"}
     stats_title = "Overview"
     games = ("match", "matches")
 
