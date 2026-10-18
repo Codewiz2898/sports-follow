@@ -18,3 +18,7 @@ The web app and the Android app (`mobile/`) take the list of sports from the API
 ## Before a pull request
 
 Run the checks in the README's "Run it" (tests, `ruff check`, `basedpyright`, the web build). Then have the `reviewer` agent (`.claude/agents/reviewer.md`) review the branch: name the branch or worktree, and paste the Linear issue's title and description (it can't read Linear). Fix what it marks Blocking, and for anything you leave, say why in the pull request. Add a `Reviewed:` line next to the `Fixes BHA-n` lines, such as `Reviewed: reviewer agent, 2 fixed, 1 left (see above)`. A hook stops `gh pr create` without one.
+
+## Deploys
+
+Approving a production deploy is Bharath's, even after he says "deploy now": start the Deploy run if needed, then give him its link and what it brings (every merge since the live commit, any migration, secrets or server change), and he approves it on GitHub. `gh` runs as his account, so an approval sent from a session would count as his. A hook (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a waiting deploy, changing the `production` environment, and `deploy.sh deploy` or `rollback`. It isn't a sandbox: rebuilding or recreating containers on the server by hand (`docker compose … up`) also needs his yes first (the `debug` skill), and the hook doesn't catch that.

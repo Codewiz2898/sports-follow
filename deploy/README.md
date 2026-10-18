@@ -414,6 +414,9 @@ the site.
   Actions → Deploy summary → Run workflow sends it now). Several merges in a day make one waiting
   deploy, one message when it starts and the morning's.
 - **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
+- **Claude sessions never approve.** `gh` there runs as you, so GitHub would count their approval as yours; a hook
+  (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, changing the environment, and running
+  `deploy.sh deploy` or `rollback`. A session can start a run and send you its link.
 
 **From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
 It waits for your approval too. A deploy goes ahead only if the CI workflow passed for that commit. A run
