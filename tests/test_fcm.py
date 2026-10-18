@@ -132,23 +132,45 @@ GOAL = {"id": 31, "title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South A
 # ---------------------------------------------------------------- the message
 
 
-def test_a_push_is_its_games_notification_on_the_channel_its_sound_needs():
+def test_a_push_is_a_data_message_the_app_draws_itself():
     loud = fcm.message(TOKEN, GOAL, 600)
     assert loud == {
         "token": TOKEN,
-        "notification": {"title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'"},
-        # Strings only, as FCM takes them: what the app needs to open the player's page and count the open.
-        "data": {"id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "tag": "e1"},
-        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1", "notification": {"channel_id": "key", "visibility": "PUBLIC", "sound": "default", "tag": "e1"}},
+        # Strings only, as FCM takes them: everything the app draws the moment with, opens on a tap and counts the
+        # open by. No notification block: Android would draw that itself, and the app's own wouldn't run.
+        "data": {"v": "2", "type": "moment", "tag": "e1", "loud": "1", "title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'",
+                 "line": "Goal: Mohamed Salah", "id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "colour": "#1f5bef", "ink": "#ffffff"},
+        "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1"},
     }
-    # Quiet hours, or a moment that makes no sound: the same notification without a sound, at normal priority
-    # (FCM doesn't wake a dozing phone for it), still public and on a channel the lock screen shows.
+    # Quiet hours, or a moment that makes no sound: normal priority (FCM doesn't wake a dozing phone for it), and
+    # the app draws it without a sound.
     for quiet in ({**GOAL, "quiet": True}, {**GOAL, "loud": False}):
-        android = fcm.message(TOKEN, quiet, 600)["android"]
-        assert (android["priority"], android["notification"]) == ("normal", {"channel_id": "other", "visibility": "PUBLIC", "tag": "e1"})
+        message = fcm.message(TOKEN, quiet, 600)
+        assert (message["android"]["priority"], message["data"]["loud"]) == ("normal", "0")
     # A player's news, outside any game, has the player's tag; a push with no tag still has one per moment.
-    assert fcm.message(TOKEN, {**GOAL, "tag": "p7", "event_id": None}, 60)["data"] == {"id": "31", "url": "/player/7", "player_id": "7", "kind": "goal", "tag": "p7"}
-    assert fcm.message(TOKEN, {**GOAL, "tag": None}, 60)["android"]["notification"]["tag"] == "moment-31"
+    news = fcm.message(TOKEN, {**GOAL, "tag": "p7", "event_id": None}, 60)
+    assert (news["data"]["tag"], "event_id" in news["data"], news["android"]["collapse_key"]) == ("p7", False, "p7")
+    assert fcm.message(TOKEN, {**GOAL, "tag": None}, 60)["android"]["collapse_key"] == "moment-31"
+
+
+def test_a_moments_scorecard_goes_as_strings():
+    drawn = {**GOAL, "sport": "football", "colour": "#12c46c", "ink": "#0b1a10", "league": "Africa Cup of Nations", "match": "/match/espn_soccer/1",
+             "sides": [["EGY", "1"], ["RSA", "0"]], "status": "23'", "live": "1", "word": "Goal", "line": "Mohamed Salah", "story": ["Kick-off"], "photo": ""}
+    data = fcm.message(TOKEN, drawn, 600)["data"]
+    assert {k: data[k] for k in ("sport", "colour", "ink", "sides", "status", "live", "word", "line", "story", "photo")} == {
+        "sport": "football", "colour": "#12c46c", "ink": "#0b1a10", "sides": '[["EGY","1"],["RSA","0"]]', "status": "23'", "live": "1",
+        "word": "Goal", "line": "Mohamed Salah", "story": '["Kick-off"]', "photo": ""}
+    # A list with nothing in it is "", as the app takes a missing key.
+    assert fcm.message(TOKEN, {**drawn, "sides": [], "story": []}, 600)["data"]["sides"] == ""
+
+
+def test_a_message_too_big_for_fcm_loses_its_story_before_its_text():
+    story = ["क" * 80] * 3
+    big = fcm.data_message(TOKEN, {"type": "moment", "title": "Goal", "body": "ब" * 1200, "line": "Mohamed Salah", "story": story}, 600)["data"]
+    assert len(json.dumps(big, ensure_ascii=False).encode()) <= fcm.DATA_BYTES
+    assert json.loads(big["story"]) == story[:1] and big["body"] == "ब" * 1200  # two story lines go; the body stays whole
+    bigger = fcm.data_message(TOKEN, {"type": "moment", "title": "Goal", "body": "ब" * 1500, "story": story}, 600)["data"]
+    assert bigger["story"] == "" and bigger["body"].endswith("…") and len(json.dumps(bigger, ensure_ascii=False).encode()) <= fcm.DATA_BYTES
 
 
 def test_the_app_makes_the_channels_the_server_sends_on():
@@ -237,7 +259,7 @@ def test_a_device_gets_its_push_by_its_own_transport(fake_fcm, monkeypatch):
     assert web == [("https://web.push.apple.com/a", "e1")]
     [sent] = fake_fcm.sent
     # Cut to fit as a Web Push is: FCM takes 4 KB.
-    assert sent["token"] == TOKEN and sent["notification"]["body"].endswith("…") and len(json.dumps(sent, ensure_ascii=False).encode()) < 4096
+    assert sent["token"] == TOKEN and sent["data"]["body"].endswith("…") and len(json.dumps(sent, ensure_ascii=False).encode()) < 4096
     assert notify._service((2, "fcm", TOKEN, None, None)) == "fcm" and notify._service((1, "webpush", "https://web.push.apple.com/a", "k", "a")) == "web.push.apple.com"
 
 
