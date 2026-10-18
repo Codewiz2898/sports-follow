@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -306,8 +306,8 @@ async def startup(ctx) -> None:
     (it looks up hosts in one)."""
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
-    # A connection for each of those threads, the tick's and notify's: checkouts give up after 5 s.
-    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers)
+    # A connection for each of those threads, the tick's, notify's and the live cards': checkouts give up after 5 s.
+    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
     redis = ctx.get("redis")

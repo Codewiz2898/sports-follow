@@ -56,7 +56,9 @@ QUIET_CHANNEL = "other"  # "quiet" was a low-importance one, hidden from most lo
 VERSION = "2"  # data["v"]: a message the app draws itself, from its data (1 was FCM's own notification)
 # The app's blue and white on it: a push about no sport (the test push), or a sport without a colour of its own.
 COLOUR, INK = "#1f5bef", "#ffffff"
-# A moment's own keys, beside every message's (livecards.keys), as notify's payload has them.
+# What every message says of its game (livecards.keys), as one about no game says it.
+COMMON = {"sport": "", "colour": COLOUR, "ink": INK, "league": "", "match": "", "sides": "", "status": "", "live": "0"}
+# The keys of notify's payload a moment's message carries: its own, and its game's (livecards.keys).
 MOMENT = ("id", "url", "event_id", "player_id", "kind", "word", "line", "story", "photo", "sport", "colour", "ink", "league", "match", "sides", "status", "live")
 # FCM takes 4,096 bytes of data. Its JSON (quotes, escapes and all, so more than FCM counts) is kept under this.
 DATA_BYTES = 4000
@@ -187,15 +189,17 @@ def message(token: str, payload: dict[str, Any], ttl: int) -> dict[str, Any]:
     loud = bool(payload.get("loud", True)) and not payload.get("quiet")
     title = payload.get("title") or APP_NAME
     data = {"type": "moment", "tag": payload.get("tag") or (f"moment-{payload['id']}" if payload.get("id") else ""), "loud": "1" if loud else "0",
-            "title": title, "body": payload.get("body") or "", "line": title, **{k: payload[k] for k in MOMENT if payload.get(k) is not None}}
+            "title": title, "body": payload.get("body") or "", "word": "", "line": title, "story": "", "photo": "",
+            **{k: payload[k] for k in MOMENT if payload.get(k) is not None}}
     return data_message(token, data, ttl, urgent=loud)
 
 
 def data_message(token: str, data: dict[str, Any], ttl: int, urgent: bool = False) -> dict[str, Any]:
     """A data-only FCM message the app draws itself (the module docstring): `data` as strings (a list as its JSON,
-    an empty one as ""), with the version and the app's colours where it brings none, kept under FCM's 4 KB (fit).
-    High priority only when `urgent` (a moment that makes a sound); collapsed by its tag."""
-    strings = fit({"v": VERSION, "colour": COLOUR, "ink": INK, **{k: _text(v) for k, v in data.items() if v is not None}})
+    an empty one as ""), with the version, and what a message about no game says (COMMON) where it says nothing,
+    kept under FCM's 4 KB (fit). High priority only when `urgent` (a moment that makes a sound); collapsed by its
+    tag."""
+    strings = fit({"v": VERSION, **COMMON, **{k: _text(v) for k, v in data.items() if v is not None}})
     android: dict[str, Any] = {"priority": "high" if urgent else "normal", "ttl": f"{max(0, ttl)}s"}
     if strings.get("tag"):
         android["collapse_key"] = strings["tag"]

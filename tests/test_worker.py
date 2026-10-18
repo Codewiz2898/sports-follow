@@ -18,7 +18,7 @@ from arq.worker import Worker, create_worker
 
 import pytest
 
-from sports_follow import db, engine, history, logs, notify, pipeline, worker
+from sports_follow import db, engine, history, livecards, logs, notify, pipeline, worker
 
 
 def test_every_job_slot_gets_a_thread(monkeypatch):
@@ -60,7 +60,7 @@ def test_every_thread_that_reaches_the_database_gets_a_connection():
     try:
         asyncio.run(worker.WorkerSettings.on_startup({}))
         pool = db.engine.pool
-        assert pool.size() + pool._max_overflow >= worker.MAX_JOBS + 4 + worker._tick_pool._max_workers + notify._pool._max_workers
+        assert pool.size() + pool._max_overflow >= worker.MAX_JOBS + 4 + worker._tick_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers
     finally:
         db.size_pool(15)
 

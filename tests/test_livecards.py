@@ -94,7 +94,9 @@ def test_the_test_push_is_a_moment_of_no_sport_in_stann_blue():
     message = notify.fcm.message("t" * 40, {"id": 0, "title": "Notifications are on", "body": "…", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}, 600)
     data = message["data"]
     assert "notification" not in message and (data["v"], data["type"], data["tag"], data["loud"]) == ("2", "moment", "test", "1")
-    assert (data["colour"], data["ink"], data["line"], data.get("sport", "")) == ("#1f5bef", "#ffffff", "Notifications are on", "")
+    assert {k: data[k] for k in ("sport", "colour", "ink", "league", "match", "sides", "status", "live", "word", "line", "story", "photo")} == {
+        "sport": "", "colour": "#1f5bef", "ink": "#ffffff", "league": "", "match": "", "sides": "", "status": "", "live": "0",
+        "word": "", "line": "Notifications are on", "story": "", "photo": ""}
 
 
 # ---------------------------------------------------------------- live cards

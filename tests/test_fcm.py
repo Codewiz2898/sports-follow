@@ -139,7 +139,10 @@ def test_a_push_is_a_data_message_the_app_draws_itself():
         # Strings only, as FCM takes them: everything the app draws the moment with, opens on a tap and counts the
         # open by. No notification block: Android would draw that itself, and the app's own wouldn't run.
         "data": {"v": "2", "type": "moment", "tag": "e1", "loud": "1", "title": "Goal: Mohamed Salah", "body": "Egypt 1 – 0 South Africa · 23'",
-                 "line": "Goal: Mohamed Salah", "id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal", "colour": "#1f5bef", "ink": "#ffffff"},
+                 "id": "31", "url": "/player/7", "event_id": "1", "player_id": "7", "kind": "goal",
+                 # Its scorecard where notify gave none (the test push): a moment of no game in the app's blue, its line its title.
+                 "word": "", "line": "Goal: Mohamed Salah", "story": "", "photo": "",
+                 "sport": "", "colour": "#1f5bef", "ink": "#ffffff", "league": "", "match": "", "sides": "", "status": "", "live": "0"},
         "android": {"priority": "high", "ttl": "600s", "collapse_key": "e1"},
     }
     # Quiet hours, or a moment that makes no sound: normal priority (FCM doesn't wake a dozing phone for it), and
@@ -166,9 +169,9 @@ def test_a_moments_scorecard_goes_as_strings():
 
 def test_a_message_too_big_for_fcm_loses_its_story_before_its_text():
     story = ["क" * 80] * 3
-    big = fcm.data_message(TOKEN, {"type": "moment", "title": "Goal", "body": "ब" * 1200, "line": "Mohamed Salah", "story": story}, 600)["data"]
+    big = fcm.data_message(TOKEN, {"type": "moment", "title": "Goal", "body": "ब" * 1150, "line": "Mohamed Salah", "story": story}, 600)["data"]
     assert len(json.dumps(big, ensure_ascii=False).encode()) <= fcm.DATA_BYTES
-    assert json.loads(big["story"]) == story[:1] and big["body"] == "ब" * 1200  # two story lines go; the body stays whole
+    assert json.loads(big["story"]) == story[:1] and big["body"] == "ब" * 1150  # two story lines go; the body stays whole
     bigger = fcm.data_message(TOKEN, {"type": "moment", "title": "Goal", "body": "ब" * 1500, "story": story}, 600)["data"]
     assert bigger["story"] == "" and bigger["body"].endswith("…") and len(json.dumps(bigger, ensure_ascii=False).encode()) <= fcm.DATA_BYTES
 

@@ -53,7 +53,9 @@ MAX_PLAYERS = 2  # lines on a card about the fan's own players in the game
 QUIET = ("results", "off")  # the levels that don't hear a game's key moments, so get no card of it
 OVER = ("final", "postponed")  # a poll's statuses that end a game's card (a game called off mid-way too)
 
-_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="livecard")  # a game's card to all its fans
+# A game's card to all its fans: one card at a time, so a game's go out in the order its polls decided them (an end
+# never before the card it takes down), each one's pushes at once (_wire). The worker gives it a connection.
+_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="livecard")
 # One card to one device: apart from a moment's pushes (notify._wire), so a goal never waits behind a card.
 _wire = ThreadPoolExecutor(max_workers=8, thread_name_prefix="livecard-push")
 
