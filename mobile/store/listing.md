@@ -12,13 +12,17 @@ in its voice: short, plain sentences, no claims the app doesn't keep.
 | Short description | `Follow any athlete, any sport: live scores, results and alerts for your players.` | 80 (this is exactly 80) |
 | Full description | below | 4,000 |
 | App category | Application → **Sports** | |
-| Tags | Live scores, Sports news, Football, Cricket, Chess, Esports (pick up to 5 of those Play offers) | 5 |
+| Tags | Live scores, Sports, Football, Cricket, Chess, Esports (pick up to 5 of those Play offers) | 5 |
 | Contact email | `bharath@stann.in` | |
 | Website | `https://stann.in` | |
 | Privacy policy (App content) | `https://stann.in/privacy` | |
 | Account deletion (App content) | `https://stann.in/account` (sign in, then Delete account) | |
 
 Google shows the name and short description as typed: keep "stann" lower case, as fans see it everywhere.
+
+**Never the word "news"** in the name, either description, the tags or a What's new note. Bharath answered No
+to the News app declaration (19 Oct 2026), and Google rejects a listing that calls itself news while declaring
+it isn't. Say alerts, moments, live scores, updates or follow instead.
 
 ## Full description
 
@@ -64,7 +68,7 @@ Answers for the declarations under **Policy → App content**. The data safety f
 | App access | All functionality is available without special access | Signing in is optional; following and alerts work anonymously. |
 | Content rating | Fill the IARC questionnaire as **Utility, Productivity, Communication or Other**: no violence, sexual content, language, controlled substances, gambling; no chat; no location sharing; no purchases. **User-generated content: No**, with one thing to know: a name a fan types into Research with AI is kept as that player's name and shown to every fan of them, which isn't fans sharing content with each other, the question's meaning. If you'd rather not argue it, turn the agent off in production (`SPORTS_FOLLOW_AGENT=0`) before the upload | Rated Everyone / 3+. |
 | Target audience | **18 and over** only | Not designed for children; picking a younger group adds the Families programme's questions. |
-| News app | No | News lines about a player are a small part; the app's purpose is scores and alerts. |
+| News app | **No** (answered 19 Oct 2026) | The app's purpose is scores and alerts; a player's headlines are a small part. So the listing text never says "news" (above). |
 | COVID-19 contact tracing | No | |
 | Data safety | `data-safety.md` | |
 | Government app | No | |

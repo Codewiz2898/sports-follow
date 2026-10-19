@@ -21,8 +21,8 @@ folder.
 
 Each step is Bharath's: the Console is his account.
 
-1. **Create the app**: name `stann`, app (not game), free, default language English (India) or English (United
-   Kingdom), and accept the declarations.
+1. **Create the app**: done 19 Oct 2026 as `stann`, app, free (which Play never lets change), default language
+   English.
 2. **Set up your app** (the Dashboard's checklist): privacy policy, app access, ads, content rating, target
    audience, news app, data safety (`data-safety.md`), government app, financial features, health, account
    deletion. `listing.md` has every answer.
