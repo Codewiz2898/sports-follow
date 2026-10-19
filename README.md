@@ -655,6 +655,11 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:8421 npm start  # then Metro serves it the l
 npm run typecheck                                   # what CI checks
 ```
 
+**Google Play.** `mobile/store/` holds what the Play Console asks for (the listing, graphics, the data
+safety form, the closed-testing plan) and `release-build.md`, the signed `.aab`: an upload key in
+`~/.config/sports-follow/`, never in the repo, that `mobile/plugins/with-upload-key.js` puts on the release
+build when `STANN_UPLOAD_KEYSTORE` names it; `versionCode` in `mobile/app.config.ts` goes up for every upload.
+
 **Notifications** come through Firebase Cloud Messaging, planned as the web's are (one notification a
 game, replaced as its moments come; sound only for a key moment outside quiet hours). The server sends
 them itself with FCM's HTTP v1 API (`sports_follow/fcm.py`), with no Expo push service in between, as data

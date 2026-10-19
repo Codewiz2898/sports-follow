@@ -44,6 +44,7 @@ export default (): ExpoConfig => ({
   name,
   slug: 'stann',
   scheme: 'stann',
+  // What Play shows testers; versionCode below is what it orders uploads by.
   version: '0.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'light',
@@ -52,6 +53,8 @@ export default (): ExpoConfig => ({
   android: {
     // Play never lets a package id change after the first upload (decided 16 Oct 2026, BHA-210).
     package: 'io.stann.app',
+    // Every upload to Play needs a higher one than the last (store/release-build.md): raise it here, nowhere else.
+    versionCode: 1,
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
     intentFilters: [{
@@ -65,6 +68,8 @@ export default (): ExpoConfig => ({
   ios: { bundleIdentifier: 'io.stann.app' },
   plugins: [
     'expo-router',
+    // A release build signed with the Play upload key when the build has it (store/release-build.md).
+    './plugins/with-upload-key',
     // The badge on paper while the first screen waits for the sports (catalog.tsx).
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
     // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue. A push on
