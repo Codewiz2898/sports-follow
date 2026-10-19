@@ -29,12 +29,12 @@ export function PrivacyPage() {
       </Part>
 
       <Part title="Who else handles it">
-        <p>Resend sends sign-in emails. Google, if you choose to sign in with Google. Your browser's push service (Google, Apple, Mozilla or Microsoft) delivers alerts; Google's Firebase Cloud Messaging delivers the Android app's.</p>
+        <p>Resend sends sign-in emails. Google, if you choose to sign in with Google. Your browser's push service (Google, Apple, Mozilla or Microsoft) delivers alerts; Google's Firebase Cloud Messaging delivers the Android app's. OpenRouter, and the model it picks, reads the name you type into Research with AI.</p>
       </Part>
 
       <Part title="Deleting it">
         <p>Signed in: <Link to="/account" className="link">Account</Link>, then Delete account. Everything above goes at once, and our daily backups are kept for 14 days.</p>
-        <p>Without an account: unfollow your players and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</p>
+        <p>Without an account: unfollow your players, teams and games and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</p>
       </Part>
 
       {contact && (

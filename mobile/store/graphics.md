@@ -8,7 +8,7 @@ comes from. `make_graphics.py` draws the first two from the app's own assets and
 |---|---|---|---|
 | App icon | 512 × 512, 32-bit PNG, under 1 MB. Play rounds the corners itself, so no mask of our own | `icon-512.png` | `make_graphics.py`: the badge on a full paper square, the same picture as the web app's `maskable-512.png` (`web/scripts/make_icons.py`'s geometry) |
 | Feature graphic | 1024 × 500, JPEG or 24-bit PNG with no alpha. Shown above the listing and in promotions | `feature-1024x500.png` | `make_graphics.py`: the badge and the name as the header pairs them, the site's one-line pitch in the leaning display type, one plain line |
-| Phone screenshots | At least 2, up to 8. JPEG or 24-bit PNG without alpha; each side 320 to 3,840 px; the long side no more than twice the short. 1080 × 1920 (9:16) or more gets the listing into Play's larger promotion spots, which asks at least 4 | `screenshots/NN-name.png` | you, on the emulator (below), then `make_graphics.py --screenshots DIR` |
+| Phone screenshots | At least 2, up to 8. JPEG or 24-bit PNG without alpha; each side 320 to 3,840 px; the long side no more than twice the short. (Play's larger promotion spots want 16:9 or 9:16 at 1080 px or more, at least four of them; a phone capture is 20:9, so that's for later, with cropped pictures) | `screenshots/<name>.png` | you, on the emulator (below), then `make_graphics.py --screenshots DIR` |
 | Tablet screenshots (7" and 10") | Optional. Only if the app is offered on tablets | none | skip; the app is portrait, phone first |
 | Promo video | Optional, a YouTube link | none | skip for now |
 
@@ -22,10 +22,11 @@ python mobile/store/make_graphics.py --screenshots ~/Desktop/stann-shots
 
 ## The screenshots to take
 
-An emulator's 1080 × 2400 capture is 20:9, longer than Play's 2:1 limit, so the script cuts it to 1080 × 2160
-keeping the top. Take them on `stann_pixel` (Android 16, 1080 × 2400) against production (`stann.in` is the
-app's default API), signed out, with a fan who already follows a few players so every page has something
-to show: Kohli, Gukesh, Salah and one esports player cover four sports' colours.
+An emulator's 1080 × 2400 capture is 20:9, longer than Play's 2:1 limit, so the script sets it on a paper
+canvas 1200 × 2400, a 60 px margin each side (cutting it would take the floating tab bar off the bottom).
+Take them on `stann_pixel` (Android 16, 1080 × 2400) against production (`stann.in` is the app's default
+API), signed out, with a fan who already follows a few players so every page has something to show: Kohli,
+Gukesh, Salah and one esports player cover four sports' colours.
 
 ```bash
 export JAVA_HOME=~/.local/jdk-17/Contents/Home ANDROID_HOME=~/.local/android-sdk
@@ -44,9 +45,8 @@ Take them in this order, on a day with a live game if possible (a live board is 
 5. **Search** with results across sports for a name like "Rohit" (`5-search.png`).
 6. **Following**, the fan's players (`6-following.png`).
 
-Six at 9:16 gets the larger promotion spots too. No device frames, no text overlays for the first upload;
-Play forbids other companies' logos and device imagery in them, and a clean capture of the real pages is
-the project's look. Pictures of players come from the photos the app already shows with their credits
+No device frames, no text overlays for the first upload; Play forbids other companies' logos and device
+imagery in them, and a clean capture of the real pages is the project's look. Pictures of players come from the photos the app already shows with their credits
 (`/credits`), so a screenshot with one is fine.
 
 Set the emulator's clock to a plausible time first (it shows in the status bar), and clear notifications
@@ -54,6 +54,6 @@ from other apps.
 
 ## Checking what the script made
 
-`make_graphics.py` prints each file's size and mode: the icon and feature graphic must say `RGB` (no alpha),
-and a screenshot `1080x2160 RGB`. Open them once before uploading; Play shows the icon at 48 px in lists, so
-the badge has to read small.
+`make_graphics.py` prints each file's size and mode: the icon `512x512 RGBA` (Play asks for 32-bit, and it's
+opaque), the feature graphic `1024x500 RGB` (no alpha), and a screenshot `1200x2400 RGB`. Open them once
+before uploading; Play shows the icon at 48 px in lists, so the badge has to read small.

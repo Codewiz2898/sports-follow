@@ -62,7 +62,7 @@ Answers for the declarations under **Policy → App content**. The data safety f
 | Privacy policy | `https://stann.in/privacy` | Covers the app since the PR that added this folder. |
 | Ads | No, the app has no ads | None in the code. |
 | App access | All functionality is available without special access | Signing in is optional; following and alerts work anonymously. |
-| Content rating | Fill the IARC questionnaire as **Utility, Productivity, Communication or Other**: no violence, sexual content, language, controlled substances, gambling; no user-generated content shown to others; no chat; no location sharing; no purchases | Rated Everyone / 3+. |
+| Content rating | Fill the IARC questionnaire as **Utility, Productivity, Communication or Other**: no violence, sexual content, language, controlled substances, gambling; no chat; no location sharing; no purchases. **User-generated content: No**, with one thing to know: a name a fan types into Research with AI is kept as that player's name and shown to every fan of them, which isn't fans sharing content with each other, the question's meaning. If you'd rather not argue it, turn the agent off in production (`SPORTS_FOLLOW_AGENT=0`) before the upload | Rated Everyone / 3+. |
 | Target audience | **18 and over** only | Not designed for children; picking a younger group adds the Families programme's questions. |
 | News app | No | News lines about a player are a small part; the app's purpose is scores and alerts. |
 | COVID-19 contact tracing | No | |
@@ -71,4 +71,5 @@ Answers for the declarations under **Policy → App content**. The data safety f
 | Financial features | No financial features | |
 | Health | No health features | |
 | Account deletion | Yes, in the app (Account → Delete account) and at `https://stann.in/account`; deleting the account deletes all its data (daily backups kept 14 days) | `web/src/pages/AccountPage.tsx`, `sports_follow/accounts.py`. |
-| Advertising ID | No, the app doesn't use it | No ads SDK; Firebase Messaging doesn't add the `AD_ID` permission (checked in the generated manifest). |
+| Advertising ID | No, the app doesn't use it | No ads SDK; Firebase Messaging doesn't add the `AD_ID` permission (checked in the release bundle's merged manifest, 19 Oct 2026). |
+| AI-generated content (Policy → App content, if Play lists it) | Research with AI writes a player's page from a typed name, with the model's answer checked against the sources. Say **Yes** if the declaration is offered, and know that Play's policy then asks for a way to report objectionable content in the app: there isn't one yet, so decide between adding a Report link on researched pages and turning the agent off for the first upload | `sports_follow/agent.py`; a decision for Bharath. |

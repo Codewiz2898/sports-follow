@@ -61,7 +61,7 @@ It takes two minutes:
 3. Install stann from the Play link on that page.
 4. Keep it installed for two weeks, follow a player or two, and tell me anything that looks wrong.
 
-No ads, no selling data, and you can delete everything from Account at any time. Thanks!
+No ads, no selling data, and if you sign in you can delete everything from Account at any time. Thanks!
 ```
 
 Fill in the two links from Play Console, **Testing → Closed testing → Testers**, once the release is out.

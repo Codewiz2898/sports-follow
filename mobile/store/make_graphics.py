@@ -1,12 +1,15 @@
 """Draw the Play Store's graphics from the app's own assets, and fit screenshots to Play's rules.
 
-- icon-512.png: the store icon, stann's badge on a full paper square (Play rounds the corners itself).
-  The same picture as web/public/icons/maskable-512.png, drawn by web/scripts/make_icons.py's rasterizer.
+- icon-512.png: the store icon, stann's badge on a full paper square (Play rounds the corners itself), a
+  32-bit PNG as Play asks, opaque. The same picture as web/public/icons/maskable-512.png, drawn by
+  web/scripts/make_icons.py's rasterizer.
 - feature-1024x500.png: the feature graphic, the badge and "stann" (Fredoka, as in the header), the site's
   one-line pitch in the leaning display type (Anton, the app's own slanted copy) and a line of Manrope.
   24-bit PNG with no alpha, as Play asks.
-- screenshots/: with --screenshots DIR, every PNG or JPEG in DIR made opaque, and cut to Play's limit of
-  twice as long as wide (an emulator's 1080x2400 becomes 1080x2160, keeping the top), as NN-name.png.
+- screenshots/: with --screenshots DIR, every PNG or JPEG in DIR made opaque and brought within Play's limit
+  of twice as long as wide: a longer one is set whole on a paper canvas (an emulator's 1080x2400 capture on
+  1200x2400, a 60px margin each side; cutting it would take the floating tab bar off the bottom). Named as
+  the captures are; what was there before goes.
 
 Run from the repo root with its venv (Pillow is in requirements.txt), after `npm install` in mobile/
 (the fonts come from node_modules/@expo-google-fonts):
@@ -49,7 +52,7 @@ def badge(size: int) -> Image.Image:
 
 def icon() -> Path:
     out = STORE / "icon-512.png"
-    Image.open(io.BytesIO(make_icons.render(make_icons.VARIANTS["maskable"], 512))).convert("RGB").save(out, optimize=True)
+    Image.open(io.BytesIO(make_icons.render(make_icons.VARIANTS["maskable"], 512))).convert("RGBA").save(out, optimize=True)
     return out
 
 
@@ -103,21 +106,23 @@ def feature() -> Path:
 
 
 def screenshots(source: Path) -> list[Path]:
-    """Every picture in `source`, opaque and no more than twice as long as wide, numbered in name order."""
+    """Every picture in `source`, opaque and no more than twice as long as wide, under its own name."""
     out_dir = STORE / "screenshots"
     out_dir.mkdir(exist_ok=True)
+    for old in out_dir.glob("*.png"):
+        old.unlink()
     made = []
-    files = sorted(p for p in source.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"})
-    for n, path in enumerate(files, 1):
+    for path in sorted(p for p in source.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}):
         im = Image.open(path).convert("RGB")
         w, h = im.size
-        if h > 2 * w:
-            im = im.crop((0, 0, w, 2 * w))  # the top: status bar and the page's head; the bottom is the nav bar
-        elif w > 2 * h:
-            im = im.crop((0, 0, 2 * h, h))
+        if h > 2 * w or w > 2 * h:  # whole, on paper, with the margin that brings it to 2:1
+            cw, ch = max(w, -(-h // 2)), max(h, -(-w // 2))
+            canvas = Image.new("RGB", (cw, ch), PAPER)
+            canvas.paste(im, ((cw - w) // 2, (ch - h) // 2))
+            im = canvas
         if min(im.size) < 320 or max(im.size) > 3840:
             raise ValueError(f"{path.name}: {im.size} is outside Play's 320 to 3840px")
-        out = out_dir / f"{n:02d}-{path.stem}.png"
+        out = out_dir / f"{path.stem}.png"
         im.save(out, optimize=True)
         made.append(out)
     return made
