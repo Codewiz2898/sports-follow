@@ -1484,6 +1484,40 @@ def admin_linear() -> dict[str, Any]:
     return linear.status()
 
 
+@app.get("/api/admin/feed", dependencies=AdminOnly)
+def admin_feed(show: Annotated[str, Query(max_length=20)] = "all", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The Feed's candidates, newest found first, with the judge's verdicts and scores, and every video channel's trust."""
+    try:
+        return admin.feed_page(db, show, offset)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
+def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
+    said = body.get("review")
+    try:
+        found = admin.review_candidate(row_id, said if isinstance(said, str) or said is None else "?")
+    except ValueError:
+        raise HTTPException(400, "Review is approved, hidden, pinned, or null.") from None
+    if not found:
+        raise HTTPException(404, "There's no such candidate.")
+    admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
+    return {"review": said}
+
+
+@app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
+def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """How far the Feed trusts a video channel ({"trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its videos."""
+    try:
+        admin.set_channel_trust(channel, body.get("trust"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
+    return {"channels": admin.channels_view(db)}
+
+
 @app.get("/api/admin/users", dependencies=AdminOnly)
 def admin_users(q: Annotated[str, Query(max_length=254)] = "", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"overview": admin.overview(db), **admin.account_page(db, q, offset)}
@@ -1834,7 +1868,7 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
     """Today's "From your players": each followed player's top video or post (feed.shares_for). No news, which
-    the Wire carries, so empty until the feed pipeline is wired in."""
+    the Wire carries: empty until the curator has judged and ranked something about a followed player."""
     return {"shares": feed.shares_for(db, fan)}
 
 

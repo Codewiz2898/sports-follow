@@ -1,19 +1,24 @@
 """The curator: the feed's own process beside the worker, which fetches what's shared about followed players
-(candidates.py). It's an arq worker of its own on a queue of its own, so its jobs never take the worker's
-slots and a slow source never holds up a live poll; its source requests are in the feed lane, a background
-lane (adapters/budget.py). The feed's endpoint only reads what it stored: nothing a fan does waits on it.
+(candidates.py), then has the judge read it and ranks it (rank.py). It's an arq worker of its own on a queue of
+its own, so its jobs never take the worker's slots and a slow source or model never holds up a live poll; its
+source requests are in the feed lane, a background lane (adapters/budget.py). The feed's endpoint only reads
+what it stored: nothing a fan does waits on it.
 
 Its jobs are logged, traced and measured as the worker's are (worker._logged), it reports as its own service,
 and it stops as the worker does: running jobs end at their next step and free their locks (worker.wind_down).
 Cron times are UTC.
 
 Run it with:  .venv/bin/python -m sports_follow.curator
+Work every score out again from what's stored, without fetching (and with --rejudge, ask the judge again first):
+              .venv/bin/python -m sports_follow.curator rescore [--rejudge]
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timezone
 from typing import Any
@@ -28,7 +33,7 @@ from arq import cron  # noqa: E402
 from arq.connections import RedisSettings  # noqa: E402
 from arq.worker import run_worker  # noqa: E402
 
-from . import bus, candidates, db  # noqa: E402
+from . import bus, candidates, db, rank  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
 from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
 
@@ -55,13 +60,27 @@ def _locked(name: str, fn):
     return run
 
 
+def rank_new() -> dict[str, int]:
+    """After a poll: read the youngest videos again, have the judge read what's new, and rank everything again.
+    Each step stands alone: a judge that can't answer (the model off, the gateway down) leaves its rows for
+    next time, and the rest are still ranked."""
+    done: dict[str, int] = {}
+    for step, fn in (("fresh", candidates.fresh_reads), ("judge", rank.judge), ("rank", rank.rescore)):
+        try:
+            done |= {f"{step} {k}": v for k, v in fn().items() if v}
+        except Exception:
+            log.exception("feed: %s failed; the rest of the run goes on", step)
+    return done
+
+
 async def poll_channels(ctx) -> None:
-    """Every half hour: each trusted channel's latest uploads, kept where they name a followed player."""
+    """Every half hour: each trusted channel's latest uploads, kept where they name a followed player; then
+    what's new is judged and everything ranked."""
     if await _missed(ctx, "feed_poll"):
         return
-    done = await in_lane("feed", _locked("feed-poll", candidates.poll))
+    done = await in_lane("feed", _locked("feed-poll", lambda: (candidates.poll() or {}) | rank_new()))
     if done:
-        log.info("feed poll: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra=done)
+        log.info("feed poll: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra={k.replace(" ", "_"): v for k, v in done.items()})
 
 
 async def check_videos(ctx) -> None:
@@ -95,9 +114,22 @@ class CuratorSettings:
     keep_result = 0
 
 
-def main() -> None:
-    run_worker(CuratorSettings)  # type: ignore[arg-type]  # arq types its settings as a dict; it reads a class's attributes too
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m sports_follow.curator", description="The feed's curator: run it, or rank what's stored again.")
+    sub = parser.add_subparsers(dest="command")
+    again = sub.add_parser("rescore", help="work every stored candidate's score out again, fetching nothing")
+    again.add_argument("--rejudge", action="store_true", help="ask the judge about every candidate again first (a model call each the rules don't settle)")
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.command != "rescore":
+        run_worker(CuratorSettings)  # type: ignore[arg-type]  # arq types its settings as a dict; it reads a class's attributes too
+        return 0
+    if args.rejudge:
+        judged = rank.judge(limit=None, again=True)
+        print(f"judged {judged['judged']}, {judged['unjudged']} left unjudged (the model couldn't answer)")
+    done = rank.rescore()
+    print(f"{done['scored']} judged candidates: {done['served']} served, {done['changed']} changed")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

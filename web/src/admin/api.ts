@@ -81,6 +81,60 @@ export interface AccountDetail extends AccountRow {
   alert_devices: { created_at: string; last_ok_at: string | null; timezone: string; failures: number }[]
 }
 
+/** What the Feed's judge said of a candidate (sports_follow/curate.py's Verdict). */
+export interface FeedVerdict {
+  about_player: 'subject' | 'mention' | 'no'
+  by: string
+  kind: string
+  interest: number
+  risks: string[]
+  sponsored: boolean
+  reason: string
+  stage: 'rules' | 'model'
+}
+export type Review = 'approved' | 'hidden' | 'pinned'
+/** A video the curator found about a player, with the judge's verdict, its score (null: never served) and an admin's word. */
+export interface FeedCandidateRow {
+  id: number
+  player: { id: number; name: string; sport: string }
+  url: string
+  youtube_id: string | null
+  title: string
+  channel: string
+  channel_id: string
+  published: string | null
+  fetched_at: string
+  judged_at: string | null
+  views: number | null
+  likes: number | null
+  seconds: number | null
+  verdict: FeedVerdict | null
+  passes: boolean
+  score: number | null
+  review: Review | null
+  moment_id: number | null
+  served: boolean
+}
+/** A video channel: listed by a running sport or not, its trust as the panel set it (null: its default), and what fans said of its videos. */
+export interface FeedChannel {
+  channel_id: string
+  name: string
+  listed: boolean
+  trust: number | null
+  default: number
+  effective: number
+  candidates: number
+  served: number
+  feedback: number
+}
+export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed'
+export interface FeedPage {
+  candidates: FeedCandidateRow[]
+  next: number | null
+  totals: Record<string, number>
+  channels: FeedChannel[]
+}
+
 const at = (path: string) => `/api/admin/${path}`
 
 export const admin = {
@@ -95,6 +149,10 @@ export const admin = {
   setLimits: (name: string, limits: Limits) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', limits)),
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   linear: () => request<LinearStatus>(at('linear')),
+  feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
+  review: (id: number, review: Review | null) => request<{ review: Review | null }>(at(`feed/${id}`), json('PUT', { review })),
+  channelTrust: (channel: string, trust: number | null) =>
+    request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),
