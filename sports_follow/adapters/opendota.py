@@ -5,8 +5,8 @@ schedule and the series and map scores but nothing inside a map. No key needed: 
 requests a minute and 3,000 a day, counted by the source budget (budget.py, BUDGET) and never spent past
 FREE_* less a margin. Finished matches never change, so each is kept in Redis once it's complete.
 
-OpenDota is community-run and publishes no data licence (best effort, no guarantee), so a public build
-leaves it off until its terms are checked: SPORTS_FOLLOW_OPENDOTA=0.
+OpenDota is community-run and publishes no data licence (best effort, no guarantee). The public build runs
+it all the same, credited on the Credits page (BHA-208, 20 Oct 2026); SPORTS_FOLLOW_OPENDOTA=0 turns it off.
 """
 
 from __future__ import annotations

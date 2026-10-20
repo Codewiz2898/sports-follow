@@ -294,8 +294,8 @@ reached, the app says so plainly rather than looking broken.
    that look live are worse than an empty page.
 
 **Open questions**
-- Where the snapshot lives: a release on this (private) repo, or the object storage the off-site
-  backups will use.
+- Where the snapshot lives: the object storage the off-site backups use, kept private (decided 20 Oct
+  2026, BHA-55; a release on this repo would be public).
 - Wikidata is CC0, but the snapshot also holds ids found in ESPN and Sportmonks. Sportmonks' terms
   allow storing their data for our own app, not passing it on, so keep the snapshot private or strip
   those ids.
@@ -434,7 +434,7 @@ Elsewhere:
   list lags a minute). OpenDota's start times run 17 minutes ahead of PandaScore's. Checked 13 Oct
   2026 on five live series (DreamLeague qualifiers and others): every series matched its game. No
   key; 60 requests a minute and 3,000 a day, counted in Redis. Community-run with no data licence:
-  `SPORTS_FOLLOW_OPENDOTA=0` in the public build until its terms are checked.
+  on in the public build since 20 Oct 2026, with credit (BHA-208).
 - **LoL:** Riot's own site backend (esports-api.lolesports.com, feed.lolesports.com/livestats) gives full
   live stats, but it's undocumented and Riot licenses official live data only to GRID: development only.
 - **Valorant:** the valorantesports.com backend has results, no live; nothing official.

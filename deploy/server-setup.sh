@@ -12,7 +12,7 @@
 #   DEPLOY_KEY="<public key>"    GitHub Actions' key; it can run deploy/deploy.sh and nothing else
 # Safe to run again: keys are added, never removed.
 set -euo pipefail
-REPO="${REPO:-git@github.com:Codewiz2898/sports-follow.git}"   # private: read with REPO_KEY, below
+REPO="${REPO:-git@github.com:Codewiz2898/sports-follow.git}"   # read with REPO_KEY, below
 APP_DIR=/opt/sports-follow
 USER_NAME=deploy
 export DEBIAN_FRONTEND=noninteractive
@@ -134,9 +134,10 @@ EOF
 systemctl enable fail2ban >/dev/null 2>&1
 systemctl restart fail2ban
 
-# The repo is private, so deploy reads it with a read-only key of its own, made here once and added on
-# GitHub by hand (not DEPLOY_KEY, which lets Actions in here). GitHub's host keys come from its API over
-# HTTPS, so the first connection isn't taken on trust.
+# Deploy reads the repo with a read-only key of its own, made here once and added on GitHub by hand (not
+# DEPLOY_KEY, which lets Actions in here). The repo is public, but the key stays: it works either way, and
+# nothing changes if the repo goes private again. GitHub's host keys come from its API over HTTPS, so the
+# first connection isn't taken on trust.
 REPO_KEY=/home/$USER_NAME/.ssh/github-read
 if [ ! -f "$REPO_KEY" ]; then
   ssh-keygen -q -t ed25519 -N '' -C "sports-follow read $(hostname)" -f "$REPO_KEY"
