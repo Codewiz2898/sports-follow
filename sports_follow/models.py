@@ -450,6 +450,26 @@ class FeedCandidate(Base):
     review: Mapped[str | None] = mapped_column(String(10))
 
 
+class FeedSearch(Base):
+    """A search for fans' videos of a followed player's big moment (searches.py): one per player and game, which a
+    later moment of theirs in the game takes over until its last run (a brace over the goal before it). It runs a
+    few hours after the moment, and again a day after; it goes with the player, the game and the moment."""
+
+    __tablename__ = "feed_search"
+    __table_args__ = (UniqueConstraint("player_id", "event_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
+    moment_id: Mapped[int] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)  # the latest it's for
+    query: Mapped[str] = mapped_column(String(300))  # the player's name and the sport's words for the moment
+    priority: Mapped[int] = mapped_column(Integer)  # its moments' highest (moments.PRIORITY): the biggest run first
+    fired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # its first moment's: videos published since
+    first_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when its first run ran
+    second_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # and its second, the last
+    kept: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # candidates its runs kept
+
+
 class Sidelined(Base):
     """A spell a player is out of their team's games, injured or suspended, as a source listed it at its
     reads (sidelined.py), whoever follows them: by the source's ids, for the spell and the player, never a

@@ -1,5 +1,6 @@
 """The curator: the feed's own process beside the worker, which fetches what's shared about followed players
-(candidates.py), then has the judge read it and ranks it (rank.py). It's an arq worker of its own on a queue of
+(candidates.py: trusted channels; searches.py: searches for big moments), then has the judge read it and ranks it
+(rank.py). It's an arq worker of its own on a queue of
 its own, so its jobs never take the worker's slots and a slow source or model never holds up a live poll; its
 source requests are in the feed lane, a background lane (adapters/budget.py). The feed's endpoint only reads
 what it stored: nothing a fan does waits on it.
@@ -33,7 +34,7 @@ from arq import cron  # noqa: E402
 from arq.connections import RedisSettings  # noqa: E402
 from arq.worker import run_worker  # noqa: E402
 
-from . import bus, candidates, db, rank  # noqa: E402
+from . import bus, candidates, db, rank, searches  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
 from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
 
@@ -60,6 +61,19 @@ def _locked(name: str, fn):
     return run
 
 
+def search_moments() -> dict[str, int]:
+    """After a poll: queue a search for each big moment of a followed player's, and run the ones due, within the
+    day's cap (searches.py). A failure leaves them for the next poll."""
+    done: dict[str, int] = {}
+    for fn in (searches.queue, searches.run):
+        try:
+            done |= {f"search {k}": v for k, v in fn().items() if v}
+        except Exception:
+            log.exception("feed: moment searches failed; the rest of the run goes on")
+            break
+    return done
+
+
 def rank_new() -> dict[str, int]:
     """After a poll: read the youngest videos again, have the judge read what's new, and rank everything again.
     Each step stands alone: a judge that can't answer (the model off, the gateway down) leaves its rows for
@@ -74,11 +88,11 @@ def rank_new() -> dict[str, int]:
 
 
 async def poll_channels(ctx) -> None:
-    """Every half hour: each trusted channel's latest uploads, kept where they name a followed player; then
-    what's new is judged and everything ranked."""
+    """Every half hour: each trusted channel's latest uploads, kept where they name a followed player, and the
+    searches for big moments that are due; then what's new is judged and everything ranked."""
     if await _missed(ctx, "feed_poll"):
         return
-    done = await in_lane("feed", _locked("feed-poll", lambda: (candidates.poll() or {}) | rank_new()))
+    done = await in_lane("feed", _locked("feed-poll", lambda: (candidates.poll() or {}) | search_moments() | rank_new()))
     if done:
         log.info("feed poll: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra={k.replace(" ", "_"): v for k, v in done.items()})
 

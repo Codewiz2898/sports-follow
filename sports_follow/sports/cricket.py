@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, joined, number, short, spaced, stage, stat, undecided, values
+from .base import ORDINAL, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -362,6 +362,18 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
         "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
+        knock and where it was ("Kohli century Lord's")."""
+        mark = number(fired.detail.rpartition(":")[2].lstrip("w"))
+        if fired.kind == "hundred":
+            what = "double century" if mark >= 200 else "150" if mark >= 150 else "century"
+        elif fired.kind == "wickets" and mark >= 5:
+            what = f"{mark} wickets"
+        else:
+            return None
+        return words(what, ground(fired.venue) or fired.game)
 
 
 SPORT = Cricket()

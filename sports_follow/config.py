@@ -87,6 +87,9 @@ SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_P
 STARTERS_HOME_COUNTRY = os.environ.get("SPORTS_FOLLOW_STARTERS_HOME_COUNTRY", "India").strip()
 # Where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept (candidates.py).
 FEED_COUNTRY = os.environ.get("SPORTS_FOLLOW_FEED_COUNTRY", "IN").strip().upper() or "IN"
+# Searches a day for fans' videos of followed players' big moments (searches.py), each run counted: a moment's
+# search runs twice. The biggest moments go first when there are more. 0 turns them off.
+FEED_MOMENT_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MOMENT_SEARCHES", 40)))
 
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters

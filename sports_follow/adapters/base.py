@@ -465,7 +465,8 @@ class VideoSource:
 
     uploads(channel_id) lists a channel's latest videos, cheaply (the source's public feed), and facts(ids)
     what the source says of each of up to `batch` videos now; a video it leaves out is gone (removed, made
-    private). Both raise AdapterError when the source can't be read, and budget.RateLimited when its
+    private). A source that can search (search_cost set) finds videos from any channel too, for a moment's search
+    (searches.py). Each raises AdapterError when the source can't be read, and budget.RateLimited when its
     allowance is spent."""
 
     system: str  # "youtube": the feed's rows name their source by it
@@ -476,6 +477,7 @@ class VideoSource:
     channel_pattern: re.Pattern[str]  # and of its channels', as a sport lists them
     platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
     batch = 50  # the most videos one facts() call asks about
+    search_cost: int | None = None  # what one search() spends of its budget; None: it can't search
 
     def embed(self, video_id: str) -> dict[str, str] | None:
         """How the app's video player plays one of its videos (feed.Video's fields, past duration and views), or
@@ -496,6 +498,11 @@ class VideoSource:
 
     def facts(self, video_ids: list[str], max_age: float = 3600) -> dict[str, VideoFacts]:
         """max_age: the oldest read (seconds) the cache may answer with; 0 asks the source."""
+        raise NotImplementedError
+
+    def search(self, query: str, after: datetime, country: str) -> list[Upload]:
+        """Videos from any channel that the query finds, published after then, most watched first: only ones that
+        may be embedded and played outside the source's own site, as a viewer in this country finds them."""
         raise NotImplementedError
 
 
