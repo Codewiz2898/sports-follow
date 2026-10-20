@@ -33,7 +33,7 @@ function HowItWorks() {
     <section className="stack" style={{ gap: 10 }} aria-label="How it works">
       <span className="dsp" style={{ fontSize: 26 }}>How it works</span>
       <ol className="stack small" style={{ gap: 8, margin: 0, paddingLeft: 20, fontWeight: 700 }}>
-        <li>Before each game, call it: who wins, or who takes each map. One tap.</li>
+        <li>Before each game, call it. One tap.</li>
         <li>Picks close as it starts. Your friends' picks show then.</li>
         <li>{APP_NAME} scores it when it ends: the fewer fans who called it, the more a right call is worth.</li>
       </ol>
@@ -271,6 +271,7 @@ export function InvitePage() {
           <>
             {band}
             <span className="dsp" style={{ fontSize: 26 }}>Sign in to join</span>
+            <span className="small muted" style={{ fontWeight: 700 }}>Calls you made on this device for games still to start come with you; those already under way stay on this device.</span>
           </>
         )} />
       )}

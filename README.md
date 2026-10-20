@@ -214,13 +214,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   closes as its game or map starts (`Sport.closed`; a first question's start time closes it too, and the server
   refuses a pick after that) and settles from the board (`Sport.answer`): a right pick scores 100 less the share of
   fans who picked the same, at least 10; a wrong one 0; a map the series didn't need is voided, as is a question
-  still unanswered three days past its start. A game a pick waits on is polled as a followed game is, till it
-  settles. Picks need no account (they're kept under the fan id and move into the account on sign-in); making or
+  still unanswered three days past its start (a postponed game's wait a month for their new date). A game is
+  polled as a followed game is while a question of it waits: one a fan picked any question of, or one with a
+  later map, which only a poll can close; and a game under way takes a later map's pick only on a board a few
+  minutes fresh, so a map already played can't be called. Picks need no account (they're kept under the fan id and move into the account on sign-in); making or
   joining a league needs one (`prediction_league`, `prediction_member`: a six-letter invite code, a name the
   friends see, never the email). Fans see how everyone split once they've picked; friends' picks show in the
   league once the question's closed; a league's table is its members' points on what settled since it was made.
-  The split shows to a fan once they've picked and at least five have (fewer would tell them a friend's pick), and
-  to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
+  The split shows to a fan once they've picked and at least 20 have, as shares only while it's open (counts, or
+  fewer picks, would tell them a friend's pick), and to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
   already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
   whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page, on
   Today (a rail of the fan's games to call and how their calls went: `GET /api/me/predictions`) and on a campaign

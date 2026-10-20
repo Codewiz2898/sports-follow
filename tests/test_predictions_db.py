@@ -117,7 +117,8 @@ def picks(db) -> dict[str, tuple[str, int | None]]:
 # ---------------------------------------------------------------- made, closed and settled by the poller
 
 
-def test_a_chess_game_is_asked_before_it_starts_and_settled_from_its_recorded_result(db, redis):
+def test_a_chess_game_is_asked_before_it_starts_and_settled_from_its_recorded_result(db, redis, monkeypatch):
+    monkeypatch.setattr(predictions, "SPLIT_FROM", 5)
     start = soon()
     chess_board(db, start)
     poll(1, board(status="*"))
@@ -221,20 +222,111 @@ def test_a_pick_waiting_keeps_its_game_polled_and_the_tick_closes_and_voids(db, 
     assert (db.get(Question, q.id).status, picks(db)) == ("void", {"asha": ("draw", None)})
 
 
-def test_a_game_put_back_opens_its_question_again_till_its_new_start(db, redis):
+def test_a_game_put_back_moves_its_question_while_its_open_and_one_closed_stays_closed(db, redis):
     start = soon()
     chess_board(db, start)
     poll(1, board(status="*"))
     q = db.scalars(select(Question)).one()
-    predictions.sweep(db, start + timedelta(minutes=1))  # its start time came, the game didn't: closed
-    db.commit()
-    later = start + timedelta(days=2)
-    db.execute(text("UPDATE event SET start_utc = :at"), {"at": later})  # its source moved the round
+    later = start + timedelta(hours=2)
+    db.execute(text("UPDATE event SET start_utc = :at"), {"at": later})  # its source moved the round before it began
     db.commit()
     poll(1, board(status="*"))
     db.expire_all()
-    moved = db.get(Question, q.id)
-    assert (moved.status, moved.locks_at, moved.closed_at) == ("open", later, None)
+    assert (db.get(Question, q.id).status, db.get(Question, q.id).locks_at, db.get(Question, q.id).starts_at) == ("open", later, later)
+    predictions.sweep(db, later + timedelta(minutes=1))  # its new start came, the game didn't: closed
+    db.commit()
+    db.execute(text("UPDATE event SET start_utc = :at"), {"at": later + timedelta(days=1)})  # put back again
+    db.commit()
+    poll(1, board(status="*"))
+    db.expire_all()
+    assert db.get(Question, q.id).status == "closed"  # friends' picks may have shown: it doesn't open again
+    # Postponed, it waits for its new date: the sweep leaves it a month, not three days.
+    db.execute(text("UPDATE event SET status = 'postponed'"))
+    db.commit()
+    predictions.sweep(db, later + predictions.STALE + timedelta(days=1))
+    db.commit()
+    db.expire_all()
+    assert db.get(Question, q.id).status == "closed"
+    predictions.sweep(db, later + predictions.POSTPONED_KEEP + timedelta(days=2))
+    db.commit()
+    db.expire_all()
+    assert db.get(Question, q.id).status == "void"
+
+
+def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):
+    began = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)  # the series' start time has come
+    db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=began, status="armed", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))
+    db.commit()
+    poll(5, ps.parse_match(_match("not_started")), "pandascore_esports")  # late, as its source often is: map 1's time has gone
+    qs = {q.ask: q for q in db.scalars(select(Question))}
+    assert sorted(qs) == ["map2", "map3"] and [qs[k].status for k in ("map2", "map3")] == ["open", "open"]
+    # Nobody's picked: a series with maps only a poll can close is polled all the same, till they settle.
+    assert set(db.scalars(predictions.watched())) == {5}
+    live = _match("running", 1, 0, [_game(1, "finished", SEN), _game(2, "running"), _game(3, "not_started")])
+    poll(5, ps.parse_match(live), "pandascore_esports")
+    db.expire_all()
+    assert [db.get(Question, qs[k].id).status for k in ("map2", "map3")] == ["closed", "open"]
+    # Map 3 isn't on yet: callable on a board just polled, refused once the board's minutes old (polling stopped).
+    predictions.pick(db, "b", qs["map3"].id, str(NRG))
+    db.commit()
+    with pytest.raises(predictions.Refused) as stale:
+        predictions.pick(db, "c", qs["map3"].id, str(NRG), now=datetime.now(timezone.utc) + predictions.FRESH + timedelta(minutes=1))
+    assert stale.value.status == 409 and stale.value.message == predictions.STALE_BOARD
+    db.rollback()
+
+
+def test_a_sport_turned_off_offers_no_questions_and_takes_no_picks(db, redis):
+    from sports_follow import admin
+
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+    predictions.pick(db, "fan", q.id, CARLSEN)
+    db.commit()
+    admin.set_sport("chess", False)
+    assert predictions.today(db, "fan") == {"open": [], "settled": []} and predictions.public(db, q.id) is None
+    with pytest.raises(predictions.Refused) as off:
+        predictions.pick(db, "fan", q.id, "draw")
+    assert (off.value.status, off.value.message) == (409, predictions.OFF)
+    db.rollback()
+
+
+def request(query: str = "", client: str = "8.8.8.8"):
+    from starlette.requests import Request
+
+    return Request({"type": "http", "method": "GET", "path": "/", "query_string": query.encode(), "headers": [], "client": (client, 5000)})
+
+
+def test_the_match_page_lists_its_questions_and_the_pick_route_refuses_what_it_should(db, redis, monkeypatch):
+    monkeypatch.setitem(server.state, "redis", Counts())
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    address = f"{ROUND}-{CARLSEN}"
+    [q] = asyncio.run(server.match_page("lichess_chess", address, "fan"))["predictions"]
+    assert (q["title"], [o["key"] for o in q["options"]], q["mine"]) == ("Who wins?", [CARLSEN, "draw", LAZAVIK], None)
+    with monkeypatch.context() as off:  # its source off: nothing to call, the page as it was
+        off.delitem(ADAPTERS, "lichess_chess")
+        assert asyncio.run(server.match_page("lichess_chess", address, "fan"))["predictions"] == []
+    picked = asyncio.run(server.make_pick(request(), q["id"], {"option": CARLSEN}, "fan"))["question"]
+    assert picked["mine"] == CARLSEN and all("share" not in o and "picks" not in o for o in picked["options"])
+    for body, status in (({"option": "white"}, 400), ({"option": ""}, 400), ({}, 400)):
+        with pytest.raises(server.HTTPException) as refused:
+            asyncio.run(server.make_pick(request(), q["id"], body, "fan"))
+        assert refused.value.status_code == status
+    with pytest.raises(server.HTTPException) as missing:
+        asyncio.run(server.make_pick(request(), 9999, {"option": CARLSEN}, "fan"))
+    assert missing.value.status_code == 404
+    monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)  # one address's picks an hour
+    with pytest.raises(server.HTTPException) as flooded:
+        asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "other")) and asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "third"))
+    assert flooded.value.status_code == 429
+    # Its link previews it, on its own game's page only.
+    preview = asyncio.run(server._page_preview(f"match/lichess_chess/{address}", request(f"q={q['id']}&s=share")))  # pyright: ignore[reportPrivateUsage]
+    assert preview is not None and preview.path == f"/match/lichess_chess/{address}?q={q['id']}" and preview.picture.word == "Who wins?"  # too few picks for the split
+    assert asyncio.run(server._page_preview("match/lichess_chess/other-1", request(f"q={q['id']}"))) is None  # pyright: ignore[reportPrivateUsage]
+
+
+
 
 
 def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):
@@ -290,7 +382,8 @@ def test_questions_are_made_ahead_from_a_read_of_a_fans_game_coming_up(db, redis
     assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("settled", CARLSEN)
 
 
-def test_a_campaign_shows_its_players_games_to_call_and_a_link_previews_the_split(db, redis):
+def test_a_campaign_shows_its_players_games_to_call_and_a_link_previews_the_split(db, redis, monkeypatch):
+    monkeypatch.setattr(predictions, "SPLIT_FROM", 5)
     start = soon()
     chess_board(db, start)
     db.add(Player(id=1, slug="carlsen", name="Magnus Carlsen", sport="Chess"))

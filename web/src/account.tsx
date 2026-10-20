@@ -25,7 +25,7 @@ const AFTER = 'sf-after-signin'  // the page to come back to after Google's sign
 
 /** A path of this app's own ("/j/K7Q2M"), or null: nothing to leave the site for. */
 function ownPage(path: string | null | undefined): string | null {
-  return path && /^\/[A-Za-z0-9/_-]*$/.test(path) ? path : null
+  return path && /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(path) ? path : null
 }
 
 /** Before leaving for Google: come back to `path`, not /account, once signed in. */
@@ -100,6 +100,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       }
       setNotice(welcome(Number(back) || 0))
     }
+    // Turned back at Google's (/account?error=…): no page to come back to after a later sign-in.
+    if (new URLSearchParams(window.location.search).has('error')) takeAfterSignIn()
     api.account().then((answer) => {
       setMe(answer)
       if (answer.signed_in === false && answer.reason === 'signed_out') {

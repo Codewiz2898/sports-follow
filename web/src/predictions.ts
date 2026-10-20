@@ -32,7 +32,7 @@ export type Outcome = { kind: 'right' | 'wrong' | 'void' | 'missed'; head: strin
 
 /** A settled (or voided) question from this fan's side. */
 export function outcomeOf(q: Prediction): Outcome | null {
-  if (q.status === 'void') return { kind: 'void', head: 'No result', line: "It wasn't played: no points either way." }
+  if (q.status === 'void') return { kind: 'void', head: 'No result', line: 'It ended without an answer: no points either way.' }
   if (q.status !== 'settled') return null
   const answer = labelOf(q, q.answer)
   const share = shareOf(q, q.answer)
