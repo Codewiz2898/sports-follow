@@ -120,8 +120,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on a clock. A player with an article and a live source never sends it. A player no live source has gets no page at all
   unless `SPORTS_FOLLOW_RESEARCH=1`, when the agent writes their whole page as before (games and news too,
   again after `SPORTS_FOLLOW_CARD_MAX_AGE`); so pages build and rebuild without the gateway for everything
-  this covers. News for players with a live source is no longer the agent's (publisher feeds are a
-  separate piece). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
+  this covers. For a player with a live source the agent is asked for the background alone
+  (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
+  alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
@@ -146,7 +147,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Structured sources where they exist, the agent everywhere else.** After the agent says who a
   player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
-  score; the agent keeps the profile and news. A player followed before their sport had an adapter is
+  score, the publishers their news (`news.py`), and the agent only writes a background Wikipedia has no
+  article for. A player followed before their sport had an adapter is
   bound by the next scheduled refresh.
 
   | Sport | Source | Fixtures | Live | Stats |
@@ -349,8 +351,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
       python -m sports_follow.campaigns show gukesh                           # also list, remove, refresh; player/team/game remove
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
-  points, a set, the start and the result; news from a rebuild adds injuries, transfers and
-  retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
+  points, a set, the start and the result; for a player no live source has (`SPORTS_FOLLOW_RESEARCH=1`), news
+  from a rebuild adds injuries, transfers and retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
   stable key) with a priority: a hundred over a fifty, a late equaliser over a fourth goal. The noise
   rules (`sports_follow/alerts.py`) then plan each fan's
   pushes: their level for the player (key moments, the default; everything; results only; off) says
