@@ -240,6 +240,21 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the app before its other
   calls (`web/src/visit.ts`, `POST /api/me/source`), moved to their account when they sign in and deleted
   with it. Nothing reads it yet: the launch numbers (BHA-239) will.
+- **A Feed on every player's page** (`sports_follow/feed.py`, `web/src/components/Feed.tsx`, epic BHA-296): what
+  fans, creators and the player share about them, judged before a fan sees it. Three layers: L0 fetches
+  candidates from the sources into `feed_candidates`, L1 (the judge) keeps the ones really about the player with
+  a one-line reason, and L2, at serve time in the API, takes out what this fan hid and groups the rest around
+  the player's moments, then This week and Earlier, the famous ones apart. `GET /api/players/<id>/feed` reads
+  rows only, never a model or a source, and is empty rather than slow. `feed.judged` is where the pipeline
+  plugs in: until it does, a feed is the card's news, so the Feed tab (which replaced News) is never emptier
+  than News was, and "From the fans" on Overview and "From your players" on Today (`GET /api/me/feed`, a
+  followed player's top video or post, never news: the Wire has that) are absent. The "…" on a card says why
+  it's there and takes the fan's word (`POST /api/players/<id>/feed/<item>/feedback`: not interested, not about
+  the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
+  account when they sign in, and goes with the player or the account. A video is YouTube's thumbnail behind a
+  play button; the player, from youtube-nocookie.com, loads only once it's tapped (the Caddyfile's
+  Content-Security-Policy allows those two hosts). In the dev server, `?feed-sample` on a player's page or
+  Today shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build).
 - **Campaign pages: a big event as a row, never code.** `stann.in/gukesh` (`sports_follow/campaigns.py`,
   `web/src/pages/CampaignPage.tsx`) is the page a launch post links to: the event in a block of its sport's
   colour, the games on now (the fan's live cards of its players, else Live now's games they're in), its

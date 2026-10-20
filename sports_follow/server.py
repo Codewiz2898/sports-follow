@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
@@ -1803,6 +1803,39 @@ def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict
     who's back), line-ups and news, newest first, then facts about a few of the best-known players they don't
     follow, which a fan who follows nobody gets too."""
     return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
+
+
+@app.get("/api/players/{player_id}/feed")
+def player_feed(player_id: RowId, response: Response, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> feed.Feed:
+    """The player's Feed (feed.py): videos, posts and news about them, grouped around their moments, without
+    what this fan hid. Read from rows only, never a model or a source; with nothing judged yet, their news."""
+    found = feed.feed_for(db, player_id, fan)
+    if found is None:
+        raise HTTPException(404, "No such player.")
+    response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})
+    return found
+
+
+@app.post("/api/players/{player_id}/feed/{item_id}/feedback")
+def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What the fan said about an item from its "…" sheet ({"verdict": one of feed.VERDICTS}): it leaves
+    their feed at once, and the judge learns from it later."""
+    verdict = body.get("verdict")
+    try:
+        feed.feedback(db, fan, player_id, item_id, verdict if isinstance(verdict, str) else "")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    db.commit()
+    return {"item_id": item_id, "hidden": True}
+
+
+@app.get("/api/me/feed")
+def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
+    """Today's "From your players": each followed player's top video or post (feed.shares_for). No news, which
+    the Wire carries, so empty until the feed pipeline is wired in."""
+    return {"shares": feed.shares_for(db, fan)}
 
 
 @app.delete("/api/follows/{player_id}")

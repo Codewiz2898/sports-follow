@@ -568,6 +568,19 @@ class NotificationMute(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class FeedFeedback(Base):
+    """What a fan said about one item on a player's Feed (feed.py): not interested, not about the player, or a
+    report. The item leaves that fan's feed at once; the judge learns from all of them later."""
+
+    __tablename__ = "feed_feedback"
+
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True, index=True)
+    item_id: Mapped[str] = mapped_column(String(32), primary_key=True)  # feed.item_id: of the item's address
+    verdict: Mapped[str] = mapped_column(String(20))  # feed.VERDICTS
+    created_at: Mapped[datetime] = _now()
+
+
 class PushSubscription(Base):
     """One device a fan turned notifications on for, with its quiet hours: a browser or installed web app
     (Web Push), or the Android app (FCM, fcm.py)."""
