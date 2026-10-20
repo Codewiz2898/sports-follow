@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 from . import accounts, controls, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, VIDEOS, budget, videos
 from .config import APP_NAME, SOURCES
-from .models import Account, AccountSession, FeedCandidate, FeedFeedback, Follow, Player, PushSubscription
+from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -446,8 +446,9 @@ def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]
 
 def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:
     kept, numbers, verdict = c.candidate or {}, c.features or {}, c.verdict
+    source = VIDEOS.get(c.source)
     return {
-        "id": c.id, "player": {"id": c.player_id, "name": name, "sport": sport}, "url": c.url, "youtube_id": c.external_id if c.source == "youtube" else None,
+        "id": c.id, "player": {"id": c.player_id, "name": name, "sport": sport}, "url": c.url, "video": source.embed(c.external_id) if source else None,
         "title": kept.get("title") or "", "channel": kept.get("channel") or "", "channel_id": kept.get("channel_id") or "",
         "published": kept.get("published"), "fetched_at": _iso(c.fetched_at), "judged_at": _iso(c.judged_at),
         "views": rank.whole(numbers.get("views")), "likes": rank.whole(numbers.get("likes")), "seconds": rank.whole(numbers.get("seconds")),
@@ -464,7 +465,7 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
     listed, set_by_admin = rank.listed_channels(), controls.current().channel_trust
     names = {cid: name for cid, name, _, _ in found}
     counts = {cid: (n, scored) for cid, _, n, scored in found}
-    said = _channel_feedback(db)
+    said = rank.channel_feedback(db)
     out = []
     for cid in sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c)):
         if not cid:
@@ -478,27 +479,18 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
     return out
 
 
-def _channel_feedback(db: Session) -> dict[str, float]:
-    from .feed import item_id
-
-    channel_of = {item_id(url): str(cid or "") for url, cid in db.execute(select(FeedCandidate.url, FeedCandidate.candidate["channel_id"].astext))}
-    if not channel_of:
-        return {}
-    said = db.execute(select(FeedFeedback.item_id, FeedFeedback.verdict).where(FeedFeedback.item_id.in_(channel_of))).all()
-    return rank.feedback_weight(((i, v) for i, v in said), channel_of)
-
-
-def review_candidate(row_id: int, said: str | None) -> bool:
-    """Approve, hide or pin a candidate (rank.REVIEWS), or take that back (None), and rank its channel again
-    at once. False for no such candidate; ValueError for a word that isn't one."""
+def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
+    """Approve, hide or pin a candidate (rank.REVIEWS), or take that back (None), and rank it again at once:
+    the candidate as the Feed tab lists it, or None for no such candidate. ValueError for a word that isn't one."""
     from . import db
 
     with db.session() as session:
         if not rank.review(session, row_id, said):
-            return False
-        channel = session.scalar(select(FeedCandidate.candidate["channel_id"].astext).where(FeedCandidate.id == row_id))
-    rank.rescore(channel=channel or "")
-    return True
+            return None
+    rank.rescore(row=row_id)
+    with db.session() as session:
+        found = session.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id).where(FeedCandidate.id == row_id)).first()
+        return _candidate_row(*found) if found else None
 
 
 def set_channel_trust(channel: str, trust: Any) -> None:

@@ -98,7 +98,7 @@ export interface FeedCandidateRow {
   id: number
   player: { id: number; name: string; sport: string }
   url: string
-  youtube_id: string | null
+  video: { youtube_id: string } | null // how the app's player plays it (the source says); null: it can't
   title: string
   channel: string
   channel_id: string
@@ -150,7 +150,7 @@ export const admin = {
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   linear: () => request<LinearStatus>(at('linear')),
   feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
-  review: (id: number, review: Review | null) => request<{ review: Review | null }>(at(`feed/${id}`), json('PUT', { review })),
+  review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
   channelTrust: (channel: string, trust: number | null) =>
     request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
   users: (q: string, offset = 0) =>

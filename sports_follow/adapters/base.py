@@ -474,7 +474,13 @@ class VideoSource:
     covers: str  # what it covers, as the admin panel lists it
     id_pattern: re.Pattern[str]  # the shape of its video ids
     channel_pattern: re.Pattern[str]  # and of its channels', as a sport lists them
+    platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
     batch = 50  # the most videos one facts() call asks about
+
+    def embed(self, video_id: str) -> dict[str, str] | None:
+        """How the app's video player plays one of its videos (feed.Video's fields, past duration and views), or
+        None if it can't: a video the player can't play isn't served."""
+        return None
 
     @classmethod
     def available(cls) -> bool:

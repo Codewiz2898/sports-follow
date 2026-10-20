@@ -420,8 +420,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   keeps the row but never serves it; the admin's approve, hide or pin stands over the judge. Each row is also
   tied to the player's moment it was published within two days after, so the Feed groups it there. Features,
   verdict and score are kept apart: `python -m sports_follow.curator rescore` works every score out again
-  without fetching, and `--rejudge` asks the judge again first. The feed only reads the table and never
-  waits on the curator. YouTube's
+  without fetching, and `--rejudge` asks the judge again first. The admin panel's Feed tab (`/admin/feed`)
+  lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
+  sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
   never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day.
   Without the key the source is off, the admin panel says so, and nothing else changes.

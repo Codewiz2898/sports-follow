@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, literal_column, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import admin, candidates, controls, curate, curator, db as db_module, feed, rank
@@ -232,10 +232,13 @@ def test_if_the_videos_cant_be_read_a_feed_is_the_news_alone(made, monkeypatch):
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())
     rank.rescore()
 
-    def broken(*_):
-        raise RuntimeError("a bug in the ranking")
+    # The query itself fails (as before a migration, or past a statement timeout): the savepoint keeps the request's
+    # session usable, and the feed is the news.
+    def broken_select(*columns):
+        query = select(*columns)
+        return query.add_columns(literal_column("no_such_column")) if columns and columns[0] is FeedCandidate.player_id else query
 
-    monkeypatch.setattr(rank, "evergreen", broken)
+    monkeypatch.setattr(feed, "select", broken_select)
     s = made()
     try:
         f = feed.feed_for(s, pid, "fan")
@@ -244,6 +247,26 @@ def test_if_the_videos_cant_be_read_a_feed_is_the_news_alone(made, monkeypatch):
         assert s.scalar(select(Player.name).where(Player.id == pid)) == "Asha Verma"  # the request's session still works
     finally:
         s.close()
+    # A bug in the ranking after the rows are read: the same.
+    monkeypatch.undo()
+    monkeypatch.setattr(rank, "evergreen", lambda *_: 1 / 0)
+    s = made()
+    try:
+        f = feed.feed_for(s, pid, "fan")
+        assert f is not None and [i.kind for g in f.groups for i in g.items] == ["news"]
+    finally:
+        s.close()
+
+
+def test_a_pinned_video_leads_however_old_and_never_among_the_evergreen(made):
+    pid = asha()
+    old = stored(pid, "classic0001", "The catch everyone remembers", OTHER, 24 * 40, views=(900_000, 980_000), likes=(20_000, 22_000), verdict=said())
+    stored(pid, "new00000001", "Today's good one", TALKS, 3, verdict=said(interest=1.0))
+    rank.rescore()
+    assert [i.title for i in page(made, player_id=pid).evergreen] == ["The catch everyone remembers"]
+    admin.review_candidate(old, "pinned")
+    f = page(made, player_id=pid)
+    assert f.evergreen == [] and [i.title for g in f.groups for i in g.items if i.kind == "video"] == ["The catch everyone remembers", "Today's good one"]
 
 
 # ---------------------------------------------------------------- the admin's word, the channel's trust, fans' reports
@@ -279,18 +302,36 @@ def test_an_admins_word_stands_over_the_judges_and_a_channels_trust_scales_or_hi
             admin.set_channel_trust(*bad)
     assert controls.current().channel_trust == {}
 
+    # An approved video stands over its channel's Hidden: the admin's word on the one video is the nearer one.
+    assert admin.review_candidate(edit, "approved")
+    admin.set_channel_trust(EDITS, 0)
+    assert "Every boundary" in served()
 
-def test_fans_reports_lower_their_channels_trust_at_the_next_rescore(made):
+
+def test_signed_in_fans_reports_lower_their_channels_trust_to_half_at_most_and_anonymous_ones_dont(made):
     pid = asha()
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())
     stored(pid, "edit0000002", "Every wicket", EDITS, 30, verdict=said())
     rank.rescore()
     before = rows()["edit0000001"].score
-    with db_module.session() as s:
-        for fan in ("a", "b", "c", "d"):
-            s.add(FeedFeedback(fan_id=fan, player_id=pid, item_id=feed.item_id("https://www.youtube.com/watch?v=edit0000002"), verdict="report"))
+    wicket = feed.item_id("https://www.youtube.com/watch?v=edit0000002")
+
+    def say(*fans: str, verdict: str = "report") -> None:
+        with db_module.session() as s:
+            s.add_all(FeedFeedback(fan_id=fan, player_id=pid, item_id=wicket, verdict=verdict) for fan in fans)
+
+    say(*(f"anon-{i}" for i in range(40)))  # a new cookie is free: anonymous reports hide it from them alone
+    say("acct-1", "acct-2", "acct-3", verdict="not_interested")  # taste, not the channel's fault
+    rank.rescore()
+    assert rows()["edit0000001"].score == pytest.approx(before)
+    say("acct-4", "acct-5", "acct-6", "acct-7")
     rank.rescore()
     assert rows()["edit0000001"].score == pytest.approx(before / 2, abs=1e-3)  # type: ignore[operator]
+    say(*(f"acct-x{i}" for i in range(40)))
+    rank.rescore()
+    assert rows()["edit0000001"].score == pytest.approx(before * rank.FEEDBACK_FLOOR, abs=1e-3)  # type: ignore[operator]
+    admin.set_channel_trust(EDITS, 1)  # the admin's word stands as it is
+    assert rows()["edit0000001"].score == pytest.approx(before)
 
 
 def test_the_admin_feed_page_lists_candidates_with_their_verdicts_and_every_channels_trust(made):
@@ -304,7 +345,7 @@ def test_the_admin_feed_page_lists_candidates_with_their_verdicts_and_every_chan
         everything = admin.feed_page(s)
         assert [c["title"] for c in everything["candidates"]] == ["Not judged yet", "Asha Verma the singer", "Every boundary"]
         first = everything["candidates"][2]
-        assert first["served"] and first["passes"] and first["youtube_id"] == "edit0000001" and first["player"]["name"] == "Asha Verma"
+        assert first["served"] and first["passes"] and first["video"] == {"youtube_id": "edit0000001"} and first["player"]["name"] == "Asha Verma"
         assert first["verdict"]["reason"] == "A fan edit of her hundred." and first["views"] == 1_000
         assert everything["totals"] == {"all": 3, "unjudged": 1, "served": 1} and everything["next"] is None
         assert [c["title"] for c in admin.feed_page(s, "served")["candidates"]] == ["Every boundary"]

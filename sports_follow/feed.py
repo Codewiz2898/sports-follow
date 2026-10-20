@@ -32,6 +32,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import rank
+from .adapters import VIDEOS
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, PlayerCard
 
 log = logging.getLogger("sports_follow.feed")
@@ -104,6 +105,8 @@ class Candidate:
     moment_id: int | None = None  # the moment it's about (a fan edit of a hundred): grouped under it
     evergreen: bool = False
     score: float = 0.0  # the judge's: higher first within a group, then newer
+    channel: str = ""  # a video's channel, by the source's id for it: a page holds one video from each
+    pinned: bool = False  # an admin pinned it: at the top of This week (or of its moment), however old
 
 
 def item_id(url: str) -> str:
@@ -125,8 +128,10 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None) 
             ).all()  # fmt: skip
         out: dict[int, list[Candidate]] = {}
         for r in rows:
+            source = VIDEOS.get(r.source)
             try:
-                c = _video(r.external_id if r.source == "youtube" else None, r.url, r.candidate or {}, r.features or {}, r.verdict or {}, r.score or 0.0, r.moment_id, now)
+                embed = source.embed(r.external_id) if source else None
+                c = _video(embed, source.name if source else "", r, now)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
@@ -137,39 +142,44 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None) 
         return {}
 
 
-def _video(youtube_id: str | None, url: str, kept: dict[str, Any], features: dict[str, Any], verdict: dict[str, Any], score: float, moment_id: int | None, now: datetime) -> Candidate | None:
-    """A scored row as a video item, its score faded by age (an evergreen one keeps its own)."""
-    if not youtube_id:
-        return None  # the only video source so far; another's player joins Video when it does
+def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> Candidate | None:
+    """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
+    fades only past its pin, so it leads however old, and is never put among the evergreen."""
+    if not embed:
+        return None  # a video the app's player can't play
+    kept, features, verdict = r.candidate or {}, r.features or {}, r.verdict or {}
+    pinned = r.review == "pinned"
+    score = (r.score or 0.0) - (rank.PIN if pinned else 0.0)
     published = rank.when(kept.get("published"))
-    evergreen = rank.evergreen(features, published, now)
+    evergreen = not pinned and rank.evergreen(features, published, now)
     age = (now - published) if published else HALF_LIFE * 4
-    faded = score if evergreen else score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
+    faded = (score if evergreen else score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)) + (rank.PIN if pinned else 0.0)
     item = Item(
-        id=item_id(url), kind="video", tag=rank.tag(verdict), title=str(kept.get("title") or "").strip() or "A video", url=url,
-        source=str(kept.get("channel") or "YouTube"), published_at=str(kept.get("published") or "") or None,
+        id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=str(kept.get("title") or "").strip() or "A video", url=r.url,
+        source=str(kept.get("channel") or source), published_at=str(kept.get("published") or "") or None,
         reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.",
-        video=Video(youtube_id=youtube_id, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views"))),
+        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views"))),
     )  # fmt: skip
-    return Candidate(item=item, moment_id=None if evergreen else moment_id, evergreen=evergreen, score=round(faded, 6))
+    channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
+    return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned)
 
 
 def _page(candidates: list[Candidate]) -> list[Candidate]:
     """What one page shows of a player's ranked candidates: one video from each channel (and one more among the
     evergreen ones, a list apart), and PER_MOMENT around each moment, the best of each kept. News and posts
     aren't thinned."""
-    channels: set[tuple[bool, str]] = set()
+    channels: set[tuple[bool, str]] = set()  # (evergreen, channel id)
     per_moment: dict[int, int] = {}
     out = []
     for c in _ranked(candidates):
         if c.item.kind == "video":
-            if (c.evergreen, c.item.source) in channels:
+            if (c.evergreen, c.channel or c.item.source) in channels:
                 continue
             if c.moment_id is not None:
                 if per_moment.get(c.moment_id, 0) >= PER_MOMENT:
                     continue
                 per_moment[c.moment_id] = per_moment.get(c.moment_id, 0) + 1
-            channels.add((c.evergreen, c.item.source))
+            channels.add((c.evergreen, c.channel or c.item.source))
         out.append(c)
     return out
 
@@ -295,7 +305,7 @@ def _arrange(candidates: list[Candidate], moments: dict[int, Moment], now: datet
     for c in candidates:
         if c.moment_id in moments:
             around.setdefault(c.moment_id, []).append(c)
-        elif (at := _when(c.item.published_at)) and now - at <= WEEK:
+        elif c.pinned or ((at := _when(c.item.published_at)) and now - at <= WEEK):
             week.append(c)
         else:
             earlier.append(c)

@@ -242,6 +242,11 @@ class YouTube(VideoSource):
     covers = "Videos about players, for the feed (YouTube)"
     id_pattern = VIDEO_ID
     channel_pattern = CHANNEL_ID
+    platform = "youtube"
+
+    def embed(self, video_id: str) -> dict[str, str] | None:
+        """The app plays YouTube's own embedded player (youtube-nocookie.com), by the video's id."""
+        return {"youtube_id": video_id} if VIDEO_ID.fullmatch(video_id) else None
 
     @classmethod
     def available(cls) -> bool:

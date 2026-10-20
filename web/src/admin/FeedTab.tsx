@@ -32,8 +32,8 @@ export function FeedTab() {
     setBusy(`row${row.id}`)
     setError(null)
     try {
-      await admin.review(row.id, row.review === said ? null : said)  // pressed again, it's taken back
-      await load()
+      const now = await admin.review(row.id, row.review === said ? null : said)  // pressed again, it's taken back
+      setRows((old) => old?.map((r) => (r.id === now.id ? now : r)) ?? null)  // in place: the page stays where it was
     } catch (e) {
       setError(failed(e))
     } finally {
@@ -57,9 +57,9 @@ export function FeedTab() {
     <section className="section" aria-label="Feed">
       <Note>
         Every video the curator found about a followed player, with what the judge said. A video is served when it's about the player, isn't
-        paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said. Pinned ones lead their
-        player's feed. A channel's trust multiplies its videos' scores: Hidden keeps all of them out. Fans hiding or reporting a channel's
-        videos lowers its trust by itself.
+        paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said. Pinned ones go to the
+        top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. Signed-in
+        fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is.
       </Note>
       <div className="stat-grid" aria-label="Candidates">
         <div className="stat"><span className="dsp num">{count(totals.all ?? 0)}</span><span className="tiny">Candidates</span></div>
@@ -80,9 +80,9 @@ export function FeedTab() {
         <ul className="feed-admin">
           {rows.map((row) => (
             <li key={row.id} className="card feed-admin-row" data-served={row.served ? '' : undefined}>
-              {row.youtube_id && (
+              {row.video && (
                 <a href={row.url} target="_blank" rel="noreferrer noopener" className="feed-admin-thumb">
-                  <img src={`https://i.ytimg.com/vi/${encodeURIComponent(row.youtube_id)}/mqdefault.jpg`} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                  <img src={`https://i.ytimg.com/vi/${encodeURIComponent(row.video.youtube_id)}/mqdefault.jpg`} alt="" loading="lazy" referrerPolicy="no-referrer" />
                 </a>
               )}
               <div className="stack" style={{ gap: 6 }}>

@@ -18,9 +18,10 @@ The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
 How fast it's watched is views an hour between its last two reads (the first when it was found, then a re-read
 every few hours while it's under two days old, then the weekly check), or over its whole life while there's
-one read. A channel's trust is high when a running sport lists it, lower for one
-no sport lists any more, what the admin panel sets for it (controls.channel_trust: 0 hides it), and lower
-again for each item of its that fans hid or reported.
+one read. A channel's trust is high when a running sport lists it, lower for one no sport lists any more,
+or what the admin panel sets for it (controls.channel_trust: 0 hides it). Signed-in fans reporting its
+videos, or saying they aren't about the player, lower a default trust, down to half of it at most; an
+admin's setting stands as it is.
 
 `python -m sports_follow.curator rescore [--rejudge]` works every score out again from what's stored, and
 with --rejudge asks the judge again first: tune the weights or the prompt without fetching anything.
@@ -30,21 +31,26 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast, get_args
 
 from pydantic import ValidationError
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from . import controls, curate, db, sports
+from . import controls, curate, db, shutdown, sports
+from .accounts import FAN_PREFIX
+from .adapters import VIDEOS
 from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias
 
 log = logging.getLogger("sports_follow.rank")
 
 JUDGE_PER_RUN = 300  # candidates sent to the judge a run: what a poll finds is far fewer; a backlog clears in a few
+JUDGE_FOR = 12 * 60  # seconds a run of the judge may take: well inside the poll's lock (curator.POLL_LOCK)
+JUDGE_CHUNK = curate.WORKERS * 2  # judged side by side and stored together, so a run cut short keeps what it did
 INTEREST, PACE, LIKES = 0.45, 0.35, 0.20  # the score's weights; trust multiplies the sum
 PACE_TOP = 10_000  # views an hour that count as the most a video can be watched
 LIKES_TOP = 0.06  # a like ratio that counts as the most liked; 4-6% is a lot on YouTube
@@ -53,10 +59,13 @@ LIKES_FROM = 100  # views before the like ratio means anything
 MENTION = 0.6  # a share that only mentions the player is worth this much of one about them
 LISTED, UNLISTED = 1.0, 0.5  # a channel's trust: a running sport lists it, or none does now
 PIN = 10.0  # added to a pinned row's score: ahead of everything the numbers rank
-# Fans' feedback on a channel's items lowers its trust: each report counts this much, and so on; the trust is
-# divided by 1 + their sum / FEEDBACK_SCALE (four reports halve it).
-FEEDBACK = {"report": 1.0, "not_about_player": 0.5, "not_interested": 0.15}
+# Signed-in fans' feedback on a channel's items lowers its default trust: each report counts this much, each "not
+# about the player" half that ("not interested" is taste, not the channel's fault). The trust is divided by 1 + their
+# sum / FEEDBACK_SCALE, and never below FEEDBACK_FLOOR of it: four reports halve it, and more can't sink a channel
+# by themselves (the admin panel can). Anonymous fans' words hide items from them alone: a new cookie is free.
+FEEDBACK = {"report": 1.0, "not_about_player": 0.5}
 FEEDBACK_SCALE = 4.0
+FEEDBACK_FLOOR = 0.5
 MOMENT_WINDOW = timedelta(hours=48)  # a share published this long after a moment of the player's is about it
 # Moments a share isn't grouped under: before the game (a line-up), its start, and taking one back.
 NOT_A_HEAD = ("lineup", "start", "correction")
@@ -180,12 +189,25 @@ def feedback_weight(rows: Iterable[tuple[str, str]], channel_of: dict[str, str])
 
 
 def trust(channel: str, listed: set[str], set_by_admin: dict[str, float], weight: float = 0.0) -> float:
-    """How far a channel's videos are trusted, 0 to 1: the admin's word for it, else whether a running sport
-    lists it; lower for what fans said of its items."""
-    base = set_by_admin.get(channel)
-    if base is None:
-        base = LISTED if channel in listed else UNLISTED
-    return max(0.0, min(1.0, base)) / (1 + weight / FEEDBACK_SCALE)
+    """How far a channel's videos are trusted, 0 to 1: the admin's word for it as it is, else whether a running
+    sport lists it, lowered (to FEEDBACK_FLOOR of it at most) by what signed-in fans said of its items."""
+    if channel in set_by_admin:
+        return max(0.0, min(1.0, set_by_admin[channel]))
+    base = LISTED if channel in listed else UNLISTED
+    return max(base * FEEDBACK_FLOOR, base / (1 + weight / FEEDBACK_SCALE))
+
+
+def channel_feedback(session: Session) -> dict[str, float]:
+    """Each channel's weighed feedback from signed-in fans (FEEDBACK): the feedback table read whole (it's a
+    few rows a fan), matched to the channels of the candidates' addresses."""
+    from .feed import item_id  # feed.py reads this module's helpers; this one of its, here only
+
+    said = session.execute(select(FeedFeedback.item_id, FeedFeedback.verdict)
+                           .where(FeedFeedback.fan_id.startswith(FAN_PREFIX), FeedFeedback.verdict.in_(FEEDBACK))).all()  # fmt: skip
+    if not said:
+        return {}
+    channel_of = {item_id(url): str(cid or "") for url, cid in session.execute(select(FeedCandidate.url, FeedCandidate.candidate["channel_id"].astext))}
+    return feedback_weight(((i, v) for i, v in said), channel_of)
 
 
 # ---------------------------------------------------------------- moments
@@ -233,8 +255,9 @@ def heads(session: Session, player_ids: Iterable[int], since: datetime) -> dict[
 def as_candidate(source: str, url: str, kept: dict[str, Any], features: dict[str, Any], player: curate.PlayerContext) -> curate.Candidate:
     """A stored row as the judge reads it."""
     status = (kept.get("details") or {}).get("status") or {}
+    platform = VIDEOS[source].platform if source in VIDEOS else "other"
     return curate.Candidate(
-        kind="video", source="youtube" if source == "youtube" else "other", url=url,
+        kind="video", source=cast(curate.Source, platform if platform in get_args(curate.Source) else "other"), url=url,
         author_name=str(kept.get("channel") or ""), author_handle=str(kept.get("channel_id") or ""),
         title=str(kept.get("title") or ""), text=str(kept.get("description") or ""), published_at=kept.get("published") or None,
         engagement=curate.Engagement(views=whole(features.get("views")), likes=whole(features.get("likes"))),
@@ -264,10 +287,12 @@ def players(session: Session, ids: Iterable[int]) -> dict[int, curate.PlayerCont
     return out
 
 
-def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again: bool = False) -> dict[str, int]:
-    """Send unjudged rows (every row, with again) to the judge, newest first, and keep its verdicts. A row the
-    judge couldn't answer for now stays as it was, for the next run."""
+def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again: bool = False, within: float | None = JUDGE_FOR) -> dict[str, int]:
+    """Send unjudged rows (every row, with again) to the judge, newest first, and keep its verdicts, a chunk at a
+    time. A row the judge couldn't answer for now stays as it was, for the next run; so do the rows left when
+    the run has taken `within` seconds or the curator is stopping."""
     now = now or datetime.now(timezone.utc)
+    started = time.monotonic()
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
         if not again:
@@ -275,49 +300,56 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
         rows = session.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id).limit(limit)).all()
         who = players(session, (r.player_id for r in rows))
     rows = [r for r in rows if r.player_id in who]
-    if not rows:
-        return {"judged": 0, "unjudged": 0}
-    verdicts = curate.judge_many(as_candidate(r.source, r.url, r.candidate or {}, r.features or {}, who[r.player_id]) for r in rows)
-    done = [{"id": r.id, "verdict": v.model_dump(mode="json"), "judged_at": now} for r, v in zip(rows, verdicts) if v is not None]
-    if done:
-        with db.session() as session:
-            session.execute(update(FeedCandidate), done)
-    return {"judged": len(done), "unjudged": len(rows) - len(done)}
+    judged = 0
+    for i in range(0, len(rows), JUDGE_CHUNK):
+        if shutdown.stopping.is_set() or (within is not None and time.monotonic() - started > within):
+            log.info("feed: the judge stopped with %d candidate(s) left for the next run", len(rows) - i)
+            break
+        part = rows[i:i + JUDGE_CHUNK]
+        verdicts = curate.judge_many(as_candidate(r.source, r.url, r.candidate or {}, r.features or {}, who[r.player_id]) for r in part)
+        done = [{"id": r.id, "verdict": v.model_dump(mode="json"), "judged_at": now} for r, v in zip(part, verdicts) if v is not None]
+        if done:
+            with db.session() as session:
+                session.execute(update(FeedCandidate), done)
+        judged += len(done)
+    return {"judged": judged, "unjudged": len(rows) - judged}
 
 
 # ---------------------------------------------------------------- the score
 
 
-def rescore(now: datetime | None = None, channel: str | None = None) -> dict[str, int]:
-    """Work out every judged row's moment and score again from what's stored (just one channel's rows, given
-    one), and write the ones that changed. No source, no model: cheap enough to run after every poll."""
+def rescore(now: datetime | None = None, channel: str | None = None, row: int | None = None) -> dict[str, int]:
+    """Work out every judged row's moment and score again from what's stored (just one channel's rows, or one
+    row, given either), and write the ones that changed. No source, no model: cheap enough to run after every poll."""
     now = now or datetime.now(timezone.utc)
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
                        FeedCandidate.verdict, FeedCandidate.review, FeedCandidate.score, FeedCandidate.moment_id).where(FeedCandidate.verdict.is_not(None))
         if channel is not None:
             query = query.where(FeedCandidate.candidate["channel_id"].astext == channel)
+        if row is not None:
+            query = query.where(FeedCandidate.id == row)
         rows = session.execute(query).all()
         if not rows:
             return {"scored": 0, "served": 0, "changed": 0}
         published = {r.id: when((r.candidate or {}).get("published")) for r in rows}
         oldest = min((at for at in published.values() if at), default=now) - MOMENT_WINDOW
         moments = heads(session, (r.player_id for r in rows), oldest)
-        from .feed import item_id  # feed.py reads this module's helpers; this one of its, here only
-
-        channel_of = {item_id(r.url): str((r.candidate or {}).get("channel_id") or "") for r in rows}
-        said = session.execute(select(FeedFeedback.item_id, FeedFeedback.verdict).where(FeedFeedback.item_id.in_(channel_of))).all()
-        weights = feedback_weight(((i, v) for i, v in said), channel_of)
+        weights = channel_feedback(session)
         listed, set_by_admin = listed_channels(), controls.current().channel_trust
         changes, served = [], 0
         for r in rows:
             at = published[r.id]
             moment = moment_for(at, moments.get(r.player_id, []))
-            cid = channel_of[item_id(r.url)]
+            cid = str((r.candidate or {}).get("channel_id") or "")
             how_far = trust(cid, listed, set_by_admin, weights.get(cid, 0.0))
             value: float | None = None
-            if r.review != "hidden" and (r.review in ("approved", "pinned") or (passes(r.verdict) and how_far > 0)):
-                value = score(r.verdict, r.features or {}, how_far, at, now) + (PIN if r.review == "pinned" else 0.0)
+            if r.review in ("approved", "pinned"):
+                # The admin's word on this one video stands over their word on its channel: served, if hidden there.
+                value = score(r.verdict, r.features or {}, how_far or UNLISTED, at, now) + (PIN if r.review == "pinned" else 0.0)
+            elif r.review != "hidden" and passes(r.verdict) and how_far > 0:
+                value = score(r.verdict, r.features or {}, how_far, at, now)
+            if value is not None:
                 served += 1
             if value != r.score or moment != r.moment_id:
                 changes.append({"id": r.id, "score": value, "moment_id": moment})

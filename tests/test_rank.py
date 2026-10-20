@@ -75,7 +75,7 @@ def test_the_score_weighs_interest_pace_and_likes_and_trust_multiplies_it():
     assert rank.score(verdict(interest="lots"), fast, 1.0, published, NOW) < rank.score(verdict(), fast, 1.0, published, NOW)  # a bad value counts as none
 
 
-def test_a_channels_trust_is_the_admins_word_else_whether_a_sport_lists_it_and_fans_feedback_lowers_it():
+def test_a_channels_trust_is_the_admins_word_else_whether_a_sport_lists_it_and_fans_reports_lower_it_to_half():
     listed = {CHANNEL}
     assert rank.trust(CHANNEL, listed, {}) == rank.LISTED
     assert rank.trust("UC" + "z" * 22, listed, {}) == rank.UNLISTED
@@ -83,9 +83,11 @@ def test_a_channels_trust_is_the_admins_word_else_whether_a_sport_lists_it_and_f
     assert rank.trust(CHANNEL, listed, {CHANNEL: 0.0}) == 0.0
     weight = rank.feedback_weight([("i1", "report"), ("i2", "report"), ("i1", "not_about_player"), ("i3", "not_interested"), ("other", "report")],
                                   {"i1": CHANNEL, "i2": CHANNEL, "i3": CHANNEL})  # fmt: skip
-    assert weight == {CHANNEL: pytest.approx(2.65)}
-    assert rank.trust(CHANNEL, listed, {}, weight[CHANNEL]) == pytest.approx(1 / (1 + 2.65 / rank.FEEDBACK_SCALE))
+    assert weight == {CHANNEL: pytest.approx(2.5)}  # "not interested" is taste: it doesn't count against the channel
+    assert rank.trust(CHANNEL, listed, {}, weight[CHANNEL]) == pytest.approx(1 / (1 + 2.5 / rank.FEEDBACK_SCALE))
     assert rank.trust(CHANNEL, listed, {}, 4 * rank.FEEDBACK["report"]) == pytest.approx(0.5)  # four reports halve it
+    assert rank.trust(CHANNEL, listed, {}, 400.0) == pytest.approx(rank.LISTED * rank.FEEDBACK_FLOOR)  # and no number of them sinks it
+    assert rank.trust(CHANNEL, listed, {CHANNEL: 1.0}, 400.0) == 1.0  # the admin's word stands as it is
 
 
 def test_the_panels_channel_trust_is_kept_as_a_control_and_odd_values_are_ignored():
@@ -120,6 +122,8 @@ def test_older_videos_still_being_watched_are_evergreen():
     assert not rank.evergreen(numbers(read(24 * 8, 900_000), read(1, 900_100)), old, NOW)  # hardly watched now
     assert not rank.evergreen(numbers(read(1, 960_000)), old, NOW)  # one read: can't tell
     assert not rank.evergreen(numbers(read(24 * 8, 1_000), read(1, 9_000)), old, NOW)  # growing, but few have seen it
+    # Watched fast once and not since: its last two reads say so, whatever its first one did.
+    assert not rank.evergreen(numbers(read(24 * 39, 2_000), read(24 * 8, 960_000), read(1, 960_000)), old, NOW)
 
 
 @pytest.mark.parametrize(("kind", "by", "tag"), [

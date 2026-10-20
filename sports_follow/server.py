@@ -1501,10 +1501,10 @@ def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, A
         found = admin.review_candidate(row_id, said if isinstance(said, str) or said is None else "?")
     except ValueError:
         raise HTTPException(400, "Review is approved, hidden, pinned, or null.") from None
-    if not found:
+    if found is None:
         raise HTTPException(404, "There's no such candidate.")
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
-    return {"review": said}
+    return found
 
 
 @app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
