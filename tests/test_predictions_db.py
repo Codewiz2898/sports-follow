@@ -24,7 +24,7 @@ from sports_follow.models import Account, Event, EventPlayer, Follow, League, Le
 
 from .test_match_follow import Store
 from .test_new_adapters import CARLSEN, LAZAVIK, load
-from .test_pandascore import NRG, SEN, _game, _match
+from .test_pandascore import FINAL, NRG, SEN, _game, _match
 from .test_predictions import board
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -85,6 +85,14 @@ def redis(monkeypatch):
     return store
 
 
+@pytest.fixture(autouse=True)
+def running(monkeypatch):
+    """Both sources run here, as in production: a pick needs its game's source on, to be settled."""
+    for system in ("lichess_chess", "pandascore_esports"):
+        if system not in ADAPTERS:
+            monkeypatch.setitem(ADAPTERS, system, SimpleNamespace(system=system, sports=("chess",) if system == "lichess_chess" else ("valorant",)))
+
+
 def source(system: str) -> SimpleNamespace:
     return SimpleNamespace(system=system, credit=lambda snap: system, live_note=None, lag_note=None)
 
@@ -123,28 +131,35 @@ def test_a_chess_game_is_asked_before_it_starts_and_settled_from_its_recorded_re
     db.commit()
     # A pick waits on it: its game is polled as a followed game is, though nobody follows a player in it.
     assert db.scalars(predictions.watched()).all() == [1] and predictions.waiting(db, 1)
+    # Three picks: too few for the split, which would tell a fan their friends' picks; it shows from SPLIT_FROM on.
+    [few] = predictions.shown(db, "asha", [q], datetime.now(timezone.utc))
+    assert all("share" not in o for o in few["options"]) and few["worth"] is None and few["mine"] == CARLSEN
+    for fan in ("kiran", "dev"):
+        predictions.pick(db, fan, q.id, LAZAVIK)
+    db.commit()
     [shown] = predictions.shown(db, "asha", [q], datetime.now(timezone.utc))
-    assert [(o["key"], o["share"]) for o in shown["options"]] == [(CARLSEN, 67), ("draw", 33), (LAZAVIK, 0)] and shown["worth"] == 33
-    [unpicked] = predictions.shown(db, "dev", [q], datetime.now(timezone.utc))
-    assert all("share" not in o for o in unpicked["options"]) and unpicked["picks"] == 3  # the crowd doesn't pick for them
+    assert [(o["key"], o["share"]) for o in shown["options"]] == [(CARLSEN, 40), ("draw", 20), (LAZAVIK, 40)] and shown["worth"] == 60
+    [unpicked] = predictions.shown(db, "sana", [q], datetime.now(timezone.utc))
+    assert all("share" not in o for o in unpicked["options"]) and unpicked["picks"] == 5  # the crowd doesn't pick for them
 
     poll(1, board(status="*", ongoing=True))  # the first move: it closes
     db.expire_all()
     assert db.get(Question, q.id).status == "closed"
     with pytest.raises(predictions.Refused) as late:
-        predictions.pick(db, "dev", q.id, LAZAVIK)
+        predictions.pick(db, "sana", q.id, LAZAVIK)
     assert late.value.status == 409
+    db.rollback()
 
     poll(1, board(0))  # the recorded result: Carlsen won with White
     db.expire_all()
     settled = db.get(Question, q.id)
     assert (settled.status, settled.answer) == ("settled", CARLSEN)
-    assert picks(db) == {"asha": (CARLSEN, 33), "ravi": (CARLSEN, 33), "meera": ("draw", 0)}  # two of three were right
+    assert picks(db) == {"asha": (CARLSEN, 60), "ravi": (CARLSEN, 60), "meera": ("draw", 0), "kiran": (LAZAVIK, 0), "dev": (LAZAVIK, 0)}  # two of five were right
     assert db.scalars(predictions.watched()).all() == []  # nothing waits on it now
     # The result corrected at the source (an arbiter's ruling): it settles again.
     predictions.settle(db, [settled], structured.sports.get("chess"), "final", board(1).state, datetime.now(timezone.utc))
     db.commit()
-    assert picks(db) == {"asha": (CARLSEN, 0), "ravi": (CARLSEN, 0), "meera": ("draw", 67)}
+    assert picks(db) == {"asha": (CARLSEN, 0), "ravi": (CARLSEN, 0), "meera": ("draw", 80), "kiran": (LAZAVIK, 0), "dev": (LAZAVIK, 0)}
 
 
 def test_a_series_settles_map_by_map_and_a_map_never_played_is_voided(db, redis):
@@ -158,6 +173,8 @@ def test_a_series_settles_map_by_map_and_a_map_never_played_is_voided(db, redis)
         predictions.pick(db, fan, qs["map3"].id, str(option))
     predictions.pick(db, "a", qs["map2"].id, str(NRG))
     db.commit()
+    # Its source polls its games together, in one lane: the series is in it now, though nobody follows a player in it.
+    assert structured.lane_events("pandascore_esports") == [5]
     live = _match("running", 1, 0, [_game(1, "finished", SEN), _game(2, "running"), _game(3, "not_started")])
     poll(5, ps.parse_match(live), "pandascore_esports")
     db.expire_all()
@@ -176,6 +193,12 @@ def test_a_pick_waiting_keeps_its_game_polled_and_the_tick_closes_and_voids(db, 
     chess_board(db, start)
     poll(1, board(status="*"))
     q = db.scalars(select(Question)).one()
+    with monkeypatch.context() as off:  # its source turned off: a pick could never be settled
+        off.delitem(ADAPTERS, "lichess_chess")
+        with pytest.raises(predictions.Refused) as unsettled:
+            predictions.pick(db, "asha", q.id, CARLSEN)
+        assert unsettled.value.status == 409
+        db.rollback()
     monkeypatch.setitem(ADAPTERS, "lichess_chess", SimpleNamespace(system="lichess_chess", sports=("chess",)))
     assert structured._watching(1) is None  # pyright: ignore[reportPrivateUsage]  nobody's player, nobody's game, no pick
     predictions.pick(db, "asha", q.id, CARLSEN)
@@ -214,6 +237,23 @@ def test_a_game_put_back_opens_its_question_again_till_its_new_start(db, redis):
     assert (moved.status, moved.locks_at, moved.closed_at) == ("open", later, None)
 
 
+def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):
+    start = soon() + timedelta(days=4)
+    db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=start, status="scheduled", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))
+    db.commit()
+    poll(5, ps.parse_match(_match("not_started")), "pandascore_esports")
+    predictions.sweep(db, datetime.now(timezone.utc) + predictions.STALE + timedelta(hours=1))  # three days after they were made: still to come
+    db.commit()
+    assert {q.ask: q.status for q in db.scalars(select(Question))} == {"map1": "open", "map2": "open", "map3": "open"}
+    predictions.sweep(db, start + predictions.STALE + timedelta(hours=1))  # three days past the start, never played
+    db.commit()
+    db.expire_all()
+    assert {(q.status, q.answer) for q in db.scalars(select(Question))} == {("void", None)}
+    # A void of the sweep's is final: a board saying otherwise later doesn't settle it.
+    rows = list(db.scalars(select(Question)))
+    assert predictions.settle(db, rows, structured.sports.get("valorant"), "final", ps.parse_match(FINAL).state, datetime.now(timezone.utc)) == []
+
+
 def test_questions_are_made_ahead_from_a_read_of_a_fans_game_coming_up(db, redis, monkeypatch):
     start = soon()
     fixtures = [f"{ROUND}-{CARLSEN}", f"{ROUND}-{LAZAVIK}"]
@@ -241,6 +281,37 @@ def test_questions_are_made_ahead_from_a_read_of_a_fans_game_coming_up(db, redis
     db.commit()
     db.expire_all()
     assert db.get(Question, q.id).event_id == 1
+    # Read again once it's over (its match page's, after the last poll): settled from the read.
+    over = LiveGame(source_id=fixtures[0], title="Magnus Carlsen vs Denis Lazavik", competition="EWC", start_utc=start, snapshot=board(0), fixtures=fixtures, sport="chess")
+    monkeypatch.setattr(read, "match", lambda fixture: over)
+    match.read("board", fixtures[0])
+    predictions.made("board", fixtures[0])
+    db.expire_all()
+    assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("settled", CARLSEN)
+
+
+def test_a_campaign_shows_its_players_games_to_call_and_a_link_previews_the_split(db, redis):
+    start = soon()
+    chess_board(db, start)
+    db.add(Player(id=1, slug="carlsen", name="Magnus Carlsen", sport="Chess"))
+    db.flush()
+    db.add(EventPlayer(event_id=2, player_id=1))  # his fixture's event: the question was made from the other one
+    db.commit()
+    poll(1, board(status="*"))
+    assert predictions.for_players(db, "fan", [1]) == []  # his fixture's not polled, and no read listed it, yet
+    poll(2, board(status="*", fide=LAZAVIK))
+    q = db.scalars(select(Question)).one()
+    [listed] = predictions.for_players(db, "fan", [1])
+    assert listed["id"] == q.id and predictions.for_players(db, "fan", [99]) == []
+    for i in range(predictions.SPLIT_FROM - 1):
+        predictions.pick(db, f"fan{i}", q.id, CARLSEN)
+    db.commit()
+    assert all("share" not in o for o in predictions.public(db, q.id)["options"])  # too few to show anyone
+    predictions.pick(db, "last", q.id, "draw")
+    db.commit()
+    shown = predictions.public(db, q.id)
+    assert [o["share"] for o in shown["options"]] == [80, 20, 0] and shown["mine"] is None
+    assert predictions.public(db, 9999) is None
 
 
 # ---------------------------------------------------------------- leagues
@@ -284,10 +355,10 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     assert made["name"] == "Chess gang" and re.fullmatch(f"[{predictions.CODE}]{{6}}", code) and made["members"] == 1
     assert asyncio.run(server.league_invite(code.lower(), "acct-meera"))["invite"] == {"code": code, "name": "Chess gang", "members": 1, "by": "Arjun", "member": False}
     with pytest.raises(server.HTTPException) as unsigned:
-        server.join_league(code, {"member": "Meera"}, "anon", None, db)
+        asyncio.run(server.join_league(code, {"member": "Meera"}, "anon", None))
     assert unsigned.value.status_code == 401
     for fan, name in (("acct-meera", "Meera"), ("acct-ravi", "Ravi")):
-        server.join_league(code, {"member": name}, fan, accounts.Signed(account_id=2, fan_id=fan, session_id=2), db)
+        asyncio.run(server.join_league(code, {"member": name}, fan, accounts.Signed(account_id=2, fan_id=fan, session_id=2)))
     server.league_shared(code, "acct-ravi", db)
     db.expire_all()
     league = db.scalars(select(League)).one()
@@ -329,26 +400,30 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     assert db.scalars(select(League)).all() == []
 
 
-def test_signing_in_brings_a_devices_picks_and_deleting_the_account_takes_its_own(db, redis):
+def test_signing_in_brings_a_devices_open_picks_and_deleting_the_account_takes_its_own(db, redis):
     now = datetime.now(timezone.utc)
     q1 = settled_question(db, "g:1", now, {}, "w")
-    q2 = Question(game="g:2", ask="result", keys=[], sport="chess", match="m/2", title="Who wins?", options=[{"key": "w", "label": "w"}], status="open")
-    db.add(q2)
+    open_q = dict(ask="result", keys=[], sport="chess", title="Who wins?", options=[{"key": "w", "label": "w"}, {"key": "b", "label": "b"}], status="open", locks_at=now + timedelta(hours=2))
+    q2, q3 = Question(game="g:2", match="m/2", **open_q), Question(game="g:3", match="m/3", **open_q)
+    db.add_all([q2, q3])
     account = Account(id=1, email="sana@example.com", fan_id="acct-sana")
     db.add(account)
     db.flush()
-    db.add_all([Pick(question_id=q1.id, fan_id="device", option="b"), Pick(question_id=q2.id, fan_id="device", option="w"), Pick(question_id=q1.id, fan_id="acct-sana", option="w")])
+    db.add_all([Pick(question_id=q1.id, fan_id="device", option="w", points=50), Pick(question_id=q2.id, fan_id="device", option="w"),
+                Pick(question_id=q3.id, fan_id="device", option="b"), Pick(question_id=q3.id, fan_id="acct-sana", option="w")])
     db.commit()
     accounts.sign_in(db, 1, "device")
     db.commit()
-    assert {(p.question_id, p.fan_id, p.option) for p in db.scalars(select(Pick))} == {(q1.id, "acct-sana", "w"), (q2.id, "acct-sana", "w")}  # the account's pick stands
+    # Picks still open come over (the account's own standing where both picked); one already scored stays the
+    # device's: calling a game three ways on three browsers and signing in on the right one wins nothing.
+    assert {(p.question_id, p.fan_id, p.option) for p in db.scalars(select(Pick))} == {(q1.id, "device", "w"), (q2.id, "acct-sana", "w"), (q3.id, "acct-sana", "w")}
     made = predictions.create(db, "acct-sana", "Sana's lot", "Sana")
     predictions.create(db, "acct-sana", "Just me", "Sana")
     predictions.join(db, "acct-kiran", made.code, "Kiran")
     db.commit()
     accounts.delete_account(db, 1)
     db.commit()
-    assert db.scalars(select(Pick)).all() == []
+    assert [p.fan_id for p in db.scalars(select(Pick))] == ["device"]
     [kept] = db.scalars(select(League)).all()  # the one Kiran's in stays, with nobody as its maker; the other went
     assert (kept.name, kept.owner) == ("Sana's lot", None) and db.scalars(select(LeagueMember.fan_id)).all() == ["acct-kiran"]
 

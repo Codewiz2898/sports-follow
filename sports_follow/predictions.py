@@ -31,12 +31,14 @@ from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session
 
 from . import bus, sports
+from .adapters import ADAPTERS
 from .config import APP_NAME
 from .db import session
 from .models import Event, EventPlayer, EventTeam, Follow, League, LeagueMember, MatchFollow, Pick, Question, TeamFollow
 
 FLOOR = 10  # a right pick scores at least this: one everyone made is still worth something
-STALE = timedelta(days=3)  # a question unanswered this long past its start (or its making) is voided
+STALE = timedelta(days=3)  # a question unanswered this long past its game's start (or its making, with none) is voided
+SPLIT_FROM = 5  # picks before an open question's split shows: with fewer, it would tell a fan their friends' picks
 OPEN, CLOSED, SETTLED, VOIDED = "open", "closed", "settled", "void"
 UNSETTLED = (OPEN, CLOSED)
 PRE_START = ("scheduled", "armed")  # a game whose questions can still be made: a postponed one waits for its date
@@ -121,7 +123,7 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
         db.execute(insert(Question).values(
             game=game, ask=ask.key, keys=keys, event_id=event_id, sport=rules.key, match=f"{system}/{fixture}"[:100], title=ask.title[:200],
             game_title=(title or "")[:300], options=[{"key": k, "label": label} for k, label in ask.options], position=ask.order, status=OPEN,
-            locks_at=start if ask.first else None,
+            starts_at=start, locks_at=start if ask.first else None,
         ).on_conflict_do_nothing(index_elements=["game", "ask"]))
     if new:
         rows = list(db.scalars(select(Question).where(Question.game == game).order_by(Question.position, Question.id)))
@@ -130,6 +132,8 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
             q.keys = list(dict.fromkeys([*(q.keys or []), *keys]))
         if q.event_id is None and event_id is not None:
             q.event_id = event_id
+        if start is not None and q.status in UNSETTLED and q.starts_at != start:
+            q.starts_at = start
         ask = asks.get(q.ask)
         if ask is not None and ask.first and start is not None and start > now and q.status in UNSETTLED and q.locks_at != start:
             q.locks_at, q.status, q.closed_at = start, OPEN, None
@@ -138,13 +142,31 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
 
 def polled(db: Session, event: Event, status: str, state: dict[str, Any], now: datetime) -> list[int]:
     """A poll of a game (structured.apply_poll): its questions made, if it's still to start, and what its board
-    answers settled. Returns the questions settled now."""
+    answers settled. Returns the questions settled now. Its last read is from Redis (match.last_read), which the
+    poll's own copy is kept in too."""
+    from . import match  # the game's last read, for its other addresses (match reads Live now, which reads search)
+
     rules = _rules(event.sport, state)
     if not rules.predicts:
         return []
     system, _, fixture = (event.key or "").partition(":")
-    _, rows = ensure(db, system, fixture, event.sport, status, state, event.start_utc, event.title, [event.key], event.id, now)
+    # Every address the game has, as its last read listed them (a chess board's other player's fixture), so a fan of
+    # either player finds its questions before that fixture's own poll.
+    listed = ((match.last_read(system, fixture) or {}).get("game") or {}).get("fixtures") or []
+    keys = list(dict.fromkeys([event.key, *(f"{system}:{f}" for f in listed)]))
+    _, rows = ensure(db, system, fixture, event.sport, status, state, event.start_utc, event.title, keys, event.id, now)
     return settle(db, rows, rules, status, state, now) if rows else []
+
+
+def _read(db: Session, system: str, fixture: str, game: dict[str, Any], keys: list[str], polled_by: int | None, now: datetime) -> list[Question]:
+    """A game's questions as a read of it says (its match page's, or the worker's): made if it's to come, settled from
+    its board if it's under way or over, so a result its source corrects after the last poll still settles again."""
+    state = (game.get("live") or {}).get("state") or {}
+    start = datetime.fromisoformat(game["start_utc"]) if game.get("start_utc") else None
+    _, rows = ensure(db, system, fixture, game.get("sport"), game.get("status"), state, start, game.get("title") or "", keys, polled_by, now)
+    if rows and game.get("status") not in PRE_START:
+        settle(db, rows, _rules(game.get("sport"), state), game.get("status"), state, now)
+    return rows
 
 
 def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
@@ -174,17 +196,16 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
 
 def made(system: str, fixture: str) -> None:
     """After a game's read (worker.read_match): the questions its board asks, if it's still to start, under every
-    fixture the read lists (a chess board's two)."""
+    fixture the read lists (a chess board's two); or, under way or over, what it answers of those made before."""
     from . import match
 
     game = (match.last_read(system, fixture) or {}).get("game")
-    if not game or game.get("status") not in PRE_START:
+    if not game or not _rules(game.get("sport"), (game.get("live") or {}).get("state") or {}).predicts:
         return
     keys = list(dict.fromkeys(f"{system}:{f}" for f in [fixture, *(game.get("fixtures") or [])]))
-    start = datetime.fromisoformat(game["start_utc"]) if game.get("start_utc") else None
     with session() as db:
         polled_by = db.scalar(select(Event.id).where(Event.key.in_(keys), Event.live_binding.is_not(None)).order_by(Event.id).limit(1))
-        ensure(db, system, fixture, game.get("sport"), game.get("status"), (game.get("live") or {}).get("state") or {}, start, game.get("title") or "", keys, polled_by)
+        _read(db, system, fixture, game, keys, polled_by, _now())
 
 
 # ---------------------------------------------------------------- closing and settling
@@ -192,16 +213,17 @@ def made(system: str, fixture: str) -> None:
 
 def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str | None, state: dict[str, Any], now: datetime) -> list[int]:
     """What a game's board says of its questions: those under way closed, those it answers settled and their picks
-    scored (or voided), a settled one whose answer the source changed settled again. Returns the ones settled now."""
+    scored (or voided), one whose answer the source changed settled again (a voided one too, once a winner it lacked
+    comes). Returns the ones settled now."""
     done = []
     for q in rows:
-        if q.status == VOIDED:
-            continue
+        if q.status == VOIDED and q.answer != sports.VOID:
+            continue  # voided by the sweep, long past its start: that's final
         answer = rules.answer(q.ask, status, state)
         if q.status == OPEN and (answer is not None or rules.closed(q.ask, status, state) or (q.locks_at is not None and q.locks_at <= now)):
             q.status, q.closed_at = CLOSED, now
-        if answer is None or (q.status == SETTLED and (answer == q.answer or answer == sports.VOID)):
-            continue
+        if answer is None or answer == q.answer or (answer == sports.VOID and q.status == SETTLED):
+            continue  # nothing new; or a board that lost an answer it gave doesn't take it back
         if answer != sports.VOID and answer not in {o["key"] for o in q.options or []}:
             continue  # an answer it didn't offer (a side changed after it was asked): it waits for the sweep
         score(db, q, answer, now)
@@ -224,10 +246,11 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
 
 def sweep(db: Session, now: datetime) -> None:
     """The tick (pipeline.due_work): first questions whose start time has come close, though no poll has seen the
-    game start; and a question still unanswered STALE past its start (or its making, for a later map) is voided."""
+    game start; and a question still unanswered STALE past its game's start (or its making, with none) is voided."""
     db.execute(update(Question).where(Question.status == OPEN, Question.locks_at <= now).values(status=CLOSED, closed_at=now))
-    stale = (Question.status.in_(UNSETTLED), func.coalesce(Question.locks_at, Question.created_at) < now - STALE)
-    db.execute(update(Question).where(*stale).values(status=VOIDED, answer=sports.VOID, settled_at=now, closed_at=func.coalesce(Question.closed_at, now)))
+    stale = (Question.status.in_(UNSETTLED), func.coalesce(Question.starts_at, Question.created_at) < now - STALE)
+    # Its answer left empty: a void of the sweep's is final, where one its board gave (VOID) can still be settled.
+    db.execute(update(Question).where(*stale).values(status=VOIDED, answer=None, settled_at=now, closed_at=func.coalesce(Question.closed_at, now)))
 
 
 def watched() -> Any:
@@ -255,7 +278,7 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
     from . import matches  # the event a followed game's polled by (matches reads match, which reads Live now)
 
     now = now or _now()
-    q = db.get(Question, question_id)
+    q = db.get(Question, question_id, with_for_update=True)  # a poll closing it waits for this pick, or this for it
     if q is None:
         raise Refused(404, "No such question.")
     if not is_open(q, now):
@@ -268,6 +291,8 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         if event is None:
             raise Refused(409, NO_POLL)
         db.execute(update(Question).where(Question.game == q.game, Question.event_id.is_(None)).values(event_id=event.id))
+    elif (db.scalar(select(Event.live_binding).where(Event.id == q.event_id)) or {}).get("adapter") not in ADAPTERS:
+        raise Refused(409, NO_POLL)  # its source is off for now: a pick would never be settled
     db.execute(insert(Pick).values(question_id=q.id, fan_id=fan, option=option)
                .on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "updated_at": func.now()}))
     return q
@@ -275,7 +300,7 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
 
 def unpick(db: Session, fan: str, question_id: int, now: datetime | None = None) -> None:
     """Take a pick back while its question's open."""
-    q = db.get(Question, question_id)
+    q = db.get(Question, question_id, with_for_update=True)
     if q is None:
         raise Refused(404, "No such question.")
     if not is_open(q, now or _now()):
@@ -286,10 +311,11 @@ def unpick(db: Session, fan: str, question_id: int, now: datetime | None = None)
 # ---------------------------------------------------------------- what the app shows
 
 
-def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> list[dict[str, Any]]:
-    """Questions as the app shows them: each answer with how fans split on it, once this fan has picked or the
-    question's closed (the crowd doesn't pick for them); their own pick, what it scored or would score now, and the
-    answer once it's settled."""
+def shown(db: Session, fan: str | None, rows: list[Question], now: datetime, public: bool = False) -> list[dict[str, Any]]:
+    """Questions as the app shows them: each answer with how fans split on it, once this fan has picked (and
+    SPLIT_FROM have, so it can't tell them a friend's pick) or the question's closed: the crowd doesn't pick for them;
+    their own pick, what it scored or would score now, and the answer once it's settled. `public`: a link preview's,
+    whose split shows to anyone once SPLIT_FROM have picked (the picker shared it)."""
     ids = [q.id for q in rows]
     if not ids:
         return []
@@ -304,33 +330,57 @@ def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> 
         total = sum(c.get(k, 0) for k in keys)
         live = is_open(q, now)
         own = mine.get(q.id)
-        split = shares(c, keys) if own is not None or not live else None
+        split = shares(c, keys) if ((own is not None or public) and total >= SPLIT_FROM) or not live else None
         out.append({
             "id": q.id, "ask": q.ask, "title": q.title, "game": q.game_title, "sport": q.sport, "match": q.match,
             "status": q.status if q.status != OPEN or live else CLOSED, "locks_at": _iso(q.locks_at), "answer": q.answer,
             "picks": total,
+            "split_from": SPLIT_FROM,
             "options": [{"key": o["key"], "label": o["label"], **({"picks": c.get(o["key"], 0), "share": split[o["key"]]} if split is not None else {})} for o in q.options or []],
             "mine": own[0] if own else None,
             "points": own[1] if own else None,
             # What their pick would score were it right now, while it's still to be settled.
-            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED else None,
+            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED and split is not None else None,
         })
     return out
 
 
 def for_page(db: Session, fan: str | None, system: str, fixture: str, page: dict[str, Any], now: datetime | None = None) -> list[dict[str, Any]]:
-    """A match page's questions (match.view's page): made from its board if the game's still to come, else those
-    made before; under every address the page knows it by, polled by one of its events where it has one."""
+    """A match page's questions (match.view's page, which carries its board as a read does): made from its board if
+    the game's still to come, else those made before, settled as far as its board says; under every address the page
+    knows it by, polled by one of its events where it has one. None while its source is off."""
     now = now or _now()
     state = ((page.get("live") or {}).get("state")) or {}
-    if not _rules(page.get("sport"), state).predicts:
-        return []
+    if system not in ADAPTERS or not _rules(page.get("sport"), state).predicts:
+        return []  # a sport that asks nothing, or a source that's off: nothing could be settled
     ids = page.get("event_ids") or []
     polled_by = db.scalar(select(Event.id).where(Event.id.in_(ids), Event.live_binding.is_not(None)).order_by(Event.id).limit(1)) if ids else None
-    start = datetime.fromisoformat(page["start_utc"]) if page.get("start_utc") else None
     keys = list(dict.fromkeys(f"{system}:{f}" for f in [fixture, *(page.get("fixtures") or [])]))
-    _, rows = ensure(db, system, fixture, page.get("sport"), page.get("status"), state, start, page.get("title") or "", keys, polled_by, now)
+    rows = _read(db, system, fixture, page, keys, polled_by, now)
     return shown(db, fan, rows, now)
+
+
+def public(db: Session, question_id: int, now: datetime | None = None) -> dict[str, Any] | None:
+    """A question as its link preview shows it to anyone (share.of_question): its split, once SPLIT_FROM have picked
+    or it's closed. None for no such question."""
+    q = db.get(Question, question_id)
+    return shown(db, None, [q], now or _now(), public=True)[0] if q is not None else None
+
+
+def for_players(db: Session, fan: str | None, player_ids: list[int], now: datetime | None = None) -> list[dict[str, Any]]:
+    """A campaign page's questions (campaigns.page): those of its players' games still open, soonest first, then
+    those settled lately, newest first."""
+    now = now or _now()
+    if not player_ids:
+        return []
+    keys = [k for (k,) in db.execute(select(Event.key).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id.in_(player_ids))).all()]
+    if not keys:
+        return []
+    theirs = Question.keys.has_any(array(keys))
+    coming = list(db.scalars(select(Question).where(theirs, Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > now))
+                             .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(6)))
+    settled = list(db.scalars(select(Question).where(theirs, Question.status == SETTLED, Question.settled_at >= now - RECENT).order_by(Question.settled_at.desc()).limit(3)))
+    return shown(db, fan, [*coming, *settled], now)
 
 
 def _fans_events(fan: str | None = None) -> Any:
@@ -506,12 +556,16 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
 
 
 def merge(db: Session, anon: str, fan: str) -> None:
-    """An anonymous fan's picks into their account's (accounts.adopt): a question both picked keeps the account's.
-    An anonymous fan is in no league: leagues need an account."""
+    """An anonymous fan's picks on questions still open into their account's (accounts.adopt): a question both picked
+    keeps the account's. Those on games under way or over stay the device's, in the split but in no league's table:
+    else a fan could call a game three ways on three browsers and sign in on the one that was right. An anonymous
+    fan is in no league: leagues need an account."""
+    still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now()))
+    theirs = (Pick.fan_id == anon, Pick.question_id.in_(still))
     moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "created_at", "updated_at"],
-                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, Pick.created_at, Pick.updated_at).where(Pick.fan_id == anon))
+                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, Pick.created_at, Pick.updated_at).where(*theirs))
     db.execute(moved.on_conflict_do_nothing())
-    db.execute(delete(Pick).where(Pick.fan_id == anon))
+    db.execute(delete(Pick).where(*theirs))
 
 
 def forget(db: Session, fan: str) -> None:

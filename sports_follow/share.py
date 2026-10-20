@@ -171,6 +171,34 @@ def of_campaign(shown: dict[str, Any]) -> Preview:
     )
 
 
+def of_question(q: dict[str, Any]) -> Preview:
+    """A question fans call (predictions.public), as the link a fan shares from its card (/match/<game>?q=<id>):
+    once settled, how few called it ("7%", "called it: Sindarov"); before, how fans split ("71%", "say Gukesh D"),
+    once enough have picked to show it; with fewer, the question itself. In its sport's colour, as every preview."""
+    ground, ink = _colours(sports.of(q["sport"]))
+    label = sports.label(q["sport"])
+    shown = [o for o in q["options"] if o.get("share") is not None]
+    answer = next((o for o in shown if o["key"] == q.get("answer")), None) if q["status"] == "settled" else None
+    top = max(shown, key=lambda o: o["share"]) if shown and q["picks"] else None
+    rest = _joined(*(f"{o['label']} {o['share']}%" for o in shown if o is not (answer or top)))
+    if answer is not None:
+        word, name, lines = f"{answer['share']}%", f"called it: {answer['label']}", (q["game"], f"{q['picks']:,} picks · {rest}" if rest else "")
+        title = f"Only {answer['share']}% of {APP_NAME} fans called it: {answer['label']}" if answer["share"] <= 50 else f"{answer['share']}% of {APP_NAME} fans called it: {answer['label']}"
+    elif top is not None:
+        word, name, lines = f"{top['share']}%", f"say {top['label']}", (_joined(q["title"], q["game"]), _joined(rest, f"{q['picks']:,} picks"))
+        title = f"{top['share']}% of {APP_NAME} fans say {top['label']}: {q['title']} {q['game']}"
+    else:
+        word, name, lines = q["title"], "", (q["game"], f"Call it on {APP_NAME} before it starts")
+        title = f"{q['title']} {q['game']}"
+    return Preview(
+        title=title,
+        description=f"{_sentence(_joined(q['title'], q['game'], sep=' '))} Call it before it starts, and play with friends on {APP_NAME}. Bragging rights only.",
+        path=f"/match/{q['match']}?q={q['id']}",
+        picture=Picture(ground, ink, label, word, name, tuple(line for line in lines if line)),
+        image=f"/api/predictions/{q['id']}/share.png",
+    )
+
+
 APP = Picture(BRAND, "#ffffff", "", APP_WORD, "", (APP_LINE,))
 
 

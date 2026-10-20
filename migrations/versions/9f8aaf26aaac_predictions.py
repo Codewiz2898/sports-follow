@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("position", sa.Integer(), nullable=False),
         sa.Column("status", sa.String(length=10), nullable=False),
         sa.Column("answer", sa.String(length=64), nullable=True),
+        sa.Column("starts_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("locks_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("settled_at", sa.DateTime(timezone=True), nullable=True),

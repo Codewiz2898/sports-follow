@@ -500,6 +500,15 @@ async def player_picture(player_id: RowId, g: Annotated[int | None, Query(ge=1, 
     return await _picture(preview.picture)
 
 
+@app.get("/api/predictions/{question_id}/share.png")
+async def question_picture(question_id: RowId) -> Response:
+    """The picture a link to a question shows (share.of_question): how fans split on it, or how few called it."""
+    q = await in_db(predictions.public, question_id)
+    if q is None:
+        raise HTTPException(404, "No such question.")
+    return await _picture(share.of_question(q).picture)
+
+
 @app.get("/api/share.png")
 async def app_picture() -> Response:
     """The picture a link to any other page shows: the app's own."""
@@ -637,7 +646,9 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
 
 LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9]+$")]
 LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
-INVITES_PER_HOUR = 60  # invite pages one fan opens in an hour: a code can't be guessed by trying them all
+INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
+PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
+PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
 
 
 def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
@@ -646,19 +657,26 @@ def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
 
 
 @app.put("/api/predictions/{question_id}/pick")
-def make_pick(question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400."""
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address."""
     option = body.get("option")
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
-    try:
-        q = predictions.pick(db, fan, question_id, option)
-    except predictions.Refused as refused:
-        raise _refused(db, refused)
-    db.commit()  # before the answer: the tick polls its game from now on
-    return {"question": predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]}
+    address = client_address(request)
+    await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
+                "That's a lot of picks from your network. Try again in a while.")
+
+    def call(db: Session) -> dict[str, Any]:
+        try:
+            q = predictions.pick(db, fan, question_id, option)
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+        db.commit()  # before the answer: the tick polls its game from now on
+        return predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]
+
+    return {"question": await in_db(call)}
 
 
 @app.delete("/api/predictions/{question_id}/pick")
@@ -731,18 +749,22 @@ async def league_invite(code: LeagueCode, fan: str = Depends(fan_id)) -> dict[st
 
 
 @app.post("/api/leagues/{code}/join")
-def join_league(code: LeagueCode, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of),
-                db: Session = Depends(get_db)) -> dict[str, Any]:
+async def join_league(code: LeagueCode, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Join a league by its invite ({member}: this fan's name in it; joined already, their name changes). Needs an
-    account (a 401 without)."""
+    account (a 401 without); INVITES_PER_HOUR a fan an hour, with the invite pages they open."""
     if signed is None:
         raise HTTPException(401, predictions.SIGN_IN)
-    try:
-        joined = predictions.join(db, fan, code, body.get("member"))
-    except predictions.Refused as refused:
-        raise _refused(db, refused)
-    db.commit()
-    return {"league": predictions.league(db, fan, joined.code)}
+    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+
+    def join(db: Session) -> dict[str, Any]:
+        try:
+            joined = predictions.join(db, fan, code, body.get("member"))
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+        db.commit()
+        return predictions.league(db, fan, joined.code)
+
+    return {"league": await in_db(join)}
 
 
 @app.delete("/api/leagues/{code}/me")
@@ -878,8 +900,21 @@ def _campaign_slug(slug: str) -> str:
 @app.get("/api/campaigns/{slug}")
 async def campaign(slug: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """A campaign page (/<slug>): its words, its players and its teams' players as result rows (whether this
-    fan follows each), and its games."""
-    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    fan follows each), its games, and the questions of its players' games to call (predictions.py)."""
+
+    def view(db: Session) -> dict[str, Any] | None:
+        shown = campaigns.page(db, _campaign_slug(slug), fan)
+        if shown is not None:
+            rows = [*shown["players"], *(p for t in shown["teams"] for p in t["players"])]
+            shown["predictions"] = []  # a fault there leaves the page as it was
+            try:
+                with db.begin_nested():
+                    shown["predictions"] = predictions.for_players(db, fan, [r["player_id"] for r in rows if r.get("player_id")])
+            except Exception:
+                log.exception("campaign %s: predictions", slug)
+        return shown
+
+    shown = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such page.")
     return shown
@@ -2300,6 +2335,8 @@ MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", 
 
 # A player's page, and a game of theirs (?g=<event id>): served with their own link preview.
 PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
+# A game's page, with a question of it (?q=<question id>, the link its card shares): the question's preview.
+MATCH_PAGE = re.compile(r"match/([a-z_]{1,40})/([A-Za-z0-9][A-Za-z0-9_.:-]{0,62})/?")
 GAME = re.compile(r"[0-9]{1,10}")
 
 if WEB_DIST.is_dir():
@@ -2312,7 +2349,8 @@ def _site(request: Request) -> str:
 
 
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
-    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, or None for the app's own."""
+    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, a question's (a game's page
+    with ?q=), or None for the app's own."""
     if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
         try:
             shown = await in_db(campaigns.page, path.rstrip("/"), None)
@@ -2320,6 +2358,14 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
             log.warning("link preview of /%s", path, exc_info=True)
             return None
         return share.of_campaign(shown) if shown else None
+    question = request.query_params.get("q", "")
+    if (g := MATCH_PAGE.fullmatch(path)) and GAME.fullmatch(question) and 0 < int(question) <= MAX_ID:
+        try:
+            q = await in_db(predictions.public, int(question))
+        except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+            log.warning("link preview of /%s", path, exc_info=True)
+            return None
+        return share.of_question(q) if q and q["match"] == f"{g[1]}/{g[2]}" else None
     m = PLAYER_PAGE.fullmatch(path)
     if not m or int(m[1]) > MAX_ID:
         return None

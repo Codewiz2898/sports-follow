@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sports_follow import predictions, sports
+from sports_follow import predictions, share, sports
 from sports_follow.adapters import lichess_chess, pandascore_esports as ps
 from sports_follow.sports.base import Ask
 
@@ -85,9 +85,21 @@ def test_each_map_closes_as_it_starts_and_settles_from_its_winner():
     assert rules.closed("map3", two_nil.status, two_nil.state)
 
 
+def test_a_series_called_off_voids_what_it_never_played():
+    rules = sports.get("lol")
+    off = ps.parse_match(_match("canceled", 1, 0, [_game(1, "finished", SEN), _game(2, "not_started"), _game(3, "not_started")]))
+    assert off.status == "postponed" and off.state["cancelled"]
+    assert [rules.answer(f"map{n}", off.status, off.state) for n in (1, 2, 3)] == [str(SEN), sports.VOID, sports.VOID]
+    assert rules.closed("map2", off.status, off.state)
+    # Put back to a later date, it's still to come: its questions wait.
+    later = ps.parse_match(_match("postponed"))
+    assert not later.state["cancelled"] and rules.answer("map1", later.status, later.state) is None and not rules.closed("map2", later.status, later.state)
+
+
 def test_only_sports_that_ask_ask():
     asking = {s.key for s in sports.ALL if s.predicts}
-    assert "chess" in asking and "lol" in asking and "valorant" in asking  # every esports game shares esports' rule
+    assert "chess" in asking and "lol" in asking and "valorant" in asking  # every team esports game shares esports' rule
+    assert "bgmi" not in asking and "freefire" not in asking  # a lobby asks nothing yet, so its games aren't read ahead
     assert {"football", "cricket", "tennis", "basketball"}.isdisjoint(asking)  # later (BHA-318): winners first
     assert sports.get("football").asks({"kind": "football", "home": {"id": "1", "name": "A"}, "away": {"id": "2", "name": "B"}}) == []
 
@@ -105,3 +117,19 @@ def test_the_split_adds_up_to_a_hundred():
     assert predictions.shares({"a": 1, "b": 1, "c": 1}, ["a", "b", "c"]) == {"a": 34, "b": 33, "c": 33}
     assert predictions.shares({"a": 852, "b": 264, "c": 88}, ["a", "b", "c"]) == {"a": 71, "b": 22, "c": 7}
     assert predictions.shares({}, ["a", "b"]) == {"a": 0, "b": 0}
+
+
+def test_a_shared_question_previews_its_split_or_how_few_called_it():
+    q = {"id": 12, "title": "Who wins?", "game": "Gukesh D vs Javokhir Sindarov", "sport": "chess", "match": "lichess_chess/r-1", "status": "open", "answer": None, "picks": 1204,
+         "options": [{"key": "g", "label": "Gukesh D", "share": 71}, {"key": "draw", "label": "Draw", "share": 22}, {"key": "s", "label": "Javokhir Sindarov", "share": 7}]}
+    shown = share.of_question(q)
+    assert shown.title.startswith("71% of ") and shown.title.endswith(" fans say Gukesh D: Who wins? Gukesh D vs Javokhir Sindarov")
+    assert (shown.picture.word, shown.picture.name, shown.picture.tag) == ("71%", "say Gukesh D", "Chess")
+    assert shown.picture.lines == ("Who wins? · Gukesh D vs Javokhir Sindarov", "Draw 22% · Javokhir Sindarov 7% · 1,204 picks")
+    assert (shown.path, shown.image) == ("/match/lichess_chess/r-1?q=12", "/api/predictions/12/share.png")
+    assert "Bragging rights only" in shown.description
+    settled = share.of_question({**q, "status": "settled", "answer": "s"})
+    assert (settled.picture.word, settled.picture.name) == ("7%", "called it: Javokhir Sindarov") and settled.title.startswith("Only 7% of ")
+    # Too few picks to show the split (predictions.public leaves it out): the question itself.
+    few = share.of_question({**q, "picks": 3, "options": [{k: v for k, v in o.items() if k != "share"} for o in q["options"]]})
+    assert (few.picture.word, few.picture.name, few.title) == ("Who wins?", "", "Who wins? Gukesh D vs Javokhir Sindarov")

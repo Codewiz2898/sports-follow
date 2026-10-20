@@ -692,13 +692,14 @@ def batched(system: str | None) -> bool:
 
 
 def watched() -> Any:
-    """The events the poller looks after: a followed player is in it, or a fan follows the game by itself
-    (matches.py). A select of event ids."""
-    return select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id))).union(matches.watched())
+    """The events the poller looks after: a followed player is in it, a fan follows the game by itself
+    (matches.py), or a fan's pick waits on a question it settles (predictions.py). A select of event ids."""
+    return select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id))).union(matches.watched(), predictions.watched())
 
 
 def lane_events(system: str) -> list[int]:
-    """The armed and live events this source polls with a followed player in them, or followed by themselves."""
+    """The armed and live events this source polls with a followed player in them, followed by themselves, or with
+    a pick waiting on them."""
     with session() as db:
         return list(db.scalars(
             select(Event.id)

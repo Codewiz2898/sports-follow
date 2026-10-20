@@ -247,6 +247,8 @@ def parse_match(m: dict[str, Any]) -> Snapshot:
         "format": fmt,
         "stage": _stage(m),
         "forfeit": bool(m.get("forfeit")),
+        # Called off for good, not put back to a later date: what's still to be played of it won't be.
+        "cancelled": status == "postponed" and m.get("status") == "canceled",
     }
     return Snapshot(status=status, score_label=score, clock_label=clock, state=state, source_url=None)
 

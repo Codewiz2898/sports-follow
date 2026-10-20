@@ -357,7 +357,7 @@ class Esports(Sport):
         """Its map has begun (or one after it has), or the series is over; or, the series under way, its map isn't
         listed any more: one the series won't need."""
         n = _map_of(ask)
-        if status == "final":
+        if status == "final" or state.get("cancelled"):
             return True
         maps = [m for m in state.get("maps") or [] if isinstance(m.get("n"), int)]
         if status == "live" and not any(m["n"] == n for m in maps):
@@ -366,13 +366,13 @@ class Esports(Sport):
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
         """The team that took the map, by its id; VOID for a map the series ended without (a 2–0 in a best of
-        three, a forfeit)."""
+        three, a forfeit), or one of a series called off."""
         n = _map_of(ask)
         teams = {str(t.get("id")) for t in state.get("teams") or [] if isinstance(t, dict)}
         won = next((str(m["winner"]) for m in state.get("maps") or [] if m.get("n") == n and m.get("winner")), None)
         if won is not None:
             return won if won in teams else None
-        return VOID if status == "final" else None
+        return VOID if status == "final" or state.get("cancelled") else None
 
     def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
         """A series from one side's, as every sport's ("T1 won 3–1 v Gen.G"), or by forfeit ("NRG lost by forfeit
@@ -509,6 +509,8 @@ class Game(Esports):
         # Fans can follow its teams (teams.py): a team title's. A battle royale's teams are a lobby's, a dozen or more
         # a game, whose results are standings, not one side's against another's.
         self.follow_teams = teams
+        # Fans call its series' maps (predictions.py): a team title's. A lobby asks nothing yet, so its games aren't read ahead.
+        self.predicts = teams
         self.pattern = pattern or re.escape(label.lower()).replace("\\ ", " ")
 
     def __repr__(self) -> str:

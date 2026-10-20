@@ -732,6 +732,7 @@ class Question(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)  # its place in the game's list: a map's number
     status: Mapped[str] = mapped_column(String(10), default="open", index=True)  # open | closed | settled | void
     answer: Mapped[str | None] = mapped_column(String(64))  # the right option's key, once settled
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the game's start, as last seen: a question long past it is voided
     locks_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the game's start, for its first question
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

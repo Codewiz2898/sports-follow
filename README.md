@@ -219,8 +219,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   joining a league needs one (`prediction_league`, `prediction_member`: a six-letter invite code, a name the
   friends see, never the email). Fans see how everyone split once they've picked; friends' picks show in the
   league once the question's closed; a league's table is its members' points on what settled since it was made.
-  `GET /api/me/predictions` lists a fan's open questions and recent results for Today; the admin panel's Users
-  tab counts leagues (and those of three or more), invites shared and opened, and fans who picked on two game days.
+  The split shows to a fan once they've picked and at least five have (fewer would tell them a friend's pick), and
+  to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
+  already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
+  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page, on
+  Today (a rail of the fan's games to call and how their calls went: `GET /api/me/predictions`) and on a campaign
+  page (its players' games); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
+  to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
+  The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
+  picked on two game days.
 - **Following a team** (`sports_follow/teams.py`, BHA-77): Arsenal, the Lakers, India's cricket side or T1,
   not only its players, in the sports whose teams can be followed (`Sport.follow_teams`: football, cricket,
   basketball, the esports team titles; not tennis or chess). The team registry (`team`) is one row per
