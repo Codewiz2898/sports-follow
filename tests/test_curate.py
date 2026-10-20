@@ -55,10 +55,27 @@ def test_a_discount_code_is_sponsored(text):
     assert (v := curate.rules(candidate(text=text)).final) and v.sponsored and v.kind == "promo"
 
 
+@pytest.mark.parametrize("text", ["Cracking the code with Arjun Mehra", "Mehra explains the code behind his opening", "code like this is rare", "Code GOAT"])
+def test_the_word_code_alone_is_no_discount(text):
+    assert curate.rules(candidate(text=text)).final is None
+
+
 @pytest.mark.parametrize("text", ["Dream11 team for tomorrow", "Best odds at Bet365 tonight", "Kairo's picks + Thunderpick bonus", "my 11 circle picks"])
 def test_a_betting_or_fantasy_brand_is_ruled_out(text):
     v = curate.rules(candidate(text=text)).final
     assert v and v.risks == ["betting"] and v.interest == 0 and v.sponsored
+
+
+def test_news_naming_a_betting_brand_is_the_models_to_judge():
+    for c in (candidate(kind="article", source="rss", title="Board ends its Dream11 shirt deal after the new gaming law"),
+              candidate(text="Mehra in the new Dream11 kit", author_kind="official")):
+        facts = curate.rules(c)
+        assert facts.final is None and any("dream11" in h for h in facts.hints)
+
+
+def test_a_time_without_a_zone_is_utc():
+    assert candidate(published_at="2026-10-20T10:00:00").published_at.isoformat() == "2026-10-20T10:00:00+00:00"  # type: ignore[union-attr]
+    assert candidate(published_at="2026-10-20T10:00:00+05:30").published_at.utcoffset().total_seconds() == 19800  # type: ignore[union-attr]
 
 
 def test_a_betting_brand_in_the_players_own_team_name_is_not_betting():
@@ -111,6 +128,8 @@ def test_a_rules_verdict_tells_who_it_is_about_from_names_and_teams():
     assert curate.rules(candidate(title="India's new kit", text="Modelled by Mehra and others", **ad)).final.about_player == "mention"  # type: ignore[union-attr]
     assert curate.rules(candidate(title="Mumbai Mariners kit launch", text="", **ad)).final.about_player == "mention"  # type: ignore[union-attr]
     assert curate.rules(candidate(title="A new phone", text="Buy it", **ad)).final.about_player == "no"  # type: ignore[union-attr]
+    # A surname alone is the player, with no alias for it.
+    assert curate.rules(candidate(title="Mehra's new bat", player={"aliases": []}, **ad)).final.about_player == "subject"  # type: ignore[union-attr]
 
 
 def test_long_text_is_capped_and_hashtags_are_bare():
@@ -283,7 +302,7 @@ def test_every_sport_gives_the_judge_a_few_lines_of_its_own():
 def test_socials_are_set_checked_and_cleared():
     page = SimpleNamespace(socials=[])
     found = players.Found(players=[page])  # type: ignore[list-item]
-    players.set_socials(found, [("x", "@imVkohli"), ("instagram", "virat.kohli"), ("x", "@imVkohli")])
+    players.set_socials(found, [("x", "@imVkohli"), ("instagram", "virat.kohli"), ("x", "imVkohli")])
     assert page.socials == [{"platform": "x", "handle": "imVkohli"}, {"platform": "instagram", "handle": "virat.kohli"}]
     with pytest.raises(players.Refused, match="platform"):
         players.set_socials(found, [("myspace", "tom")])

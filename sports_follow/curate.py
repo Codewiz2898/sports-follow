@@ -32,12 +32,13 @@ import time
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from functools import cache
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, get_args
 
 from llm_providers import Client, LlmError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import config, sports, tracing
 from .adapters import budget
@@ -116,11 +117,20 @@ class Candidate(BaseModel):
     author_kind: AuthorKind | None = None  # the fetcher's hint: it read an official or a creator's channel list
     title: str = ""
     text: str = ""  # caption or description
-    published_at: datetime | None = None
+    published_at: AwareDatetime | None = None  # with its zone: a time without one is taken as UTC
     engagement: Engagement = Engagement()
     platform_flags: PlatformFlags = PlatformFlags()
     duration_seconds: int | None = None  # a video's
     player: PlayerContext
+
+    @field_validator("published_at", mode="before")
+    @classmethod
+    def _utc(cls, value: Any) -> Any:
+        if isinstance(value, str) and value and not re.search(r"(?:Z|[+-]\d\d:?\d\d)$", value):
+            value = datetime.fromisoformat(value)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
     @field_validator("title")
     @classmethod
@@ -144,7 +154,7 @@ class Judged(BaseModel):
     interest: float = Field(ge=0, le=1, description="How much a fan of this player would want to see it, 0 to 1. 0.8+ only for a big moment, milestone or genuinely new insight; a passing mention or a generic compilation is 0.3 or less.")
     risks: list[Risk] = Field(default=[], description="betting: promotes betting, gambling or fantasy apps. misinformation: presents false or unverified claims as fact. deepfake: edited or generated to put words or acts on the player that aren't theirs. abuse: insults, harassment or hate. restream: a full match or broadcast re-uploaded by someone without the rights.")
     sponsored: bool = Field(description="True when someone paid for it or it sells a product or service, labelled or not.")
-    reason: str = Field(description="One short line for a fan, saying why this is here or what it is, e.g. 'A fan edit of his hundred at Lord's'. No more than 15 words, no hype.")
+    reason: str = Field(description="One short line for a fan, saying why this is here or what it is, e.g. 'A fan edit of her winning moment in the final'. No more than 15 words, no hype.")
 
     @field_validator("reason")
     @classmethod
@@ -171,7 +181,8 @@ class CurateError(RuntimeError):
 # ---------------------------------------------------------------- the rules
 
 AD_TAGS = frozenset({"ad", "ads", "advert", "advertisement", "sponsored", "sponsor", "spon", "collab", "paidpartnership", "paidpartner", "gifted", "promo"})
-DISCOUNT = re.compile(r"\b(?:use|apply) (?:my |the )?(?:code|coupon)\b|\b(?:promo|discount|coupon) code\b|\bcode:? ?[A-Z0-9]{4,}\b|\b\d{1,2} ?% off\b", re.I)
+# A code itself is capitals with a digit in it ("ARJUN20"): "the code behind his opening" is no discount.
+DISCOUNT = re.compile(r"\b(?:use|apply) (?:my |the )?(?:code|coupon)\b|\b(?:promo|discount|coupon) code\b|\bcode:? ?(?-i:(?=[A-Z]*\d)[A-Z0-9]{4,})\b|\b\d{1,2} ?% off\b", re.I)
 LINK_IN_BIO = re.compile(r"\blink in (?:my |the )?bio\b|\bswipe up\b", re.I)
 HASHTAG = re.compile(r"#(\w+)")
 # Betting and fantasy brands, as one would write them in a caption. Kept small and unambiguous: a word that's
@@ -200,7 +211,10 @@ def _handle(text: str) -> str:
 
 
 def _names(player: PlayerContext) -> list[str]:
-    return [n for n in (fold(x) for x in (player.name, *player.aliases)) if len(n) >= 3]
+    """The player's names, folded: their name, aliases, and a surname long enough to tell ("Mehra")."""
+    names = [fold(x) for x in (player.name, *player.aliases)]
+    surname = names[0].split()[-1] if len(names[0].split()) > 1 else ""
+    return [n for n in dict.fromkeys([*names, surname]) if len(n) >= 4 or (n in names and len(n) >= 3)]
 
 
 def _named_in(text: str, names: Sequence[str]) -> bool:
@@ -250,7 +264,10 @@ def rules(c: Candidate) -> Facts:
         return facts
 
     betting = [b for b in _BETTING.findall(fold(words)) if b not in teams]
-    if betting:
+    if betting and (c.kind == "article" or facts.by in ("official", "outlet")):
+        # News may name a sponsor ("ends its Dream11 shirt deal") without selling it: the model tells.
+        facts.hints.append(f"Names a betting or fantasy brand ({betting[0]}): is it promoting it, or reporting on it?")
+    elif betting:
         return final("promo", ["betting"], True, "Promotes a betting or fantasy app, so it isn't shown.")
     if c.platform_flags.paid_partnership:
         return final("promo", [], True, f"A paid partnership: {_who(c)} was paid to post this.", 0.2)
@@ -328,8 +345,9 @@ def _settle(judged: Judged, facts: Facts) -> Verdict:
     return Verdict(**{**judged.model_dump(), "by": facts.by or judged.by, "stage": "model"})
 
 
+@cache
 def gateway() -> Client:
-    """The research agent's gateway, as this app, with a timeout for one short call."""
+    """The research agent's gateway, as this app, with a timeout for one short call: one client, shared."""
     return Client(GATEWAY_URL, token=_token(), timeout=CALL_TIMEOUT_MS / 1000 + 20)
 
 

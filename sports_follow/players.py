@@ -322,7 +322,7 @@ def set_socials(found: Found, handles: Sequence[tuple[str, str]]) -> list[Player
             raise Refused(f"unknown platform {platform!r}; choose from {', '.join(platforms)}")
         if not re.fullmatch(r"@?[\w.\-]{1,100}", handle):
             raise Refused(f"{handle!r} isn't a handle")
-    socials = [{"platform": p, "handle": h.lstrip("@")} for p, h in dict.fromkeys(handles)]
+    socials = [{"platform": p, "handle": h} for p, h in dict.fromkeys((p, h.lstrip("@")) for p, h in handles)]
     for player in found.players:
         player.socials = socials
     return found.players
