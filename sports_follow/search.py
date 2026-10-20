@@ -279,7 +279,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     """Search every source in parallel and merge. sport narrows to one of the sports that run. may_ask is asked once,
     just before the first of the sources' own searches would go out: False leaves them out (a client over
     its limit, server.search) and the answer comes from Sports Follow and the registry."""
-    from .config import AGENT
+    from .config import RESEARCH
 
     query = " ".join(query.split())[:80]
     # One of the sports that run, or a group any of them is in ("esports", from an app before each game was a
@@ -291,9 +291,9 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # the query's letters (pipeline.slugify).
         return {"query": query, "sport": sport, "results": [], "suggestions": [], "namesakes": 0, "partial": [], "researchable": False}
     mine = [r for r in local(db, query, fan, sport) if sports.on(r.sport)]
-    # Without the research agent (config.AGENT) only athletes in a sport with a running source can be
-    # followed: the others are left out before anything is decided on them (asking the sources, "did you mean").
-    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport) and (AGENT or r.live_scores)]
+    # Without research (config.RESEARCH) only athletes in a sport with a running source can be followed: the
+    # others are left out before anything is decided on them (asking the sources, "did you mean").
+    listed = [r for r in _registry(db, query, sport) if sports.on(r.sport) and (RESEARCH or r.live_scores)]
     found: list[SearchResult] = []
     partial: list[str] = []
     matched = [r for r in listed if r.matched]
@@ -331,7 +331,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
     if blocked:
         results = [r for r in results if (r.system, r.athlete_id) not in blocked]
         suggestions = [r for r in suggestions if (r.system, r.athlete_id) not in blocked]
-    if not AGENT:
+    if not RESEARCH:
         # And of the sources' own hits and the spellings offered, likewise.
         results = [r for r in results if r.player_id or r.live_scores]
         suggestions = [r for r in suggestions if r.player_id or r.live_scores]
@@ -349,7 +349,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         "suggestions": [public(r) for r in suggestions],
         "namesakes": namesakes if namesakes > 1 else 0,
         "partial": partial,
-        "researchable": AGENT and bool(slugify(query)),
+        "researchable": RESEARCH and bool(slugify(query)),
     }
 
 

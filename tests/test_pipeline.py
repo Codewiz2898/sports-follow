@@ -18,6 +18,14 @@ from sports_follow.adapters import AdapterError
 from sports_follow.agent import AgentError
 from sports_follow.models import Player, PlayerCard, SourceBinding
 
+
+@pytest.fixture(autouse=True)
+def research_on(monkeypatch):
+    """These tests cover pages for players no live source has, which the agent writes with research on
+    (config.RESEARCH, off by default): on here, and off with the agent in the tests that turn it off."""
+    monkeypatch.setattr(config, "RESEARCH", True)
+
+
 NOW = datetime(2026, 10, 13, 7, 40, tzinfo=timezone.utc)
 
 
@@ -237,6 +245,7 @@ def test_without_the_agent_a_sources_page_is_whole_and_nothing_waits_for_a_model
         return player_id
 
     monkeypatch.setattr(config, "AGENT", False)
+    monkeypatch.setattr(config, "RESEARCH", False)
     monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
     monkeypatch.setattr(pipeline, "llm", lambda: pytest.fail("the model was asked"))

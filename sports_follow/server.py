@@ -421,10 +421,10 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
     """What this server offers the app: its name, the model and whether it researches players no source has
-    (config.AGENT), the ways to sign in, who to write to about privacy."""
-    from .config import AGENT
+    (config.RESEARCH), the ways to sign in, who to write to about privacy."""
+    from .config import RESEARCH
 
-    return {"name": APP_NAME, "model": MODEL, "research": AGENT, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -954,9 +954,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research, and with the agent off (config.AGENT) can't be followed.
+    AI research, and without research (config.RESEARCH) can't be followed.
     """
-    from .config import AGENT
+    from .config import RESEARCH
 
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
@@ -968,7 +968,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
-            if found is None and not AGENT:
+            if found is None and not RESEARCH:
                 raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
             if found is None:
                 taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
@@ -1023,7 +1023,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
 @app.post("/api/follows")
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
-    from .config import AGENT
+    from .config import RESEARCH
 
     if body.get("system") or body.get("qid"):
         player_id = await _follow_athlete(body, fan, client_address(request))
@@ -1052,8 +1052,8 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
-    if counted and not AGENT:
-        # Without the agent (config.AGENT) a page comes from a live source, picked in search, or not at all.
+    if counted and not RESEARCH:
+        # Without research (config.RESEARCH) a page comes from a live source, picked in search, or not at all.
         raise HTTPException(404, "No live source has this player, so their page can't be built." if known is not None else "Pick an athlete from the search results: pages here come from live sources.")
     taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
@@ -1928,8 +1928,9 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
 
 
 async def _research_if_due(player_id: int, card: dict[str, Any]) -> None:
-    """A page only the research agent writes (no Wikipedia article, no live source) is researched again when
-    a fan opens it and its words are stale (pipeline.agent_due), not on a clock. Never fails the page."""
+    """A page the research agent has a part on (a background with no Wikipedia article, monthly; with research
+    on, the whole page of a player no source has) is researched again when a fan opens it and its words are
+    stale (pipeline.agent_due), not on a clock. Never fails the page."""
     if card.get("status") != "ready":
         return
     try:

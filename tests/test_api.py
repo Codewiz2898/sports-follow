@@ -36,6 +36,16 @@ from sports_follow import alerts, bus, db as db_module, league, live, logs, matc
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
+
+@pytest.fixture(autouse=True)
+def research_on(monkeypatch):
+    """These tests cover pages for players no live source has, which the agent writes with research on
+    (config.RESEARCH, off by default): on here, and off with the agent in the tests that turn it off."""
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "RESEARCH", True)
+
+
 PUBLIC = "81.2.69.142"
 KEY = b"a test key for fan cookies, 32+ bytes"
 
@@ -969,6 +979,31 @@ def test_the_card_sends_the_live_sources_own_notes(api):
     assert live["live_note"] and live["lag_note"]
 
 
+# ---------------------------------------------------------------- no live source, no page (BHA-328)
+
+
+def test_without_research_a_player_no_source_has_cant_be_followed_and_nothing_offers_it(api, monkeypatch):
+    # The default (config.RESEARCH off), with the agent on for backgrounds: no page is started for an athlete
+    # or a typed name no source has, nothing is counted, and the app is told research isn't offered.
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "AGENT", True)
+    monkeypatch.setattr(config, "RESEARCH", False)
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def nowhere(person):
+        return None
+
+    monkeypatch.setattr(server, "_resolve", nowhere)
+    monkeypatch.setattr(pipeline, "start_from_registry", lambda person: pytest.fail("a page for the agent was started"))
+    for body, said in [({"qid": "Q99", "sport": "football"}, "No live source has Some One's games"), ({"query": "Brand New Name"}, "Pick an athlete from the search results")]:
+        answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
+        assert answer.status_code == 404 and answer.json()["detail"].startswith(said), body
+    assert api.queue.jobs == [] and not any(k.startswith("research") for k in api.redis.data)
+    assert api.call("GET", "/api/config").json()["research"] is False
+
+
 # ---------------------------------------------------------------- the research agent, when a fan opens a page (BHA-324)
 
 
@@ -1240,6 +1275,7 @@ def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_
     from sports_follow import config
 
     monkeypatch.setattr(config, "AGENT", False)
+    monkeypatch.setattr(config, "RESEARCH", False)
     tenz = PlayerRef("pandascore_esports", "8742", "TenZ", ["1"], ["Sentinels"], game="Valorant")
     monkeypatch.setitem(ADAPTERS, tenz.system, KNOWN[tenz.system])  # PandaScore runs only with its token
     monkeypatch.setattr(ADAPTERS[tenz.system], "player", lambda athlete_id, league=None: tenz)

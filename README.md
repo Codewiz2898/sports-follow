@@ -114,13 +114,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   build reads them and the scheduler reads them again a month later (`reread_profile`, 5 a minute at most;
   an hour's wait when Wikimedia doesn't answer). A live source's facts win over Wikidata's (a bound
   player's name and teams are their source's), and Wikidata's and Wikipedia's over the research agent's
-  (`profile_from` on the card says which gave what). The research agent writes only what neither covers
-  (`pipeline.needs_agent`): the background of a player with no article, and the games and news of one no
-  live source has (basketball and tennis in production). A player with an article and a live source never
-  sends it. It researches a page again only when a fan opens it, the player is followed and their sport
-  runs, and its words are over `SPORTS_FOLLOW_CARD_MAX_AGE` old, never on a clock; so pages build and
-  rebuild without the gateway for everything this covers, and a page whose agent part fails still shows
-  its profile. News for players with a live source is no longer the agent's (publisher feeds are a
+  (`profile_from` on the card says which gave what). The research agent writes only the background of a
+  player with a live source and no English article (`pipeline.needs_agent`), at most once a month
+  (`BACKGROUND_EVERY`), when a fan opens the page and the player is followed and their sport runs; never
+  on a clock. A player with an article and a live source never sends it. A player no live source has gets no page at all
+  unless `SPORTS_FOLLOW_RESEARCH=1`, when the agent writes their whole page as before (games and news too,
+  again after `SPORTS_FOLLOW_CARD_MAX_AGE`); so pages build and rebuild without the gateway for everything
+  this covers. News for players with a live source is no longer the agent's (publisher feeds are a
   separate piece). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
@@ -130,10 +130,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wikidata has, or, for most footballers (Wikidata has their Transfermarkt id, rarely ESPN's), by name
   accepted only if ESPN's birth date matches; the id found is written back, so it's by id from then on.
   The page is live in about a second and its profile follows from Wikidata and Wikipedia. An athlete no
-  live source has gets their profile the same way, and an agent-built page only when Wikipedia has no
-  article on them (counted as an AI research either way).
+  live source has can't be followed, unless `SPORTS_FOLLOW_RESEARCH=1`: then the agent builds their page
+  (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following.
-- **AI research is capped.** A name no source knows goes to the research agent, 3 per fan per UTC day
+- **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
   already here, or a search result with a live source, doesn't count. The gateway's per-app budget is
@@ -664,7 +664,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_CACHE_REDIS_URL` | `REDIS_URL` | where the data sources' answers are cached (`adapters/cache.py`), shared by the API and the worker and kept across deploys. In production a Redis of its own, capped and evicting the least recently used key (deploy/compose.yaml); locally, `docker compose --profile cache up -d` and `redis://127.0.0.1:6382/0` run it as production does |
 | `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |
-| `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a page only the research agent writes (no Wikipedia article, no live source) is researched again, when a fan opens it |
+| `SPORTS_FOLLOW_CARD_MAX_AGE` | `21600` | seconds before a page the research agent writes whole (a player no live source has, with `SPORTS_FOLLOW_RESEARCH=1`) is researched again, when a fan opens it |
 | `SPORTS_FOLLOW_LIVE_INTERVAL` | `60` | seconds between agent live checks during a game (sports without an adapter) |
 | `SPORTS_FOLLOW_FIXTURES_MAX_AGE` | `1800` | seconds before a bound player's fixtures and stats are re-read |
 | `SPORTS_FOLLOW_POLL_SESSION` | `600` | seconds one live-poll job or lane runs before handing over |
@@ -712,12 +712,13 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
-| `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |
+| `SPORTS_FOLLOW_RESEARCH` | `0` | `1` gives players no live source has a page the research agent writes whole: a typed name no source knows, a registry athlete no source has, offered as "AI research" (3 a fan a day). Off, they can't be followed, search doesn't list them, and nothing offers AI research; the agent only writes the background of a player Wikipedia has no article on |
+| `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with `SPORTS_FOLLOW_RESEARCH=1` |
 | `SPORTS_FOLLOW_CURATE_MODEL` | `openrouter:anthropic/claude-haiku-5.5` | the Feed's content judge's model (`curate.py`): small and cheap, about $0.0004 a verdict; any gateway model ref |
 | `SPORTS_FOLLOW_CURATE_AI` | `1` | `0` judges the Feed's shares by the rules alone: what they can't settle waits unjudged and isn't shown; off with the agent too |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
-| `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages (none with `SPORTS_FOLLOW_AGENT=0`) |
+| `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get no page (AI-built ones with `SPORTS_FOLLOW_RESEARCH=1`) |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2, `kog` Honor of Kings), of the games that run. Naming a few imports just those, and removes only their stale players |
 | `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |

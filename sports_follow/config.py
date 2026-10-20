@@ -100,14 +100,18 @@ SOURCES = {s.strip() for s in os.environ.get("SPORTS_FOLLOW_SOURCES", "").split(
 # out isn't searched, imported, polled or researched: its sources don't run, it's not a search filter,
 # and the pages of its players already followed stay as they are, without updates.
 SPORTS = {s.strip().lower() for s in os.environ.get("SPORTS_FOLLOW_SPORTS", "").split(",") if s.strip()}
-# The research agent (agent.py, through the llm-providers gateway): each player's profile and news, and the
-# whole page of a player no source has. "0" runs the app without a model, as with no OpenRouter key: fans
-# follow athletes a running source has (from the registry and search), their pages come from that source
-# alone (fixtures, results, stats, live scores and alerts), and nothing offers AI research.
+# The research agent (agent.py, through the llm-providers gateway): the background of a player with a live
+# source but no English Wikipedia article, once a month (pipeline.needs_agent), and with RESEARCH the whole
+# page of a player no source has. "0" runs the app without a model, as with no OpenRouter key: pages come
+# from their source, with their profile from Wikidata and Wikipedia.
 AGENT = os.environ.get("SPORTS_FOLLOW_AGENT", "1") != "0"
-# Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
-# pages come from the agent without live scores or alerts, and no model calls go to watching games.
-AGENT_LIVE = AGENT and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
+# Pages for players no live source has, which the agent writes whole: a typed name no source knows, a
+# registry athlete no source has, offered as "AI research". Off by default (Bharath, 21 Oct): a player
+# with no live source gets no page, isn't listed in search, and nothing offers AI research.
+RESEARCH = AGENT and os.environ.get("SPORTS_FOLLOW_RESEARCH", "0") == "1"
+# Live scores researched by the AI agent, for those pages. Off by default: those players' pages come from
+# the agent without live scores or alerts, and no model calls go to watching games.
+AGENT_LIVE = RESEARCH and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
 # The content judge's model stage (curate.py): a share about a player its rules can't settle goes to a small
 # model through the same gateway. "0" (or the agent off) keeps the rules alone: what they settle is judged, the
 # rest waits unjudged, and nothing unjudged reaches a fan.
