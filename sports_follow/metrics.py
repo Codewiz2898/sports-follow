@@ -137,6 +137,12 @@ def card(step: str, result: str, by: int = 1) -> None:
     _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(by, {"step": step, "result": result})
 
 
+def feed(result: str, by: int = 1) -> None:
+    """Things the feed's fetch looked at (candidates.py): kept, refused by a hard filter, or dropped once gone."""
+    if by:
+        _instrument("counter", "sports_follow.feed.candidates", "{item}", "Feed candidates fetched, by result").add(by, {"result": result})
+
+
 # ---------------------------------------------------------------- read every minute, by the worker
 
 
@@ -266,9 +272,9 @@ def cards(now: datetime | None = None) -> dict[str, Reading]:
 
 def _running_budgets() -> dict[str, Any]:
     """The budgets of the sources this build runs, by name."""
-    from .adapters import ADAPTERS
+    from .adapters import ADAPTERS, videos
 
-    return {b.name: b for adapter in ADAPTERS.values() for b in adapter.budgets()}
+    return {b.name: b for source in [*ADAPTERS.values(), *videos()] for b in source.budgets()}
 
 
 def sources(now: float | None = None) -> dict[str, Reading]:

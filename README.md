@@ -38,6 +38,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                                                               ├─▶ PandaScore API (esports: team titles)
                                                                               ├─▶ LiquipediaDB API (esports: battle royale)
                                                                               └─▶ PUBG API (esports: PUBG)
+
+                              arq curator (sports_follow/curator.py), a queue of its own
+                                ├─ poll_channels, every 30 min: each sport's trusted channels ──▶ feed_candidates
+                                └─ check_videos, daily: stored videos not read for a week, dropped once gone
+                                         │
+                                       adapters/ ──▶ YouTube feeds and Data API v3 (the feed's videos)
 ```
 
 - **Work is keyed by player, never by fan.** Following adds one row. The first fan to follow a player
@@ -364,7 +370,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).
   The one line is its place in `adapters.KNOWN`, which is also the order of preference when two sources
-  serve a sport. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
+  serve a sport. A source of videos for the feed (`adapters/youtube.py`) is a `VideoSource` instead
+  (`adapters/base.py`): it describes itself the same way, plus the shape of its channel ids
+  (`channel_pattern`), lists a channel's latest `uploads` and what it says of up to 50 videos at once
+  (`facts`), and its one line is its place in `adapters.VIDEOS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
   its provider's name or an API it reads, or its URL.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
@@ -375,7 +384,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
-  following), `refresh`, `history` and `import`. The background lanes stop at the reserve; a fan loop on
+  following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop on
   Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.
 - **One cache for every source** (`sports_follow/adapters/cache.py`). Each client reads through a `Cache`
@@ -387,6 +396,23 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Threads asking for the same thing at once send one request. The Redis is shared by the API and the
   worker and outlives deploys: `SPORTS_FOLLOW_CACHE_REDIS_URL`, in production a capped Redis of its own
   that evicts the least recently used key. While it's down, each process keeps its own copy, as before.
+- **The feed's fetch runs in a process of its own**, the curator (`sports_follow/curator.py`, `python -m
+  sports_follow.curator`, the `curator` service in `deploy/compose.yaml`): an arq worker on its own queue, so
+  it never takes the worker's slots, logged, traced, measured and stopped as the worker is, its requests in
+  the `feed` lane. Every half hour (`sports_follow/candidates.py`) it reads the latest uploads of every
+  channel a running sport trusts (`Sport.video_channels`) from each channel's public feed, which costs no
+  quota (when a feed doesn't answer, as YouTube's often don't for a while, the channel's uploads playlist
+  costs 1 unit); keeps those whose title or description names a followed player of that sport (their full
+  name or a hashtag of it, a nickname fans typed, or their surname when no other followed player of the
+  sport has it); asks YouTube about the new ones, 1 unit for every 50; and keeps those that pass the hard
+  filters (embeddable, public, playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
+  in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
+  again for its pace, and every stored video is read again weekly and dropped once removed, private, no
+  longer embeddable or blocked in India. Whether one is any good is for the later stages (the judge's
+  `verdict`, then a `score`); the feed only reads the table and never waits on the curator. YouTube's
+  free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
+  never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day.
+  Without the key the source is off, the admin panel says so, and nothing else changes.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -404,11 +430,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
-  how search shows its athletes, its colours (a player's page and link previews are drawn in them), and what the Feed's
+  how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's
   content judge reads about it (`content_hints`: a few lines on what a milestone and a big moment are there, and what a
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
   vouches for may run before it's taken for a whole game re-uploaded, or `None` where long videos are normal, as in
-  chess). Shared code
+  chess), and the channels it trusts for the feed's videos about its players (`video_channels`, in one block at the
+  end of its class: real channel ids only, each checked to answer at
+  `https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, which often takes a few tries; a sport that's off has
+  none read; esports' are the `Esports` class's, for every game). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -547,6 +576,9 @@ Then three processes:
 cd web && npm run dev                                              # app on http://localhost:5173
 ```
 
+and a fourth for the feed's videos, with a YouTube key (`~/.config/sports-follow/youtube-key`, or
+`SPORTS_FOLLOW_YOUTUBE_KEY`): `.venv/bin/python -m sports_follow.curator`.
+
 The checks CI runs on every pull request, after `.venv/bin/pip install -r requirements-dev.txt`:
 
 ```bash
@@ -616,6 +648,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
+| `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |
@@ -628,6 +661,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2, `kog` Honor of Kings), of the games that run. Naming a few imports just those, and removes only their stale players |
 | `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
 | `SPORTS_FOLLOW_PUBG_TOKEN` | from `~/.config/sports-follow/pubg-token` | PUBG developer API key (PUBG esports); the worker indexes recent tournaments every 10 minutes |
+| `SPORTS_FOLLOW_YOUTUBE_KEY` | from `~/.config/sports-follow/youtube-key` (or `SPORTS_FOLLOW_YOUTUBE_KEY_FILE`) | YouTube Data API v3 key: the feed's videos, read by the curator; without it the source is off |
 | `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |
 | `SPORTS_FOLLOW_LIQUIPEDIA_HOURLY` | `60` | the key's requests an hour; counted in Redis across processes (each counts its own while Redis is down) and never overspent (a paid plan raises it) |
 | `SPORTS_FOLLOW_LIQUIPEDIA_RESERVE` | `30` | of those, kept for live lobbies and fans; refreshes, the history lane and the registry import stop below it |

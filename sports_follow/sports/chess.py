@@ -255,5 +255,18 @@ time-scramble finish. Long videos are normal here: game analysis and a player's 
 more and are interview_or_analysis, not restreams; a copied official broadcast is a restream. Cheating claims \
 without a ruling from FIDE or the platform are misinformation."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UCQHX6ViZmPsWiYSFAyS0a3Q",  # GothamChess: game analysis
+        "UCL5YbN5WLFD8dLIegT5QAbA",  # agadmator's Chess Channel: game analysis
+        "UCIsEhwBMPkRHsEgqYAPQHsA",  # ChessBase India: interviews, features
+        "UC5kS0l76kC0xOzMPtOmSFGw",  # Chess.com: features, interviews
+        "UCM-ONC2bCHytG2mYtKDmIeA",  # Saint Louis Chess Club: commentary, interviews
+        "UChDxbOUQRXEZ1zdI14Zyx9w",  # Chess Vibes: game analysis
+        "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE: interviews, features
+        "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: commentary on his own games and others'
+    )
+
 
 SPORT = Chess()

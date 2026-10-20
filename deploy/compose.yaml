@@ -29,6 +29,7 @@ x-app: &app
     SPORTS_FOLLOW_PANDASCORE_TOKEN_FILE: /run/secrets/pandascore-token   # optional: esports team titles
     SPORTS_FOLLOW_LIQUIPEDIA_TOKEN_FILE: /run/secrets/liquipedia-token   # optional: battle royale (needs a commercial plan)
     SPORTS_FOLLOW_PUBG_TOKEN_FILE: /run/secrets/pubg-token   # optional: PUBG esports
+    SPORTS_FOLLOW_YOUTUBE_KEY_FILE: /run/secrets/youtube-key   # optional: the feed's videos (YouTube Data API v3)
     SPORTS_FOLLOW_VAPID_KEY: /run/secrets/vapid-private.pem
     SPORTS_FOLLOW_FCM_KEY_FILE: /run/secrets/fcm-service-account.json   # optional: the Android app's notifications (FCM)
     SPORTS_FOLLOW_COOKIE_SECRET_FILE: /run/secrets/cookie-secret   # signs fan cookies; the API won't start without it
@@ -92,6 +93,16 @@ services:
         condition: service_completed_successfully
       gateway:
         condition: service_started
+
+  # The feed's fetch (sports_follow/curator.py): its own arq queue, so it never takes the worker's slots. Half a
+  # core: it reads channels and videos one request at a time.
+  curator:
+    <<: *app
+    command: ["python", "-m", "sports_follow.curator"]
+    cpus: 0.5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   migrate:
     <<: *app

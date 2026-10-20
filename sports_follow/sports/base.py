@@ -588,3 +588,11 @@ class Sport:
         """A few lines the content judge reads about this sport: what a milestone and a big moment are here, and
         what's a promo, a rumour or a re-upload in its fans' world. "" for none: the judge's own rules alone."""
         return ""
+
+    # ---- the feed (curator.py): videos about its players
+
+    # Channels it trusts for videos about its players (fan edits, analysis, interviews), by their ids where they
+    # post: a video source takes those of the shape its own channel ids have (VideoSource.channel_pattern). Each
+    # channel's new uploads that name a followed player of the sport are kept for the feed; a sport that's off
+    # has none read. Every id is a real one that answers (README.md, "Adding or removing").
+    video_channels: tuple[str, ...] = ()

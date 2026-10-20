@@ -38,7 +38,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from . import accounts, controls, sports
-from .adapters import ADAPTERS, ALL, KNOWN, budget
+from .adapters import ADAPTERS, ALL, KNOWN, VIDEOS, budget, videos
 from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, Follow, Player, PushSubscription
 
@@ -225,14 +225,34 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "running": system in running,
             "budgets": [b.name for b in a.budgets()],
         })
+    # The feed's video sources, under a heading of their own: every sport's channels are theirs to read.
+    feeding = videos()
+    for system, v in VIDEOS.items():
+        sport_on = any(v.channel_pattern.fullmatch(c) for s in sports.ENABLED for c in s.video_channels)
+        out.append({
+            "system": system,
+            "name": v.name,
+            "provider": v.provider.name,
+            "covers": v.covers,
+            "sport": "",
+            "sport_label": "Feed",
+            "licensed": v.provider.licensed,
+            "token": v.available(),
+            "allowed": not SOURCES or system in SOURCES,
+            "sport_on": sport_on,
+            "on": system not in off,
+            "running": v in feeding and sport_on,
+            "budgets": [b.name for b in v.budgets()],
+        })
+    every = [*KNOWN.values(), *VIDEOS.values()]
     used = {(r["source"], r["lane"]): r for r in budget.usage(budget.known(), now)}
     budgets = []
     for b in budget.known():
         live = budget.effective(b)
         budgets.append({
             "name": b.name,
-            "sources": list(dict.fromkeys(a.name for a in KNOWN.values() if b in a.budgets())),
-            "running": any(b in a.budgets() for a in running.values()),
+            "sources": list(dict.fromkeys(a.name for a in every if b in a.budgets())),
+            "running": any(b in a.budgets() for a in [*running.values(), *feeding]),
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
@@ -243,7 +263,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
 
 
 def set_source(system: str, on: bool) -> None:
-    if system not in KNOWN:
+    if system not in KNOWN and system not in VIDEOS:
         raise LookupError(system)
     controls.turn_source(system, on)
 

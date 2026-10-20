@@ -416,6 +416,31 @@ class NewsPlayer(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True)
 
 
+class FeedCandidate(Base):
+    """Something shared about a followed player that the feed may show (a video that names them), as the curator
+    fetched it (candidates.py): one row per player and item, which goes with the player. The later stages fill
+    their own columns: the judge's verdict, then a score."""
+
+    __tablename__ = "feed_candidates"
+    __table_args__ = (UniqueConstraint("player_id", "external_id"), Index("ix_feed_candidates_source_external", "source", "external_id"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(40))  # the video source's system (VideoSource.system)
+    external_id: Mapped[str] = mapped_column(String(64))  # the source's id for it
+    url: Mapped[str] = mapped_column(Text)
+    # What was fetched, as the source gave it: title, description, channel, published, thumbnail, and which of
+    # the player's names it was kept for.
+    candidate: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Numbers for ranking: views, likes, seconds, and the first and latest reads of views and likes, with when.
+    features: Mapped[dict] = mapped_column(JSONB, default=dict)
+    fetched_at: Mapped[datetime] = _now()
+    checked_at: Mapped[datetime] = _now()  # when the source last said it's still there and still plays here
+    verdict: Mapped[dict | None] = mapped_column(JSONB)  # the judge's (L1), once it has read it
+    score: Mapped[float | None] = mapped_column(Float)
+    judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Sidelined(Base):
     """A spell a player is out of their team's games, injured or suspended, as a source listed it at its
     reads (sidelined.py), whoever follows them: by the source's ids, for the spell and the player, never a

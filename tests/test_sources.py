@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from sports_follow import agent, search, sports
-from sports_follow.adapters import ADAPTERS, KNOWN, Provider, budget, providers, source_name
+from sports_follow.adapters import ADAPTERS, KNOWN, VIDEOS, Provider, budget, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
 # Every module in adapters/ is a source's, but what all of them share: what an adapter is, and the budget.
@@ -23,6 +23,11 @@ def test_every_source_describes_itself():
         assert adapter.name and adapter.covers and isinstance(adapter.provider, Provider), system
         assert not adapter.id_pattern.fullmatch(""), system
     assert {p.name for p, _ in providers(KNOWN)} == {"Sportmonks", "ESPN", "Lichess", "PandaScore", "Liquipedia", "PUBG"}
+    # The feed's video sources (adapters.VIDEOS) describe themselves too.
+    for system, source in VIDEOS.items():
+        assert source.system == system and system not in KNOWN and source.name and source.covers, system
+        assert isinstance(source.provider, Provider) and source.budgets(), system
+        assert not source.id_pattern.fullmatch("") and not source.channel_pattern.fullmatch(""), system
 
 
 def test_providers_keep_the_order_of_preference():
@@ -152,7 +157,7 @@ def test_no_source_borrows_from_another():
     # What two sources of a sport share lives in sports/ (Sportmonks cricket once read ESPN's scorecard
     # parser), so removing one never breaks another. A provider's client module (espn, sportmonks) is
     # shared by its own adapters.
-    adapter_modules = {type(a).__module__.rsplit(".", 1)[-1] for a in KNOWN.values()}
+    adapter_modules = {type(a).__module__.rsplit(".", 1)[-1] for a in [*KNOWN.values(), *VIDEOS.values()]}
     found = []
     for name in adapter_modules:
         tree = ast.parse((PACKAGE / "adapters" / f"{name}.py").read_text())

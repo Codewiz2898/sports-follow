@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import controls, sports
 from ..config import SOURCES
-from .base import Absence, Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam
+from .base import Absence, Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Upload, VideoFacts, VideoSource
 from .espn_basketball import EspnBasketball
 from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
@@ -22,6 +22,7 @@ from .pandascore_esports import PandascoreEsports
 from .pubg_esports import PubgEsports
 from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
+from .youtube import YouTube
 
 # Every source, in order of preference where two serve a sport: for_sport() picks the first that runs.
 # Licensed sources run only with a token, so where both run (a development build) football and cricket
@@ -42,6 +43,19 @@ KNOWN: dict[str, Adapter] = {a.system: a for a in (
 )}
 # The ones this build can run.
 ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
+# Every source of videos about players, for the feed (curator.py). Each takes the channels of its own shape
+# that a sport lists (Sport.video_channels); like KNOWN, adding one is its module plus an entry here.
+VIDEOS: dict[str, VideoSource] = {v.system: v for v in (
+    YouTube(),
+)}
+
+
+def videos() -> list[VideoSource]:
+    """The video sources that run now: this build can run them (their key), SPORTS_FOLLOW_SOURCES lists them
+    (or lists none), and the admin panel hasn't turned them off. Which sports' channels they read is the
+    curator's: those of the sports that run."""
+    off = controls.current().sources_off
+    return [v for v in VIDEOS.values() if v.available() and (not SOURCES or v.system in SOURCES) and v.system not in off]
 
 
 def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: Sequence[sports.Sport] = sports.ALL) -> dict[str, Adapter]:
@@ -139,6 +153,6 @@ def source_name(system: str) -> str:
 
 
 __all__ = [
-    "ADAPTERS", "ALL", "KNOWN", "Absence", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "PlayerRef", "Provider", "SourceTeam",
-    "Roster", "Rostered", "SearchResult", "Snapshot", "for_sport", "pick", "providers", "serving", "source_name",
+    "ADAPTERS", "ALL", "KNOWN", "VIDEOS", "Absence", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "PlayerRef", "Provider", "SourceTeam",
+    "Roster", "Rostered", "SearchResult", "Snapshot", "Upload", "VideoFacts", "VideoSource", "for_sport", "pick", "providers", "serving", "source_name", "videos",
 ]

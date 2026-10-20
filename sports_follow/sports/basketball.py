@@ -148,5 +148,13 @@ A milestone: a career high, a 40 or 50-point game, a triple-double, a scoring la
 championship. A match moment: a dunk, a block, a buzzer-beater, a clutch shot. Trade talk before a team \
 announces it is rumour. Full-game uploads are restreams."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UC3HPbvB6f58X_7SMIp6OPYw",  # Thinking Basketball: analysis
+        "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
+        "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
+    )
+
 
 SPORT = Basketball()
