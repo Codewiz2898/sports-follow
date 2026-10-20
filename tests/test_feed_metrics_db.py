@@ -48,7 +48,7 @@ def test_a_polls_funnel_counts_each_player_and_video_once(world, measured):  # n
     assert counts(measured, "sports_follow.feed.kept") == {("cricket", "channels"): 2}
     assert counts(measured, "sports_follow.feed.refused") == {("cricket", "channels", "too_short"): 1, ("cricket", "channels", "blocked"): 1}
     with db_module.session() as s:
-        got = feedstats.channel_yield(s, [CHANNEL, "UC" + "z" * 22], NOW)
+        got = feedstats.channel_yield(s, [CHANNEL, "UC" + "z" * 22], [CHANNEL, "UC" + "z" * 22], NOW)
     assert got[CHANNEL] == {"read": 4, "matched": 3, "kept": 1, "served": 0, "last_upload": "2026-10-19T12:00:00+00:00"}
     assert got["UC" + "z" * 22] == {"read": 0, "matched": 0, "kept": 0, "served": 0, "last_upload": None}
 
@@ -68,6 +68,7 @@ def test_coverage_counts_followed_players_with_a_servable_video_this_week(world)
     pinned = player("Shubman Gill")
     player("Magnus Carlsen", sport="chess")
     player("Nobody Followed", followed=False)
+    player("Rory McIlroy", sport="golf")  # a sport no module knows: no channel could cover him
     row(covered, "fresh", NOW - timedelta(days=2))
     row(old, "lastmonth", NOW - timedelta(days=20))
     row(hidden, "hidden", NOW - timedelta(days=1), review="hidden")
@@ -84,7 +85,7 @@ def test_a_channels_kept_and_served_count_each_video_once_over_thirty_days(world
     row(a, "held", NOW, score=None, fetched=NOW - timedelta(days=3))
     row(a, "ancient", NOW, fetched=NOW - timedelta(days=45))  # before the yield's window
     with db_module.session() as s:
-        got = feedstats.channel_yield(s, [CHANNEL], NOW)
+        got = feedstats.channel_yield(s, [CHANNEL], [CHANNEL], NOW)
     assert (got[CHANNEL]["kept"], got[CHANNEL]["served"]) == (2, 1)
 
 

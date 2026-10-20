@@ -144,10 +144,10 @@
     "uid": "sf-feed-nothing-kept",
     "title": "The feed has kept nothing for a day",
     "for": "30m",
-    "expr": "sum(increase(sports_follow_feed_kept_total{job=\"sports-follow-curator\"}[24h]))",
+    "expr": "sum(increase(sports_follow_feed_kept_total{job=\"sports-follow-curator\"}[24h])) and on () sum(count_over_time(sports_follow_feed_kept_total{job=\"sports-follow-curator\"}[24h])) > 1200",
     "op": "lt",
     "threshold": 0.5,
-    "summary": "No new video about a followed player has been kept from any channel or moment search for 24 hours, so the Feed is going stale. The Feed dashboard shows where the funnel stops: no uploads read (the YouTube key or its quota; c logs curator), nothing matched (no channel covers who fans follow), or everything refused (by reason).",
+    "summary": "No new video about a followed player has been kept from any channel or moment search for 24 hours (given a day of the curator's readings), so the Feed is going stale. The Feed dashboard shows where the funnel stops: no uploads read (the YouTube key or its quota; c logs curator), nothing matched (no channel covers who fans follow), or everything refused (by reason).",
     "no_data": "OK"
   },
   {

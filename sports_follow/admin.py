@@ -489,7 +489,7 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
     counts = {cid: (n, scored) for cid, _, n, scored in found}
     said = rank.channel_feedback(db)
     every = sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c))
-    yields = feedstats.channel_yield(db, every)
+    yields = feedstats.channel_yield(db, every, listed)
     out = []
     for cid in every:
         if not cid:

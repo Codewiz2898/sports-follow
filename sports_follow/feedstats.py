@@ -61,6 +61,8 @@ def keep_counted(stream: str, found: list[Found], have: set[tuple[int, str]], sk
     stored."""
     skip, why, facts = set(skip), why or {}, facts or {}
     first = [f for f in found if (f.player_id, f.upload.video_id) not in have and f.upload.video_id not in skip]
+    if stream == "channels":
+        first = _first_time(first)
     lost = [(f.sport, reason(why[f.upload.video_id], facts.get(f.upload.video_id))) for f in first if f.upload.video_id in why]
     if stream == "search":
         for f in found:
@@ -75,6 +77,27 @@ def keep_counted(stream: str, found: list[Found], have: set[tuple[int, str]], sk
     metrics.feed_step("kept", stream, kept)
 
 
+def _first_time(found: list[Found], now: datetime | None = None) -> list[Found]:
+    """Those of a channel's matches not counted before: a video refused is asked about again once Redis forgets it
+    (an hour for a live stream, a week for the rest), and still among its channel's latest uploads it would count
+    again each time. Each player and video is noted in a set of its publication day's, kept as long as the yield's;
+    without Redis, all of them count."""
+    if not found:
+        return found
+    now = now or datetime.now(timezone.utc)
+    try:
+        pipe = bus.sync_redis().pipeline()
+        for f in found:
+            day = _day(f.upload.published, now)
+            pipe.sadd(_set("pairs", day, "counted"), f"{f.player_id}:{f.upload.video_id}")
+            pipe.expireat(_set("pairs", day, "counted"), _ends(day))
+        answers = cast(list[Any], pipe.execute())
+    except Exception as exc:  # noqa: BLE001
+        log.debug("feed: matches not checked against those counted: %s", exc)
+        return found
+    return [f for f, added in zip(found, answers[0::2]) if added]
+
+
 # ---------------------------------------------------------------- each trusted channel's yield
 
 
@@ -86,11 +109,16 @@ def _set(channel: str, day: str, what: str) -> str:
     return f"{_KEY}:{channel}:{day}:{what}"
 
 
+def _ends(day: str) -> int:
+    """When a publication day's sets go: a day after the yield stops counting it."""
+    return int((datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=YIELD_DAYS + 1)).timestamp())
+
+
 def read_channel(channel: str, listed_by: Iterable[str], uploads: list[Upload], found: list[Found], now: datetime | None = None) -> int:
     """Note a channel's latest uploads and those naming a followed player (found), and count the uploads new to us
-    for each sport that lists the channel (listed_by: candidates.channels' keys, a group's left out where one of
-    its sports is there) as metrics.feed_step "uploads". Uploads published over YIELD_DAYS ago are old news, and
-    left out. Returns how many were new; 0 without Redis."""
+    (metrics.feed_step "uploads") once, for the sport that lists the channel (listed_by: candidates.channels'
+    keys): when several do, their group (every game lists the same esports channels), else "other". Uploads
+    published over YIELD_DAYS ago are old news, and left out. Returns how many were new; 0 without Redis."""
     now = now or datetime.now(timezone.utc)
     recent = [u for u in uploads if u.published is None or u.published >= now - timedelta(days=YIELD_DAYS)]
     named = {f.upload.video_id for f in found}
@@ -99,7 +127,7 @@ def read_channel(channel: str, listed_by: Iterable[str], uploads: list[Upload], 
         adds = 0
         for u in recent:
             day = _day(u.published, now)
-            ends = int((datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=YIELD_DAYS + 1)).timestamp())
+            ends = _ends(day)
             for what in ("read", "matched") if u.video_id in named else ("read",):
                 pipe.sadd(_set(channel, day, what), u.video_id)
                 pipe.expireat(_set(channel, day, what), ends)
@@ -116,17 +144,25 @@ def read_channel(channel: str, listed_by: Iterable[str], uploads: list[Upload], 
     for u in recent:
         new += int(answers[i] or 0)
         i += 4 if u.video_id in named else 2
-    keys = set(listed_by)
-    running = {s.key for s in sports.ENABLED}
-    for sport in sorted(keys & running) or sorted(keys)[:1] or ["other"]:
-        metrics.feed_step("uploads", "channels", [sport] * new)
+    metrics.feed_step("uploads", "channels", [listed_sport(listed_by)] * new)
     return new
 
 
-def channel_yield(session: Session, channels: Iterable[str], now: datetime | None = None) -> dict[str, dict[str, Any]]:
+def listed_sport(listed_by: Iterable[str]) -> str:
+    """The one sport a channel's uploads count for: the running sport that lists it, or the group of those that do
+    when they share one (an esports channel every game lists), else "other"."""
+    running = [s for s in sports.ENABLED if s.key in set(listed_by)]
+    if len(running) == 1:
+        return running[0].key
+    groups = {s.group for s in running}
+    return groups.pop() if len(groups) == 1 and "" not in groups else "other"
+
+
+def channel_yield(session: Session, channels: Iterable[str], listed: Iterable[str] = (), now: datetime | None = None) -> dict[str, dict[str, Any]]:
     """Each channel's last YIELD_DAYS: uploads read, those naming a followed player, kept (videos stored for
-    anyone) and served (of those, any the Feed shows), and when its latest upload was published. A channel
-    nothing is known of has zeros and no latest upload."""
+    anyone) and served (of those, any the Feed shows), and when its latest upload was published. Uploads are read
+    only from the channels a sport lists (listed), so only theirs are looked up. A channel nothing is known of has
+    zeros and no latest upload."""
     now = now or datetime.now(timezone.utc)
     wanted = sorted({c for c in channels if c})
     out: dict[str, dict[str, Any]] = {c: {"read": 0, "matched": 0, "kept": 0, "served": 0, "last_upload": None} for c in wanted}
@@ -141,6 +177,9 @@ def channel_yield(session: Session, channels: Iterable[str], now: datetime | Non
     ):
         out[channel].update(kept=kept, served=served)
     days = [_day(now - timedelta(days=n), now) for n in range(YIELD_DAYS + 1)]
+    wanted = [c for c in wanted if c in set(listed)]
+    if not wanted:
+        return out
     try:
         pipe = bus.sync_redis().pipeline()
         for channel in wanted:
@@ -166,12 +205,13 @@ def channel_yield(session: Session, channels: Iterable[str], now: datetime | Non
 
 def coverage(session: Session, now: datetime | None = None) -> dict[str, tuple[int, int]]:
     """For each running sport (metrics.sport_label), how many players fans follow, and how many of them have a
-    video the Feed would serve (scored, not hidden) published in the last COVERED_DAYS, or pinned."""
+    video the Feed would serve (scored, not hidden) published in the last COVERED_DAYS, or pinned. A sport no
+    module knows (golf) is left out: no channel looks for its players, so it could never be covered."""
     from .rank import when
 
     now = now or datetime.now(timezone.utc)
     sport_of = {pid: metrics.sport_label(sport) for pid, sport in session.execute(
-        select(Player.id, Player.sport).where(exists().where(Follow.player_id == Player.id))) if sports.on(sport)}
+        select(Player.id, Player.sport).where(exists().where(Follow.player_id == Player.id))) if sports.get(sport) and sports.on(sport)}
     covered: set[int] = set()
     if sport_of:
         rows = session.execute(

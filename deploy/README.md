@@ -552,7 +552,7 @@ first failures after a deploy count:
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
 | Someone signed in to the admin panel | a sign-in to `/admin` worked in the last 5 minutes (it says how many): if it wasn't you, see "The admin panel" |
 | Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
-| The feed has kept nothing for a day | for 30 minutes, no video has been kept from any channel or moment search in the last 24 hours (the curator's counts start at 0 while a video source runs) |
+| The feed has kept nothing for a day | for 30 minutes, no video has been kept from any channel or moment search in the last 24 hours, given a day of the curator's readings (its counts start at 0 while a video source runs) |
 | The feed's judge is failing | over 5 candidates of one kind the judge couldn't answer for in an hour (out of credit, timeout, invalid output, declined, unavailable; not the model turned off) |
 | A sport's followed players have no videos | for a day (of the curator's readings), none of a sport's followed players had a servable video published in the last 7 days |
 

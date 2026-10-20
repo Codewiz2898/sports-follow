@@ -163,7 +163,7 @@ FEED_STEPS = {
     "kept": "Candidates kept: a row stored for a player and video",
     "judged": "Candidates the judge gave a verdict on",
     "passed": "Candidates the judge lets be served: about the player, not paid for, no risk",
-    "served": "Candidates newly served: their score set where it wasn't",
+    "served": "Candidates newly served: their score set where it wasn't (again, after a hide or a channel's trust at 0 is taken back)",
 }
 # Why a matched upload isn't kept (feedstats.reason): the hard filters' words, and the two ways it was seen already.
 REFUSALS = ("not_embeddable", "blocked", "too_long", "too_short", "live", "private", "gone", "refused_before", "already_stored")

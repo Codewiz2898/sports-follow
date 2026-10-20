@@ -53,7 +53,9 @@ def test_a_hard_filters_refusal_is_labelled_by_its_reason(why, seconds, label):
     assert feedstats.reason(why, facts) == label and label in metrics.REFUSALS
 
 
-def test_a_channels_uploads_count_once_for_each_player_and_video(measured):  # noqa: F811
+def test_a_channels_uploads_count_once_for_each_player_and_video(measured, monkeypatch):  # noqa: F811
+    redis = Redis()
+    monkeypatch.setattr(bus, "sync_redis", lambda: redis)
     # Kohli's "a" is stored already (read again at every poll: not counted again), "b" was refused last week (the
     # same), "c" is refused now for its length, "d" is kept for him and Mandhana, "e" is new for Mandhana only.
     got = [found(1, "a"), found(1, "b"), found(1, "c"), found(1, "d"), found(2, "d"), found(2, "e")]
@@ -62,6 +64,10 @@ def test_a_channels_uploads_count_once_for_each_player_and_video(measured):  # n
     assert counts(measured, "sports_follow.feed.matched") == {("cricket", "channels"): 4}
     assert counts(measured, "sports_follow.feed.refused") == {("cricket", "channels", "too_short"): 1}
     assert counts(measured, "sports_follow.feed.kept") == {("cricket", "channels"): 3}
+    # An hour on, Redis has forgotten "c" was refused and it's asked about again: not counted a second time.
+    feedstats.keep_counted("channels", [found(1, "c")], set(), why={"c": "length"}, facts={"c": VideoFacts(video_id="c", seconds=40)})
+    assert counts(measured, "sports_follow.feed.matched") == {("cricket", "channels"): 4}
+    assert counts(measured, "sports_follow.feed.refused") == {("cricket", "channels", "too_short"): 1}
 
 
 def test_what_a_search_finds_that_was_stored_or_refused_already_counts_as_spent_for_nothing(measured):  # noqa: F811
@@ -107,7 +113,7 @@ def test_the_judges_verdicts_errors_and_time_are_counted(measured, monkeypatch):
             answer = next(answers)
             return FakeGateway(answer).complete(**request)
 
-    verdicts = curate.judge_many(items, Gateway(), workers=1)  # type: ignore[arg-type]
+    verdicts = curate.judge_many(items, Gateway(), workers=1)  # type: ignore[arg-type]  # a stand-in for the gateway's client
     assert [v.stage if v else None for v in verdicts] == ["rules", "model", None]
     assert counts(measured, "sports_follow.feed.verdicts") == {("no", "true", "false", "rules"): 1, ("subject", "false", "false", "model"): 1}
     assert counts(measured, "sports_follow.feed.judge_errors") == {("out_of_credit",): 1}
@@ -198,13 +204,14 @@ class Redis:
 def test_a_channels_new_uploads_are_counted_once_and_noted_by_the_day_they_were_published(measured, monkeypatch):  # noqa: F811
     redis = Redis()
     monkeypatch.setattr(bus, "sync_redis", lambda: redis)
-    uploads = [upload("new1"), upload("new2", NOW - timedelta(days=2)), upload("old", NOW - timedelta(days=40))]
-    named = [Found(1, "cricket", uploads[0], "kohli", "title")]
-    assert feedstats.read_channel(CHANNEL, {"cricket"}, uploads, named, NOW) == 2  # the 40-day-old one is old news
+    redis.sets[f"feed:yield:{CHANNEL}:2026-10-21:matched"] = {"new1"}  # already noted as matched: its SADD answers 0
+    uploads = [upload("new0"), upload("new1"), upload("new2", NOW - timedelta(days=2)), upload("old", NOW - timedelta(days=40))]
+    named = [Found(1, "cricket", uploads[1], "kohli", "title")]
+    assert feedstats.read_channel(CHANNEL, {"cricket"}, uploads, named, NOW) == 3  # the 40-day-old one is old news
     assert feedstats.read_channel(CHANNEL, {"cricket"}, uploads, named, NOW + timedelta(minutes=30)) == 0  # read again: nothing new
-    assert counts(measured, "sports_follow.feed.uploads") == {("cricket", "channels"): 2}
+    assert counts(measured, "sports_follow.feed.uploads") == {("cricket", "channels"): 3}
     assert redis.sets == {
-        f"feed:yield:{CHANNEL}:2026-10-21:read": {"new1"}, f"feed:yield:{CHANNEL}:2026-10-21:matched": {"new1"},
+        f"feed:yield:{CHANNEL}:2026-10-21:read": {"new0", "new1"}, f"feed:yield:{CHANNEL}:2026-10-21:matched": {"new1"},
         f"feed:yield:{CHANNEL}:2026-10-19:read": {"new2"},
     }  # fmt: skip
     # Each day's sets go a day after the yield stops counting it.
@@ -212,10 +219,12 @@ def test_a_channels_new_uploads_are_counted_once_and_noted_by_the_day_they_were_
     assert redis.hashes == {"feed:yield:last": {CHANNEL: NOW.isoformat()}}
 
 
-def test_an_esports_channel_counts_for_its_game_not_its_group_too(measured, monkeypatch):  # noqa: F811
+def test_a_channels_uploads_count_once_for_the_sport_or_the_group_that_lists_it(measured, monkeypatch):  # noqa: F811
     monkeypatch.setattr(bus, "sync_redis", lambda: Redis())
     feedstats.read_channel(CHANNEL, {"valorant", "esports"}, [upload("v1")], [], NOW)
-    assert counts(measured, "sports_follow.feed.uploads") == {("valorant", "channels"): 1}
+    feedstats.read_channel(CHANNEL, {"valorant", "cs2", "dota2", "esports"}, [upload("v2")], [], NOW)  # every game lists the same esports channels
+    feedstats.read_channel(CHANNEL, {"cricket", "football"}, [upload("v3")], [], NOW)  # no group in common
+    assert counts(measured, "sports_follow.feed.uploads") == {("valorant", "channels"): 1, ("esports", "channels"): 1, ("other", "channels"): 1}
 
 
 def test_without_redis_a_channels_uploads_arent_noted_and_the_poll_goes_on(measured, monkeypatch):  # noqa: F811
