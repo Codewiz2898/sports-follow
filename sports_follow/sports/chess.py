@@ -306,6 +306,9 @@ without a ruling from FIDE or the platform are misinformation."""
         "https://www.theguardian.com/sport/chess/rss": "The Guardian",
     }
 
+    def video_words(self) -> str:
+        return "chess"
+
     def search_words(self, fired: Fired) -> str | None:
         """A win, in its game ("wins game 4"): its fixture's title names the round."""
         if fired.kind != "final" or ": won" not in fired.title.lower():

@@ -3,8 +3,9 @@ whether we get enough candidates, and where they're lost.
 
 - The funnel, counted once for each player and video (keep_counted): a trusted channel's latest uploads are read
   again every poll, so only what's new to a player counts as matched, and is then kept or refused for a reason
-  (REFUSALS). A moment's search is a fresh read each time: what it finds that's stored already, or was refused
-  lately, counts too, as already_stored or refused_before, which is what the search spent for nothing.
+  (REFUSALS). A search (a moment's, a gap's, the famous sweep's) is a fresh read each time: what it finds that's
+  stored already, or was refused lately, counts too, as already_stored or refused_before, which is what the search
+  spent for nothing.
 - Each trusted channel's yield (read_channel, channel_yield): its uploads of the last YIELD_DAYS, and those naming
   a followed player, as sets in Redis by the day each was published, kept a day longer than that; the latest
   upload it was seen with. Kept and served are counted from the candidates themselves. For the admin's Feed tab:
@@ -64,7 +65,7 @@ def keep_counted(stream: str, found: list[Found], have: set[tuple[int, str]], sk
     if stream == "channels":
         first = _first_time(first)
     lost = [(f.sport, reason(why[f.upload.video_id], facts.get(f.upload.video_id))) for f in first if f.upload.video_id in why]
-    if stream == "search":
+    if stream != "channels":
         for f in found:
             if (f.player_id, f.upload.video_id) in have:
                 first.append(f)
@@ -207,25 +208,34 @@ def coverage(session: Session, now: datetime | None = None) -> dict[str, tuple[i
     """For each running sport (metrics.sport_label), how many players fans follow, and how many of them have a
     video the Feed would serve (scored, not hidden; a story isn't one) published in the last COVERED_DAYS, or pinned. A sport no
     module knows (golf) is left out: no channel looks for its players, so it could never be covered."""
-    from .rank import when
-
-    now = now or datetime.now(timezone.utc)
     sport_of = {pid: metrics.sport_label(sport) for pid, sport in session.execute(
         select(Player.id, Player.sport).where(exists().where(Follow.player_id == Player.id))) if sports.get(sport) and sports.on(sport)}
-    covered: set[int] = set()
-    if sport_of:
-        rows = session.execute(
-            select(FeedCandidate.player_id, FeedCandidate.candidate["published"].astext, FeedCandidate.review)
-            .where(FeedCandidate.player_id.in_(sorted(sport_of)), FeedCandidate.source.not_in(list(NEWS)), FeedCandidate.score.is_not(None),
-                   FeedCandidate.review.is_distinct_from("hidden")))
-        for pid, published, review in rows:
-            at = when(published)
-            if review == "pinned" or (at is not None and at >= now - timedelta(days=COVERED_DAYS)):
-                covered.add(pid)
+    have_one = covered(session, sport_of, now)
     out: dict[str, tuple[int, int]] = {}
     for pid, sport in sport_of.items():
         followed, have = out.get(sport, (0, 0))
-        out[sport] = (followed + 1, have + (pid in covered))
+        out[sport] = (followed + 1, have + (pid in have_one))
+    return out
+
+
+def covered(session: Session, players: Iterable[int], now: datetime | None = None) -> set[int]:
+    """Those of these players with a video the Feed would serve (scored, not hidden; a story isn't one) published in
+    the last COVERED_DAYS, or pinned: the rest are the gaps a gap search looks for (sweeps.py)."""
+    from .rank import when
+
+    now = now or datetime.now(timezone.utc)
+    wanted = sorted(set(players))
+    if not wanted:
+        return set()
+    rows = session.execute(
+        select(FeedCandidate.player_id, FeedCandidate.candidate["published"].astext, FeedCandidate.review)
+        .where(FeedCandidate.player_id.in_(wanted), FeedCandidate.source.not_in(list(NEWS)), FeedCandidate.score.is_not(None),
+               FeedCandidate.review.is_distinct_from("hidden")))
+    out: set[int] = set()
+    for pid, published, review in rows:
+        at = when(published)
+        if review == "pinned" or (at is not None and at >= now - timedelta(days=COVERED_DAYS)):
+            out.add(pid)
     return out
 
 

@@ -1,5 +1,6 @@
 """The curator: the feed's own process beside the worker, which fetches what's shared about followed players
-(candidates.py: trusted channels; searches.py: searches for big moments; news.py: publishers' feeds), then has the
+(candidates.py: trusted channels; searches.py: searches for big moments; sweeps.py: searches for players with nothing
+to watch, and for each one's most watched; news.py: publishers' feeds), then has the
 judge read it and ranks it (rank.py). It's an arq worker of its own on a queue of
 its own, so its jobs never take the worker's slots and a slow source or model never holds up a live poll; its
 source requests are in the feed lane, a background lane (adapters/budget.py). The feed's endpoint only reads
@@ -14,6 +15,8 @@ Work every score out again from what's stored, without fetching (and with --reju
               .venv/bin/python -m sports_follow.curator rescore [--rejudge]
 Read the publishers' feeds once, judge and rank what's new, and say what it did for each sport:
               .venv/bin/python -m sports_follow.curator news
+List the last week's sweeps, with what each found, kept and serves (and with --run, run the day's first):
+              .venv/bin/python -m sports_follow.curator sweeps [--run]
 """
 
 from __future__ import annotations
@@ -36,14 +39,14 @@ from arq import cron  # noqa: E402
 from arq.connections import RedisSettings  # noqa: E402
 from arq.worker import run_worker  # noqa: E402
 
-from . import bus, candidates, db, feedstats, metrics, news, rank, searches  # noqa: E402
+from . import bus, candidates, db, feedstats, metrics, news, rank, searches, sweeps  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
 from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
 
 log = logging.getLogger("sports_follow.curator")
 
 QUEUE = "arq:curator"
-MAX_JOBS = 3  # the channel poll, the news poll and the check (or the prune); each works through its sources one request at a time
+MAX_JOBS = 3  # the channel poll, the news poll and the check (or the prune, or the sweep); each works through its sources one request at a time
 POLL_LOCK = 25 * 60  # seconds: a poll that hasn't ended by the next one's time is still running, or died holding it
 
 
@@ -151,6 +154,16 @@ async def check_videos(ctx) -> None:
         log.info("feed check: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra=done)
 
 
+async def sweep(ctx) -> None:
+    """Daily, just after YouTube's quota day starts: a search for each followed player with nothing to watch this
+    week, and the famous sweep's share of the week (sweeps.py); then what's new is judged and everything ranked."""
+    if await _missed(ctx, "feed_sweep"):
+        return
+    done = await in_lane("feed", _locked("feed-sweep", lambda: {f"sweep {k}": v for k, v in sweeps.run().items() if v} | rank_new()))
+    if done:
+        log.info("feed sweep: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra={k.replace(" ", "_"): v for k, v in done.items()})
+
+
 async def startup(ctx) -> None:
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 2, thread_name_prefix="curator"))
@@ -165,6 +178,8 @@ class CuratorSettings:
         cron(_logged(poll_news), minute={0, 20, 40}, second=40, run_at_startup=True, timeout=POLL_LOCK),
         cron(_logged(check_videos), hour=3, minute=50, second=0, timeout=3600),
         cron(_logged(prune_news), weekday=0, hour=4, minute=20, second=0, timeout=3600),
+        # YouTube's day starts at midnight Pacific: 07:00 or 08:00 UTC.
+        cron(_logged(sweep), hour=8, minute=15, second=0, timeout=POLL_LOCK),
     ]
     queue_name = QUEUE
     timezone = timezone.utc
@@ -182,9 +197,13 @@ def main(argv: list[str] | None = None) -> int:
     again = sub.add_parser("rescore", help="work every stored candidate's score out again, fetching nothing")
     again.add_argument("--rejudge", action="store_true", help="ask the judge about every candidate again first (a model call each the rules don't settle)")
     sub.add_parser("news", help="read the publishers' feeds once, judge and rank what's new, and say what it did for each sport")
+    swept = sub.add_parser("sweeps", help="list the last week's sweeps (gap searches, the famous sweep): what each found, kept and serves")
+    swept.add_argument("--run", action="store_true", help="run the day's sweeps first, within their caps, then judge and rank what's new")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "news":
         return _news_once()
+    if args.command == "sweeps":
+        return _sweeps(args.run)
     if args.command != "rescore":
         run_worker(CuratorSettings)  # type: ignore[arg-type]  # arq types its settings as a dict; it reads a class's attributes too
         return 0
@@ -221,6 +240,24 @@ def _news_once() -> int:
     for key in sorted(set(polled) | set(stored)):
         c, (n, j, s) = polled.get(key, {}), stored.get(key, [0, 0, 0])
         print(f"{key:<12}{c.get('feeds', 0):>6}{c.get('unread', 0):>7}{c.get('read', 0):>6}{c.get('matched', 0):>8}{c.get('kept', 0):>6}{n:>8}{j:>8}{s:>8}")
+    return 0
+
+
+def _sweeps(run: bool) -> int:
+    """The last week's sweeps, newest first; with run, the day's run by hand first, in the feed lane."""
+    from datetime import datetime, timedelta
+
+    from .adapters import budget
+
+    if run:
+        with budget.in_lane("feed"):
+            done = sweeps.run() | rank_new()
+        print(", ".join(f"{v} {k}" for k, v in done.items() if v) or "nothing to search for (no key, caps spent, or every player covered)")
+    with db.session() as session:
+        rows = sweeps.report(session, datetime.now(timezone.utc) - timedelta(days=7))
+    print(f"{'ran (UTC)':<17}{'stream':<8}{'found':>6}{'kept':>6}{'served':>8}  query")
+    for r in rows:
+        print(f"{r['ran_at']:%Y-%m-%d %H:%M}  {r['stream']:<8}{r['found']:>6}{r['kept']:>6}{r['served']:>8}  {r['query']}")
     return 0
 
 
