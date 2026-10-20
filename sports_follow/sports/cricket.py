@@ -366,6 +366,7 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
         "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",
         "https://www.theguardian.com/sport/cricket/rss": "The Guardian",

@@ -156,6 +156,7 @@ announces it is rumour. Full-game uploads are restreams."""
         "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
         "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",
         "https://www.theguardian.com/sport/nba/rss": "The Guardian",

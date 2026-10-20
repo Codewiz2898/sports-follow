@@ -482,6 +482,7 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
         "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.theguardian.com/football/rss": "The Guardian",
         "https://www.skysports.com/rss/11095": "Sky Sports",
