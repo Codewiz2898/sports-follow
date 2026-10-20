@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Card, type Feed, type FeedItem, type FeedShare, type FeedVerdict } from '../api'
-import { day, parseDate, safeHref, shortName } from '../format'
+import { dateOnly, day, parseDate, safeHref, shortName } from '../format'
 import { useFollowing } from '../following'
 import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
@@ -17,13 +17,12 @@ import { Rail } from './Rail'
 
 type Kind = FeedItem['kind']
 const KINDS: [Kind, string][] = [['video', 'Videos'], ['post', 'Posts'], ['news', 'News']]
-const PLATFORMS: Record<string, string> = { x: 'X', twitter: 'X', instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok', threads: 'Threads', facebook: 'Facebook' }
 
 /** Dev only: ?feed-sample on a player's page or Today shows made-up videos and posts (dev/feedSample.ts). */
 const SAMPLE = import.meta.env.DEV && typeof location !== 'undefined' && new URLSearchParams(location.search).has('feed-sample')
 
-/** The player's feed, again when their card changes (its news may have), and a way to hide an item now. */
-export function useFeed(playerId: number, name: string, version: number) {
+/** The player's feed, again when their card's news changes (`news`: its stories' addresses), and a way to hide an item now. */
+export function useFeed(playerId: number, name: string, news: string) {
   const [feed, setFeed] = useState<Feed | null>(null)
   const [error, setError] = useState<string | null>(null)
   const current = useRef(feed)
@@ -35,7 +34,7 @@ export function useFeed(playerId: number, name: string, version: number) {
     const load = SAMPLE ? import('../dev/feedSample').then((m) => m.sampleFeed(playerId, name)) : api.feed(playerId)
     load.then((f) => { if (!stale) { setFeed(f); setError(null) } }).catch((e: Error) => { if (!stale) setError(e.message) })
     return () => { stale = true }
-  }, [playerId, name, version])
+  }, [playerId, name, news])
   useEffect(() => { setFeed(null); setError(null) }, [playerId])
 
   // Gone from the page straight away; back, with why, if the server didn't take it.
@@ -59,10 +58,11 @@ function without(feed: Feed, id: string): Feed {
   return { ...feed, groups, evergreen, count: groups.reduce((n, g) => n + g.items.length, 0) + evergreen.length }
 }
 
-/** "9h ago", "3 days ago", then the date. */
+/** "9h ago", "3 days ago", then the date; a story known only by its day, that day. */
 function ago(at: string | null, now: number, short = false): string {
   const d = parseDate(at)
   if (!d) return ''
+  if (dateOnly(at)) return day(at)
   const mins = Math.max(1, Math.floor((now - d.getTime()) / 6e4))
   if (mins < 60) return short ? `${mins}m` : `${mins}m ago`
   const hours = Math.floor(mins / 60)
@@ -86,10 +86,6 @@ function views(n: number | null | undefined): string {
   if (n == null) return ''
   const short = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
   return `${short} ${n === 1 ? 'view' : 'views'}`
-}
-
-function platform(name: string): string {
-  return PLATFORMS[name.toLowerCase()] ?? name.charAt(0).toUpperCase() + name.slice(1)
 }
 
 /** YouTube's own thumbnail of a video. Its stand-in for one it has none for (gone, or never was) is a grey
@@ -146,7 +142,7 @@ export function VideoCard({ item, now, onMore }: { item: FeedItem; now: number; 
 /** A post: whose it is (the player's own in ink, a fan's in the sport's outline), their words, and the way there. */
 export function PostCard({ item, name, now, onMore }: { item: FeedItem; name: string; now: number; onMore?: () => void }) {
   const own = item.post?.own ?? false
-  const where = platform(item.post?.platform ?? '')
+  const where = item.post?.platform ?? ''
   const href = safeHref(item.url)
   return (
     <article className="card feed-card post">
@@ -172,6 +168,7 @@ export function NewsCard({ item, now, onMore }: { item: FeedItem; now: number; o
         <span><span className="pill feed-tag">{item.tag}</span></span>
         <span className="title" style={{ fontSize: 16 }}>{item.title}</span>
         <span className="tiny muted" style={{ fontWeight: 700 }}>{[item.source, ago(item.published_at, now)].filter(Boolean).join(' · ')}</span>
+        {item.summary && <span className="small muted">{item.summary}</span>}
       </a>
       {onMore && <More onClick={onMore} />}
     </article>
@@ -371,7 +368,8 @@ export function FromYourPlayers({ shares: rows, now }: { shares: { card: Card; i
       {rows.map(({ card, item }) => {
         const name = shortName(card.player.name)
         const own = item.kind === 'post' && item.post?.own
-        const from = item.kind === 'post' ? (own ? `On ${platform(item.post?.platform ?? '')}` : `${item.source} on ${platform(item.post?.platform ?? '')}`) : item.source
+        const where = item.post?.platform ?? ''
+        const from = item.kind === 'post' ? (own ? `On ${where}` : `${item.source} on ${where}`) : item.source
         return (
           <Link key={`${card.player_id}:${item.id}`} to={`/player/${card.player_id}?tab=feed`} className="feed-share" data-sport={sportKey(card.player.sport)}>
             {item.kind === 'video' && <span className="feed-share-play" aria-hidden="true">{play(16)}</span>}

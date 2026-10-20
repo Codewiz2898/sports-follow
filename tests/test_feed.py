@@ -39,13 +39,13 @@ CARD = {"player": {"name": "Gukesh D"}, "news": [
 
 
 def video(url: str, title: str, tag: str = "Analysis", days_ago: float = 1, youtube_id: str = "dQw4w9WgXcQ") -> Item:
-    return Item(id=feed.item_id(url), kind="video", tag=tag, title=title, url=url, source="Endgame Hour", published_at=NOW - timedelta(days=days_ago),
+    return Item(id=feed.item_id(url), kind="video", tag=tag, title=title, url=url, source="Endgame Hour", published_at=(NOW - timedelta(days=days_ago)).isoformat(),
                 reason="A creator on the chess list breaking down game 4.", video=Video(youtube_id=youtube_id, duration=1122, views=41000))
 
 
 def post(url: str, text_: str, own: bool, days_ago: float = 0.5) -> Item:
-    return Item(id=feed.item_id(url), kind="post", tag="Post", title=text_, url=url, source="@DGukesh" if own else "Rook Lift", published_at=NOW - timedelta(days=days_ago),
-                reason="His own account, after the game." if own else "A fan account the judge trusts.", post=Post(platform="x", own=own))
+    return Item(id=feed.item_id(url), kind="post", tag="Post", title=text_, url=url, source="@DGukesh" if own else "Rook Lift", published_at=(NOW - timedelta(days=days_ago)).isoformat(),
+                reason="His own account, after the game." if own else "A fan account the judge trusts.", post=Post(platform="X", own=own))
 
 
 # ---------------------------------------------------------------- without the database
@@ -56,9 +56,9 @@ def test_the_cards_news_become_news_items_with_ids_from_their_address():
     assert [i.title for i in items] == ["Game 4 annotated", "The match so far", "Undated"]  # one with no address can't be opened
     first = items[0]
     assert (first.kind, first.tag, first.source, first.id) == ("news", "News", "ChessBase", feed.item_id("https://example.com/g4"))
-    assert first.published_at == NOW - timedelta(days=1)
-    day = (NOW - timedelta(days=18)).date()
-    assert items[1].published_at == datetime(day.year, day.month, day.day, tzinfo=timezone.utc)  # a bare date: that day
+    assert first.published_at == (NOW - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+    # A story known only by its day stays a day: the app shows it as that day wherever the fan is.
+    assert items[1].published_at == (NOW - timedelta(days=18)).date().isoformat()
     assert first.reason == "A story about Gukesh D from ChessBase, from the news on their page."
     assert feed.item_id("https://example.com/g4") == feed.item_id("https://example.com/g4") and len(first.id) == 16
 
@@ -147,10 +147,16 @@ def test_a_feed_is_the_news_until_the_pipeline_and_hiding_drops_an_item_for_that
 @needs_db
 def test_odd_feedback_and_missing_players_are_refused_plainly(db):
     gukesh = player(db, "gukesh")
-    for item, body in (("not-an-id", {"verdict": "report"}), ("0123456789abcdef", {"verdict": "love it"}), ("0123456789abcdef", {"verdict": 3}), ("0123456789abcdef", {})):
+    real = feed.item_id("https://example.com/g4")
+    for item, body in (("not-an-id", {"verdict": "report"}), (real, {"verdict": "love it"}), (real, {"verdict": 3}), (real, {})):
         with pytest.raises(server.HTTPException) as refused:
             server.feed_feedback(gukesh, item, body, "fan", db)
         assert refused.value.status_code == 422
+    # Only about an item the feed has: a fan can't fill the table with ids of nothing.
+    with pytest.raises(server.HTTPException) as nothing:
+        server.feed_feedback(gukesh, "0123456789abcdef", {"verdict": "report"}, "fan", db)
+    assert nothing.value.status_code == 404
+    assert db.scalars(select(FeedFeedback)).all() == []
     with pytest.raises(server.HTTPException) as missing:
         server.feed_feedback(9999, "0123456789abcdef", {"verdict": "report"}, "fan", db)
     assert missing.value.status_code == 404
@@ -189,8 +195,8 @@ def test_judged_videos_and_posts_join_the_news_and_todays_rail_takes_the_top_one
 @needs_db
 def test_feedback_goes_with_its_player_and_follows_the_fan_into_an_account(db):
     gukesh, kohli = player(db, "gukesh"), player(db, "kohli")
-    for fan, who, item in (("anon", gukesh, "0123456789abcdef"), ("anon", kohli, "fedcba9876543210")):
-        feed.feedback(db, fan, who, item, "not_interested")
+    for who in (gukesh, kohli):
+        feed.feedback(db, "anon", who, feed.item_id("https://example.com/g4"), "not_interested")
     db.commit()
 
     account_id = accounts.find_or_create(db, "fan@example.com")

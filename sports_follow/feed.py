@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .models import FeedFeedback, Follow, Moment, Player, PlayerCard
+from .models import FeedFeedback, Follow, Moment, PlayerCard
 
 # What a fan can say about an item from its "…" sheet. Each hides it from them; the judge reads all three later.
 VERDICTS = ("not_interested", "not_about_player", "report")
@@ -46,7 +46,7 @@ class Video(BaseModel):
 
 
 class Post(BaseModel):
-    platform: str  # "x", "instagram": the card says "Open on X" and links to the post itself
+    platform: str  # where it was posted, as fans call it ("X", "Instagram"): the card says "Open on X"
     own: bool  # the player's own account (an ink pill) rather than a fan's or a creator's
 
 
@@ -57,8 +57,11 @@ class Item(BaseModel):
     title: str  # a video's or story's title; a post's words, a snippet of them
     url: str
     source: str  # the channel, account or outlet
-    published_at: datetime | None = None
+    # As the source gave it: an instant, or a bare day ("2026-10-12") for a story known only by its day, which
+    # the app shows as that day wherever the fan is, never as a time.
+    published_at: str | None = None
     reason: str  # "Why this is here", one line, shown as it is
+    summary: str | None = None  # a story's first lines
     video: Video | None = None
     post: Post | None = None
 
@@ -111,7 +114,7 @@ def feed_for(db: Session, player_id: int, fan: str, now: datetime | None = None)
     if card is None:
         return None
     now = now or datetime.now(timezone.utc)
-    shown = _unhidden(db, fan, player_id, [*judged(db, [player_id]).get(player_id, []), *_news(card.card)])
+    shown = _unhidden(db, fan, player_id, _candidates(db, player_id, card.card))
     moments = _moments(db, {c.moment_id for c in shown if c.moment_id is not None and not c.evergreen})
     groups = _arrange([c for c in shown if not c.evergreen], moments, now)
     evergreen = [c.item for c in _ranked(c for c in shown if c.evergreen)]
@@ -133,16 +136,25 @@ def shares_for(db: Session, fan: str) -> list[Share]:
 
 def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> None:
     """Keep what a fan said about an item: it leaves their feed at once. A second word on it replaces the
-    first. ValueError for an item id or verdict this never makes; LookupError for no such player."""
+    first. Only about an item the player's feed has now, so a fan's rows are never more than its items.
+    ValueError for an item id or verdict this never makes; LookupError for no such player or item."""
     if verdict not in VERDICTS or not ITEM_ID.fullmatch(item):
         raise ValueError("No such item or feedback.")
-    if db.get(Player, player_id) is None:
+    card = db.get(PlayerCard, player_id)
+    if card is None:
         raise LookupError("No such player.")
+    if item not in {c.item.id for c in _candidates(db, player_id, card.card)}:
+        raise LookupError("That item isn't in this player's feed any more.")
     row = insert(FeedFeedback).values(fan_id=fan, player_id=player_id, item_id=item, verdict=verdict)
     db.execute(row.on_conflict_do_update(index_elements=["fan_id", "player_id", "item_id"], set_={"verdict": verdict}))
 
 
 # ---------------------------------------------------------------- inside
+
+
+def _candidates(db: Session, player_id: int, card: dict[str, Any]) -> list[Candidate]:
+    """Everything the player's feed could show anyone: the judge's kept items, then the card's news."""
+    return [*judged(db, [player_id]).get(player_id, []), *_news(card)]
 
 
 def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]) -> list[Candidate]:
@@ -177,12 +189,14 @@ def _news(card: dict[str, Any]) -> list[Candidate]:
             continue
         source = (n.get("source") or "").strip()
         reason = f"A story about {name} from {source}, from the news on their page." if source else f"A story about {name}, from the news on their page."
-        out.append(Candidate(Item(id=item_id(url), kind="news", tag="News", title=title, url=url, source=source, published_at=_when(n.get("published")), reason=reason)))
+        published = n.get("published") if isinstance(n.get("published"), str) and _when(n.get("published")) else None
+        summary = (n.get("summary") or "").strip() or None
+        out.append(Candidate(Item(id=item_id(url), kind="news", tag="News", title=title, url=url, source=source, published_at=published, reason=reason, summary=summary)))
     return out
 
 
 def _when(value: Any) -> datetime | None:
-    """An ISO date or time a source gave, in UTC; a bare date is that day's midnight."""
+    """An ISO date or time a source gave, in UTC, for sorting and the week's cut-off; a bare day is its UTC midnight."""
     if not isinstance(value, str) or not value:
         return None
     try:
@@ -197,7 +211,8 @@ def _moments(db: Session, ids: set[int]) -> dict[int, Moment]:
 
 
 def _newest(c: Candidate) -> tuple[float, float]:
-    return (-c.score, -(c.item.published_at.timestamp() if c.item.published_at else 0))
+    at = _when(c.item.published_at)
+    return (-c.score, -(at.timestamp() if at else 0))
 
 
 def _ranked(candidates: Iterable[Candidate]) -> list[Candidate]:
@@ -214,7 +229,7 @@ def _arrange(candidates: list[Candidate], moments: dict[int, Moment], now: datet
     for c in candidates:
         if c.moment_id in moments:
             around.setdefault(c.moment_id, []).append(c)
-        elif c.item.published_at and now - c.item.published_at <= WEEK:
+        elif (at := _when(c.item.published_at)) and now - at <= WEEK:
             week.append(c)
         else:
             earlier.append(c)

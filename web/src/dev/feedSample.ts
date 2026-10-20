@@ -25,7 +25,7 @@ export function sampleFeed(playerId: number, name: string): Feed {
         item('a1b2c3d4e5f60001', { kind: 'video', tag: 'Analysis', title: `The decider, move by move: where ${who} turned it`, source: 'Sample Creator', published_at: at(9),
           video: { youtube_id: 'SAMPLEvid01', duration: 1122, views: 41000 }, reason: 'A creator on this sport\'s list, breaking down the game the day after.' }),
         item('a1b2c3d4e5f60002', { kind: 'post', tag: 'Post', title: 'Proud of the whole team. One more to go, see you on Friday.', source: `@${who.toLowerCase()}`, published_at: at(6),
-          post: { platform: 'x', own: true }, reason: `${who}'s own account, after the game.` }),
+          post: { platform: 'X', own: true }, reason: `${who}'s own account, after the game.` }),
         item('a1b2c3d4e5f60003', { kind: 'news', tag: 'News', title: `The decider annotated: the plan behind ${who}'s sacrifice`, source: 'Sample Outlet', published_at: at(3) }),
       ],
     },
@@ -35,7 +35,7 @@ export function sampleFeed(playerId: number, name: string): Feed {
         item('a1b2c3d4e5f60004', { kind: 'video', tag: 'Fan edit', title: `${who} this season so far: the best of it`, source: 'Sample Edits', published_at: at(50),
           video: { youtube_id: 'SAMPLEvid02', duration: 365, views: 412000 } }),
         item('a1b2c3d4e5f60005', { kind: 'post', tag: 'Post', title: "A fan's caption, as written, up to three lines. A snippet here, the post where it lives.", source: 'Sample Fan', published_at: at(26),
-          post: { platform: 'instagram', own: false } }),
+          post: { platform: 'Instagram', own: false } }),
         item('a1b2c3d4e5f60006', { kind: 'video', tag: 'Interview', title: 'Sit-down before the match: preparation, sleep, and the second\'s chair', source: 'Sample Pod', published_at: at(96),
           video: { youtube_id: 'SAMPLEvid03', duration: 2470, views: 88000 } }),
       ],
@@ -53,7 +53,7 @@ export function sampleFeed(playerId: number, name: string): Feed {
 export function sampleShares(cards: Card[]): FeedShare[] {
   const kinds: Omit<FeedItem, 'id' | 'url' | 'reason'>[] = [
     { kind: 'video', tag: 'Analysis', title: 'The last game, move by move: where it turned', source: 'Sample Creator', published_at: at(9), video: { youtube_id: 'SAMPLEvid01', duration: 1122, views: 41000 } },
-    { kind: 'post', tag: 'Post', title: 'Proud of the whole team. One more to go.', source: '@player', published_at: at(11), post: { platform: 'instagram', own: true } },
+    { kind: 'post', tag: 'Post', title: 'Proud of the whole team. One more to go.', source: '@player', published_at: at(11), post: { platform: 'Instagram', own: true } },
     { kind: 'video', tag: 'Fan edit', title: 'The run so far: every big moment', source: 'Sample Edits', published_at: at(26), video: { youtube_id: 'SAMPLEvid02', duration: 365, views: 412000 } },
   ]
   return cards.slice(0, kinds.length).map((c, n) => ({ player_id: c.player_id, item: item(`b1b2c3d4e5f6000${n}`, kinds[n]) }))

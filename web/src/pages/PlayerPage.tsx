@@ -97,7 +97,7 @@ export function PlayerPage() {
   }, [shown, playerId, isFollowing, listen, navigate])
 
   // The Feed reads rows, never a model: it loads with the page, for Overview's "From the fans" and the tab.
-  const feed = useFeed(playerId, card?.player.name ?? '', card?.version ?? 0)
+  const feed = useFeed(playerId, card?.player.name ?? '', (card?.news ?? []).map((n) => n.url).join(' '))
 
   if (error) return <div className="error-box">{error}</div>
   if (!card) return <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>

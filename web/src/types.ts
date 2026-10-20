@@ -272,10 +272,11 @@ export interface FeedItem {
   title: string
   url: string
   source: string
-  published_at: string | null
+  published_at: string | null  // an instant, or a bare day for a story known only by its day
   reason: string
+  summary?: string | null
   video?: { youtube_id: string; duration: number | null; views: number | null } | null
-  post?: { platform: string; own: boolean } | null
+  post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
 
 /** Items around one of the player's moments (`match` its game's page), or "This week" and "Earlier". */
