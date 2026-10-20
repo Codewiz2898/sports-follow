@@ -330,7 +330,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   half of one core. A band changes only when two evaluations agree, so a board glitch isn't a swing.
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
-- **Adding or removing a data source** is one module and one line. A source is a module in
+- **Adding or removing a data source** is one module and one line (a source with a key of its own also
+  names the key in the deploy's secrets lists: the `secrets` skill, `.claude/skills/secrets`, says where). A source is a module in
   `sports_follow/adapters/` with an `Adapter` subclass (`adapters/base.py`) that describes itself: its
   `system`, the `sports` it serves (one, or each esports game it covers, with `sport_of` saying which an
   athlete plays and `running()` which run now, so it reads only theirs), its `name` on a page, its `provider` (the Credits entry, shared with
