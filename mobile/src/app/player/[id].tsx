@@ -1,10 +1,11 @@
 // One player's page, the web's PlayerPage.tsx: a band of their sport's colour edge to edge with share, alerts and
-// follow, then Overview (the live board or next game, the last game, form, numbers, news, about), Matches, Stats
-// and News. Always from the full card, read again every 30 s while the page is open (every 3 s while it's built).
+// follow, then Overview (the live board or next game, the last game, what fans shared, form, numbers, news,
+// about), Matches, Stats and the Feed (feed.tsx). Always from the full card, read again every 30 s while the page
+// is open (every 3 s while it's built). ?tab=feed opens the Feed (Today's "From your players" links there).
 
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, levelText } from '../../../../web/src/alerts'
@@ -13,10 +14,11 @@ import { bareScore, highlight, lastChecked, liveLag, liveUpdates, nextGame } fro
 import { sharePlayer } from '../../../../web/src/share'
 import { useAccount } from '../../account'
 import { useActivity } from '../../activity'
-import { api, type Card } from '../../api'
+import { api, type Card, type Feed } from '../../api'
 import { BuildProgress, formMarks, FormStrip, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SourceNote, StatGrid, UpcomingList } from '../../blocks'
 import { toneOf, useSports } from '../../catalog'
 import { useNow } from '../../clock'
+import { FeedTab, FromTheFans, useFeed } from '../../feed'
 import { useFollowing } from '../../following'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../../icons'
 import { ResultsHistory, Segmented, StatsWithForm } from '../../results'
@@ -25,7 +27,7 @@ import { colour, font, num, t } from '../../theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner, WL } from '../../ui'
 import { Page } from '../../page'
 
-type Tab = 'overview' | 'matches' | 'stats' | 'news'
+type Tab = 'overview' | 'matches' | 'stats' | 'feed'
 type MatchesView = 'upcoming' | 'results'
 
 const APP = Constants.expoConfig?.name ?? ''
@@ -33,7 +35,7 @@ const EVERY_MS = 30_000
 const BUILDING_MS = 3_000
 
 export default function PlayerScreen() {
-  const params = useLocalSearchParams<{ id: string }>()
+  const params = useLocalSearchParams<{ id: string; tab?: string }>()
   const playerId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
   const insets = useSafeAreaInsets()
   const sports = useSports()
@@ -45,7 +47,7 @@ export default function PlayerScreen() {
   const [card, setCard] = useState<Card | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null) // a follow, retry or alert change the server refused
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<Tab>(params.tab === 'feed' ? 'feed' : 'overview')
   const [matches, setMatches] = useState<MatchesView | null>(null)
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -62,6 +64,10 @@ export default function PlayerScreen() {
     tick()
     return () => { gone = true; clearTimeout(timer) }
   }, [playerId]))
+  useEffect(() => { if (params.tab === 'feed') setTab('feed') }, [params.tab]) // a link to this page's Feed, while on it
+
+  // The Feed reads rows, never a model: it loads with the page, for Overview's "From the fans" and the tab.
+  const feed = useFeed(playerId, card?.player.name ?? '', (card?.news ?? []).map((n) => n.url).join(' '))
 
   if (!card) {
     return (
@@ -89,8 +95,8 @@ export default function PlayerScreen() {
     setBusy(false)
   }
   const tabs: [Tab, string][] = retired
-    ? [['overview', 'Overview'], ['stats', 'Career'], ['matches', 'Results'], ['news', 'News']]
-    : [['overview', 'Overview'], ['matches', 'Matches'], ['stats', 'Stats'], ['news', 'News']]
+    ? [['overview', 'Overview'], ['stats', 'Career'], ['matches', 'Results'], ['feed', 'Feed']]
+    : [['overview', 'Overview'], ['matches', 'Matches'], ['stats', 'Stats'], ['feed', 'Feed']]
   const onBand = { fg: tone.on, border: tone.on, bg: 'transparent' }
   const filled = { fg: tone.sport, border: tone.on, bg: tone.on }
   const eventId = card.live.is_live ? card.live.event_id : null
@@ -150,10 +156,10 @@ export default function PlayerScreen() {
             ))}
           </View>
 
-          {tab === 'overview' ? <Overview card={card} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
+          {tab === 'overview' ? <Overview card={card} feed={feed.feed} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
           {tab === 'matches' ? <Matches card={card} view={matches} setView={setMatches} /> : null}
           {tab === 'stats' ? <View style={{ gap: 10 }}><StatsWithForm card={card} /></View> : null}
-          {tab === 'news' ? <NewsList items={card.news ?? []} empty="No recent news found." /> : null}
+          {tab === 'feed' ? <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} now={now} onHide={feed.hide} /> : null}
 
           <Text style={[t.tiny, t.muted]}>
             {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
@@ -167,7 +173,7 @@ export default function PlayerScreen() {
 }
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
-function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
+function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
   const research = useAccount().config?.research !== false
   const sports = useSports()
   const { muted, setMuted } = useActivity()
@@ -240,6 +246,8 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
         </View>
       ) : null}
 
+      <FromTheFans feed={feed} name={p.name} sport={p.sport} now={now} onAll={() => show('feed')} />
+
       {marks.length >= 3 ? (
         <Surface pad style={s.row}>
           <View style={{ gap: 2 }}>
@@ -260,7 +268,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
 
       {(card.news ?? []).length > 0 ? (
         <View style={{ gap: 10 }}>
-          <SectionHead title="News" right={(card.news ?? []).length > 2 ? <Btn kind="link" label="All news" onPress={() => show('news')} /> : undefined} />
+          <SectionHead title="News" right={(card.news ?? []).length > 2 ? <Btn kind="link" label="All news" onPress={() => show('feed')} /> : undefined} />
           <NewsList items={(card.news ?? []).slice(0, 2)} brief empty="" />
         </View>
       ) : null}

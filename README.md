@@ -264,7 +264,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   account when they sign in, and goes with the player or the account. A video is YouTube's thumbnail behind a
   play button; the player, from youtube-nocookie.com, loads only once it's tapped (the Caddyfile's
   Content-Security-Policy allows those two hosts). In the dev server, `?feed-sample` on a player's page or
-  Today shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build).
+  Today shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
+  all three (`mobile/src/feed.tsx`), where a tapped video opens in the YouTube app (or the browser without it)
+  rather than playing inside the page; `EXPO_PUBLIC_FEED_SAMPLE=1` on Metro shows the same made-up items.
 - **Campaign pages: a big event as a row, never code.** `stann.in/gukesh` (`sports_follow/campaigns.py`,
   `web/src/pages/CampaignPage.tsx`) is the page a launch post links to: the event in a block of its sport's
   colour, the games on now (the fan's live cards of its players, else Live now's games they're in), its
@@ -701,7 +703,8 @@ What the pages decide is shared with the web app, not copied: the API's calls an
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
 `lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
 `follow.ts`), what a Share button shares (`share.ts`), what a campaign page offers and when its games are
-(`campaign.ts`), what a match page's head shows and when it looks again (`match.ts`), and each sport's facts
+(`campaign.ts`), what a match page's head shows and when it looks again (`match.ts`), what a player's Feed shows
+and how its cards say when (`feed.ts`), and each sport's facts
 (`sports/facts/`: the scoreboard kinds it draws, its line art, how it words a player's line, what its match
 page's part says). Only the drawing is each app's own: a sport's live board is
 `web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,
