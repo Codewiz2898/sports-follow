@@ -6,6 +6,7 @@ import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, li
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
+import { outlets } from '../feed'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -367,7 +368,7 @@ export function NewsList({ items, who, brief, empty }: { items: (NewsItem & { pl
         <li key={n.url || n.headline}>
           <a href={safeHref(n.url)} target="_blank" rel="noreferrer" className="stack">
             <span className="title" style={{ fontSize: 16 }}>{n.headline}</span>
-            <span className="tiny muted" style={{ fontWeight: 700 }}>{[who && n.players?.join(', '), n.source, n.published && day(n.published)].filter(Boolean).join(' · ')}</span>
+            <span className="tiny muted" style={{ fontWeight: 700 }}>{[who && n.players?.join(', '), n.source, outlets(n.outlets), n.published && day(n.published)].filter(Boolean).join(' · ')}</span>
             {!who && !brief && n.summary && <span className="small muted">{n.summary}</span>}
           </a>
         </li>

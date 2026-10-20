@@ -5,7 +5,7 @@
 
 import { ahead, countdown, dateOnly, day, dayLabel, lineStats, outcome, parseDate, playedOn, shortName, shortWhen } from './format'
 import { factsOf, factsOfKind } from './sports/facts'
-import type { Card, FollowedTeam, LatestResult, LiveStatus, Stat, UpcomingEvent } from './types'
+import type { Card, FollowedTeam, LatestResult, LiveStatus, NewsItem, Stat, UpcomingEvent } from './types'
 
 export const WON = { W: 'Won', D: 'Drew', L: 'Lost' } as const
 
@@ -31,7 +31,12 @@ export function statusLine(card: Card, progress: string[] | undefined, now: numb
   if (last && now - lastAt < 14 * 864e5) return last.result
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
   if (card.player.status === 'retired') return 'Retired · news only'
-  return card.news?.[0]?.headline ?? sport
+  return newsOf(card)[0]?.headline ?? sport
+}
+
+/** A card's news: the publishers' stories the curator served, else the research agent's. */
+export function newsOf(card: Pick<Card, 'news' | 'stories'>): NewsItem[] {
+  return card.stories?.length ? card.stories : (card.news ?? [])
 }
 
 /** What a followed team's tile says, as a player's does: its game on now, then a game this week, then its last

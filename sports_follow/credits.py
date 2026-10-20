@@ -83,7 +83,7 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
     and every player photo shown (photos.used). Each source describes its provider and what it covers
     (adapters.base.Provider); licensed ones come first. The AI model and the news it summarises only when
     the research agent runs (config.AGENT)."""
-    from .config import AGENT
+    from .config import AGENT, RESEARCH
 
     running = ADAPTERS if running is None else running
     agent = AGENT if agent is None else agent
@@ -127,7 +127,7 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
         also += [
             {
                 "name": "AI",
-                "what": f"The background of a player Wikipedia has no article on, news summaries, and pages for sports without a live source are written by an AI model ({_model()}) from the sources linked on each page.",
+                "what": f"The background of a player Wikipedia has no article on, news summaries{', and pages for sports without a live source' if RESEARCH else ''} are written by an AI model ({_model()}) from the sources linked on each page.",
                 "note": "It can get things wrong: check the linked sources before relying on a detail.",
             },
             {

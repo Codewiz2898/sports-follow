@@ -9,9 +9,10 @@ result stored for them (Sport.finished_poster: "112 (98)" is a hundred, "2 goals
 
 The Wire is the news about them, put plainly. First the facts a source gave about the fan's players in the
 last FACT_HOURS: who's out injured or suspended, and who's back (sidelined.py), as their sport words them.
-Then line-ups for games still to finish, and the injuries, transfers and retirements the research agent
-found in the news and marked as just happened (pipeline.news_moments), each by the story's own headline with
-the site that ran it. Last, while there's room, the same facts about a few of the best-known players the fan
+Then line-ups for games still to finish, each player's best story of the last NEWS_DAYS from the publishers'
+feeds the curator read and served (news.py), and the injuries, transfers and retirements the research agent found
+in the news and marked as just happened (pipeline.news_moments), each by the story's own headline with the site
+that ran it, a story at one address once. Last, while there's room, the same facts about a few of the best-known players the fan
 doesn't follow (the registry's Wikipedia editions), so a fan who follows nobody has a Wire too. Every row
 names where it's from: those headlines are web search results, not our facts. It never says "breaking".
 """
@@ -26,10 +27,10 @@ from typing import Any
 from sqlalchemy import Select, and_, exists, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
-from . import registry, sports
-from .adapters import ADAPTERS, source_name
+from . import rank, registry, sports
+from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
-from .models import Event, EventPlayer, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined
+from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined
 from .naming import team_key
 
 DAYS = 7
@@ -162,6 +163,7 @@ LINEUP_TAG = "Line-up"
 NEWS_TAGS = {"injury": "Injury", "transfer": "Transfer", "retirement": "Retired"}
 _NEWS_KEY = re.compile(r":news:n(\d+)$")  # notify._key of a story's moment: "-:<player>:news:n<news id>"
 _NEWS_KIND = re.compile(r": (\w+) news$")  # its title, pipeline.news_moments: "Bukayo Saka: injury news"
+NOT_ON_THE_WIRE = ("rumour", "promo")  # a served story of these kinds (the judge's) stays in the Feed
 # A site's label in front of its headline: "BREAKING:", "Breaking news -", or "BREAKING" alone in capitals.
 _BREAKING = re.compile(r"^\W*(?:(?i:breaking(?:\s+news)?)\W*[:|–—-]|BREAKING(?:\s+NEWS)?\b|Breaking\s+news\b)\s*")
 
@@ -200,9 +202,9 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         ))
         .order_by(Moment.id.desc())
     ).all()
+    found, linked = _stories(db, fan, now)
     ids = {int(m[1]) for moment, _, _ in rows if (m := _NEWS_KEY.search(moment.key))}
     stories = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(ids)))} if ids else {}
-    found: list[tuple[datetime, int, dict[str, Any]]] = []
     told: set[tuple[str, int | None, int | None]] = set()  # line-ups by player and game, stories by id: newest first
     for moment, player, title in rows:
         row = {"id": f"m{moment.id}", "player_id": moment.player_id, "player": player.name, "sport": player.sport, "yours": True}
@@ -218,13 +220,38 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         # The kind the moment was told as: the story's row keeps the kind of whichever report stored it first.
         said = _NEWS_KIND.search(moment.title)
         kind = said[1] if said else story.kind if story else None
-        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told:
+        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told or story.url in linked:
             continue  # gone, not a story the Wire tells, or on it already
         told.add(("news", story.id, None))
         found.append((moment.created_at, moment.id, row | {"tag": NEWS_TAGS[kind], "text": _plain(story.headline), "source": story.source or None, "url": story.url}))
     # When each reached us, as the Alerts list dates them: a story's own date is often a day with no time.
     found.sort(key=lambda f: f[:2], reverse=True)
     return [(at, row) for at, _, row in found]
+
+
+def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
+    """Each of the fan's players' best story of the last NEWS_DAYS that the curator served (news.py), and their
+    addresses. Rows are dated when the story reached us, as the agent's are."""
+    rows = db.execute(
+        select(FeedCandidate, Player)
+        .join(Follow, and_(Follow.player_id == FeedCandidate.player_id, Follow.fan_id == fan))
+        .join(Player, Player.id == FeedCandidate.player_id)
+        .where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"),
+               FeedCandidate.fetched_at >= now - timedelta(days=NEWS_DAYS))
+        .order_by(FeedCandidate.score.desc(), FeedCandidate.id.desc())
+    ).all()  # fmt: skip
+    found: list[tuple[datetime, int, dict[str, Any]]] = []
+    told: set[int] = set()
+    for row, player in rows:
+        kept, verdict = row.candidate or {}, row.verdict or {}
+        if player.id in told or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title"):
+            continue
+        told.add(player.id)
+        found.append((row.fetched_at, row.id, {
+            "id": f"s{row.id}", "player_id": player.id, "player": player.name, "sport": player.sport, "yours": True,
+            "tag": rank.tag(verdict, story=True), "text": _plain(str(kept["title"])), "source": str(kept.get("channel") or "") or None, "url": row.url,
+        }))  # fmt: skip
+    return found, {str(row["url"]) for _, _, row in found}
 
 
 def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:

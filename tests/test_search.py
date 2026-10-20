@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
 from sports_follow import naming, pipeline, registry, search, sports
@@ -12,6 +13,15 @@ from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
 from sports_follow.adapters import KNOWN, LiveSearch, Provider, SearchResult, espn, lichess_chess
 
 from .test_new_adapters import load
+
+
+@pytest.fixture(autouse=True)
+def research_on(monkeypatch):
+    """These tests cover pages for players no live source has, which the agent writes with research on
+    (config.RESEARCH, off by default): on here, and off with the agent in the tests that turn it off."""
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "RESEARCH", True)
 
 
 ESPN = [a for a in KNOWN.values() if a.provider is espn.PROVIDER]
@@ -344,6 +354,9 @@ def test_without_the_agent_search_lists_only_athletes_a_source_has(monkeypatch):
     searching(monkeypatch, espn=[warne, carwin])
     out = search.run(None, "shane")
     assert sorted(r["name"] for r in out["results"]) == ["Shane Carwin", "Shane Warne"] and out["researchable"]
+    monkeypatch.setattr(config, "RESEARCH", False)  # the default: the agent on, for backgrounds only
+    out = search.run(None, "shane")
+    assert [r["name"] for r in out["results"]] == ["Shane Warne"] and not out["researchable"]
     monkeypatch.setattr(config, "AGENT", False)
     out = search.run(None, "shane")
     assert [r["name"] for r in out["results"]] == ["Shane Warne"] and not out["researchable"]

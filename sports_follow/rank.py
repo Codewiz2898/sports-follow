@@ -17,6 +17,14 @@ The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
     trust x (INTEREST x the judge's interest + PACE x how fast it's watched + LIKES x its like ratio)
 
+A story from a publisher's feed (news.py) has no views or likes: how many outlets ran it stands in for both,
+
+    trust x (INTEREST x the judge's interest + (PACE + LIKES) x how many outlets ran it, up to OUTLETS_TOP)
+
+and of a player's stories about the same thing within a day (news.clusters) only the best is served, counting
+the others' outlets (features["outlets"]); the rest keep a NULL score. A feed's trust is a channel's: high while a
+running sport lists it.
+
 How fast it's watched is views an hour between its last two reads (the first when it was found, then a re-read
 every few hours while it's under two days old, then the weekly check), or over its whole life while there's
 one read. A channel's trust is high when a running sport lists it, lower for one no sport lists any more,
@@ -42,10 +50,10 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from . import controls, curate, db, shutdown, sports
+from . import controls, curate, db, naming, news, shutdown, sports
 from .accounts import FAN_PREFIX
-from .adapters import VIDEOS
-from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias
+from .adapters import NEWS, feed_source
+from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard
 
 log = logging.getLogger("sports_follow.rank")
 
@@ -57,6 +65,7 @@ PACE_TOP = 10_000  # views an hour that count as the most a video can be watched
 LIKES_TOP = 0.06  # a like ratio that counts as the most liked; 4-6% is a lot on YouTube
 LIKES_UNKNOWN = 0.5  # its part while there are too few views to tell (or likes are hidden)
 LIKES_FROM = 100  # views before the like ratio means anything
+OUTLETS_TOP = 5  # outlets running one story that count as the most a story can be covered
 MENTION = 0.6  # a share that only mentions the player, served only when an admin approves it, is worth this much of one about them
 LISTED, UNLISTED = 1.0, 0.5  # a channel's trust: a running sport lists it, or none does now
 PIN = 10.0  # added to a pinned row's score: ahead of everything the numbers rank
@@ -78,6 +87,7 @@ TAGS = {  # the verdict's kind, as the Feed's pill says it; by who made it where
     "match_moment": "Highlights", "milestone": "Milestone", "personal_or_fun": "Fun", "interview_or_analysis": "Analysis",
     "news": "News", "rumour": "Rumour", "promo": "Promo", "other": "Video",
 }  # fmt: skip
+STORY_TAGS = {**TAGS, "match_moment": "Match report", "personal_or_fun": "Feature", "other": "News"}  # a story's (an article's)
 
 
 # ---------------------------------------------------------------- the numbers, from what's stored
@@ -154,6 +164,23 @@ def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, publi
     return round(max(0.0, trust) * raw, 4)
 
 
+def outlets_part(outlets: int) -> float:
+    """How widely a story ran, 0 to 1: one outlet is a little under half, OUTLETS_TOP or more all of it."""
+    return min(1.0, math.log10(1 + max(0, outlets)) / math.log10(1 + OUTLETS_TOP))
+
+
+def story_score(verdict: dict[str, Any], outlets: int, trust: float) -> float:
+    """A story's number, 0 to 1, before an admin's pin (see the module's docstring)."""
+    try:
+        interest = min(1.0, max(0.0, float(verdict.get("interest") or 0)))
+    except (TypeError, ValueError):
+        interest = 0.0
+    raw = INTEREST * interest + (PACE + LIKES) * outlets_part(outlets)
+    if verdict.get("about_player") == "mention":
+        raw *= MENTION
+    return round(max(0.0, trust) * raw, 4)
+
+
 def evergreen(features: dict[str, Any], published: datetime | None, now: datetime) -> bool:
     """An older share that's still being watched: "The ones everyone's seen"."""
     if published is None or now - published < EVERGREEN_AFTER:
@@ -162,21 +189,28 @@ def evergreen(features: dict[str, Any], published: datetime | None, now: datetim
     return per_hour is not None and per_hour >= EVERGREEN_PACE and (whole(features.get("views")) or 0) >= EVERGREEN_VIEWS
 
 
-def tag(verdict: dict[str, Any]) -> str:
+def tag(verdict: dict[str, Any], story: bool = False) -> str:
+    """The Feed's pill for a row: a video's, or with story, an article's."""
     kind, by = verdict.get("kind"), verdict.get("by")
-    if kind == "match_moment" and by == "fan_or_creator":
+    if kind == "match_moment" and by == "fan_or_creator" and not story:
         return "Fan edit"
     if kind == "interview_or_analysis" and by in ("player", "official", "outlet"):
         return "Interview"
-    return TAGS.get(str(kind), "Video")
+    return (STORY_TAGS if story else TAGS).get(str(kind), "News" if story else "Video")
+
+
+def is_story(source: str) -> bool:
+    """Whether a row's source (FeedCandidate.source) is one of stories (news.py) rather than of videos."""
+    known = feed_source(source)
+    return known is not None and known.kind == "article"
 
 
 # ---------------------------------------------------------------- a channel's trust
 
 
 def listed_channels() -> set[str]:
-    """Every channel a running sport lists for its videos."""
-    return {c for sport in sports.ENABLED for c in sport.video_channels}
+    """Every channel a running sport lists for its videos, and every feed it lists for its stories."""
+    return {c for sport in sports.ENABLED for c in (*sport.video_channels, *sport.news_feeds)}
 
 
 def feedback_weight(rows: Iterable[tuple[str, str]], channel_of: dict[str, str]) -> dict[str, float]:
@@ -256,7 +290,14 @@ def heads(session: Session, player_ids: Iterable[int], since: datetime) -> dict[
 def as_candidate(source: str, url: str, kept: dict[str, Any], features: dict[str, Any], player: curate.PlayerContext) -> curate.Candidate:
     """A stored row as the judge reads it."""
     status = (kept.get("details") or {}).get("status") or {}
-    platform = VIDEOS[source].platform if source in VIDEOS else "other"
+    known = feed_source(source)
+    platform = known.platform if known else "other"
+    if known is not None and known.kind == "article":
+        return curate.Candidate(
+            kind="article", source=cast(curate.Source, platform if platform in get_args(curate.Source) else "other"), url=url, author_kind="outlet",
+            author_name=str(kept.get("channel") or ""), author_handle=str(kept.get("channel_id") or ""), title=str(kept.get("title") or ""),
+            text=str(kept.get("description") or ""), published_at=kept.get("published") or None, player=player,
+        )  # fmt: skip
     return curate.Candidate(
         kind="video", source=cast(curate.Source, platform if platform in get_args(curate.Source) else "other"), url=url,
         author_name=str(kept.get("channel") or ""), author_handle=str(kept.get("channel_id") or ""),
@@ -322,45 +363,125 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
 def rescore(now: datetime | None = None, channel: str | None = None, row: int | None = None) -> dict[str, int]:
     """Work out every judged row's moment and score again from what's stored (just one channel's rows, or one
     row, given either), and write the ones that changed. A row a moment's search found keeps that moment while it
-    stands. No source, no model: cheap enough to run after every poll."""
+    stands. A story is scored with the others of its player's about the same thing (_stories), so those are read
+    too. No source, no model: cheap enough to run after every poll."""
     now = now or datetime.now(timezone.utc)
     with db.session() as session:
-        query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
-                       FeedCandidate.verdict, FeedCandidate.review, FeedCandidate.score, FeedCandidate.moment_id).where(FeedCandidate.verdict.is_not(None))
+        columns = (FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
+                   FeedCandidate.verdict, FeedCandidate.review, FeedCandidate.score, FeedCandidate.moment_id)  # fmt: skip
+        query = select(*columns).where(FeedCandidate.verdict.is_not(None))
         if channel is not None:
             query = query.where(FeedCandidate.candidate["channel_id"].astext == channel)
         if row is not None:
             query = query.where(FeedCandidate.id == row)
-        rows = session.execute(query).all()
+        rows = list(session.execute(query).all())
         if not rows:
             return {"scored": 0, "served": 0, "changed": 0}
+        storied = {r.player_id for r in rows if is_story(r.source)}
+        if storied and (channel is not None or row is not None):
+            have = {r.id for r in rows}
+            more = session.execute(select(*columns).where(FeedCandidate.verdict.is_not(None), FeedCandidate.player_id.in_(storied),
+                                                          FeedCandidate.source.in_([s for s in {r.source for r in rows} if is_story(s)]))).all()  # fmt: skip
+            rows += [r for r in more if r.id not in have]
         published = {r.id: when((r.candidate or {}).get("published")) for r in rows}
         oldest = min((at for at in published.values() if at), default=now) - MOMENT_WINDOW
         moments = heads(session, (r.player_id for r in rows), oldest)
         weights = channel_feedback(session)
         listed, set_by_admin = listed_channels(), controls.current().channel_trust
-        changes, served = [], 0
+        outlets = _stories(session, [r for r in rows if is_story(r.source)], published)
+        values: dict[int, float | None] = {}
+        for r in rows:
+            cid = str((r.candidate or {}).get("channel_id") or "")
+            how_far = trust(cid, listed, set_by_admin, weights.get(cid, 0.0))
+            if r.id in outlets:
+                worth = lambda far, r=r: story_score(r.verdict, outlets[r.id][0], far)  # noqa: E731
+            else:
+                worth = lambda far, r=r: score(r.verdict, r.features or {}, far, published[r.id], now)  # noqa: E731
+            value: float | None = None
+            if r.review in ("approved", "pinned"):
+                # The admin's word on this one item stands over their word on its channel: served, if hidden there.
+                value = worth(how_far or UNLISTED) + (PIN if r.review == "pinned" else 0.0)
+            elif r.review != "hidden" and passes(r.verdict) and how_far > 0:
+                value = worth(how_far)
+            values[r.id] = value
+        # Of each story's group, only the best is served, but those an admin approved or pinned.
+        reviewed = {r.id for r in rows if r.review in ("approved", "pinned")}
+        for rid, (_, group) in outlets.items():
+            scored = [g for g in group if values.get(g) is not None and g not in reviewed]
+            if rid in scored and max(scored, key=lambda g: (values[g] or 0.0, -(published[g] or now).timestamp(), -g)) != rid:
+                values[rid] = None
+        changes, features, served = [], [], 0
         for r in rows:
             at = published[r.id]
             theirs = moments.get(r.player_id, [])
             searched = (r.candidate or {}).get("searched_for")
             # Found by a search for a moment: that moment, while it stands, over the biggest one near (searches.py).
             moment = searched if any(h.id == searched for h in theirs) else moment_for(at, theirs)
-            cid = str((r.candidate or {}).get("channel_id") or "")
-            how_far = trust(cid, listed, set_by_admin, weights.get(cid, 0.0))
-            value: float | None = None
-            if r.review in ("approved", "pinned"):
-                # The admin's word on this one video stands over their word on its channel: served, if hidden there.
-                value = score(r.verdict, r.features or {}, how_far or UNLISTED, at, now) + (PIN if r.review == "pinned" else 0.0)
-            elif r.review != "hidden" and passes(r.verdict) and how_far > 0:
-                value = score(r.verdict, r.features or {}, how_far, at, now)
+            value = values[r.id]
             if value is not None:
                 served += 1
             if value != r.score or moment != r.moment_id:
                 changes.append({"id": r.id, "score": value, "moment_id": moment})
+            if r.id in outlets and (r.features or {}).get("outlets") != outlets[r.id][0]:
+                features.append({"id": r.id, "features": {**(r.features or {}), "outlets": outlets[r.id][0]}})
         if changes:
             session.execute(update(FeedCandidate), changes)
+        if features:
+            session.execute(update(FeedCandidate), features)
     return {"scored": len(rows), "served": served, "changed": len(changes)}
+
+
+def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetime | None]) -> dict[int, tuple[int, list[int]]]:
+    """Each story row's group (news.clusters: its player's stories about the same thing within a day) and how many
+    outlets ran it, by row id: (outlets, the group's row ids)."""
+    if not rows:
+        return {}
+    drop: dict[int, list[str]] = {}
+    for pid, name in session.execute(select(Player.id, Player.name).where(Player.id.in_({r.player_id for r in rows}))):
+        drop.setdefault(pid, []).append(name)
+    for pid, alias in session.execute(select(PlayerAlias.player_id, PlayerAlias.alias).where(PlayerAlias.player_id.in_({r.player_id for r in rows}))):
+        drop.setdefault(pid, []).append(alias.replace("-", " "))
+    by_player: dict[int, list[news.Story]] = {}
+    outlet: dict[int, str] = {}
+    for r in rows:
+        kept = r.candidate or {}
+        words = news.story_words(str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, []))
+        by_player.setdefault(r.player_id, []).append(news.Story(r.id, published[r.id], frozenset(words)))
+        outlet[r.id] = naming.fold(str(kept.get("channel") or "")) or str(kept.get("channel_id") or r.url)
+    out = {}
+    for stories in by_player.values():
+        for group in news.clusters(stories):
+            n = len({outlet[g] for g in group})
+            out |= {g: (n, group) for g in group}
+    return out
+
+
+def cards(now: datetime | None = None) -> dict[str, int]:
+    """After ranking: each player's served stories (news.py) onto their card as "stories" (feed.news_for), so every
+    card that leaves the server carries them, a page's, a stream's or the Android app's, beside the research agent's
+    news, which stays under "news"; taken off once none is served. A card is written only where they differ, under
+    its row's lock, its version moved on, and published as any card is; one another writer replaced meanwhile gets
+    them back at the next run."""
+    from . import bus
+    from .feed import news_for  # feed.py reads this module's helpers; this one of its, here only
+
+    changed: list[tuple[int, dict[str, Any]]] = []
+    with db.session() as session:
+        ids = set(session.scalars(select(FeedCandidate.player_id).where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.score.is_not(None)).distinct()))
+        ids |= set(session.scalars(select(PlayerCard.player_id).where(PlayerCard.card.has_key("stories"))))
+        served = news_for(session, sorted(ids), now, strict=True)  # a failed read is an error, not every story gone
+        for pid in sorted(ids):
+            row = session.get(PlayerCard, pid, with_for_update=True)
+            want = served.get(pid)
+            if row is None or row.status != "ready" or (row.card or {}).get("stories") == want:
+                continue
+            card = {k: v for k, v in (row.card or {}).items() if k != "stories"} | ({"stories": want} if want else {})
+            card["version"] = row.version = (row.version or 0) + 1
+            row.card = card
+            changed.append((pid, card))
+    for pid, card in changed:
+        bus.store_card(pid, card)
+    return {"cards": len(changed)}
 
 
 def review(session: Session, row_id: int, said: str | None) -> bool:

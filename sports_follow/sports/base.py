@@ -677,6 +677,12 @@ class Sport:
     # channel's new uploads that name a followed player of the sport are kept for the feed; a sport that's off
     # has none read. Every id is a real one that answers (README.md, "Adding or removing").
     video_channels: tuple[str, ...] = ()
+    # Publishers' feeds (RSS or Atom) it reads for stories about its players (news.py), each with the publisher's
+    # name as a story credits it: a news source takes those of the shape its feed addresses have
+    # (NewsSource.feed_pattern). Each feed's new stories that name a followed player of the sport are kept for the
+    # feed; a sport that's off has none read. Every address is a real feed that answers with headlines, links, dates
+    # and a short description (README.md, "Adding or removing"), never a search engine's feed of other sites.
+    news_feeds: dict[str, str] = {}
 
     def search_words(self, fired: Fired) -> str | None:
         """Words that, after the player's name, find fans' videos of this moment on a video source's search: "hundred

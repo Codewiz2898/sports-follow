@@ -33,7 +33,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, db, metrics, naming, shutdown, sports
-from .adapters import AdapterError, Upload, VideoFacts, VideoSource, budget, videos
+from .adapters import NEWS, AdapterError, Upload, VideoFacts, VideoSource, budget, videos
 from .config import FEED_COUNTRY
 from .models import Athlete, FeedCandidate, Follow, Player, PlayerAlias, PlayerIdentity
 
@@ -60,25 +60,28 @@ _POSSESSIVE = re.compile(r"['’`]s\b", re.I)  # "Kohli's": the name, not "kohli
 
 @dataclass
 class Followed:
-    """A followed player as the feed looks for them: their sport (its key) and every name they go by."""
+    """A followed player as the feed looks for them: their sport (its key), every name they go by, and the sides
+    they turn out for (their teams, their country), which tell a namesake apart in a story (news.py)."""
 
     player_id: int
     sport: str
     name: str
     aliases: list[str] = field(default_factory=list)
+    teams: list[str] = field(default_factory=list)
 
 
 def followed(session: Session) -> list[Followed]:
     """Every player at least one fan follows, with their sport and the names they go by: their own, what fans
     typed to find them, and the registry's other names for them."""
-    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid).where(exists().where(Follow.player_id == Player.id))).all()
-    out = {pid: Followed(pid, sports.family(sport), name) for pid, name, sport, _ in rows}
+    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid, Player.teams, Player.nationality)
+                           .where(exists().where(Follow.player_id == Player.id))).all()  # fmt: skip
+    out = {pid: Followed(pid, sports.family(sport), name, teams=_sides(teams, country)) for pid, name, sport, _, teams, country in rows}
     if not out:
         return []
     for pid, alias in session.execute(select(PlayerAlias.player_id, PlayerAlias.alias).where(PlayerAlias.player_id.in_(out))):
         out[pid].aliases.append(alias.replace("-", " "))
     qids: dict[str, set[int]] = {}
-    for pid, _, _, qid in rows:
+    for pid, _, _, qid, _, _ in rows:
         if qid:
             qids.setdefault(qid, set()).add(pid)
     for pid, qid in session.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(out), PlayerIdentity.system == "wikidata")):
@@ -89,6 +92,12 @@ def followed(session: Session) -> list[Followed]:
                 if out[pid].sport in ("", sports.family(sport)) or not sports.get(out[pid].sport):
                     out[pid].aliases += [name, *(a for a in aliases or [] if isinstance(a, str))]
     return list(out.values())
+
+
+def _sides(teams: Any, country: str | None) -> list[str]:
+    """A player's teams (as Player.teams keeps them: names, or {"name": …}) and their country, as names."""
+    names = [t if isinstance(t, str) else str((t or {}).get("name") or "") for t in (teams if isinstance(teams, list) else [])]
+    return [n for n in dict.fromkeys([*names, country or ""]) if n.strip()]
 
 
 def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
@@ -464,8 +473,10 @@ def check(now: datetime | None = None) -> dict[str, int]:
     totals = {"read": 0, "dropped": 0}
     # Rows no check could read for a month (their source turned off, or without its key) go: what's shown must
     # have been confirmed lately, and YouTube's terms keep its data 30 days at most without reading it again.
+    # A publisher's story (news.py) is never read again: the weekly prune drops it by age instead.
     with db.session() as session:
-        stale = session.execute(delete(FeedCandidate).where(FeedCandidate.checked_at < now - STALE_AFTER).returning(FeedCandidate.id)).all()
+        stale = session.execute(delete(FeedCandidate).where(FeedCandidate.checked_at < now - STALE_AFTER, FeedCandidate.source.not_in(list(NEWS)))
+                                .returning(FeedCandidate.id)).all()  # fmt: skip
     if stale:
         log.info("feed: dropped %d candidate(s) no check has read for %d days", len(stale), STALE_AFTER.days)
         totals["dropped"] += len(stale)

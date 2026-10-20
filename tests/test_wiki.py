@@ -15,6 +15,14 @@ from sports_follow import bus, config, pipeline, sports, structured, wiki
 from sports_follow.models import Player, PlayerCard
 from tests.test_pipeline import FakeDb, FakeRedis
 
+
+@pytest.fixture(autouse=True)
+def research_on(monkeypatch):
+    """These tests cover pages for players no live source has, which the agent writes with research on
+    (config.RESEARCH, off by default): on here, and off with the agent in the tests that turn it off."""
+    monkeypatch.setattr(config, "RESEARCH", True)
+
+
 NOW = datetime(2026, 10, 21, 9, 0, tzinfo=timezone.utc)
 FOOTBALL, CRICKET, CHESS = sports.BY_KEY["football"], sports.BY_KEY["cricket"], sports.BY_KEY["chess"]
 
@@ -311,6 +319,7 @@ def test_a_picked_players_page_without_an_article_gets_its_facts_and_the_agent_w
 
 def test_wikimedia_not_answering_leaves_the_page_as_it_is_and_tries_again_later(monkeypatch, redis, no_model):
     monkeypatch.setattr(config, "AGENT", False)
+    monkeypatch.setattr(config, "RESEARCH", False)
     source = {"status": "ready", "version": 1, "pending": ["profile"], "player": {"name": "Asha Rao"}, "provenance": {}}
     page = _page(monkeypatch, bound=True, qid="Q1", card=source, status="ready", profile=wiki.Unavailable("HTTP 429"))
     pipeline.build_card(7)
@@ -327,15 +336,44 @@ def test_a_page_with_no_article_and_no_source_is_researched_when_a_fan_opens_it(
                  status="ready", profile=wiki.Profile(qid="Q1", born="1994-03-09"))
     assert pipeline.agent_due(7, page.row.card, NOW)
     assert not pipeline.agent_due(7, {**page.row.card, "built_at": (NOW - timedelta(hours=1)).isoformat()}, NOW)  # researched an hour ago
-    monkeypatch.setattr(config, "AGENT", False)
-    assert not pipeline.agent_due(7, page.row.card, NOW)
-    monkeypatch.setattr(config, "AGENT", True)
     ran = []
     monkeypatch.setattr(pipeline, "llm", lambda: None)
     monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: ran.append(name) or iter(()))
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
     pipeline.build_card(7)
     assert ran == ["Asha Rao"] and page.published[7]["player"]["born"] == "1994-03-09"
+    # Research off (the default): a page no live source has is never researched.
+    monkeypatch.setattr(config, "RESEARCH", False)
+    assert not pipeline.agent_due(7, page.row.card, NOW)
+    pipeline.build_card(7)
+    assert ran == ["Asha Rao"]
+
+
+def test_a_background_the_agent_wrote_is_written_again_monthly(monkeypatch, redis):
+    # A player with a live source and no article: the agent's background, at most once a month (Bharath, 21 Oct).
+    monkeypatch.setattr(config, "AGENT", True)
+    monkeypatch.setattr(config, "RESEARCH", False)
+    monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
+    page = _page(monkeypatch, bound=True, qid=None, card={"status": "ready", "player": {"name": "Asha Rao", "summary": "The agent's words."}, "provenance": {}}, status="ready", profile=None)
+    built = lambda age: {**page.row.card, "built_at": (NOW - age).isoformat()}  # noqa: E731
+    assert pipeline.agent_due(7, page.row.card, NOW)  # never written
+    assert not pipeline.agent_due(7, built(timedelta(hours=7)), NOW)  # was every 6 hours
+    assert not pipeline.agent_due(7, built(timedelta(days=29)), NOW)
+    assert pipeline.agent_due(7, built(timedelta(days=31)), NOW)
+    with_article = {**built(timedelta(days=31)), "player": {"name": "Asha Rao", "about": {"source": "Wikipedia"}}}
+    assert not pipeline.agent_due(7, with_article, NOW)  # Wikipedia's: never
+    monkeypatch.setattr(config, "AGENT", False)
+    assert not pipeline.agent_due(7, built(timedelta(days=31)), NOW)  # nor with the agent off
+
+
+def test_without_research_a_player_no_source_has_gets_no_page(monkeypatch, redis, no_model):
+    # Research off (the default): a profile alone isn't a page; the first build fails, saying no source has them.
+    monkeypatch.setattr(config, "AGENT", True)
+    monkeypatch.setattr(config, "RESEARCH", False)
+    placeholder = pipeline.placeholder_card(Player(id=7, slug="asha-rao", name="Asha Rao", sport="Cricket", status="active", teams=[]))
+    page = _page(monkeypatch, bound=False, qid="Q1", card=placeholder, status="building", profile=PROFILE)
+    pipeline.build_card(7)
+    assert page.row.status == "failed" and page.row.error == "No live source has this player, so there's no page to show yet."
 
 
 def test_profiles_are_read_again_monthly_and_never_for_a_player_with_no_person(redis):

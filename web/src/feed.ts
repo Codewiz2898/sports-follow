@@ -97,3 +97,8 @@ export function fromTheFans(feed: Feed | null): { top: FeedItem; line?: FeedItem
   const line = top.kind === 'video' ? items.find((i) => i.kind === 'post' && i.post?.own) ?? items.find((i) => i.kind === 'post') : undefined
   return { top, line }
 }
+
+/** "4 outlets", for a story more than one outlet ran; nothing otherwise. */
+export function outlets(n?: number | null): string {
+  return n && n > 1 ? `${n} outlets` : ''
+}

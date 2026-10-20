@@ -302,9 +302,10 @@ restart the API and the worker, as for the esports tokens above. `https://<domai
 new key in the Firebase console, send it, restart, then delete the old key there.
 
 **Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
-the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
-AI research, and pages the agent built before (sports with no source here) stay as they were, no longer
-updated. With the key but out of credit, source pages work too; they say why news is missing.
+the sources, Wikidata and Wikipedia alone (scores, games, stats, live and alerts, profiles), and a player
+with no English article has no background. With the key but out of credit, pages work too. Players no
+live source has get no page unless `SPORTS_FOLLOW_RESEARCH=1` (the agent then writes them whole, offered as
+AI research); pages the agent built before stay as they were, no longer updated.
 
 **On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
 instead of running `push-secrets.sh`:
