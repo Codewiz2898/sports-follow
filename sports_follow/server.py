@@ -1182,12 +1182,11 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         await give_back_research(taken)
         raise
     if created:
-        # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
-        # of minutes (none with the agent off). Without one: the agent builds the whole page.
+        # With a live source: scores and fixtures in seconds, and the profile from Wikidata and Wikipedia.
+        # Without one: the profile, and the agent's research for an athlete Wikipedia has no article on.
         if ref is not None:
             await enqueue("refresh_structured", player_id)
-        if ref is None or AGENT:
-            await enqueue("build_card", player_id)
+        await enqueue("build_card", player_id)
     return player_id
 
 
@@ -2085,6 +2084,7 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
     card = await read_card(player_id)
     if card is None:
         raise HTTPException(404, "No such player.")
+    await _research_if_due(player_id, card)
     rules = await in_db(lambda db: db.scalar(select(Follow.alert_rules).where(Follow.fan_id == fan, Follow.player_id == player_id)))
     following = rules is not None
     body = {**card, "following": following, "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL) if following else None}
@@ -2094,6 +2094,18 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
     if etag in (t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")):
         return Response(status_code=304, headers=response.headers)  # with a cookie fan_id set, if any
     return body
+
+
+async def _research_if_due(player_id: int, card: dict[str, Any]) -> None:
+    """A page only the research agent writes (no Wikipedia article, no live source) is researched again when
+    a fan opens it and its words are stale (pipeline.agent_due), not on a clock. Never fails the page."""
+    if card.get("status") != "ready":
+        return
+    try:
+        if await asyncio.to_thread(pipeline.agent_due, player_id, card) and await state["redis"].set(f"research:{player_id}", "1", nx=True, ex=REFRESH_EVERY):
+            await enqueue("build_card", player_id)
+    except Exception:
+        log.warning("research check for player %s failed", player_id, exc_info=True)
 
 
 REFRESH_EVERY = 60  # seconds: one refresh of a player a minute, whoever asks

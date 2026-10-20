@@ -203,6 +203,12 @@ class Football(Sport):
     follow_teams = True
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
+    honours = {
+        "Q166177": "Ballon d'Or", "Q2291862": "Ballon d'Or", "Q59411480": "Ballon d'Or Féminin",
+        "Q182529": "FIFA World Player of the Year", "Q10869150": "FIFA World Player of the Year",
+        "Q28156245": "The Best FIFA Men's Player", "Q28196702": "The Best FIFA Women's Player",
+        "Q233454": "European Golden Shoe", "Q17355204": "World Cup Golden Ball",
+    }
     athletes = 260_000
     no_line = "Not in the matchday squad"
     team_sheet_before = 75 * 60  # the Premier League's since 2024-25; most leagues publish about an hour ahead

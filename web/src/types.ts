@@ -18,6 +18,15 @@ export interface Photo {
   crop?: { x: number; y: number; w: number; h: number }
 }
 
+/** Where a player's About paragraph comes from, when it isn't the research agent's: their Wikipedia article,
+ * shown under it with its licence (sports_follow/wiki.py). */
+export interface AboutSource {
+  source: string  // "Wikipedia"
+  url?: string | null  // the article
+  licence: string  // "CC BY-SA 4.0"
+  licence_url: string
+}
+
 export interface PlayerProfile {
   name: string
   sport: string
@@ -26,6 +35,12 @@ export interface PlayerProfile {
   role?: string | null
   teams: string[]
   summary?: string
+  about?: AboutSource | null
+  born?: string | null  // "1988-11-05", or "1988" when only the year is known
+  honours?: string[]  // "Ballon d'Or ×8"
+  // Which fields Wikidata and Wikipedia gave ({"born": "wikidata", "summary": "wikipedia"}); the rest are a
+  // live source's or the research agent's.
+  profile_from?: Record<string, string>
   disambiguation?: string | null
   photo?: Photo | null
 }

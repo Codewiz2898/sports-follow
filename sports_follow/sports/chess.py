@@ -101,6 +101,8 @@ class Chess(Sport):
     wikidata = {"lichess_chess": "P1440"}
     athletes = 24_247
     wikidata_title = "P2962"
+    profile_role = ("P2962",)  # their title: "Grandmaster"
+    honours = {"Q10290970": "World Chess Champion", "Q141044426": "Women's World Chess Champion", "Q752000": "Chess Oscar"}
     engine = True
     draws = True
     source_line_first = True

@@ -367,6 +367,15 @@ class Sport:
         current = teams and ((latest_start is not None and latest_start.year >= today.year - 10) or (age is not None and age <= 38))
         return current or (age is not None and age <= 30)
 
+    # ---- the profile on a player's page, from their Wikidata person (wiki.py)
+
+    profile_nation: tuple[str, ...] = ("P1532", "P27")  # the country they compete for, else their citizenship
+    profile_role: tuple[str, ...] = ("P413",)  # what the page calls their role: position played ("forward", "batter")
+    # Awards worth naming on the page (Wikidata's "award received"), by item, and what the page calls each.
+    # Two items with one name (FIFA Ballon d'Or and Ballon d'Or) are counted together. Only awards Wikidata
+    # records reliably, with the year of each, go here: a list of every honour is the article's to give.
+    honours: dict[str, str] = {}
+
     # ---- the registry, for a sport whose athletes come from its sources' lists (roster): who on Wikidata
     # is one of its people, so each athlete's Wikidata person, and their photo, can be found (roster_wikidata.py)
 

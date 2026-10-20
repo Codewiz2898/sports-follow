@@ -11,7 +11,7 @@ import { FeedTab, FromTheFans, useFeed } from '../components/Feed'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ShareButton } from '../components/Share'
-import { day, outcome, playedOn, relative, shortName } from '../format'
+import { day, outcome, playedOn, relative, safeHref, shortName } from '../format'
 import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
 import { sharePlayer } from '../share'
 import { sportName } from '../sports'
@@ -176,7 +176,8 @@ export function PlayerPage() {
         <>
           {card.pending && (
             <p className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="spinner" />Scores and fixtures are live. Still gathering news and background, about two minutes.
+              {/* A page from a live source has its scores; one from Wikipedia alone (no source) its profile. */}
+              <span className="spinner" />{card.provenance ? 'Scores and fixtures are live. ' : ''}Still gathering {card.pending.includes('news') ? 'news and background, about two minutes' : 'their background'}.
             </p>
           )}
           {card.pending_error && <p className="small muted">News and background couldn't be gathered: {card.pending_error}</p>}
@@ -204,6 +205,13 @@ export function PlayerPage() {
   )
 }
 
+/** "5 November 1988"; a year alone as it is. */
+function bornOn(value: string): string {
+  if (/^\d{4}$/.test(value)) return value
+  const d = new Date(`${value}T12:00:00Z`)
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+}
+
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
 function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
   // Without the research agent (GET /api/config) a page no source updates stays as it was found.
@@ -221,6 +229,8 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
   const { muted, setMuted } = useActivity()
   // "Won 133–128" is a score once the badge says won; "West Indies won by 5 wkts" stays a sentence.
   const score = last && bareScore(last.result)
+  // Who they are in a line, from Wikidata (sports_follow/wiki.py): born, country, honours.
+  const facts = [p.born && `Born ${bornOn(p.born)}`, p.nationality, ...(p.honours ?? []).slice(0, 4)].filter((f): f is string => Boolean(f))
 
   return (
     <>
@@ -309,10 +319,17 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
         </section>
       )}
 
-      {p.summary && (
+      {(p.summary || facts.length > 0) && (
         <section className="section" aria-label="About">
           <SectionHead title="About" />
-          <p style={{ maxWidth: '70ch' }}>{p.summary}</p>
+          {facts.length > 0 && <p className="small muted">{facts.join(' · ')}</p>}
+          {p.summary && <p style={{ maxWidth: '70ch' }}>{p.summary}</p>}
+          {p.summary && p.about && (
+            <p className="tiny muted">
+              From {safeHref(p.about.url) ? <a href={safeHref(p.about.url)} target="_blank" rel="noreferrer" className="link">{p.about.source}</a> : p.about.source}
+              {', '}<a href={safeHref(p.about.licence_url)} target="_blank" rel="noreferrer license" className="link">{p.about.licence}</a>
+            </p>
+          )}
           {p.disambiguation && <p className="tiny muted">{p.disambiguation}</p>}
         </section>
       )}
