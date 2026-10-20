@@ -2,7 +2,7 @@
 content judge (curate.py) reads to know a share is the player's own. Every player starts with none.
 
 Revision ID: e2a7c4f19b36
-Revises: 9f38e7d26f75
+Revises: e2b9c4f7a1d3
 Create Date: 2026-10-20
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "e2a7c4f19b36"
-down_revision = "9f38e7d26f75"
+down_revision = "e2b9c4f7a1d3"
 branch_labels = None
 depends_on = None
 
