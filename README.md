@@ -117,7 +117,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`profile_from` on the card says which gave what). The research agent writes only the background of a
   player with a live source and no English article (`pipeline.needs_agent`), at most once a month
   (`BACKGROUND_EVERY`), when a fan opens the page and the player is followed and their sport runs; never
-  on a clock. A player with an article never sends it. A player no live source has gets no page at all
+  on a clock. A player with an article and a live source never sends it. A player no live source has gets no page at all
   unless `SPORTS_FOLLOW_RESEARCH=1`, when the agent writes their whole page as before (games and news too,
   again after `SPORTS_FOLLOW_CARD_MAX_AGE`); so pages build and rebuild without the gateway for everything
   this covers. News for players with a live source is no longer the agent's (publisher feeds are a

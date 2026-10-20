@@ -342,7 +342,7 @@ def test_a_page_with_no_article_and_no_source_is_researched_when_a_fan_opens_it(
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
     pipeline.build_card(7)
     assert ran == ["Asha Rao"] and page.published[7]["player"]["born"] == "1994-03-09"
-    # Research off (the default): a page no live source has is never researched, nor is it with the agent off.
+    # Research off (the default): a page no live source has is never researched.
     monkeypatch.setattr(config, "RESEARCH", False)
     assert not pipeline.agent_due(7, page.row.card, NOW)
     pipeline.build_card(7)
@@ -362,6 +362,8 @@ def test_a_background_the_agent_wrote_is_written_again_monthly(monkeypatch, redi
     assert pipeline.agent_due(7, built(timedelta(days=31)), NOW)
     with_article = {**built(timedelta(days=31)), "player": {"name": "Asha Rao", "about": {"source": "Wikipedia"}}}
     assert not pipeline.agent_due(7, with_article, NOW)  # Wikipedia's: never
+    monkeypatch.setattr(config, "AGENT", False)
+    assert not pipeline.agent_due(7, built(timedelta(days=31)), NOW)  # nor with the agent off
 
 
 def test_without_research_a_player_no_source_has_gets_no_page(monkeypatch, redis, no_model):

@@ -1928,8 +1928,9 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
 
 
 async def _research_if_due(player_id: int, card: dict[str, Any]) -> None:
-    """A page only the research agent writes (no Wikipedia article, no live source) is researched again when
-    a fan opens it and its words are stale (pipeline.agent_due), not on a clock. Never fails the page."""
+    """A page the research agent has a part on (a background with no Wikipedia article, monthly; with research
+    on, the whole page of a player no source has) is researched again when a fan opens it and its words are
+    stale (pipeline.agent_due), not on a clock. Never fails the page."""
     if card.get("status") != "ready":
         return
     try:

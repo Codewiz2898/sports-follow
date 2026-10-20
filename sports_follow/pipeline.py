@@ -3,9 +3,10 @@
 A player with a Wikidata person gets the profile on their page (birth date, country, teams, role,
 honours) from Wikidata and the About paragraph from their English Wikipedia article (wiki.py), with no
 model. For sports with a structured adapter (structured.py), the player is bound to that source, which
-owns their name, teams, fixtures, results, stats and live score. The research agent says who a player is
-and writes the rest only for a page neither has anything for: no article and no live source
-(needs_agent), when a fan opens it. All of them write the same tables (player, event, event_state,
+owns their name, teams, fixtures, results, stats and live score. The research agent writes only what
+neither covers (needs_agent), when a fan opens the page: the background of a player with a live source and
+no article, monthly, and, with research on (config.RESEARCH), the whole page of a player no source has,
+saying who they are. A player no live source has gets no page otherwise. All of them write the same tables (player, event, event_state,
 player_line, news_item), so the card and the API don't care where a section came from.
 """
 
@@ -55,8 +56,8 @@ BUILD_RETRY = 30 * 60
 # which is longer than an agent run may take (agent.RUN_LIMIT). arq's timeout doesn't stop the build's
 # thread, so the lock, not the job, says a build is still running.
 BUILD_LOCK = 20 * 60
-# Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
-AGENT_OFF = "The research agent is off and no live source has this player."
+# Why a build failed without research (config.RESEARCH, or the agent off): a player no source has (fan_message says so).
+AGENT_OFF = "No live source has this player, and research is off."
 
 _llm = None
 

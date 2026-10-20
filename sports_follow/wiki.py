@@ -16,7 +16,8 @@ no key and publish no limit; requests go one at a time, with the app's user agen
 
 What a live source says of a player wins over Wikidata (pipeline.apply_profile): a bound player's name,
 sport and teams are their source's. What the research agent wrote (agent.py) is used only for what neither
-has: it runs for a page with no article and no live source (pipeline.needs_agent), when a fan opens it.
+has (pipeline.needs_agent): the background of a player with no article, written monthly when a fan opens
+their page.
 
     .venv/bin/python -m sports_follow.wiki Q213854 cricket     # one player's profile, as a page gets it
 """
