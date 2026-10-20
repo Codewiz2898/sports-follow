@@ -56,9 +56,11 @@ BUILD_LOCK = 20 * 60
 # Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
 AGENT_OFF = "The research agent is off and no live source has this player."
 # Why a first build failed for a typed name only athletes nobody here follows have (structured.identify's
-# NOT_FOUND): no page, and no research. Its fan's text, which asking again answers at once (server.follow).
+# NOT_FOUND): no page, and no research. Its fan's text, which asking again answers at once for NOT_FOUND_FOR
+# (server.follow); after that the sources are asked again, as a college player may have turned pro.
 NOT_FOLLOWED = "Only athletes nobody here follows have this name."
 NOT_FOUND_TEXT = "No player here goes by this name. Check the spelling, or pick them from the search results."
+NOT_FOUND_FOR = 24 * 3600
 
 _llm = None
 
@@ -567,6 +569,11 @@ def _retry_key(player_id: int) -> str:
     return f"buildretry:{player_id}"
 
 
+def not_found_key(player_id: int) -> str:
+    """Held for NOT_FOUND_FOR once a player's typed name was found to be nobody's here (NOT_FOLLOWED)."""
+    return f"notfound:{player_id}"
+
+
 def back_off(player_id: int, now: datetime) -> datetime:
     """Note a failed rebuild. Returns when the scheduler may try again: BUILD_RETRY after the first
     failure, twice as long after each one in a row, never longer than CARD_MAX_AGE."""
@@ -649,6 +656,7 @@ def build_card(player_id: int) -> None:
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
             found = structured.identify(name)
             if found == structured.NOT_FOUND:
+                bus.sync_redis().set(not_found_key(player_id), "1", ex=NOT_FOUND_FOR)
                 mark_failed(player_id, NOT_FOLLOWED, "not_found")
                 return
             if found:

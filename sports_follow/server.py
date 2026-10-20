@@ -1050,9 +1050,9 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
             raise HTTPException(400, "A player's name can't have < or > in it.")
         known = await in_db(lambda db: db.scalar(select(PlayerCard).join(PlayerAlias, PlayerAlias.player_id == PlayerCard.player_id).where(PlayerAlias.alias == pipeline.slugify(query))))
         player = None
-    if known is not None and known.status == "failed" and known.error == pipeline.NOT_FOUND_TEXT:
-        # The sources found only athletes nobody here follows by the name, so no research was run: asking
-        # again would find the same, and isn't counted or built again.
+    if known is not None and known.status == "failed" and await state["redis"].get(pipeline.not_found_key(known.player_id)):
+        # The sources found only athletes nobody here follows by the name today, so no research was run:
+        # asking again would find the same, and isn't counted or built again until the day is out.
         raise HTTPException(404, pipeline.NOT_FOUND_TEXT)
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.

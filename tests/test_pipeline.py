@@ -285,6 +285,7 @@ def test_a_typed_name_only_a_college_player_has_fails_without_the_agent(monkeypa
     assert published[1]["status"] == "failed" and published[1]["error"] == card.error
     assert counted == [("build", "not_found")]
     assert not bus.is_locked("build:1")
+    assert redis.ttl[pipeline.not_found_key(1)] == pipeline.NOT_FOUND_FOR  # asking again is answered at once for a day
 
 
 # ---------------------------------------------------------------- one build at a time
