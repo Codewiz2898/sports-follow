@@ -52,14 +52,24 @@ export function duration(seconds: number | null | undefined): string {
   return h ? `${h}:${two(m)}:${two(r)}` : `${m}:${two(r)}`
 }
 
+/** Whether this device writes numbers short ("41K"): Hermes, the Android app's engine, may not. */
+const COMPACT = (() => {
+  try {
+    return new Intl.NumberFormat(undefined, { notation: 'compact' }).resolvedOptions().notation === 'compact'
+  } catch {
+    return false
+  }
+})()
+
 /** 41000 is "41K", in the reader's own way of writing it where their device knows it. */
 function compact(n: number): string {
-  try {
-    const short = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
-    if (n < 1000 || !/^[\d,.\s ]+$/.test(short)) return short  // all digits: compact isn't known here
-  } catch { /* no compact notation here */ }
-  const [size, mark] = n >= 1e9 ? [1e9, 'B'] : n >= 1e6 ? [1e6, 'M'] : n >= 1e3 ? [1e3, 'K'] : [1, '']
-  return `${Number((n / size).toFixed(n / size >= 100 ? 0 : 1))}${mark}`
+  if (COMPACT) return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+  const units: [number, string][] = [[1e3, 'K'], [1e6, 'M'], [1e9, 'B']]
+  const round = (x: number) => Number(x.toFixed(x >= 100 ? 0 : 1))
+  let i = units.filter(([size]) => n >= size).length - 1
+  if (i < 0) return String(n)
+  if (round(n / units[i][0]) >= 1000 && i < units.length - 1) i += 1  // 999,999 is "1M", not "1000K"
+  return `${round(n / units[i][0])}${units[i][1]}`
 }
 
 /** 41000 views is "41K views". */

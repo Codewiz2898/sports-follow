@@ -133,7 +133,8 @@ export default function TodayScreen() {
   const { cards, loaded, failed, matches, matchesLoaded, teams } = following
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
-  const shares = useShares()
+  const [pulled, setPulled] = useState(0)
+  const shares = useShares(pulled)
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
@@ -151,6 +152,7 @@ export default function TodayScreen() {
 
   const refresh = async () => {
     setRefreshing(true)
+    setPulled((n) => n + 1)
     await Promise.all([following.reload(), following.reloadMatches()])
     setRefreshing(false)
   }

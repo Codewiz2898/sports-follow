@@ -8,7 +8,7 @@
 import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { AppState, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle, Path } from 'react-native-svg'
 import { ago, duration, feedOf, fromTheFans, postFrom, views, without, type FeedKind } from '../../web/src/feed'
@@ -21,9 +21,11 @@ import { Rail, type RailCard } from './rail'
 import { colour, dsp, font, RADIUS_CARD, RADIUS_TILE, t } from './theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner } from './ui'
 
-/** Dev only: EXPO_PUBLIC_FEED_SAMPLE=1 when Metro starts shows the web's made-up videos and posts (web/src/dev/feedSample.ts). */
-const SAMPLE = __DEV__ && process.env.EXPO_PUBLIC_FEED_SAMPLE === '1'
-const sample = () => require('../../web/src/dev/feedSample') as typeof import('../../web/src/dev/feedSample')
+/** Dev only: EXPO_PUBLIC_FEED_SAMPLE=1 when Metro starts shows the web's made-up videos and posts
+ * (web/src/dev/feedSample.ts). Written out in place so a release build, where __DEV__ is false, drops it. */
+function sample(): typeof import('../../web/src/dev/feedSample') | null {
+  return __DEV__ && process.env.EXPO_PUBLIC_FEED_SAMPLE === '1' ? require('../../web/src/dev/feedSample') : null
+}
 
 type Hide = (item: FeedItem, verdict: FeedVerdict) => Promise<void>
 
@@ -37,7 +39,8 @@ export function useFeed(playerId: number, name: string, news: string) {
   useEffect(() => {
     if (!Number.isFinite(playerId) || !name) return // once the card is in: the feed's news is the card's
     let stale = false
-    const load = SAMPLE ? Promise.resolve(sample().sampleFeed(playerId, name)) : api.feed(playerId)
+    const made = sample()
+    const load = made ? Promise.resolve(made.sampleFeed(playerId, name)) : api.feed(playerId)
     load.then((f) => { if (!stale) { setFeed(f); setError(null) } }).catch((e: Error) => { if (!stale) setError(e.message) })
     return () => { stale = true }
   }, [playerId, name, news])
@@ -48,7 +51,7 @@ export function useFeed(playerId: number, name: string, news: string) {
     const before = current.current
     setFeed((f) => f && without(f, item.id))
     try {
-      if (!SAMPLE) await api.feedFeedback(playerId, item.id, verdict)
+      if (!sample()) await api.feedFeedback(playerId, item.id, verdict)
     } catch (e) {
       setFeed(before)
       throw e
@@ -173,17 +176,20 @@ function ItemCard({ item, name, tone, now, onMore }: { item: FeedItem; name: str
 
 /** The "…" sheet (.feed-sheet): why the item is here, and the three things a fan can tell the judge about it.
  * Back, or a tap above it, closes it. */
-function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem | null; name: string; onClose: () => void; onHide: Hide }) {
+function ItemSheet({ item: asked, name, onClose, onHide }: { item: FeedItem | null; name: string; onClose: () => void; onHide: Hide }) {
   const insets = useSafeAreaInsets()
+  const last = useRef(asked)
+  if (asked) last.current = asked
+  const item = asked ?? last.current // still drawn while the sheet slides away
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setError(null); setBusy(false) }, [item])
+  useEffect(() => { if (asked) { setError(null); setBusy(false) } }, [asked])
   const say = async (verdict: FeedVerdict) => {
-    if (!item) return
+    if (!asked) return
     setBusy(true)
     setError(null)
     try {
-      await onHide(item, verdict)
+      await onHide(asked, verdict)
       onClose()
     } catch (e) {
       setError((e as Error).message)
@@ -194,7 +200,7 @@ function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem | null; nam
     <Btn label={label} disabled={busy} colours={{ border: colour.line }} style={s.say} onPress={() => { say(verdict) }} />
   )
   return (
-    <Modal visible={item != null} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+    <Modal visible={asked != null} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose} accessibilityLabel="Close" />
       {item ? (
         <View style={[s.sheet, { paddingBottom: 28 + insets.bottom }]} accessibilityViewIsModal>
@@ -224,14 +230,14 @@ function KindChip({ label, on, onPress }: { label: string; on: boolean; onPress:
 
 /** A group's head (.feed-head): a moment's dot, title and when, and the way to its game. */
 function GroupHead({ group, tone, now }: { group: FeedGroup; tone: Tone; now: number }) {
-  const match = group.match
+  const match = group.match // the whole path, "/match/<source>/<game>"
   return (
     <View style={s.head}>
       {group.moment ? <View style={[s.dot, { backgroundColor: tone.sport }]} /> : null}
       <Eyebrow color={colour.text} style={{ flexShrink: 1 }}>{group.head}</Eyebrow>
       {group.moment && group.when ? <Eyebrow>· {ago(group.when, now)}</Eyebrow> : null}
       {match ? (
-        <Pressable onPress={() => router.push(matchHref(match))} accessibilityRole="link" hitSlop={8} style={{ marginLeft: 'auto' }}>
+        <Pressable onPress={() => router.push(matchHref(match.replace(/^\/match\//, '')))} accessibilityRole="link" hitSlop={8} style={{ marginLeft: 'auto' }}>
           <Text style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>The game</Text>
         </Pressable>
       ) : null}
@@ -333,18 +339,26 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
-/** Today's shares (GET /api/me/feed), loaded with the follow list, each with its player's card. */
-export function useShares(): { card: Card; item: FeedItem }[] {
-  const { cards, loaded } = useFollowing()
+/** Today's shares (GET /api/me/feed), each with its player's card: loaded with the follow list, and again when
+ * it comes back changed, when Today is pulled (`again`) and when the app comes back to the front, since Today
+ * stays open where the web's page would be loaded anew. */
+export function useShares(again = 0): { card: Card; item: FeedItem }[] {
+  const { cards, loaded, heard } = useFollowing()
   const [rows, setRows] = useState<FeedShare[]>([])
+  const [back, setBack] = useState(0)
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') setBack((n) => n + 1) })
+    return () => sub.remove()
+  }, [])
   useEffect(() => {
     if (!loaded) return
     let stale = false
-    const load = SAMPLE ? Promise.resolve(sample().sampleShares(cards)) : api.myFeed().then((r) => r.shares)
+    const made = sample()
+    const load = made ? Promise.resolve(made.sampleShares(cards)) : api.myFeed().then((r) => r.shares)
     load.then((r) => { if (!stale) setRows(r) }).catch(() => {})
     return () => { stale = true }
-  }, [loaded, who]) // who stands for cards
+  }, [loaded, who, heard, again, back]) // who stands for cards
   return useMemo(() => {
     const byId = new Map(cards.map((c) => [c.player_id, c]))
     return rows.flatMap((r) => { const card = byId.get(r.player_id); return card ? [{ card, item: r.item }] : [] })
