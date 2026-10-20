@@ -38,7 +38,7 @@ PARSE_WAIT = 300  # a match not parsed yet is asked again this often: a pro game
 MISS_WAIT = 60  # and one OpenDota doesn't have at all, this often (per process)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
-_cache = cache.Cache(BUDGET.name)
+_cache = cache.Cache(BUDGET.name, size=200)  # a match is a big document: this process keeps a few days' maps
 _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list), and matches not there yet, per process
 
 
@@ -94,35 +94,44 @@ def parsed(details: dict[str, Any] | None) -> bool:
 
 def match(match_id: int | str) -> dict[str, Any] | None:
     """A finished match's details (each player's hero and numbers; once parsed, the rest), or None while
-    OpenDota hasn't got it. A parsed one is kept MATCH_KEEP; one that isn't, PARSE_WAIT."""
+    OpenDota hasn't got it. A parsed one is kept MATCH_KEEP; one that isn't is asked again every
+    PARSE_WAIT, and kept as it is when asking fails."""
     path = f"/matches/{match_id}"
     kept = _cache.peek(path, MATCH_KEEP)
     if parsed(kept):
         return kept
-    missing = _memo.get(path)
-    if missing and time.time() - missing[0] < MISS_WAIT:
-        return None
+    failed = _memo.get(path)
+    if failed and time.time() - failed[0] < MISS_WAIT:
+        return kept
     try:
-        return _cache.read(path, PARSE_WAIT if kept else MATCH_KEEP, lambda: _get(path, dict))
+        return _cache.read(path, PARSE_WAIT if kept else MATCH_KEEP, lambda: _get(path, dict), keep=MATCH_KEEP)
     except RateLimited:
         raise
-    except AdapterError:  # not in OpenDota yet: nothing kept, asked again in a minute
+    except AdapterError:  # not in OpenDota yet, or it's down: nothing new kept, asked again in a minute
         _memo[path] = (time.time(), None)
         return kept
 
 
+def _listed(path: str, kind: type = list) -> Any:
+    """A list OpenDota must have something in (the heroes, the items, the pros): an empty one isn't kept."""
+    data = _get(path, kind)
+    if not data:
+        raise AdapterError(f"OpenDota returned nothing for {path}")
+    return data
+
+
 def heroes() -> dict[int, str]:
     """Hero id -> name ("Faceless Void")."""
-    rows = _cache.read("/heroes", 7 * 86400, lambda: _get("/heroes"))
+    rows = _cache.read("/heroes", 7 * 86400, lambda: _listed("/heroes"))
     return {int(h["id"]): h.get("localized_name") or h.get("name") for h in rows or []}
 
 
 def items() -> dict[int, str]:
     """Item id -> name ("Black King Bar"), from OpenDota's constants (keyed by Valve's names, "black_king_bar")."""
-    rows = _cache.read("/constants/items", 7 * 86400, lambda: _get("/constants/items", dict))
+    rows = _cache.read("/constants/items", 7 * 86400, lambda: _listed("/constants/items", dict))
     return {int(i["id"]): i.get("dname") or key.replace("_", " ").title() for key, i in (rows or {}).items() if isinstance(i, dict) and i.get("id") is not None}
 
 
 def pro_players() -> list[dict[str, Any]]:
     """Every pro OpenDota knows: Steam account, pro name, team name and tag."""
-    return _cache.read("/proPlayers", 86400, lambda: _get("/proPlayers"))
+    return _cache.read("/proPlayers", 86400, lambda: _listed("/proPlayers"))

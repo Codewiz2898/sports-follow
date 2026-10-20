@@ -198,7 +198,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   till then, so a crowd opening yesterday's final costs its source two reads. One that finds it not there
   is the last for hours. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
   and draft come only with the page's own read (each poll's state is stored and sent to every card, so it
-  stays small), as the state's `detail`, and show under whichever board is newest. The page shows Live now's copy
+  stays small), as the state's `page_detail`, and show under whichever board is newest. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row

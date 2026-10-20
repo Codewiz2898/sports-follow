@@ -24,7 +24,7 @@ from typing import Any
 from .. import naming
 from .base import Line
 
-FILLER = naming.TEAM_FILLER
+FILLER = {"team", "esports", "esport", "gaming", "club", "the", "gg"}
 
 
 def team_words(name: str | None) -> str:
@@ -177,6 +177,13 @@ NUMBERS = ("no", "one", "two", "three", "four", "five")
 NTH = ("", "", "second", "third", "fourth", "fifth", "sixth")
 
 
+def short(name: str | None) -> str:
+    """A team's name without its filler words, as fans say it: "Team Spirit" -> "Spirit", "Tundra Esports"
+    -> "Tundra"; the whole name when it's all filler."""
+    words = [w for w in (name or "").split() if naming.team_key(w) not in FILLER]
+    return " ".join(words) or (name or "")
+
+
 def gold(amount: int) -> str:
     """ "32.5k", "850"."""
     return f"{amount / 1000:.1f}k" if abs(amount) >= 1000 else str(amount)
@@ -220,7 +227,7 @@ def map_detail(details: dict[str, Any], n: int, teams: list[dict[str, Any]], pla
         return None
     radiant, dire = sides
     side = {True: radiant, False: dire}
-    word = {True: naming.short_team(radiant["name"]), False: naming.short_team(dire["name"])}
+    word = {True: short(radiant["name"]), False: short(dire["name"])}
     rows = details.get("players") or []
     slot = {i: p for i, p in enumerate(rows)}  # objectives name players by their place in this list
 
@@ -287,7 +294,7 @@ def map_detail(details: dict[str, Any], n: int, teams: list[dict[str, Any]], pla
         for i, p in enumerate(fight.get("players") or []):
             if i < len(rows):
                 died[is_radiant(rows[i])] += int(p.get("deaths") or 0)
-        worse = died[True] < died[False]  # the side that lost more, first: False is Radiant
+        worse = died[True] < died[False]  # Radiant lost fewer: the side that lost more (Dire) comes first
         more, fewer = (not worse, worse)
         title = f"Fight: {NUMBERS[min(died[more], 5)]} {word[more]} {'hero dies' if died[more] == 1 else 'heroes die'}, {NUMBERS[min(died[fewer], 5)]} {word[fewer]}"
         if (before > 0) != (after > 0) and before:

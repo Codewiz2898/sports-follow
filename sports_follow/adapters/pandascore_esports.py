@@ -587,7 +587,7 @@ class PandascoreEsports(Adapter):
         finished map's numbers are missing (OpenDota down, or the map not parsed yet).
 
         With detail (the match page's own read, not a poll, whose every state is stored and sent to each
-        card), each finished map's part of the page as well (dota.map_detail), as the state's "detail": the
+        card), each finished map's part of the page as well (dota.map_detail), as the state's "page_detail": the
         same OpenDota matches, so no more requests but the item names, kept a week."""
         if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
             return True
@@ -626,7 +626,7 @@ class PandascoreEsports(Adapter):
             return False
         snap.state["dota"] = {"maps": maps, "live": live}
         if parts:
-            snap.state["detail"] = {"maps": parts}
+            snap.state["page_detail"] = {"teams": [{"id": t["id"], "name": t["name"], "short": dota.short(t["name"])} for t in teams], "maps": parts}
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"

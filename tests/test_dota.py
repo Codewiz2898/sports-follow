@@ -18,7 +18,7 @@ import pytest
 
 from sports_follow import credits, moments, structured
 from sports_follow.adapters import dota, opendota, pandascore, pandascore_esports as ps
-from sports_follow.adapters import budget
+from sports_follow.adapters import budget, cache
 from sports_follow.adapters.base import AdapterError
 from sports_follow.models import Event
 
@@ -264,12 +264,15 @@ def test_a_match_is_kept_once_parsed_and_the_minute_is_never_overspent(monkeypat
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(request.url.path)
         if request.url.path.endswith("/matches/9001"):
+            if down["now"]:
+                return httpx.Response(502)
             if not there["match"]:
                 return httpx.Response(404, json={"error": "Not Found"})
             return httpx.Response(200, json={"radiant_win": True, "version": 22 if there["parsed"] else None, "players": [{"account_id": 1, "kills": 3}]})
         return httpx.Response(200, json=[])
 
     monkeypatch.setattr(time, "time", lambda: clock[0])
+    down = {"now": False}
     monkeypatch.setattr(opendota, "ENABLED", True)
     monkeypatch.setattr(opendota, "_memo", {})
     monkeypatch.setattr(opendota, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=opendota._client.headers))
@@ -281,10 +284,16 @@ def test_a_match_is_kept_once_parsed_and_the_minute_is_never_overspent(monkeypat
     assert first is not None and first["version"] is None and not opendota.parsed(first) and asked() == 2
     assert opendota.match(9001) == first and asked() == 2  # not parsed yet: kept a while
     clock[0] += opendota.PARSE_WAIT + 1
-    there["parsed"] = True
-    assert opendota.parsed(opendota.match(9001)) and asked() == 3
+    down["now"] = True
+    assert opendota.match(9001) == first and asked() == 3  # asking again failed: the copy it has
+    clock[0] += 5
+    assert opendota.match(9001) == first and asked() == 3  # and still, without asking, for a minute
+    clock[0] += opendota.MISS_WAIT + 1
+    down["now"], there["parsed"] = False, True
+    assert opendota.parsed(opendota.match(9001)) and asked() == 4
+    cache.forget()  # another process, or after a deploy: the source cache's copy
     clock[0] += 10 * 86400
-    assert opendota.parsed(opendota.match(9001)) and asked() == 3  # parsed: kept
+    assert opendota.parsed(opendota.match(9001)) and asked() == 4  # parsed: kept
     assert "sports-follow" in opendota._client.headers["user-agent"]
     for _ in range(opendota.FREE_MINUTE - opendota.MARGIN_MINUTE):  # a new minute: the three asks were days ago
         budget.take(opendota.BUDGET, lane_name="live")
@@ -454,13 +463,13 @@ def grand_final(monkeypatch):
 
 
 def test_a_match_pages_read_has_every_maps_part_and_a_poll_none(grand_final):
-    """The match page's own read carries each map's part (state "detail"), and the esports page passes it on with
-    the two teams by id and short name; a poll, whose every state is stored and sent to each card, doesn't."""
+    """The match page's own read carries each map's part (state "page_detail"), and the esports page passes it on
+    with the two teams by id and short name; a poll, whose every state is stored and sent to each card, doesn't."""
     from sports_follow import sports
 
     game = ps.PandascoreEsports().match("888")
     assert game is not None and not game.partial
-    parts = game.snapshot.state["detail"]["maps"]
+    parts = game.snapshot.state["page_detail"]["maps"]
     assert [p["n"] for p in parts] == [1, 2, 3, 4] and [p["winner"] for p in parts] == [str(SPIRIT), str(YANDEX), str(YANDEX), str(YANDEX)]
     assert parts[3]["players"][0]["name"] == "Yatoro" and parts[3]["players"][0]["id"] == "5000"  # by his PandaScore id
     names = {str(5000 + i): (name, "") for i, name in enumerate(FINAL_NAMES.values())}
@@ -471,7 +480,7 @@ def test_a_match_pages_read_has_every_maps_part_and_a_poll_none(grand_final):
 
     snap = ps.parse_match(grand_final)
     ps.PandascoreEsports()._dota(grand_final, snap)
-    assert [m["n"] for m in snap.state["dota"]["maps"]] == [1, 2, 3, 4] and "detail" not in snap.state
+    assert [m["n"] for m in snap.state["dota"]["maps"]] == [1, 2, 3, 4] and "page_detail" not in snap.state
 
 
 def test_item_names_come_from_opendotas_constants(monkeypatch):
@@ -486,3 +495,16 @@ def test_item_names_come_from_opendotas_constants(monkeypatch):
     names = opendota.items()
     assert names[1] == "Blink Dagger" and names[116] == "Black King Bar"
     assert opendota.items() == names and sent == ["/api/constants/items"]  # kept a week
+
+
+def test_an_empty_list_of_heroes_or_pros_isnt_kept(monkeypatch):
+    answers = {"/api/heroes": [[], [{"id": 1, "localized_name": "Anti-Mage"}]]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=answers[request.url.path].pop(0))
+
+    monkeypatch.setattr(opendota, "ENABLED", True)
+    monkeypatch.setattr(opendota, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=opendota._client.headers))
+    with pytest.raises(AdapterError):
+        opendota.heroes()
+    assert opendota.heroes() == {1: "Anti-Mage"}  # asked again, not a week of "?"

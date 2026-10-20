@@ -333,10 +333,10 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     names = {p["athlete_id"]: (p["name"], p.get("team") or "") for p in [*roster, *((game or {}).get("bench") or [])]}
     state = (board or {}).get("state") or {}
     # A game's own read can say more than its polls (a Dota 2 map's draft and gold by minute, which no poll
-    # stores): that, its state's "detail", shows under whichever board is newest.
-    told = (((game or {}).get("live") or {}).get("state") or {}).get("detail")
-    if told and not state.get("detail"):
-        state = {**state, "detail": told}
+    # stores): that, its state's "page_detail", shows under whichever board is newest.
+    told = (((game or {}).get("live") or {}).get("state") or {}).get("page_detail")
+    if told and not state.get("page_detail"):
+        state = {**state, "page_detail": told}
     page = rules.match_page(state, game_events, (game or {}).get("lines") or {}, names)
     # Who won, over a finished game's board; before its first read, what the league's card says ("Arsenal beat
     # Chelsea", or the score).
