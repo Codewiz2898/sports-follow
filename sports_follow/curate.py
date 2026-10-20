@@ -40,7 +40,7 @@ from typing import Any, Literal, get_args
 from llm_providers import Client, LlmError
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import config, sports, tracing
+from . import config, metrics, sports, tracing
 from .adapters import budget
 from .agent import GATEWAY_URL, _submit_tool, _token
 from .naming import fold, lead
@@ -175,7 +175,28 @@ class Verdict(Judged):
 
 
 class CurateError(RuntimeError):
-    """The model was needed and couldn't answer (or is off): the candidate stays unjudged, to try again."""
+    """The model was needed and couldn't answer (or is off): the candidate stays unjudged, to try again. kind says
+    why, as the feed's metrics count it (metrics.JUDGE_ERRORS)."""
+
+    def __init__(self, message: str, kind: str = "unavailable") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+# The gateway's or the provider's words for an account out of money: OpenRouter answers 402 "Insufficient credits".
+_NO_CREDIT = re.compile(r"credit|insufficient (?:funds|balance)|payment required|billing", re.I)
+
+
+def error_kind(exc: LlmError) -> str:
+    """A failed model call as the feed's metrics count it: out of credit (the gateway's daily budget spent too),
+    timed out, an answer that wasn't one, or the model unavailable for any other reason."""
+    if exc.kind == "budget_exceeded" or exc.status == 402 or exc.http_status == 402 or _NO_CREDIT.search(exc.message or ""):
+        return "out_of_credit"
+    if exc.kind in ("timeout", "aborted"):
+        return "timeout"
+    if exc.kind in ("parse", "schema_rejected"):
+        return "invalid_output"
+    return "unavailable"
 
 
 # ---------------------------------------------------------------- the rules
@@ -379,9 +400,9 @@ def _ask(llm: Client, c: Candidate, facts: Facts) -> Verdict:
         except LlmError as exc:
             if attempt == 0 and exc.kind in RETRYABLE:
                 continue
-            raise CurateError(f"Model call failed ({exc.kind}): {exc}") from exc
+            raise CurateError(f"Model call failed ({exc.kind}): {exc}", error_kind(exc)) from exc
         if r.finish == "refusal":
-            raise CurateError("The model declined to judge this.")
+            raise CurateError("The model declined to judge this.", "declined")
         submit = next((t for t in r.tool_calls if t.name == "submit_verdict"), None)
         if submit is None:
             messages += [r.message, {"role": "user", "content": "Please call submit_verdict now with your verdict."}]
@@ -391,7 +412,7 @@ def _ask(llm: Client, c: Candidate, facts: Facts) -> Verdict:
         except ValidationError as exc:
             log.warning("curate: verdict rejected, %d errors, first: %s", exc.error_count(), exc.errors()[0])
             messages += [r.message, {"role": "tool", "tool_call_id": submit.id, "content": f"Input did not match the schema, please resubmit: {exc}"}]
-    raise CurateError("The model gave no verdict that matched the schema.")
+    raise CurateError("The model gave no verdict that matched the schema.", "invalid_output")
 
 
 # ---------------------------------------------------------------- judging
@@ -404,24 +425,28 @@ def judge(candidate: Candidate, llm: Client | None = None) -> Verdict:
     if facts.final is not None:
         return facts.final
     if not config.CURATE_AI:
-        raise CurateError("Needs the model, which is off (SPORTS_FOLLOW_CURATE_AI).")
+        raise CurateError("Needs the model, which is off (SPORTS_FOLLOW_CURATE_AI).", "off")
     return _ask(llm or gateway(), candidate, facts)
 
 
 def judge_many(candidates: Iterable[Candidate], llm: Client | None = None, workers: int = WORKERS) -> list[Verdict | None]:
     """Verdicts in the candidates' order, the model's calls side by side; None for one that couldn't be judged
-    now (CurateError), to try again later."""
+    now (CurateError), to try again later. Each is counted (metrics.feed_verdict, feed_judge_error)."""
     items = list(candidates)
     if not items:
         return []
     client = llm or (gateway() if config.CURATE_AI else None)
 
     def one(c: Candidate) -> Verdict | None:
+        started = time.monotonic()
         try:
-            return judge(c, client)
+            v = judge(c, client)
         except CurateError as exc:
             log.warning("curate: %s unjudged: %s", c.url, exc)
+            metrics.feed_judge_error(exc.kind, time.monotonic() - started)
             return None
+        metrics.feed_verdict(v.about_player, v.sponsored, bool(v.risks), v.stage, time.monotonic() - started)
+        return v
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(budget.carry(one), items))

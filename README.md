@@ -520,6 +520,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wire shows each followed player's best story of the last three days beside the agent's injury lines. A weekly prune (Mondays) drops stories over 30 days old but those an admin approved or pinned; removing a
   player removes their rows. `python -m sports_follow.curator news` reads every feed once, judges and ranks, and
   prints each sport's counts. The admin panel's Sources tab turns the source off like any other.
+- **Whether the feed gets enough** (`sports_follow/feedstats.py`, BHA-326) is measured by the curator, by sport and
+  stream (`channels` or `search`), never by channel or player: each step of the funnel (uploads read, matched to a
+  followed player, kept, judged, passed, served; each player and video counted once, so a channel's latest uploads
+  read again every poll don't count again), why what was matched wasn't kept (not embeddable, blocked in India, too
+  long, too short, live, private, gone; and for a search, already stored or refused lately: units spent for
+  nothing), the judge's verdicts by about_player, sponsored, risk and stage, its errors by kind (out of credit,
+  timeout, invalid output, declined, unavailable, off) and its time, moment searches and the units they spend, and
+  after each poll each sport's coverage: its followed players, and those with a video the Feed would serve
+  published in the last 7 days. The **Feed** dashboard shows them; three alert rules mail when nothing was kept for a
+  day, when the judge fails over 5 times of a kind in an hour (the OpenRouter credit spent, on 21 Oct, went unseen),
+  and when a sport's followed players have had no servable video for a day. The admin panel's Feed tab gives each
+  channel's yield over 30 days (uploads published, those naming someone followed, kept, served, and its latest
+  upload), from sets in Redis by the day each upload was published: a channel that posts nothing, or nothing about
+  anyone followed, is one to drop, and a sport whose players nobody covers needs a channel.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -742,7 +756,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_EXPORTER_OTLP_HEADERS` | none | the backend's key, e.g. `Authorization=Basic%20…`: a secret, so in the server's `otlp.env`, never `settings.env` |
 | `OTEL_TRACES_EXPORTER` | `otlp` | `console` prints spans instead, for development; `none` turns traces off |
 | `OTEL_LOGS_EXPORTER` | `otlp` | `none` keeps log lines on stdout only, while traces still go |
-| `OTEL_METRICS_EXPORTER` | `otlp` | `none` sends no metrics, while traces and logs still go. Metrics: API requests by route, worker jobs, pushes, moments, card builds and refreshes, source requests by host; and from the worker, every minute, live games and how long since each was polled, the job queue, cards by status, each source's allowance (`metrics.py`) |
+| `OTEL_METRICS_EXPORTER` | `otlp` | `none` sends no metrics, while traces and logs still go. Metrics: API requests by route, worker jobs, pushes, moments, card builds and refreshes, source requests by host; and from the worker, every minute, live games and how long since each was polled, the job queue, cards by status, each source's allowance (`metrics.py`); and from the curator, the feed's funnel, judge and coverage (`feedstats.py`) |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | milliseconds between metric exports |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |

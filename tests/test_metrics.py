@@ -225,6 +225,12 @@ def test_a_process_starts_the_counts_alerts_take_increase_of_at_zero(measured):
     assert [p.value for p in points(measured)["sports_follow.api.errors"]] == [1]
 
 
+# The feed's (BHA-326), as Grafana Cloud stores them: the curator's counts, and its coverage gauges.
+FEED_COUNTERS = {f"sports_follow_feed_{step}_total" for step in metrics.FEED_STEPS} | {
+    f"sports_follow_feed_{name}_total" for name in ("refused", "verdicts", "judge_errors", "searches", "search_units")}
+FEED_GAUGES = {"sports_follow_feed_followed", "sports_follow_feed_covered", "sports_follow_feed_coverage"}
+
+
 def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_right():
     """The app's alert rules (deploy/grafana/app-rules.json, applied by apply-alerts.sh): each complete, each
     uid once across both groups, each reading only metrics with the job they come from."""
@@ -239,11 +245,12 @@ def test_every_alert_rule_reads_a_metric_the_app_sends_and_names_its_labels_righ
     assert len(uids) == len(set(uids))
     # Each name as Grafana Cloud stores it: dots to underscores, _seconds for a unit of s, _total for a
     # counter, _bucket, _count and _sum for a histogram.
-    gauges = {name.replace(".", "_") + ("_seconds" if unit == "s" else "") for name, unit, *_ in metrics.READINGS}
+    gauges = {name.replace(".", "_") + ("_seconds" if unit == "s" else "") for name, unit, *_ in metrics.READINGS} | FEED_GAUGES
     counters = {"sports_follow_api_errors_total", "sports_follow_pushes_total", "sports_follow_cards_updates_total", "sports_follow_moments_total",
-                "sports_follow_admin_sign_ins_total"}
+                "sports_follow_admin_sign_ins_total"} | FEED_COUNTERS
     histograms = {f"{h}_{part}" for h in ("http_server_request_duration_seconds", "http_client_request_duration_seconds",
-                                          "sports_follow_job_duration_seconds", "sports_follow_job_wait_seconds", "sports_follow_push_wait_seconds")
+                                          "sports_follow_job_duration_seconds", "sports_follow_job_wait_seconds", "sports_follow_push_wait_seconds",
+                                          "sports_follow_feed_judge_duration_seconds")
                   for part in ("bucket", "count", "sum")}
     for rule in app:
         assert {"uid", "title", "for", "expr", "op", "threshold", "summary"} <= set(rule) and rule["op"] in ("gt", "lt")

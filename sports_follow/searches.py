@@ -163,10 +163,12 @@ def run(now: datetime | None = None) -> dict[str, int]:
                 log.info("feed: %s search %r failed: %s", source.system, s.query, exc)
                 continue
             answered = True
+            metrics.feed_search(target.sport, source.search_cost or 0)
+            metrics.feed_step("uploads", "search", [target.sport] * len(uploads))
             found = [candidates.Found(f.player_id, f.sport, f.upload, f.name, f.where, s.moment_id) for f in candidates.match(uploads, [target], names[target.sport])]
             counts["found"] += len(found)
             try:
-                got = candidates.keep(source, found, now)
+                got = candidates.keep(source, found, now, stream="search")
             except (AdapterError, budget.RateLimited) as exc:
                 log.warning("feed: %s: what search %r found not kept: %s", source.system, s.query, exc)
                 got = {}
