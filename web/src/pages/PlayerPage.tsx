@@ -12,7 +12,7 @@ import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../compone
 import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ShareButton } from '../components/Share'
 import { day, outcome, playedOn, relative, safeHref, shortName } from '../format'
-import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
+import { bareScore, lastChecked, liveLag, liveUpdates, newsOf, nextGame } from '../lines'
 import { sharePlayer } from '../share'
 import { sportName } from '../sports'
 import { useFollowing } from '../following'
@@ -97,7 +97,7 @@ export function PlayerPage() {
   }, [shown, playerId, isFollowing, listen, navigate])
 
   // The Feed reads rows, never a model: it loads with the page, for Overview's "From the fans" and the tab.
-  const feed = useFeed(playerId, card?.player.name ?? '', (card?.news ?? []).map((n) => n.url).join(' '))
+  const feed = useFeed(playerId, card?.player.name ?? '', (card ? newsOf(card) : []).map((n) => n.url).join(' '))
 
   if (error) return <div className="error-box">{error}</div>
   if (!card) return <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
@@ -310,12 +310,12 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
         </section>
       )}
 
-      {(card.news ?? []).length > 0 && (
+      {newsOf(card).length > 0 && (
         <section className="section" aria-label="News">
           <SectionHead title="News">
-            {(card.news ?? []).length > 2 && <button type="button" className="btn link" onClick={() => show('feed')}>All news</button>}
+            {newsOf(card).length > 2 && <button type="button" className="btn link" onClick={() => show('feed')}>All news</button>}
           </SectionHead>
-          <NewsList items={(card.news ?? []).slice(0, 2)} brief empty="" />
+          <NewsList items={newsOf(card).slice(0, 2)} brief empty="" />
         </section>
       )}
 

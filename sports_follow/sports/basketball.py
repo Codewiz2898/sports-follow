@@ -156,6 +156,11 @@ announces it is rumour. Full-game uploads are restreams."""
         "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
         "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
     )
+    news_feeds = {
+        "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",
+        "https://www.theguardian.com/sport/nba/rss": "The Guardian",
+        "https://feeds.bbci.co.uk/sport/basketball/rss.xml": "BBC Sport",
+    }
 
     def search_words(self, fired: Fired) -> str | None:
         """40 points or more, or a triple-double, in the game."""

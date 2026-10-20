@@ -11,7 +11,7 @@ import base64
 import time
 
 from sports_follow import admin, adapters, controls, metrics, server, sports
-from sports_follow.adapters import ADAPTERS, KNOWN, VIDEOS, budget
+from sports_follow.adapters import ADAPTERS, KNOWN, NEWS, VIDEOS, budget
 from tests.test_api import Api, api  # noqa: F401  (the fixture)
 
 PASSWORD = "correct horse battery staple"
@@ -155,7 +155,7 @@ def test_an_allowance_that_cant_work_is_refused_saying_why(scarce, body, wrong):
 def test_every_known_allowance_is_shown_with_who_spends_it(scarce):
     view = admin.sources_view()
     assert [b["name"] for b in view["budgets"]] == [scarce.name]
-    assert {s["system"] for s in view["sources"]} == set(KNOWN) | set(VIDEOS)
+    assert {s["system"] for s in view["sources"]} == set(KNOWN) | set(VIDEOS) | set(NEWS)
     assert view["budgets"][0]["declared"] == {"windows": [{"seconds": 3600, "requests": 10, "margin": 1}], "reserve": 3, "fan": 2, "pause": 60}
 
 

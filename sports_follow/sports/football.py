@@ -482,6 +482,12 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
         "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
     )
+    news_feeds = {
+        "https://feeds.bbci.co.uk/sport/football/rss.xml": "BBC Sport",
+        "https://www.theguardian.com/football/rss": "The Guardian",
+        "https://www.skysports.com/rss/11095": "Sky Sports",
+        "https://www.thehindu.com/sport/football/feeder/default.rss": "The Hindu",
+    }
 
     def search_words(self, fired: Fired) -> str | None:
         """A goal, a brace or a hat-trick (the player's goals in the game so far), in the game: "brace Liverpool vs

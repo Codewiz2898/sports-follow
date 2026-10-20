@@ -269,6 +269,12 @@ without a ruling from FIDE or the platform are misinformation."""
         "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE: interviews, features
         "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: commentary on his own games and others'
     )
+    news_feeds = {
+        "https://www.chess.com/rss/news": "Chess.com",
+        "https://en.chessbase.com/feed": "ChessBase",
+        "https://www.fide.com/feed": "FIDE",
+        "https://www.theguardian.com/sport/chess/rss": "The Guardian",
+    }
 
     def search_words(self, fired: Fired) -> str | None:
         """A win, in its game ("wins game 4"): its fixture's title names the round."""

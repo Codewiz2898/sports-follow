@@ -403,7 +403,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   serve a sport. A source of videos for the feed (`adapters/youtube.py`) is a `VideoSource` instead
   (`adapters/base.py`): it describes itself the same way, plus the shape of its channel ids
   (`channel_pattern`), lists a channel's latest `uploads` and what it says of up to 50 videos at once
-  (`facts`), and its one line is its place in `adapters.VIDEOS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
+  (`facts`), and its one line is its place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
+  is a `NewsSource`: the shape of the feed addresses it reads (`feed_pattern`) and a feed's latest `articles`, one
+  line in `adapters.NEWS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
   its provider's name or an API it reads, or its URL.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
@@ -468,6 +470,28 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rolling, so YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
   which stays the channel poll's and the weekly check's. The ranking keeps a searched video's moment while it
   stands, rather than the biggest one near it. Off without the key.
+- **News comes from publishers' own feeds** (`sports_follow/news.py`, `sports_follow/adapters/publisher_rss.py`,
+  BHA-325), into the same pipeline as videos. Every 20 minutes the curator reads each RSS or Atom feed a running sport
+  lists (`Sport.news_feeds`), through the source cache (a feed at most every 15 minutes) and conditionally (the ETag
+  and Last-Modified of its last answer, so an unchanged feed is a 304), in the `feed` lane, counted as the
+  `publisher-rss` budget (no published limit). Of the stories published in the last three days it keeps those whose
+  headline or description names a followed player of that sport: their full name or own one-word name as for videos,
+  or their surname alone only when no other followed player of the sport has it and fewer than three of the sport's
+  athletes in the registry do ("Smith" doesn't qualify); otherwise only with one of the player's sides (a team, their country)
+  in the story, and no other player whose name it is. A one-word name counts only capitalised (a handle as the
+  player writes it) and not next to another capitalised name ("head coach" isn't Travis Head, "Deepti Sharma"
+  isn't Rohit). One `feed_candidates` row per player and story, kind
+  `article`, known by its address with tracking parameters dropped, so two feeds listing it are one row. Only the
+  headline, link, time and the feed's own description (cut to 300 characters) are kept, never the story. The same
+  judge reads them; `rank.py` scores a story by the judge's interest and how many outlets ran it (in place of
+  views and likes), and of a player's stories about the same thing within a day (similar words in headline and
+  description) only the best is served, with "N outlets". Served stories are the Feed's news in place of the card's
+  (the research agent's) while there are any; the curator also writes them onto the card as `stories` after each
+  run (only where they changed, version bumped and published like any card), so the player page's news section
+  shows them wherever the card comes from (page, stream, follow list); the agent's `news` stays underneath. The
+  Wire shows each followed player's best story of the last three days beside the agent's injury lines. A weekly prune (Mondays) drops stories over 30 days old but those an admin approved or pinned; removing a
+  player removes their rows. `python -m sports_follow.curator news` reads every feed once, judges and ranks, and
+  prints each sport's counts. The admin panel's Sources tab turns the source off like any other.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -493,7 +517,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   chess), and the channels it trusts for the feed's videos about its players (`video_channels`, in one block at the
   end of its class: real channel ids only, each checked to answer at
   `https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, which often takes a few tries; a sport that's off has
-  none read; esports' are the `Esports` class's, for every game), and which of its moments the feed searches for
+  none read; esports' are the `Esports` class's, for every game), the publishers' feeds it reads for news about its
+  players (`news_feeds`, right after: each feed's address with the publisher's name as stories credit it; real RSS
+  or Atom feeds only, each checked to answer with headlines, links, dates and descriptions, never a search engine's
+  feed of other sites; each publisher's terms for headlines with links are noted in the pull request that adds it),
+  and which of its moments the feed searches for
   fans' videos of, in what words (`search_words`: a hundred and the ground, a brace and the game; `None` for the
   rest). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the

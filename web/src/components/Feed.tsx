@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Card, type Feed, type FeedItem, type FeedShare, type FeedVerdict } from '../api'
-import { ago, duration, feedOf, fromTheFans, postFrom, views, without, type FeedKind } from '../feed'
+import { ago, duration, feedOf, fromTheFans, outlets, postFrom, views, without, type FeedKind } from '../feed'
 import { safeHref, shortName } from '../format'
 import { useFollowing } from '../following'
 import { sportKey } from '../sports'
@@ -122,14 +122,14 @@ export function PostCard({ item, name, now, onMore }: { item: FeedItem; name: st
   )
 }
 
-/** A story: its headline, where it's from and when; it opens at its site. */
+/** A story: its headline, where it's from (and how many outlets ran it) and when; it opens at its site. */
 export function NewsCard({ item, now, onMore }: { item: FeedItem; now: number; onMore?: () => void }) {
   return (
     <article className="card feed-card news">
       <a href={safeHref(item.url)} target="_blank" rel="noreferrer" className="stack" style={{ gap: 6, flex: 1 }}>
         <span><span className="pill feed-tag">{item.tag}</span></span>
         <span className="title" style={{ fontSize: 16 }}>{item.title}</span>
-        <span className="tiny muted" style={{ fontWeight: 700 }}>{[item.source, ago(item.published_at, now)].filter(Boolean).join(' · ')}</span>
+        <span className="tiny muted" style={{ fontWeight: 700 }}>{[item.source, outlets(item.outlets), ago(item.published_at, now)].filter(Boolean).join(' · ')}</span>
         {item.summary && <span className="small muted">{item.summary}</span>}
       </a>
       {onMore && <More onClick={onMore} />}

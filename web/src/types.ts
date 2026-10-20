@@ -76,7 +76,7 @@ export interface LiveStatus {
 
 export interface Provenance { source: string; url?: string | null; at: string }
 
-export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null }
+export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null; outlets?: number | null }  // outlets: how many ran the story
 
 export interface UpcomingEvent {
   title: string
@@ -135,6 +135,7 @@ export interface Card {
   player: PlayerProfile
   live: LiveStatus
   news: NewsItem[]
+  stories?: NewsItem[]  // the publishers' stories the curator served (sports_follow/rank.py cards): shown in place of news
   upcoming: UpcomingEvent[]
   recent_results?: RecentResult[]
   season_stats?: Stat[]
@@ -290,6 +291,7 @@ export interface FeedItem {
   published_at: string | null  // an instant, or a bare day for a story known only by its day
   reason: string
   summary?: string | null
+  outlets?: number | null  // a story's: how many outlets ran it, when more than one
   video?: { youtube_id: string; duration: number | null; views: number | null } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }

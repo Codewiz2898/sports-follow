@@ -491,6 +491,8 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
             # No source covers this sport and the agent doesn't watch games: say so rather than show a
             # score from the moment the page was built.
             card["live"] = {"is_live": False, "player_stats": [], "available": False}
+        if (card_row.card or {}).get("stories"):
+            card["stories"] = card_row.card["stories"]  # the publishers' stories the curator put there (rank.cards) stay
         if bound and card_row.status == "ready":
             previous = card_row.card or {}
             for section in structured.OWNED:

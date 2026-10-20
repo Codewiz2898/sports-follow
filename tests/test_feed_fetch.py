@@ -390,7 +390,7 @@ def test_the_curator_runs_its_own_queue_its_jobs_logged_and_stopping_as_the_work
 
     assert curator.CuratorSettings.queue_name not in ("arq:queue", getattr(worker.WorkerSettings, "queue_name", "arq:queue"))
     assert all(hasattr(j.coroutine, "__wrapped__") for j in curator.CuratorSettings.cron_jobs)
-    assert {j.name for j in curator.CuratorSettings.cron_jobs} == {"cron:poll_channels", "cron:check_videos"}
+    assert {j.name for j in curator.CuratorSettings.cron_jobs} == {"cron:poll_channels", "cron:check_videos", "cron:poll_news", "cron:prune_news"}
     assert curator.CuratorSettings.on_shutdown is worker.wind_down
 
 
