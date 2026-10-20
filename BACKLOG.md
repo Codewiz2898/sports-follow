@@ -434,7 +434,7 @@ Elsewhere:
   list lags a minute). OpenDota's start times run 17 minutes ahead of PandaScore's. Checked 13 Oct
   2026 on five live series (DreamLeague qualifiers and others): every series matched its game. No
   key; 60 requests a minute and 3,000 a day, counted in Redis. Community-run with no data licence:
-  `SPORTS_FOLLOW_OPENDOTA=0` in the public build until its terms are checked.
+  on in the public build since 20 Oct 2026, with credit (BHA-208).
 - **LoL:** Riot's own site backend (esports-api.lolesports.com, feed.lolesports.com/livestats) gives full
   live stats, but it's undocumented and Riot licenses official live data only to GRID: development only.
 - **Valorant:** the valorantesports.com backend has results, no live; nothing official.

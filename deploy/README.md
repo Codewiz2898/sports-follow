@@ -115,10 +115,11 @@ ssh ubuntu@<server-ip> "sudo RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' 
 ```
 On a provider whose first login is root, it's `ssh root@<server-ip> "RECOVERY_KEY=… bash -s" < …` instead.
 
-The repo is private, so the first run stops and prints a key for the server to read it with: add it under
+The server reads the repo with a key of its own, so the first run stops and prints it: add it under
 [Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
-off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) Then
-run the setup again as `deploy` (root can't log in by then):
+off. Deploys fetch with it too. The repo is public, but the key stays: it works either way, and nothing
+changes if the repo goes private again. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the
+server.) Then run the setup again as `deploy` (root can't log in by then):
 ```bash
 ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
 ```
