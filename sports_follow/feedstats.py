@@ -205,7 +205,7 @@ def channel_yield(session: Session, channels: Iterable[str], listed: Iterable[st
 
 def coverage(session: Session, now: datetime | None = None) -> dict[str, tuple[int, int]]:
     """For each running sport (metrics.sport_label), how many players fans follow, and how many of them have a
-    video the Feed would serve (scored, not hidden) published in the last COVERED_DAYS, or pinned. A sport no
+    video the Feed would serve (scored, not hidden; a story isn't one) published in the last COVERED_DAYS, or pinned. A sport no
     module knows (golf) is left out: no channel looks for its players, so it could never be covered."""
     from .rank import when
 

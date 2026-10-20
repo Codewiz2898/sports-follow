@@ -252,3 +252,11 @@ def test_the_feed_dashboard_reads_only_metrics_the_app_sends():
     assert read <= FEED_COUNTERS | FEED_GAUGES | sources | {"sports_follow_feed_judge_duration_seconds_bucket"}, read - FEED_COUNTERS - FEED_GAUGES
     assert {f"sports_follow_feed_{step}_total" for step in metrics.FEED_STEPS} <= read  # every step of the funnel is on it
     assert len({p["id"] for p in board["panels"]}) == len(board["panels"])
+
+
+def test_a_rows_stream_is_news_for_a_publishers_story_search_for_a_moments_find_else_channels():
+    from sports_follow import rank
+
+    assert rank.stream("publisher_rss", {"searched_for": 3}) == "news"
+    assert rank.stream("youtube", {"searched_for": 3}) == "search"
+    assert rank.stream("youtube", {}) == rank.stream("youtube", None) == "channels"

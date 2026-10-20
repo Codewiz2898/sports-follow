@@ -53,9 +53,10 @@ def test_a_polls_funnel_counts_each_player_and_video_once(world, measured):  # n
     assert got["UC" + "z" * 22] == {"read": 0, "matched": 0, "kept": 0, "served": 0, "last_upload": None}
 
 
-def row(pid: int, vid: str, published: Any, score: float | None = 0.5, review: str | None = None, channel: str = CHANNEL, fetched: Any = NOW) -> None:
+def row(pid: int, vid: str, published: Any, score: float | None = 0.5, review: str | None = None, channel: str = CHANNEL, fetched: Any = NOW,
+        source: str = "youtube") -> None:
     with db_module.session() as s:
-        s.add(FeedCandidate(player_id=pid, source="youtube", external_id=vid, url=f"https://www.youtube.com/watch?v={vid}", fetched_at=fetched, checked_at=fetched,
+        s.add(FeedCandidate(player_id=pid, source=source, external_id=vid, url=f"https://www.youtube.com/watch?v={vid}", fetched_at=fetched, checked_at=fetched,
                             candidate={"published": published.isoformat() if published else None, "channel_id": channel, "sport": "cricket"},
                             features={}, score=score, review=review))  # fmt: skip
 
@@ -74,6 +75,7 @@ def test_coverage_counts_followed_players_with_a_servable_video_this_week(world)
     row(hidden, "hidden", NOW - timedelta(days=1), review="hidden")
     row(judged_out, "promo", NOW - timedelta(days=1), score=None)
     row(pinned, "pinned", NOW - timedelta(days=40), score=10.5, review="pinned")
+    row(old, "story", NOW - timedelta(days=1), source="publisher_rss")  # a served story isn't a video
     with db_module.session() as s:
         assert feedstats.coverage(s, NOW) == {"cricket": (5, 2), "chess": (1, 0)}
 
