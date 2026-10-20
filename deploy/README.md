@@ -35,8 +35,8 @@ YouTube, plus OpenDota by choice (BHA-208). Never ESPN, which is for development
 | `offsite-backup.sh`, `systemd/sports-follow-offsite.*` | On the server, hourly: seals new dumps and sends them, with the sealed secrets, to object storage; thins out old ones. |
 | `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `pg_restore`. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
-| `../.github/workflows/deploy.yml` | After CI passes on main: waits for your approval, then runs `deploy.sh` over SSH, then a health check from outside that the site runs that commit. |
-| `deploy-summary.sh`, `../.github/workflows/deploy-summary.yml` | What a waiting deploy brings, on its run's page; sent when it starts waiting and every morning while it does. |
+| `../.github/workflows/deploy.yml` | After CI passes on main: waits for your approval (in a private repository, for you to start it), then runs `deploy.sh` over SSH, then a health check from outside that the site runs that commit. |
+| `deploy-summary.sh`, `../.github/workflows/deploy-summary.yml` | What a waiting (or ready) deploy brings, on its run's page; sent when it starts waiting and every morning while it does. |
 | `server-check.sh`, `systemd/` | The server checks, whose findings go to Grafana Cloud as metrics; the weekly Docker clean-up. |
 | `alloy/` | Grafana Alloy's config: the server's metrics and the checks' findings, to Grafana Cloud every minute. |
 | `grafana/` | The alert rules (`rules.json`), and `apply-alerts.sh`, which puts them, an email contact point and the policy into Grafana Cloud. |
@@ -430,11 +430,19 @@ the site.
   deploy, one message when it starts and the morning's.
 - **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
 - **Claude sessions never approve.** `gh` there runs as you, so GitHub would count their approval as yours; a hook
-  (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, changing the environment, and running
-  `deploy.sh deploy` or `rollback`. A session can start a run and send you its link.
+  (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, starting or re-running a Deploy run,
+  changing the environment, and running `deploy.sh deploy` or `rollback`. A session sends you the run's link.
 
-**From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
-It waits for your approval too. A deploy goes ahead only if the CI workflow passed for that commit. A run
+**In a private repository** GitHub doesn't hold a run for a required reviewer (only on Enterprise), so
+nothing waits, and starting the run is your approval. Each merge's run puts what it brings on its page,
+with **Before you deploy** in place of Before you approve, and stops there. The first change since what's
+live is sent to you at once, and every morning whatever is ready then: main's newest commit that CI passed,
+if it isn't live. To deploy it, Actions → Deploy → Run workflow, with the commit the summary names (left
+blank, it deploys the tip of main, which may have more). That run deploys at once and says what it brought.
+
+**From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` and a commit on main (blank: the tip)
+or `rollback`. In a public repository it waits for your approval too. A deploy goes ahead only if the CI
+workflow passed for that commit. A run
 by hand cancels a deploy waiting after CI (a rollback would otherwise queue behind it); re-run that one
 later to deploy it. One catch: a rollback queued behind a deploy that's running is replaced if a merge's
 deploy queues too (GitHub keeps one run waiting per group), so after such a merge check that the rollback
@@ -486,6 +494,7 @@ The live image and the previous one are kept; older ones are removed.
 4. Delete `deploy_key` from the Mac: GitHub has it, and a new one is quick to make.
 5. **Approval:** in the `production` environment, tick **Required reviewers** and add yourself. Leave
    **Prevent self-review** unticked: GitHub counts a merge you make as yours, so you couldn't approve it.
+   (A private repository has no such setting off Enterprise: you deploy by hand, as above.)
 6. **The summary's way to you**, as repository secrets (Settings → Secrets and variables → Actions), not the
    environment's, which would make it wait for approval too. Either or both:
    - **Email, through Resend** (the sign-in codes' service, from `deploys@` the same domain): make a key
@@ -497,7 +506,7 @@ The live image and the previous one are kept; older ones are removed.
    - **A push through ntfy**, with a button that opens the approval: `gh secret set DEPLOY_SUMMARY_URL
      --body https://ntfy.sh/<a topic only you know>`, and subscribe to the topic in ntfy's phone app.
 
-   Check it with Actions → Deploy summary → Run workflow while a deploy is waiting.
+   Check it with Actions → Deploy summary → Run workflow while a deploy is waiting (or ready).
 
 ## Alerts
 

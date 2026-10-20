@@ -3,11 +3,15 @@
 # server changes, a step by hand, Android changes it doesn't ship), the changes since the live commit with
 # what each touches, the BHA issues they close, whether CI passed, and the link to approve it. GitHub
 # Actions runs it (gh with GH_TOKEN, jq, curl, and this repo with its history); it works from a checkout too.
-#   deploy-summary.sh [--send] [<commit> <run-url>]
+#   deploy-summary.sh [--send | --send-first] [--deploying] [<commit> <run-url>]
 # prints it as Markdown, for the deploy waiting now or for that Deploy run, and with --send also sends it:
 # by email through Resend (RESEND_KEY, DEPLOY_SUMMARY_TO) and as a push to an ntfy topic
 # (DEPLOY_SUMMARY_URL), whichever are set. With nothing waiting, it says so and sends nothing.
 # deploy.yml sends the first deploy to wait; deploy-summary.yml, every morning, the one waiting then.
+# In a private repository nothing waits (deploy.yml says why): a deploy is ready instead, the newest commit
+# on main that CI passed if it isn't live, and you start it with that commit. --send-first sends it only
+# if it's the first change since the live one (the morning brings the rest), and --deploying is for a run
+# you started, which deploys it now.
 # What's live: the commit /api/health names, or, from an image built before it did, the last deploy GitHub
 # recorded. The site's address: APP_URL (a repository variable), else the one GitHub recorded with that deploy.
 set -euo pipefail
@@ -64,18 +68,29 @@ by_hand() {
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-send=0 want="" run_url="" since=""
-if [ "${1:-}" = --send ]; then send=1; shift; fi
-case $# in
-  0)
+send=0 want="" run_url="" since="" mode=waits
+case ${1:-} in --send) send=1; shift ;; --send-first) send=first; shift ;; esac
+if [ "${1:-}" = --deploying ]; then mode=deploying; shift
+elif [ "$(gh api "repos/$REPO" --jq .private)" = true ]; then mode=ready; fi
+deploy_url="$GITHUB/actions/workflows/deploy.yml"   # Run workflow
+case $#:$mode in
+  0:waits)
     # The newest run waiting for approval (deploy.yml cancels older ones). Its name carries its commit.
     IFS='|' read -r run_id title since < <(api "actions/workflows/deploy.yml/runs?status=waiting&per_page=1" \
       --jq '.workflow_runs[0] // empty | [.id, .display_title, .created_at] | map(tostring) | join("|")') || true
     if [ -z "${run_id:-}" ]; then echo "No deploy is waiting." >&2; exit 0; fi
     run_url="$GITHUB/actions/runs/$run_id"
-    want=$(grep -oE '[0-9a-f]{40}' <<<"$title" | head -1) || true
+    want=$(grep -oE '[0-9a-f]{7,40}' <<<"$title" | head -1) || true   # by hand, the commit as typed
+    [ -z "$want" ] || [ ${#want} = 40 ] || want=$(api "commits/$want" --jq .sha)
     ;;
-  2) want=$1 run_url=$2 ;;
+  0:ready)
+    # The newest commit on main that CI passed; whether it's live is read below.
+    want=$(api "actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
+      --jq '.workflow_runs[0].head_sha // empty') || true
+    if [ -z "$want" ]; then echo "No commit on main has passed CI." >&2; exit 0; fi
+    run_url=$deploy_url
+    ;;
+  2:*) want=$1 run_url=$2 ;;
   *) usage ;;
 esac
 
@@ -95,6 +110,16 @@ if [ -n "$site" ] && live=$(curl -fsS -m 10 "$site/api/health" | jq -r '.commit 
 elif [ -n "$deployed" ]; then
   live=$deployed live_how="its last deploy, $(when "$deployed_at"); the site doesn't say which commit it runs yet"
 fi
+if [ $# = 0 ] && [ "$mode" = ready ] && [ "$want" = "$live" ]; then echo "Nothing to deploy: ${live:0:7} is live." >&2; exit 0; fi
+
+# The words for each: a deploy waiting for approval, one ready for you to start, or one this run deploys.
+case $mode in
+  waits) state=Waiting heading="Before you approve:" acting=approving titled="a deploy is waiting for you"
+    go_line="Approve or reject it: $run_url" ;;
+  ready) state=Ready heading="Before you deploy:" acting=deploying titled="a deploy is ready for you"
+    go_line="Deploy it: $deploy_url → Run workflow, with $want as the commit (left blank, it deploys the tip of main)." ;;
+  deploying) state=Deploying heading="What to look at:" acting=deploying titled="deploying ${want:0:7}" go_line="" ;;
+esac
 
 body="$tmp/body"
 if [ -z "$want" ]; then
@@ -105,13 +130,13 @@ else
   for c in "$want" ${live:+"$live"}; do git cat-file -e "$c^{commit}" 2>/dev/null || git fetch --quiet origin "$c" || true; done
   range="" range_note=""
   if [ -z "$live" ] || ! git cat-file -e "$live^{commit}" 2>/dev/null; then
-    range_note="What's live is unknown, so the changes, and what to check before approving, aren't listed."
+    range_note="What's live is unknown, so the changes, and what to check before $acting, aren't listed."
   elif [ "$live" = "$want" ]; then
-    range_note="It's the commit already live: approving it changes nothing."
+    range_note="It's the commit already live: $acting it changes nothing."
   elif git merge-base --is-ancestor "$live" "$want"; then
     range="$live..$want"
   else
-    range_note="It's older than what's live (${live:0:7}): approving it takes the site back, and the newer migrations, if any, stay in the database."
+    range_note="It's older than what's live (${live:0:7}): $acting it takes the site back, and the newer migrations, if any, stay in the database."
   fi
 
   # Each change on main: its pull request's title, or the commit's own subject, and what it touches. The
@@ -134,7 +159,7 @@ else
     done < <(git log --first-parent --format='%H%x1f%s' "$range")
     git log --format=%B "$range" >>"$texts"
 
-    # What to look at before approving, from every file the deploy changes (deploy.sh, deploy/README.md).
+    # What to look at before deploying, from every file the deploy changes (deploy.sh, deploy/README.md).
     files="$tmp/files"
     git diff --no-renames --name-only "$live" "$want" >"$files"
     migrations=$(git diff --no-renames --name-only --diff-filter=A "$live" "$want" -- migrations/versions |
@@ -145,7 +170,7 @@ else
     apps=$(joined <"$android")
     {
       [ -z "$migrations" ] || echo "- Database migration: $migrations. It runs before the new version starts, and a rollback leaves it in place."
-      [ -z "$secrets" ] || echo "- The secrets scripts changed ($secrets): if a change needs a new key, run deploy/push-secrets.sh from the Mac before approving."
+      [ -z "$secrets" ] || echo "- The secrets scripts changed ($secrets): if a change needs a new key, run deploy/push-secrets.sh from the Mac before $acting."
       [ -z "$server" ] || echo "- Server changes this deploy applies: $server."
       # The server runs the deploy.sh it has: deploy.sh reads all of itself before checking out the new commit.
       ! grep -qx deploy/deploy.sh "$files" || echo "- deploy/deploy.sh changed: this deploy still runs the old one, and the new one runs from the next deploy or rollback."
@@ -155,6 +180,10 @@ else
     [ -s "$checks" ] || echo "- Nothing unusual: no database migration, no server changes, nothing to run by hand." >"$checks"
   fi
   count=$(wc -l <"$changes" | tr -d ' ')
+  if [ "$send" = first ] && { [ "$count" -gt 1 ] || [ "$want" = "$live" ]; }; then
+    echo "It isn't the first change since the live commit, so it comes with the morning's summary." >&2
+    send=0
+  fi
   issues=$(grep -oiE '(^|[^a-z])(fix(e[sd])?|close[sd]?|resolve[sd]?) +BHA-[0-9]+((,| and|, and) +BHA-[0-9]+)*' "$texts" | grep -oE 'BHA-[0-9]+' |
     sort -t- -k2,2n -u | joined) || true
 
@@ -168,22 +197,23 @@ else
   if [ "$tip" != "$want" ]; then
     IFS='|' read -r tip_state tip_url < <(ci "$tip") || true
     case "${tip_state:-}" in
-      success) tip_note="Main's newest commit, ${tip:0:7}, passed CI too: its own deploy should be waiting soon, in place of this one." ;;
+      success) if [ "$mode" = waits ]; then tip_note="Main's newest commit, ${tip:0:7}, passed CI too: its own deploy should be waiting soon, in place of this one."
+               else tip_note="Main's newest commit, ${tip:0:7}, passed CI too, and has more than this."; fi ;;
       failure) tip_note="Main's newest commit, ${tip:0:7}, isn't in it: its CI failed (${tip_url:-})." ;;
       *) tip_note="Main's newest commit, ${tip:0:7}, isn't in it: its CI is ${tip_state:-not started} (${tip_url:-no run yet})." ;;
     esac
   fi
 
-  if [ "$count" -gt 0 ]; then title="$APP_NAME: a deploy is waiting for you ($count change$([ "$count" = 1 ] || echo s))"
-  else title="$APP_NAME: a deploy is waiting for you"; fi
+  if [ "$count" -gt 0 ]; then title="$APP_NAME: $titled ($count change$([ "$count" = 1 ] || echo s))"
+  else title="$APP_NAME: $titled"; fi
   # Markdown that reads as plain text too: a line ending in two spaces breaks there on the run's page.
   {
-    echo "Waiting: ${want:0:7}, ${ci_said}${ci_url:+ ($ci_url)}  "
+    echo "$state: ${want:0:7}, ${ci_said}${ci_url:+ ($ci_url)}  "
     echo "Live now: ${live:+${live:0:7}, }${live_how:-unknown}  "
     [ -z "$since" ] || echo "Waiting since $(when "$since"). Leave it, and ${site:-the site} stays as it is."
     echo
     if [ "$count" -gt 0 ]; then
-      echo "Before you approve:"
+      echo "$heading"
       cat "$checks"
       echo
       echo "What it brings:"
@@ -196,8 +226,7 @@ else
       echo "$range_note"
     fi
     [ -z "$tip_note" ] || { echo; echo "$tip_note"; }
-    echo
-    echo "Approve or reject it: $run_url"
+    [ -z "$go_line" ] || { echo; echo "$go_line"; }
   } >"$body"
 fi
 
@@ -220,13 +249,16 @@ if [ -n "${RESEND_KEY:-}" ] && [ -n "${DEPLOY_SUMMARY_TO:-}" ]; then
   sent=1
 fi
 if [ -n "${DEPLOY_SUMMARY_URL:-}" ]; then
-  # ntfy: the notification opens the run, and its button is the way to approve. ntfy keeps 4,096 bytes
-  # as a message; past that, the summary is cut at a line and the rest is on the run's page.
+  # ntfy: the notification opens the run, and its button is the way to approve (or, ready, to Run
+  # workflow). ntfy keeps 4,096 bytes as a message; past that, the summary is cut at a line and the rest is
+  # on the run's page.
+  button="Approve or reject, $run_url"
+  [ "$mode" != ready ] || button="Deploy it, $deploy_url"
   push="$tmp/push"
   if [ "$(wc -c <"$body")" -le 4000 ]; then cp "$body" "$push"
   else { head -c 3900 "$body" | sed '$d'; echo "…"; echo; echo "The rest: $run_url"; } >"$push"; fi
   curl -fsS -m 20 --retry 3 -o /dev/null -H "Title: $title" -H "Tags: rocket" -H "Click: $run_url" \
-    -H "Actions: view, Approve or reject, $run_url" --data-binary @"$push" "$DEPLOY_SUMMARY_URL"
+    -H "Actions: view, $button" --data-binary @"$push" "$DEPLOY_SUMMARY_URL"
   echo "Pushed it." >&2
   sent=1
 fi

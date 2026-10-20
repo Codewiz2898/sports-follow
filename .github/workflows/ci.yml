@@ -1,5 +1,7 @@
 # Checks every pull request and every push to main. Nothing here calls a live source or needs a token:
-# adapter tests read recorded responses (tests/fixtures).
+# adapter tests read recorded responses (tests/fixtures). A push to main runs only the tests and the web
+# build, which a deploy goes by: lint, types and the Android app's types ran on its pull request, and in a
+# private repository every job's minutes count, each rounded up.
 name: CI
 
 on:
@@ -60,6 +62,7 @@ jobs:
 
   lint:
     name: Lint and types
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +99,7 @@ jobs:
 
   mobile:
     name: Android app types
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:

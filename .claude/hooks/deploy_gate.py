@@ -1,8 +1,9 @@
 """Stops a session from deploying to production on its own: approving a deploy is Bharath's.
 
-Every deploy waits at GitHub's `production` environment for his approval (deploy/README.md, "Deploying").
-`gh` runs as his account, so an approval a session sends through the API counts as his, and the review
-it stands for never happens (18 Oct 2026). This blocks a Bash call that would get past that gate:
+Every deploy waits at GitHub's `production` environment for his approval (deploy/README.md, "Deploying"),
+or, in a private repository, where GitHub can't hold it, waits for him to start it. `gh` runs as his
+account, so an approval a session sends through the API counts as his, and the review it stands for
+never happens (18 Oct 2026). This blocks a Bash call that would get past that gate:
 
 - approving or rejecting a waiting deploy: text naming `pending_deployments` (or
   `deployment_protection_rule`) that also sends something: `approved`, `rejected`, POST, a body from a
@@ -10,6 +11,10 @@ it stands for never happens (18 Oct 2026). This blocks a Bash call that would ge
   or in a file the call feeds in (`@q.graphql`, `--input`, `< q`, `cat q |`);
 - changing an environment (its required reviewers): a POST, PUT, PATCH, DELETE or fields to
   `repos/<owner>/<repo>/environments/...`;
+- starting a Deploy run, which in a private repository deploys at once: `gh workflow run` naming the
+  Deploy workflow (deploy.yml, Deploy, or a workflow's number), or its `dispatches` in the API;
+- re-running one, which deploys its commit again: `gh run rerun`, or `.../runs/<id>/rerun` or
+  `.../jobs/<id>/rerun` in the API, when GitHub says the run is Deploy's, or can't say;
 - running `deploy.sh` other than `status`: a command line naming it may only read (grep, git, ls, cat and
   the like); anything that could run it (a shell, ssh, sudo, xargs, `.`, python) stops the line, though
   ssh, `-c` and `eval` scripts are judged the same way. And `ssh … deploy` or `rollback`, which the
@@ -17,8 +22,8 @@ it stands for never happens (18 Oct 2026). This blocks a Bash call that would ge
 
 These read the raw command, so no wrapper, variable or spelling of a flag gets past them; the cost is
 that a commit message or comment naming them in the command itself is stopped too (pass the text in a
-file). Reading goes through (`gh api .../pending_deployments`, `deploy.sh status`), and so does starting a
-Deploy run (`gh workflow run deploy.yml`), which waits for his approval like any other.
+file). Reading goes through (`gh api .../pending_deployments`, `deploy.sh status`, `gh run list --workflow
+deploy.yml`), and so do other workflows (`gh workflow run deploy-summary.yml`, re-running CI).
 
 It stops a session that sets out to approve or deploy the usual ways. It isn't a sandbox: a script
 written to get round it would, and CLAUDE.md says not to. Clicks in a browser aren't Bash calls.
@@ -31,15 +36,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bash_words import parse  # noqa: E402
 
-TELL = ("Approving or rejecting a production deploy, changing its environment, and running deploy.sh deploy or "
-        "rollback are Bharath's. Give him the Deploy run's link "
+TELL = ("Approving or rejecting a production deploy, starting or re-running a Deploy run, changing its environment, "
+        "and running deploy.sh deploy or rollback are Bharath's. Give him the Deploy runs' link "
         "(https://github.com/Codewiz2898/sports-follow/actions/workflows/deploy.yml) and what it brings: every "
-        "merge since the live commit, and any migration, secrets or server change. He approves it there. "
+        "merge since the live commit, and any migration, secrets or server change. He approves or starts it there. "
         "(If the command only mentions these in text, such as a commit message, pass the text in a file, or run "
         "the other commands in it on their own.)")
 
@@ -53,6 +59,14 @@ ENVIRONMENT = re.compile(r"repos/\S+/environments\b")  # repos/o/r/, repos/$GITH
 CHANGES = re.compile(r"(\b|-X)(post|put|patch|delete)\b|(^|\s)(-[fF]\S*|--field|--raw-field|--input)", re.IGNORECASE)
 NAMES_DEPLOY = re.compile(r"(?<![\w-])deploy\.sh\b(?![\s'\"]+(status|help|-h|--help)\b)")
 FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)")  # when unreadable
+# Starting or re-running a Deploy run. What follows `workflow run` or `run rerun`, up to the end of that command,
+# split into words, quoted ones whole: in a shell line, or in a list a wrapper hands to subprocess.
+DISPATCHES = re.compile(r"actions/workflows/([^/\s'\"]+)/dispatches", re.IGNORECASE)
+WORKFLOW_RUN = re.compile(r"\bworkflow\W+run\b([^\n;&|)]*)", re.IGNORECASE)
+RUN_RERUN = re.compile(r"\brun\W+rerun\b([^\n;&|)]*)", re.IGNORECASE)
+RERUN_API = re.compile(r"(?:repos/([^\s'\"]+?)/)?actions/(runs|jobs)/([^/\s'\"]+)/rerun", re.IGNORECASE)
+WORD = re.compile(r"'[^']*'|\"[^\"]*\"|[^\s'\",\[\]]+")
+DEPLOY_WORKFLOW = {"deploy", "deploy.yml", "deploy.yaml", ".github/workflows/deploy.yml", ".github/workflows/deploy.yaml"}
 
 # Commands that only read or tidy files: a line naming deploy.sh may run these and nothing else.
 READ_ONLY = {"grep", "egrep", "fgrep", "rg", "ag", "ls", "cat", "bat", "less", "more", "head", "tail", "wc", "sed",
@@ -199,8 +213,69 @@ def files_fed(command: str, cwd: str) -> list[str]:
     return texts
 
 
+def words_after(match: re.Match[str]) -> list[str]:
+    return [w.strip("'\"") for w in WORD.findall(match.group(1))]
+
+
+def gh_says(path: str, jq: str, cwd: str) -> str:
+    """One answer from GitHub's API through gh, as the session's account; raises when there's none."""
+    out = subprocess.run(["gh", "api", path, "--jq", jq], cwd=cwd if os.path.isdir(cwd) else None,
+                         capture_output=True, text=True, timeout=20, check=True).stdout.strip()
+    if not out:
+        raise ValueError(path)
+    return out
+
+
+def deploys_again(kind: str, number: str, repo: str | None, cwd: str) -> bool:
+    """Whether re-running this run (or this job's run) re-runs a deploy: True for Deploy's, and when GitHub
+    can't say. `{owner}/{repo}` is gh's: the repository of the folder it runs in."""
+    base = f"repos/{repo if repo and '$' not in repo else '{owner}/{repo}'}/actions"
+    try:
+        if kind == "jobs":
+            number = gh_says(f"{base}/jobs/{number}", ".run_id", cwd)
+        path = gh_says(f"{base}/runs/{number}", ".path", cwd)
+    except Exception:
+        return True
+    return os.path.basename(path.split("@")[0]).lower() in ("deploy.yml", "deploy.yaml")
+
+
+def other_workflow(name: str) -> bool:
+    """A workflow named by its file, and not Deploy's: ci.yml, deploy-summary.yml. A number or a variable could
+    be Deploy."""
+    return bool(re.fullmatch(r"[\w.-]+\.ya?ml", name)) and name.lower() not in DEPLOY_WORKFLOW
+
+
+def starts_deploy(command: str, cwd: str) -> bool:
+    """`gh workflow run` for the Deploy workflow, its dispatches in the API, or re-running one of its runs.
+    A run or workflow the line doesn't spell out (a variable, xargs) counts as Deploy's."""
+    if any(not other_workflow(name) for name in DISPATCHES.findall(command)):
+        return True
+    for match in WORKFLOW_RUN.finditer(command):
+        if any(w.lower() in DEPLOY_WORKFLOW or w.isdigit() for w in words_after(match)):
+            return True
+    folder = directories(command, cwd)[-1]
+    for match in RUN_RERUN.finditer(command):
+        words = words_after(match)
+        if {"-h", "--help"} & set(words):
+            continue
+        if any(w.startswith("$") or "`" in w for w in words) or not any(w.isdigit() for w in words):
+            return True
+        repo = next((words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-R", "--repo")), None)
+        repo = repo or next((w.split("=", 1)[1] for w in words if w.startswith("--repo=")), None)
+        jobs = {words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-j", "--job")}
+        for w in words:
+            if w.isdigit() and deploys_again("jobs" if w in jobs else "runs", w, repo, folder):
+                return True
+    for repo, kind, number in RERUN_API.findall(command):
+        if not number.isdigit() or deploys_again(kind.lower(), number, repo or None, folder):
+            return True
+    return False
+
+
 def blocked(command: str, cwd: str) -> bool:
     if GATE.search(command) and SENDS.search(command):
+        return True
+    if starts_deploy(command, cwd):
         return True
     if GRAPHQL.search(command) and (MUTATIONS.search(command) or (
             CALLS_API.search(command) and any(MUTATIONS.search(text) for text in files_fed(command, cwd)))):
@@ -226,13 +301,14 @@ def main() -> int:
     except Exception:
         return 0
     lowered = command.lower()
-    if not ("deploy" in lowered or "environments" in lowered or "graphql" in lowered or "rollback" in lowered):
+    if not any(word in lowered for word in ("deploy", "environments", "graphql", "rollback", "workflow", "rerun")):
         return 0
     try:
         stop = blocked(command, call.get("cwd") or os.getcwd())
     except Exception:  # anything else unexpected: stopped only if it plainly names a deploy
         stop = bool((GATE.search(command) and SENDS.search(command)) or MUTATIONS.search(command)
-                    or NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command))
+                    or NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command)
+                    or any(not other_workflow(name) for name in DISPATCHES.findall(command)))
     if stop:
         print(TELL, file=sys.stderr)
         return 2
