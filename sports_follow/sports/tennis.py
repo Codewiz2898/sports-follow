@@ -129,5 +129,13 @@ A milestone: a title, a Grand Slam, a first, a ranking landmark (career high, No
 moment: a match point, a tweener, a long rally, a comeback from a set down. Full-match uploads are restreams; \
 tournament and tour channels' highlights are official."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UCbcxFkd6B9xUU54InHv4Tig",  # Tennis TV: the ATP's highlights, interviews
+        "UCaBIVVpHjq6j3tSyxwTE-8Q",  # WTA: highlights, interviews
+        "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel: analysis
+    )
+
 
 SPORT = Tennis()

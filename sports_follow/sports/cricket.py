@@ -349,5 +349,19 @@ run-out, a last-over finish. Fantasy team picks ("Dream11 prediction", "GL team"
 innings or whole-match uploads by anyone but a board or broadcaster are restreams. Selection and squad news from \
 a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UCujuVKmt_utAQZJghxlRMIQ",  # ESPNcricinfo: analysis, interviews
+        "UCQYRGzYaVa7aWd8TsbjdJ6Q",  # Aakash Chopra: analysis
+        "UCVXCo0W9pk2dDkEBNLhTt7A",  # Sports Tak: interviews, news (Hindi)
+        "UCjFw-0Vdfy2KW78NClGECXw",  # Sports Yaari: interviews (Hindi)
+        "UCms-xnI50pEtJC06xdw4J6A",  # Wisden Cricket: analysis, interviews
+        "UCjGC9zWjHHF6CG1j8YfJK9g",  # RevSportz: interviews, news
+        "UC5oTaFLOFlLNeAJt_dt5rBw",  # CricTracker: interviews, fan edits
+        "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
+        "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
+    )
+
 
 SPORT = Cricket()

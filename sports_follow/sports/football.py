@@ -467,5 +467,15 @@ save, a red card, a missed penalty. Transfers and injuries reported by clubs or 
 "done deal" or "sources" from aggregator accounts before a club confirms are rumours. Full-match or full-half \
 uploads are restreams; extended highlights from a league or broadcaster are official."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UC6c1z7bA__85CIWZ_jpCK-Q",  # ESPN FC: analysis, debate
+        "UCjXIw1GlwaY1IzpW_jN9iCQ",  # The Overlap: interviews
+        "UCXzrxvm0Jqq1OpSZQhT6lEQ",  # Statman Dave: tactical analysis
+        "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
+        "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
+    )
+
 
 SPORT = Football()

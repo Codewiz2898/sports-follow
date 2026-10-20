@@ -421,5 +421,77 @@ class Adapter:
         raise NotImplementedError
 
 
+@dataclass
+class Upload:
+    """One video a channel posted, as its feed lists it (a video source's uploads()): what the feed's fetch
+    (curator.py) reads a followed player's name in, before asking anything else of it."""
+
+    video_id: str  # the source's id for it, of the shape VideoSource.id_pattern says
+    channel_id: str
+    channel: str  # the channel's name, as the source gives it
+    title: str
+    description: str
+    url: str  # where it plays, on the source's own site
+    published: datetime | None = None
+    thumbnail: str | None = None
+
+
+@dataclass
+class VideoFacts:
+    """What a video source says of one video now (a video source's facts()): what the feed's hard filters
+    read, and the numbers it keeps for ranking later."""
+
+    video_id: str
+    seconds: int | None  # how long it runs; None for a live stream or one still being processed
+    views: int | None = None
+    likes: int | None = None
+    embeddable: bool = False  # it may play inside another site's page
+    public: bool = False  # anyone can watch it: not private or unlisted, and its upload has been processed
+    live: bool = False  # a live stream, now or to come, rather than a video
+    allowed: tuple[str, ...] | None = None  # the only countries it plays in (ISO 3166-1 alpha-2), where the source limits it
+    blocked: tuple[str, ...] = ()  # countries it doesn't play in
+    raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
+
+    def plays_in(self, country: str) -> bool:
+        """Whether it plays for a viewer in this country."""
+        return country not in self.blocked and (self.allowed is None or country in self.allowed)
+
+
+class VideoSource:
+    """A source of videos about players, for the feed (curator.py): each sport names the channels it trusts
+    (Sport.video_channels), and a source takes those of the shape its channel ids have (channel_pattern).
+    Like an adapter it describes itself, so nothing else names it: adding one is its module plus one entry in
+    adapters.VIDEOS.
+
+    uploads(channel_id) lists a channel's latest videos, cheaply (the source's public feed), and facts(ids)
+    what the source says of each of up to `batch` videos now; a video it leaves out is gone (removed, made
+    private). Both raise AdapterError when the source can't be read, and budget.RateLimited when its
+    allowance is spent."""
+
+    system: str  # "youtube": the feed's rows name their source by it
+    name: str
+    provider: Provider
+    covers: str  # what it covers, as the admin panel lists it
+    id_pattern: re.Pattern[str]  # the shape of its video ids
+    channel_pattern: re.Pattern[str]  # and of its channels', as a sport lists them
+    batch = 50  # the most videos one facts() call asks about
+
+    @classmethod
+    def available(cls) -> bool:
+        """Whether this build can run it: a source with a key needs its key."""
+        return True
+
+    def budgets(self) -> tuple[Budget, ...]:
+        """What its requests spend (adapters/budget.py)."""
+        return self.provider.budgets
+
+    def uploads(self, channel_id: str) -> list[Upload]:
+        raise NotImplementedError
+
+    def facts(self, video_ids: list[str], max_age: float = 3600) -> dict[str, VideoFacts]:
+        """max_age: the oldest read (seconds) the cache may answer with; 0 asks the source."""
+        raise NotImplementedError
+
+
 class AdapterError(RuntimeError):
     pass

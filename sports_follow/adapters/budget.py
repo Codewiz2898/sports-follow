@@ -14,8 +14,9 @@ request) and carried into the threads it uses (carry):
     refresh  a followed player's fixtures and stats
     history  older results (history.py)
     import   the weekly registry import
+    feed     videos and posts about players, for the feed (curator.py)
 
-The background lanes (refresh, history, import) stop while a window's allowance is down to the source's
+The background lanes (refresh, history, import, feed) stop while a window's allowance is down to the source's
 reserve, which is kept for live games and fans. A scarce source gives fans a share of their own (fan: at
 most that many fan requests a window): one fan following a pro is a request, but searches or previews in
 a loop would spend what live games need, so past the share they're refused, and logged.
@@ -44,8 +45,8 @@ from .base import AdapterError
 
 log = logging.getLogger("sports_follow.budget")
 
-LANES = ("live", "fan", "refresh", "history", "import")
-BACKGROUND = ("refresh", "history", "import")
+LANES = ("live", "fan", "refresh", "history", "import", "feed")
+BACKGROUND = ("refresh", "history", "import", "feed")
 _lane: contextvars.ContextVar[str] = contextvars.ContextVar("source_lane", default="refresh")
 T = TypeVar("T")
 
@@ -348,11 +349,12 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
 
 
 def known() -> list[Budget]:
-    """Every budget a known source spends (Adapter.budgets), once each, in adapters.KNOWN's order."""
-    from . import KNOWN
+    """Every budget a known source spends (Adapter.budgets, VideoSource.budgets), once each, in adapters.KNOWN's
+    order, then adapters.VIDEOS'."""
+    from . import KNOWN, VIDEOS
 
     found: dict[str, Budget] = {}
-    for adapter in KNOWN.values():
+    for adapter in [*KNOWN.values(), *VIDEOS.values()]:
         for b in adapter.budgets():
             found.setdefault(b.name, b)
     return list(found.values())

@@ -433,6 +433,16 @@ moment: a clutch, an ace or pentakill, a team wipe, a chicken dinner. Roster mov
 sponsor's peripheral or energy drink held up in a clip is a promo. Full VOD re-uploads of a broadcast are \
 restreams; a player's own stream highlights aren't."""
 
+    # ---- the feed (curator.py): channels trusted for videos about its pros, every game's (each feed answered,
+    # 20 Oct 2026)
+
+    video_channels = (
+        "UCfeeUuW7edMxF3M_cyxGT8Q",  # Thooorin: CS2 and League interviews, history
+        "UCXbsUubmNPK8XJFbkmlMcMg",  # HLTV: CS2 interviews, news
+        "UC9k--dE_UE0Faxzgb_DDkYQ",  # BLAST Premier: CS2 interviews, features
+        "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
+        "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
+    )
 
 
 class Game(Esports):
