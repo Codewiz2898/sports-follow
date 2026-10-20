@@ -686,8 +686,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
   the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `mobile/app.config.ts` gives it to the
-  Android app, whose code reads it from Expo's config. `tests/test_app_name.py` fails if any of them
-  writes the name out itself.
+  Android app, whose code reads it from Expo's config; `mobile/babel.config.js` fills it into the shared
+  `web/src/app.ts` the app loads, as Vite does. `tests/test_app_name.py` fails if any of them writes the
+  name out itself, or if the app loads shared code that reads something only Vite fills in.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
   database and `alembic check`; the web app's type-check and build; and the Android app's type-check
