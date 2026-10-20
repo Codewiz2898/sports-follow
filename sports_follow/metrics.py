@@ -272,9 +272,9 @@ def cards(now: datetime | None = None) -> dict[str, Reading]:
 
 def _running_budgets() -> dict[str, Any]:
     """The budgets of the sources this build runs, by name."""
-    from .adapters import ADAPTERS, videos
+    from .adapters import ADAPTERS, news, videos
 
-    return {b.name: b for source in [*ADAPTERS.values(), *videos()] for b in source.budgets()}
+    return {b.name: b for source in [*ADAPTERS.values(), *videos(), *news()] for b in source.budgets()}
 
 
 def sources(now: float | None = None) -> dict[str, Reading]:

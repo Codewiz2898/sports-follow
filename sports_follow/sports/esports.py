@@ -443,6 +443,12 @@ restreams; a player's own stream highlights aren't."""
         "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
         "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
     )
+    news_feeds = {  # for every game, as the channels are: HLTV is Counter-Strike's, VLR.gg Valorant's
+        "https://www.dexerto.com/feed/category/esports/": "Dexerto",
+        "https://www.hltv.org/rss/news": "HLTV",
+        "https://www.vlr.gg/rss": "VLR.gg",
+        "https://www.ginx.tv/en/rss": "GINX TV",
+    }
 
     def search_words(self, fired: Fired) -> str | None:
         """A series won from the semi-finals on, or a lobby won ("win the lobby"), at the event: league play's wins

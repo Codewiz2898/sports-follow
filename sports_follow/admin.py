@@ -39,7 +39,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from . import accounts, controls, rank, sports
-from .adapters import ADAPTERS, ALL, KNOWN, VIDEOS, budget, videos
+from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
 
@@ -247,7 +247,27 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "running": v in feeding and sport_on,
             "budgets": [b.name for b in v.budgets()],
         })
-    every = [*KNOWN.values(), *VIDEOS.values()]
+    # And its news sources: every sport's publishers' feeds are theirs to read.
+    reading = news()
+    for system, n in NEWS.items():
+        sport_on = any(n.feed_pattern.fullmatch(f) for s in sports.ENABLED for f in s.news_feeds)
+        out.append({
+            "system": system,
+            "name": n.name,
+            "provider": n.provider.name,
+            "covers": n.covers,
+            "sport": "",
+            "sport_label": "Feed",
+            "licensed": n.provider.licensed,
+            "token": n.available(),
+            "allowed": not SOURCES or system in SOURCES,
+            "sport_on": sport_on,
+            "on": system not in off,
+            "running": n in reading and sport_on,
+            "budgets": [b.name for b in n.budgets()],
+        })
+    fetching = [*feeding, *reading]
+    every = [*KNOWN.values(), *VIDEOS.values(), *NEWS.values()]
     used = {(r["source"], r["lane"]): r for r in budget.usage(budget.known(), now)}
     budgets = []
     for b in budget.known():
@@ -255,7 +275,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
         budgets.append({
             "name": b.name,
             "sources": list(dict.fromkeys(a.name for a in every if b in a.budgets())),
-            "running": any(b in a.budgets() for a in [*running.values(), *feeding]),
+            "running": any(b in a.budgets() for a in [*running.values(), *fetching]),
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
@@ -266,7 +286,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
 
 
 def set_source(system: str, on: bool) -> None:
-    if system not in KNOWN and system not in VIDEOS:
+    if system not in KNOWN and system not in VIDEOS and system not in NEWS:
         raise LookupError(system)
     controls.turn_source(system, on)
 

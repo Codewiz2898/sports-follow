@@ -410,7 +410,8 @@ async def read_card(player_id: int) -> dict[str, Any] | None:
 
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
     return {k: card.get(k) for k in ("player_id", "slug", "status", "version", "built_at", "player", "live", "upcoming", "freshness", "error")} | {
-        "news": (card.get("news") or [])[:3],
+        # The publishers' stories the curator served (rank.cards), else the research agent's news.
+        "news": (card.get("stories") or card.get("news") or [])[:3],
         # The results the card keeps, newest first: structured.RECENT_LIMIT for a bound player, and no more
         # than that of what the agent wrote for one only it covers. Today's results rail shows them all, the
         # tiles the newest.

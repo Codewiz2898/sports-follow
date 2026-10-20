@@ -365,12 +365,12 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
 
 
 def known() -> list[Budget]:
-    """Every budget a known source spends (Adapter.budgets, VideoSource.budgets), once each, in adapters.KNOWN's
-    order, then adapters.VIDEOS'."""
-    from . import KNOWN, VIDEOS
+    """Every budget a known source spends (Adapter.budgets, VideoSource.budgets, NewsSource.budgets), once each, in
+    adapters.KNOWN's order, then adapters.VIDEOS', then adapters.NEWS'."""
+    from . import KNOWN, NEWS, VIDEOS
 
     found: dict[str, Budget] = {}
-    for adapter in [*KNOWN.values(), *VIDEOS.values()]:
+    for adapter in [*KNOWN.values(), *VIDEOS.values(), *NEWS.values()]:
         for b in adapter.budgets():
             found.setdefault(b.name, b)
     return list(found.values())
