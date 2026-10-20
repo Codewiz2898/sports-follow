@@ -25,6 +25,7 @@ REFRESH = 10  # seconds between reads of the rows, in each process
 SPORTS_OFF = "sports_off"  # [sport key, …]
 SOURCES_OFF = "sources_off"  # [adapter system, …]
 BUDGET = "budget:"  # + a budget's name: what the panel changed of it (budget.effective)
+CHANNEL_TRUST = "channel_trust"  # {video channel id: trust, 0 to 1}: the Feed's ranking (rank.trust); 0 hides it
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class Controls:
     sports_off: frozenset[str] = frozenset()
     sources_off: frozenset[str] = frozenset()
     budgets: dict[str, dict[str, Any]] = field(default_factory=dict)  # by budget name
+    channel_trust: dict[str, float] = field(default_factory=dict)  # by video channel id
 
 
 def parse(rows: dict[str, Any]) -> Controls:
@@ -41,7 +43,9 @@ def parse(rows: dict[str, Any]) -> Controls:
         return frozenset(v for v in value if isinstance(v, str)) if isinstance(value, list) else frozenset()
 
     budgets = {k[len(BUDGET):]: v for k, v in rows.items() if k.startswith(BUDGET) and isinstance(v, dict)}
-    return Controls(sports_off=names(rows.get(SPORTS_OFF)), sources_off=names(rows.get(SOURCES_OFF)), budgets=budgets)
+    trusts = rows.get(CHANNEL_TRUST)
+    trust = {k: float(v) for k, v in trusts.items() if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1} if isinstance(trusts, dict) else {}
+    return Controls(sports_off=names(rows.get(SPORTS_OFF)), sources_off=names(rows.get(SOURCES_OFF)), budgets=budgets, channel_trust=trust)
 
 
 # ---------------------------------------------------------------- where they're kept
@@ -215,4 +219,20 @@ def set_budget(name: str, change: dict[str, Any] | None) -> None:
     """What the panel changes of a budget (budget.effective says what each field means); None goes back to
     what its source declares."""
     STORE.change(f"{BUDGET}{name}", lambda _: change or None)
+    load()
+
+
+def set_channel_trust(channel: str, trust: float | None) -> None:
+    """How far the Feed trusts a video channel, 0 to 1 (0 hides its videos); None goes back to the default
+    (rank.trust: high while a running sport lists it)."""
+
+    def fn(value: Any) -> dict[str, float] | None:
+        out = dict(value) if isinstance(value, dict) else {}
+        if trust is None:
+            out.pop(channel, None)
+        else:
+            out[channel] = trust
+        return out or None
+
+    STORE.change(CHANNEL_TRUST, fn)
     load()

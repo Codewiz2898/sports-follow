@@ -419,10 +419,14 @@ class NewsPlayer(Base):
 class FeedCandidate(Base):
     """Something shared about a followed player that the feed may show (a video that names them), as the curator
     fetched it (candidates.py): one row per player and item, which goes with the player. The later stages fill
-    their own columns: the judge's verdict, then a score."""
+    their own columns: the judge's verdict, then a score and the moment it's about (rank.py)."""
 
     __tablename__ = "feed_candidates"
-    __table_args__ = (UniqueConstraint("player_id", "external_id"), Index("ix_feed_candidates_source_external", "source", "external_id"))
+    __table_args__ = (
+        UniqueConstraint("player_id", "external_id"),
+        Index("ix_feed_candidates_source_external", "source", "external_id"),
+        Index("ix_feed_candidates_unjudged", "fetched_at", postgresql_where=text("verdict IS NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
@@ -432,13 +436,18 @@ class FeedCandidate(Base):
     # What was fetched, as the source gave it: title, description, channel, published, thumbnail, and which of
     # the player's names it was kept for.
     candidate: Mapped[dict] = mapped_column(JSONB, default=dict)
-    # Numbers for ranking: views, likes, seconds, and the first and latest reads of views and likes, with when.
+    # Numbers for ranking: views, likes, seconds, and reads of views and likes with when: the first and the latest two.
     features: Mapped[dict] = mapped_column(JSONB, default=dict)
     fetched_at: Mapped[datetime] = _now()
     checked_at: Mapped[datetime] = _now()  # when the source last said it's still there and still plays here
     verdict: Mapped[dict | None] = mapped_column(JSONB)  # the judge's (L1), once it has read it
+    # The ranking's number (rank.py), from the verdict, the features and the channel's trust; NULL: never served.
     score: Mapped[float | None] = mapped_column(Float)
     judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The player's moment it's about (published within two days after it), so the Feed groups it there.
+    moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
+    # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
+    review: Mapped[str | None] = mapped_column(String(10))
 
 
 class Sidelined(Base):

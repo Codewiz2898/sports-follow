@@ -175,7 +175,7 @@ def test_judged_videos_and_posts_join_the_news_and_todays_rail_takes_the_top_one
     own = post("https://x.com/DGukesh/1", "Proud of the team", own=True)
     classic = video("https://youtu.be/c", "The 2024 title: the final moments", "Classic", days_ago=700)
     kept = {gukesh: [Candidate(analysis, moment_id=moment_id, score=0.8), Candidate(own, moment_id=moment_id), Candidate(classic, evergreen=True)]}
-    monkeypatch.setattr(feed, "judged", lambda db, ids: {i: kept[i] for i in ids if i in kept})
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
     for who in (gukesh, kohli, quiet):
         db.add(Follow(fan_id="fan", player_id=who, alert_rules={}))
         db.commit()

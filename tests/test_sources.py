@@ -71,7 +71,7 @@ def _naming() -> Callable[[str], str | None]:
     other name, as written or in lower case) names the game, not a source ("pubg", "PUBG Mobile"), unless
     it's exactly a provider's name ("PUBG")."""
     provider_names = {p.name for p, _ in providers(KNOWN)}
-    systems = re.compile(rf"\b({'|'.join(KNOWN)})\b")
+    systems = re.compile(rf"\b({'|'.join([*KNOWN, *VIDEOS])})\b")  # the feed's video sources too
     names = sorted(provider_names | {b.name for b in budget.known()}, key=len, reverse=True)  # "lichess-anonymous" first
     by_name = re.compile(rf"\b({'|'.join(map(re.escape, names))})\b", re.I)
     written = {g for a in KNOWN.values() for g in getattr(a, "games", ())}
@@ -114,6 +114,9 @@ def test_no_shared_module_names_a_source():
         # A game's names are the game's, one its provider shares too ("PUBG", sports/esports.py's GAMES).
         games = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Game"]
         skip |= {id(n) for g in games for n in ast.walk(g)}
+        # The platforms the Feed's judge knows (curate.Source, Literal["youtube", "x", …]) are where shares are, not sources.
+        platforms = [n for n in ast.walk(tree) if isinstance(n, ast.Subscript) and getattr(n.value, "id", None) == "Literal"]
+        skip |= {id(n) for p in platforms for n in ast.walk(p)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
             if isinstance(node, ast.ImportFrom) and path in shared and node.level == 1:

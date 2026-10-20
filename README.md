@@ -40,7 +40,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                                                               └─▶ PUBG API (esports: PUBG)
 
                               arq curator (sports_follow/curator.py), a queue of its own
-                                ├─ poll_channels, every 30 min: each sport's trusted channels ──▶ feed_candidates
+                                ├─ poll_channels, every 30 min: each sport's trusted channels ──▶ feed_candidates,
+                                │    then the judge reads what's new and rank.py scores it (no source, the model only)
                                 └─ check_videos, daily: stored videos not read for a week, dropped once gone
                                          │
                                        adapters/ ──▶ YouTube feeds and Data API v3 (the feed's videos)
@@ -251,10 +252,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   candidates from the sources into `feed_candidates`, L1 (the judge) keeps the ones really about the player with
   a one-line reason, and L2, at serve time in the API, takes out what this fan hid and groups the rest around
   the player's moments, then This week and Earlier, the famous ones apart. `GET /api/players/<id>/feed` reads
-  rows only, never a model or a source, and is empty rather than slow. `feed.judged` is where the pipeline
-  plugs in: until it does, a feed is the card's news, so the Feed tab (which replaced News) is never emptier
-  than News was, and "From the fans" on Overview and "From your players" on Today (`GET /api/me/feed`, a
-  followed player's top video or post, never news: the Wire has that) are absent. The "…" on a card says why
+  rows only, never a model or a source, and is empty rather than slow. `feed.judged` reads the rows the curator
+  scored (below) as videos beside the card's news: each one's score halves every three days (an evergreen one
+  keeps its own), a page holds one video from each channel and two around each moment, and older ones still
+  being watched are "the ones everyone's seen". With nothing scored, or if the rows can't be read, a feed is
+  the card's news, so the Feed tab (which replaced News) is never emptier than News was, and "From the fans"
+  on Overview and "From your players" on Today (`GET /api/me/feed`, a followed player's top video or post,
+  never news: the Wire has that) are absent. The "…" on a card says why
   it's there and takes the fan's word (`POST /api/players/<id>/feed/<item>/feedback`: not interested, not about
   the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
   account when they sign in, and goes with the player or the account. A video is YouTube's thumbnail behind a
@@ -408,8 +412,17 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   filters (embeddable, public, playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
   again for its pace, and every stored video is read again weekly and dropped once removed, private, no
-  longer embeddable or blocked in India. Whether one is any good is for the later stages (the judge's
-  `verdict`, then a `score`); the feed only reads the table and never waits on the curator. YouTube's
+  longer embeddable or blocked in India; while one is under two days old it's read again every six hours.
+  After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
+  the judge's interest, how fast it's watched between its last two reads and its like ratio, times its
+  channel's trust (high while a running sport lists it, what the admin panel's Feed tab sets, lower for each
+  of its videos fans hid or reported). A verdict that it isn't about the player, is paid for or has a risk
+  keeps the row but never serves it; the admin's approve, hide or pin stands over the judge. Each row is also
+  tied to the player's moment it was published within two days after, so the Feed groups it there. Features,
+  verdict and score are kept apart: `python -m sports_follow.curator rescore` works every score out again
+  without fetching, and `--rejudge` asks the judge again first. The admin panel's Feed tab (`/admin/feed`)
+  lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
+  sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
   never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day.
   Without the key the source is off, the admin panel says so, and nothing else changes.

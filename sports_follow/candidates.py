@@ -11,7 +11,8 @@ judge's to say, later. A video refused is remembered for a week, so it isn't ask
 among its channel's latest.
 
 A day after a video is kept, its views and likes are read again (second_reads), so its pace can be told from the
-two reads. Every stored video is read again once a week (check), and dropped once it's gone: removed, made
+two reads; the curator reads them again every few hours while it's under two days old (fresh_reads), for the
+ranking (rank.py). Every stored video is read again once a week (check), and dropped once it's gone: removed, made
 private, no longer embeddable, or no longer playing in FEED_COUNTRY.
 
 A candidate is one row per player and video, so it goes with the player (ON DELETE CASCADE).
@@ -39,6 +40,9 @@ log = logging.getLogger("sports_follow.candidates")
 
 MIN_SECONDS, MAX_SECONDS = 60, 20 * 60  # how long a kept video runs
 SECOND_READ_AFTER = timedelta(days=1)  # a kept video's views and likes are read again this long after
+# While a kept video is this young, its numbers are read again this often (fresh_reads): how fast it's watched in
+# its first two days is most of what ranks it (rank.py), and a first read minutes after it's out says little.
+FRESH_FOR, FRESH_EVERY = timedelta(hours=48), timedelta(hours=6)
 RECHECK_AFTER = timedelta(days=7)  # every stored video is read again this often, and dropped once gone
 # Seconds a refused video isn't asked about again: a week for what doesn't change, an hour for what does (a Premiere
 # not aired yet is "live", an upload still processing "private", one not yet visible "gone").
@@ -206,9 +210,11 @@ def features(facts: VideoFacts, at: datetime) -> dict[str, Any]:
 
 
 def read_again(kept: dict[str, Any], facts: VideoFacts, at: datetime) -> dict[str, Any]:
-    """A stored candidate's numbers after reading it again: the latest views and likes, and two reads, the
-    first and this one, for its pace."""
-    reads = list(kept.get("reads") or [])[:1] + [_read(facts, at)]
+    """A stored candidate's numbers after reading it again: the latest views and likes, and three reads at most,
+    the first, the one before this and this one: its pace now is between the last two (rank.growth), so an
+    old video still being watched shows as one."""
+    before = list(kept.get("reads") or [])
+    reads = before[:1] + before[1:][-1:] + [_read(facts, at)]
     return {**kept, "views": facts.views, "likes": facts.likes, "reads": reads}
 
 
@@ -417,6 +423,24 @@ def second_reads(source: VideoSource, now: datetime) -> dict[str, int]:
                                                     FeedCandidate.checked_at <= FeedCandidate.fetched_at)
             .group_by(FeedCandidate.external_id).order_by(FeedCandidate.external_id).limit(READS_PER_RUN)))
     return _again(source, ids, now)
+
+
+def fresh_reads(now: datetime | None = None) -> dict[str, int]:
+    """Read again, for each running video source, the videos kept in the last FRESH_FOR that no read has seen
+    for FRESH_EVERY: a request per 50, so a day of them costs a few units in all."""
+    now = now or datetime.now(timezone.utc)
+    totals = {"read": 0, "dropped": 0}
+    for source in videos():
+        with db.session() as session:
+            ids = list(session.scalars(
+                select(FeedCandidate.external_id).where(FeedCandidate.source == source.system, FeedCandidate.fetched_at > now - FRESH_FOR)
+                .group_by(FeedCandidate.external_id).having(func.max(FeedCandidate.checked_at) <= now - FRESH_EVERY)
+                .order_by(FeedCandidate.external_id).limit(READS_PER_RUN)))
+        counts = _again(source, ids, now)
+        totals["read"] += counts["read"]
+        totals["dropped"] += counts["dropped"]
+    metrics.feed("dropped", totals["dropped"])
+    return totals
 
 
 def check(now: datetime | None = None) -> dict[str, int]:
