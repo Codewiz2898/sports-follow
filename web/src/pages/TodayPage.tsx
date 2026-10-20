@@ -8,6 +8,7 @@ import { ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { FromYourPlayers, useShares } from '../components/Feed'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
+import { TodayCalls } from '../components/Picks'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { AlsoLive, MoreLive } from '../components/LiveNow'
@@ -222,6 +223,11 @@ export function TodayPage() {
       {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. Once the
           follow list has answered, so a game of the fan's is never counted as another. */}
       {(loaded || failed) && <MoreLive mine={games.flatMap(([, group]) => group)} />}
+
+      {/* Calling their games before they start (sports_follow/predictions.py), and how their calls went. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+        <TodayCalls refreshKey={theirKey} />
+      </ErrorBoundary>
 
       <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
         {resultCount > 0 && (

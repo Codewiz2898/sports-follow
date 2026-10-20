@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -227,6 +227,16 @@ async def read_match(ctx, system: str, game: str) -> None:
     open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
     the allowance kept for followed players' live games."""
     await in_lane('refresh', match.read, system, game)
+    await asyncio.to_thread(predictions.made, system, game)  # the questions its board asks, if it's to come
+
+
+async def prepare_questions(ctx) -> None:
+    """The questions of fans' games coming up within a day, made ahead from a read of each (predictions.prepare):
+    every ten minutes, so a fan can call a game, and be asked to, before its poller arms it."""
+    if await _missed(ctx, "prepare_questions"):
+        return
+    for system, game in await asyncio.to_thread(predictions.prepare):
+        await ctx["redis"].enqueue_job("read_match", system, game, _job_id=f"read_match:{system}:{game}")
 
 
 async def read_league(ctx, system: str) -> None:
@@ -391,6 +401,7 @@ class WorkerSettings:
         # Before Europe's matchdays get going, and after most of the day's news is in.
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
+        cron(_logged(prepare_questions, quiet=True), minute=set(range(4, 60, 10)), second=20, run_at_startup=True, timeout=300),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

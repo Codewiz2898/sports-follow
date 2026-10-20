@@ -176,6 +176,24 @@ def follow(db: Session, fan: str, system: str, fixture: str) -> int:
     return event.id
 
 
+def event_for(db: Session, system: str, fixture: str) -> Event | None:
+    """The event a game at an address is polled by (a pick waiting on it, predictions.pick): one of its events here
+    a running source polls, else one made from what its source last said of it, as a follow makes it; None for a
+    game no source has named here, or that no running source can poll."""
+    from . import match
+
+    source = KNOWN.get(system)
+    if source is None or not match.ID.fullmatch(fixture):
+        return None
+    known = match.find(db, system, fixture)
+    sport = known.sport(source)
+    binding = poller(system, fixture, known.events)
+    if binding is None or not known.named(source) or not sports.on(sport):
+        return None
+    polled = [e for e in known.events if (e.live_binding or {}).get("adapter") == binding["adapter"]]
+    return polled[0] if polled else _event(db, system, fixture, known, sport, binding)
+
+
 def _event(db: Session, system: str, fixture: str, known: Said, sport: str, binding: dict[str, Any]) -> Event:
     """The game's event, from what its source last said of it, polled by its source's locator: as a followed
     player's fixture would make it (structured.upsert_event), whose refresh may later fill it in."""

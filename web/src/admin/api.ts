@@ -64,6 +64,8 @@ export interface LinearStatus {
 }
 
 export interface Overview { accounts: number; active_week: number; blocked: number; anonymous: number; devices: number }
+/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call another game day. */
+export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
 export interface AccountRow {
   id: number
   email: string
@@ -154,7 +156,7 @@ export const admin = {
   channelTrust: (channel: string, trust: number | null) =>
     request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
   users: (q: string, offset = 0) =>
-    request<{ overview: Overview; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
+    request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),
   signOut: (id: number) => request<{ signed_out: number }>(at(`users/${id}/signout`), { method: 'POST' }),
   block: (id: number, blocked: boolean) => request<{ blocked: boolean; signed_out: number }>(at(`users/${id}/block`), json('PUT', { blocked })),

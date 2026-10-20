@@ -56,6 +56,7 @@ SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
 TAKEN = frozenset({
     "api", "admin", "assets", "icons", "welcome", "following", "live", "match", "search", "player", "team", "athlete", "notifications", "credits", "account",
     "privacy", "go",  # BHA-239's short links
+    "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
 })
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in
 ZONE_LABEL = "IST"

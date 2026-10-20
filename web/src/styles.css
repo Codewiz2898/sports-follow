@@ -716,3 +716,51 @@ div.result-main { cursor: default; }
 .feed-share .line.said { font-style: italic; font-weight: 600; }
 .feed-share .from { font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--on-sport-soft); }
 .feed-share-play { position: absolute; right: 12px; top: 12px; width: 36px; height: 36px; border-radius: 50%; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; }
+
+/* ---------------------------------------------------------------- calling games (components/Picks.tsx, pages/Leagues.tsx)
+   A question's answers are tiles; the fan's pick wears its sport's colour, as everything that's theirs does. The
+   split is a bar: theirs in the colour, the rest in greys. Today's are ink cards, as games to come are. */
+.pick-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: var(--radius-card); background: var(--surface); }
+.pick-q { font-size: 34px; }
+.pick-q-small { font-size: 22px; }
+.pick-options { display: grid; gap: 8px; }
+.pick-option { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 64px; padding: 8px 6px; border: 0; border-radius: 16px; background: var(--bg); box-shadow: inset 0 0 0 2px var(--line); color: var(--text); text-align: center; cursor: pointer; }
+.pick-option:hover:not(:disabled) { box-shadow: inset 0 0 0 2px var(--text); }
+.pick-option[aria-pressed='true'] { background: var(--sport); color: var(--on-sport); box-shadow: none; }
+.pick-option:disabled { cursor: default; }
+.pick-option:disabled:not([aria-pressed='true']) { color: var(--muted); }
+.pick-label { font-family: var(--display); font-weight: 400; font-size: 18px; line-height: 1; text-transform: uppercase; overflow-wrap: anywhere; }
+.split { display: flex; gap: 3px; height: 10px; }
+.split-seg { flex-basis: 0; border-radius: 999px; background: #8e8f93; }
+.split-seg.even { background: #c9c9c2; }
+.split-seg.mine { background: var(--sport); }
+.split.on-ink .split-seg { background: #55575c; }
+.split.on-ink .split-seg.mine { background: var(--sport-on-ink); }
+.pick-card.compact { width: 264px; padding: 14px 16px; background: var(--text); color: var(--bg); --focus: var(--bg); }
+.pick-card.compact .muted { color: #a9abb0; }
+.pick-card.compact .pick-option { min-height: 44px; background: transparent; color: var(--bg); box-shadow: inset 0 0 0 2px #8e8f93; }
+.pick-card.compact .pick-option[aria-pressed='true'] { background: var(--sport); color: var(--on-sport); box-shadow: none; }
+.pick-card.compact .pick-option:disabled:not([aria-pressed='true']) { color: #a9abb0; }
+.pick-card.compact .pick-label { font-size: 15px; }
+.pick-card.settled .tag { align-self: flex-start; }
+.pick-card.settled.right { background: var(--sport); color: var(--on-sport); --focus: var(--on-sport); }
+.pick-head { font-size: 30px; }
+.pick-card.settled.right .pick-head { font-size: 40px; }
+.pick-points { font-size: 44px; }
+.btn.on-sport { align-self: flex-start; border-color: var(--on-sport); background: var(--on-sport); color: var(--sport); }
+.btn.on-ink { border-color: var(--bg); color: var(--bg); }
+.btn.on-ink:hover { background: rgba(243, 243, 239, 0.12); }
+.btn.on-ink.primary { background: var(--bg); color: var(--text); }
+.league-band { display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--text); color: var(--bg); --focus: var(--bg); }
+.league-band .muted { color: #a9abb0; }
+.league-name { font-size: 52px; overflow-wrap: anywhere; }
+.invite-box { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 18px; background: #262626; }
+.league-table { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.league-table li { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px; border-radius: 16px; }
+.league-table li.you { background: var(--text); color: var(--bg); }
+.league-table li.you .muted { color: #a9abb0; }
+.league-table .num { font-size: 26px; }
+.friends { display: flex; flex-wrap: wrap; gap: 6px; }
+.friend { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--bg); font-size: 12px; font-weight: 800; }
+.pick-slot { width: 264px; }
+.pick-slot > .pick-card { height: 100%; }

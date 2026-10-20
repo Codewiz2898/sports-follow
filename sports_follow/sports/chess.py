@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
+from .base import Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
+
+DRAW = "draw"  # a game's question's third answer, beside its two players' ids
+RESULTS = {"1-0": "white", "0-1": "black", "½-½": DRAW}  # a board's result: whose id answers it
 
 TITLES = {
     "Grandmaster": "GM", "International Master": "IM", "FIDE Master": "FM", "Candidate Master": "CM",
@@ -236,6 +239,33 @@ class Chess(Sport):
     def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
         """A win, off a finished game's line, as high() words its result's moment (whose title is the line)."""
         return _won(line.get("headline") or "", 80)  # a result's priority (moments.PRIORITY)
+
+    # ---- predictions (predictions.py): the game's result, called before the first move
+
+    predicts = True
+
+    def board(self, state: dict[str, Any]) -> str:
+        """The game's id at its source: each player's fixture shows the same board, and asks one question."""
+        return str(state.get("game_id") or "")
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A
+        knockout round's mini-match (several games on one board) asks nothing: each of its games shows only once
+        the one before is over, too late to call."""
+        white, black = state.get("white") or {}, state.get("black") or {}
+        if state.get("match") or not (state.get("game_id") and white.get("id") and black.get("id") and white.get("name") and black.get("name")):
+            return []
+        return [Ask("result", "Who wins?", ((str(white["id"]), white["name"]), (DRAW, "Draw"), (str(black["id"]), black["name"])))]
+
+    def closed(self, ask: str, status: str | None, state: dict[str, Any]) -> bool:
+        return status in ("live", "final") or bool(state.get("result"))
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """The winner's FIDE id, or a draw, from the board's result."""
+        side = RESULTS.get(state.get("result") or "")
+        if side is None:
+            return None
+        return DRAW if side == DRAW else str((state.get(side) or {}).get("id") or "") or None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         scored = [p for p in (_points(r.get("result", "")) for r in items) if p]

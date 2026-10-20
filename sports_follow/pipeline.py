@@ -22,12 +22,12 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, matches, metrics, moments, notify, photos, shutdown, sports, structured, wiki
+from . import bus, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -1039,6 +1039,8 @@ def due_work(now: datetime | None = None) -> Due:
         # of a player their fan follows, where the game's here as several.
         matches.lapse(db, now)
         matches.settle(db)
+        # Questions whose game's start has come close, and those its game never answered (predictions.py).
+        predictions.sweep(db, now)
         # Followed teams' games, read again as often as a followed player's (teams.py): their events, linked to
         # them, are polled below as games followed by themselves are.
         due.teams = teams.due(db, now)
@@ -1101,7 +1103,9 @@ def due_work(now: datetime | None = None) -> Due:
         # players' games keep the reserve. A follow of a game here as two events (a chess board) moves first to
         # the one a player its fan follows is in (matches.settle).
         theirs = {event_id for event_id, _, _ in armed}
-        itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(matches.watched()))).all()
+        # And games a pick waits on (predictions.py), as games followed by themselves.
+        watched = or_(Event.id.in_(matches.watched()), Event.id.in_(predictions.watched()))
+        itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), watched)).all()
         for event_id, live_binding, sport in itself:
             source = (live_binding or {}).get("adapter")
             if not sports.on(sport) or source not in running:
