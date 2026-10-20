@@ -320,7 +320,8 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
 
 def rescore(now: datetime | None = None, channel: str | None = None, row: int | None = None) -> dict[str, int]:
     """Work out every judged row's moment and score again from what's stored (just one channel's rows, or one
-    row, given either), and write the ones that changed. No source, no model: cheap enough to run after every poll."""
+    row, given either), and write the ones that changed. A row a moment's search found keeps that moment while it
+    stands. No source, no model: cheap enough to run after every poll."""
     now = now or datetime.now(timezone.utc)
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
@@ -340,7 +341,10 @@ def rescore(now: datetime | None = None, channel: str | None = None, row: int | 
         changes, served = [], 0
         for r in rows:
             at = published[r.id]
-            moment = moment_for(at, moments.get(r.player_id, []))
+            theirs = moments.get(r.player_id, [])
+            searched = (r.candidate or {}).get("searched_for")
+            # Found by a search for a moment: that moment, while it stands, over the biggest one near (searches.py).
+            moment = searched if any(h.id == searched for h in theirs) else moment_for(at, theirs)
             cid = str((r.candidate or {}).get("channel_id") or "")
             how_far = trust(cid, listed, set_by_admin, weights.get(cid, 0.0))
             value: float | None = None

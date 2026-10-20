@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Glance, Line, Poster, Seen, Sport, crossed, num, number, stat, values
+from .base import Fired, Found, Glance, Line, Poster, Seen, Sport, crossed, num, number, stat, values, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -155,6 +155,14 @@ announces it is rumour. Full-game uploads are restreams."""
         "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
         "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """40 points or more, or a triple-double, in the game."""
+        if fired.kind == "points" and number(fired.detail) >= 40:
+            return words(f"{number(fired.detail)} points", fired.game)
+        if fired.kind == "triple":
+            return words("triple-double", fired.game)
+        return None
 
 
 SPORT = Basketball()

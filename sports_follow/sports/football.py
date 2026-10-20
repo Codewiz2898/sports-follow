@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Fact, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
+from .base import Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -476,6 +476,13 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
         "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A goal, a brace or a hat-trick (the player's goals in the game so far), in the game: "brace Liverpool vs
+        Everton". A later goal in the same game takes over its search before that runs (searches.py)."""
+        if fired.kind != "goal":
+            return None
+        return words({1: "goal", 2: "brace"}.get(fired.count, "hat-trick"), fired.game)
 
 
 SPORT = Football()

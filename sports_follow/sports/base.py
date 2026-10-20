@@ -69,6 +69,23 @@ class Found:
     about: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Fired:
+    """A player's moment as the feed's moment search reads it (searches.py, Sport.search_words): the moment as it
+    was stored, how many of its kind the player has in this game so far (this one too: a second goal is 2), and
+    the game it was in, as its fixture names it."""
+
+    kind: str
+    detail: str
+    title: str
+    body: str
+    priority: int
+    count: int = 1
+    game: str = ""  # the game's title: "India vs England"
+    competition: str = ""
+    venue: str = ""
+
+
 # The statuses of a game not under way yet.
 PRE_MATCH = ("scheduled", "armed", "postponed")
 EVERYONE = ("*",)
@@ -195,6 +212,16 @@ def stat(line: dict[str, Any] | None, label: str) -> str | None:
 def number(value: str | None) -> int:
     match = re.match(r"\s*(\d+)", value or "")
     return int(match.group(1)) if match else 0
+
+
+def words(*parts: str | None) -> str:
+    """The parts that say something, in one line: a moment search's words (Sport.search_words)."""
+    return " ".join(p.strip() for p in parts if p and p.strip())
+
+
+def ground(venue: str | None) -> str:
+    """A venue as a search names it: "Lord's", not "Lord's, London"."""
+    return (venue or "").split(",")[0].strip()
 
 
 def crossed(before: int, now: int, marks: tuple[int, ...]) -> list[int]:
@@ -596,3 +623,10 @@ class Sport:
     # channel's new uploads that name a followed player of the sport are kept for the feed; a sport that's off
     # has none read. Every id is a real one that answers (README.md, "Adding or removing").
     video_channels: tuple[str, ...] = ()
+
+    def search_words(self, fired: Fired) -> str | None:
+        """Words that, after the player's name, find fans' videos of this moment on a video source's search: "hundred
+        Lord's", "brace Liverpool vs Everton", "wins game 4". None for a moment not worth a search (most aren't:
+        each one is a hundredth of a day's quota). The feed searches once a few hours after the moment, and again
+        a day later (searches.py)."""
+        return None
