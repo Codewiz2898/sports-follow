@@ -16,6 +16,9 @@ declare class StannNotifications extends NativeModule<Events> {
   configure(api: string): void
   /** The FCM token the app registered with the API (null once it's off), for a button that names this phone. */
   registered(token: string | null): void
+  /** Whether the notifications wear each sport's colour (the default) or all the app's ink, on this phone. */
+  sportColours(): boolean
+  setSportColours(on: boolean): void
   /** Whether live cards show, on this phone. */
   liveCards(): boolean
   setLiveCards(on: boolean): void

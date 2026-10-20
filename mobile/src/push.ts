@@ -189,7 +189,8 @@ function useExpoTaps(): void {
 }
 
 /** Notifications on this phone for Alerts' Settings and a campaign page, as the web's usePush: on or off,
- * quiet hours, a test; and the app's own, live cards on or off (null where the app can't draw them). */
+ * quiet hours, a test; and the app's own, live cards on or off and sport colours or one (null where the app can't
+ * draw them). */
 export function usePush() {
   const { epoch } = useAccount()
   const [why, setWhy] = useState<string | null>(null)
@@ -198,6 +199,7 @@ export function usePush() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [live, setLive] = useState(() => StannNotifications?.liveCards() ?? false)
+  const [colours, setColours] = useState(() => StannNotifications?.sportColours() ?? true)
 
   const load = useCallback(async () => {
     const [reason, permission, token, off, saved] = await Promise.all([
@@ -269,5 +271,12 @@ export function usePush() {
     if (on && token) await register(token, null)
   })()
 
-  return { unavailable: why, on, quiet, busy, message, enable, disable, saveQuiet, test, live: StannNotifications ? live : null, saveLive }
+  // Each sport's colour, or all the app's ink, this phone's alone: the app draws its notifications by it from the next.
+  const saveColours = (next: boolean) => {
+    StannNotifications?.setSportColours(next)
+    setColours(next)
+  }
+
+  return { unavailable: why, on, quiet, busy, message, enable, disable, saveQuiet, test, live: StannNotifications ? live : null, saveLive,
+    colours: StannNotifications ? colours : null, saveColours }
 }

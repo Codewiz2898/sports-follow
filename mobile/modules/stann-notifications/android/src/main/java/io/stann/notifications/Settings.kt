@@ -3,7 +3,8 @@ package io.stann.notifications
 import android.content.Context
 
 /** What the notifications keep on the phone, for when the app isn't running: where the API is and the FCM token
- *  the app registered with it (for a button that calls it), whether live cards are on, and the games whose live
+ *  the app registered with it (for a button that calls it), whether they wear each sport's colour or all one,
+ *  whether live cards are on, and the games whose live
  *  card the fan stopped. The server is told both (src/push.ts, ActionReceiver) and sends no card the phone would
  *  throw away; these catch any that come. */
 internal object Settings {
@@ -19,6 +20,11 @@ internal object Settings {
   fun token(c: Context): String? = prefs(c).getString("token", null)
 
   fun setToken(c: Context, token: String?) = prefs(c).edit().putString("token", token).apply()
+
+  /** Each sport's colour (the default), or all in the app's ink: quieter beside other apps' notifications. */
+  fun sportColours(c: Context): Boolean = prefs(c).getBoolean("colours", true)
+
+  fun setSportColours(c: Context, on: Boolean) = prefs(c).edit().putBoolean("colours", on).apply()
 
   fun liveCards(c: Context): Boolean = prefs(c).getBoolean("live", true)
 

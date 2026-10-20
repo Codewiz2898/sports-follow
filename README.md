@@ -660,7 +660,8 @@ game, replaced as its moments come; sound only for a key moment outside quiet ho
 them itself with FCM's HTTP v1 API (`sports_follow/fcm.py`), with no Expo push service in between, as data
 the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9):
 
-- **A moment** is a scorecard in its sport's colour: collapsed, the moment's word ("Goal", "Hundred") and its
+- **A moment** is a scorecard in its sport's colour (or every sport's in the app's ink, with Sport colours off in
+  Alerts' Settings: quieter beside other apps' notifications; the phone's choice, which the server never hears): collapsed, the moment's word ("Goal", "Hundred") and its
   line; opened, the block with the live tag, the player's photo, the word large, the game's board (its sport's
   `glance`) and the game's earlier moments, with Match page and Mute this game.
 - **A live card** for each game the fan follows while it's on (`sports_follow/livecards.py`): its board, how far
