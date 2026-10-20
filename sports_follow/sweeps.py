@@ -1,7 +1,8 @@
 """The feed's sweeps (BHA-336): searches for videos about a followed player that no moment asked for. A trusted
 channel's feed holds only its latest fifteen uploads (candidates.py), and a moment's search needs a big moment our
 sources fire (searches.py), so a player who's had neither this week has nothing to watch. Two searches find them
-some, from any channel, on the video sources that can search (searches.searching), once a day (curator.sweep):
+some, from any channel, on the video sources that can search (searches.searching), once a day (curator.sweep; a
+second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week
   (feedstats.covered), searched for by their name and their sport's words (Sport.video_words), for videos of the
@@ -9,7 +10,8 @@ some, from any channel, on the video sources that can search (searches.searching
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
 - The famous sweep: each followed player's most watched videos ever, with no date limit, for "The ones everyone's
   seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
-  more than a seventh of them a day: the players due are spread over the week, the most followed first.
+  more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
+  first), the most followed of those. When the cap binds it gets round everyone before anyone's swept again.
 
 What either finds goes the way a moment search's does: kept where it names the player and passes the hard filters
 (candidates.keep), unless it's stored for them already (counted as already_stored: units spent for nothing), then
@@ -46,7 +48,9 @@ GAP_DAYS = timedelta(days=14)  # a gap search looks for videos published this re
 GAP_EVERY = timedelta(hours=20)  # a player's gap search runs once a day: the sweep is daily, and may run a little early
 GAP_BACKOFF = timedelta(days=3)  # after a gap search that kept nothing, the player's next waits this long
 FAMOUS_EVERY = timedelta(days=30)  # a player's most watched videos are searched for again no sooner than this
-DAY, WEEK = timedelta(hours=24), timedelta(days=7)  # the caps' windows, rolling
+# The caps' windows, rolling, an hour short: a daily run that starts a moment earlier than yesterday's doesn't count
+# yesterday's against today's cap.
+DAY, WEEK = timedelta(hours=23), timedelta(days=7) - timedelta(hours=1)
 KEEP_FOR = timedelta(days=60)  # a sweep's row goes after this: the famous sweep looks back FAMOUS_EVERY
 KEEP_SHARE = 0.5  # sweeps stop while less than this share of a source's tightest window is left
 _EVER = datetime.min.replace(tzinfo=timezone.utc)  # never swept: first among the equally followed
@@ -82,6 +86,11 @@ def _ranked(players: list[candidates.Followed], followers: dict[int, int], last:
     return sorted(players, key=lambda p: (-followers.get(p.player_id, 0), last.get(p.player_id, _EVER), p.player_id))
 
 
+def _rotated(players: list[candidates.Followed], followers: dict[int, int], last: dict[int, datetime]) -> list[candidates.Followed]:
+    """The longest since their last sweep first (never, first); of those swept alike, the most followed."""
+    return sorted(players, key=lambda p: (last.get(p.player_id, _EVER), -followers.get(p.player_id, 0), p.player_id))
+
+
 def _since(session: Session, stream: str, since: datetime) -> int:
     return session.scalar(select(func.count()).where(FeedSweep.stream == stream, FeedSweep.ran_at > since)) or 0
 
@@ -112,7 +121,7 @@ def famous_due(session: Session, players: list[candidates.Followed], followers: 
     last: dict[int, datetime] = {pid: at for pid, at in session.execute(select(FeedSweep.player_id, func.max(FeedSweep.ran_at))
                                                                        .where(FeedSweep.stream == FAMOUS).group_by(FeedSweep.player_id))}  # fmt: skip
     due = [p for p in players if p.player_id not in last or last[p.player_id] <= now - FAMOUS_EVERY]
-    return _ranked(due, followers, last)[:left]
+    return _rotated(due, followers, last)[:left]
 
 
 def query(player: candidates.Followed) -> str:

@@ -85,4 +85,4 @@ def test_the_daily_sweep_runs_in_the_feed_lane_then_ranks_what_it_kept(monkeypat
     monkeypatch.setattr(bus, "release", lambda name, token=None: None)
     asyncio.run(curator.sweep({}))
     assert did == [("sweep", "feed"), ("rank", "feed")]
-    assert next(j for j in curator.CuratorSettings.cron_jobs if j.name == "cron:sweep").hour == 8
+    assert next(j for j in curator.CuratorSettings.cron_jobs if j.name == "cron:sweep").hour == {8, 20}

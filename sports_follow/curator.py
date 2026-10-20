@@ -156,7 +156,9 @@ async def check_videos(ctx) -> None:
 
 async def sweep(ctx) -> None:
     """Daily, just after YouTube's quota day starts: a search for each followed player with nothing to watch this
-    week, and the famous sweep's share of the week (sweeps.py); then what's new is judged and everything ranked."""
+    week, and the famous sweep's share of the week (sweeps.py); then what's new is judged and everything ranked.
+    It runs again in the evening, which does only what a missed morning run (a deploy, a restart) didn't: the caps
+    and each player's once a day hold the rest."""
     if await _missed(ctx, "feed_sweep"):
         return
     done = await in_lane("feed", _locked("feed-sweep", lambda: {f"sweep {k}": v for k, v in sweeps.run().items() if v} | rank_new()))
@@ -179,7 +181,7 @@ class CuratorSettings:
         cron(_logged(check_videos), hour=3, minute=50, second=0, timeout=3600),
         cron(_logged(prune_news), weekday=0, hour=4, minute=20, second=0, timeout=3600),
         # YouTube's day starts at midnight Pacific: 07:00 or 08:00 UTC.
-        cron(_logged(sweep), hour=8, minute=15, second=0, timeout=POLL_LOCK),
+        cron(_logged(sweep), hour={8, 20}, minute=15, second=0, timeout=POLL_LOCK),
     ]
     queue_name = QUEUE
     timezone = timezone.utc
@@ -251,8 +253,11 @@ def _sweeps(run: bool) -> int:
 
     if run:
         with budget.in_lane("feed"):
-            done = sweeps.run() | rank_new()
-        print(", ".join(f"{v} {k}" for k, v in done.items() if v) or "nothing to search for (no key, caps spent, or every player covered)")
+            done = _locked("feed-sweep", lambda: sweeps.run() | rank_new())()  # not beside the cron's: both would spend the caps
+        if done is None:
+            print("a sweep is running elsewhere; try again when it's done")
+        else:
+            print(", ".join(f"{v} {k}" for k, v in done.items() if v) or "nothing to search for (no key, caps spent, or every player covered)")
     with db.session() as session:
         rows = sweeps.report(session, datetime.now(timezone.utc) - timedelta(days=7))
     print(f"{'ran (UTC)':<17}{'stream':<8}{'found':>6}{'kept':>6}{'served':>8}  query")

@@ -216,3 +216,24 @@ def test_each_sweep_says_what_it_found_kept_and_serves(world, monkeypatch):
         s.execute(update(FeedCandidate).where(FeedCandidate.external_id == "iyerknock01").values(score=0.4))
         [row] = sweeps.report(s, NOW - DAY)
     assert row == {"player": "Shreyas Iyer", "stream": "gap", "query": "Shreyas Iyer cricket", "ran_at": NOW, "found": 2, "kept": 2, "served": 1}
+
+
+def test_a_daily_run_a_moment_earlier_than_yesterdays_still_has_its_caps(world, monkeypatch):
+    only(monkeypatch, gap=1, famous=7)  # one gap search and one famous a day
+    player("Alpha One", followers=2)
+    player("Bravo Two")
+    sweeps.run(NOW)
+    early = NOW + timedelta(days=1) - timedelta(seconds=1)
+    done = sweeps.run(early)
+    assert (done["gap searched"], done["famous searched"]) == (1, 1)
+    assert [(q, s) for _, s, q, *_ in swept()] == [("Alpha One cricket", "gap"), ("Alpha One cricket", "famous"),
+                                                    ("Bravo Two cricket", "gap"), ("Bravo Two cricket", "famous")]  # fmt: skip
+
+
+def test_when_the_famous_cap_binds_everyone_is_swept_before_anyone_again(world, monkeypatch):
+    only(monkeypatch, gap=0, famous=7)  # one a day
+    monkeypatch.setattr(sweeps, "FAMOUS_EVERY", timedelta(days=2))
+    a, b, c = player("Alpha One", followers=5), player("Bravo Two", followers=3), player("Charlie Three", followers=1)
+    for day in range(4):
+        sweeps.run(NOW + day * DAY)
+    assert [p for p, *_ in swept()] == [a, b, c, a]  # Charlie before Alpha's second, though Alpha's the most followed
