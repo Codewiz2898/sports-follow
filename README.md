@@ -410,9 +410,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the `feed` lane. Every half hour (`sports_follow/candidates.py`) it reads the latest uploads of every
   channel a running sport trusts (`Sport.video_channels`) from each channel's public feed, which costs no
   quota (when a feed doesn't answer, as YouTube's often don't for a while, the channel's uploads playlist
-  costs 1 unit); keeps those whose title or description names a followed player of that sport (their full
-  name or a hashtag of it, a nickname fans typed, or their surname when no other followed player of the
-  sport has it); asks YouTube about the new ones, 1 unit for every 50; and keeps those that pass the hard
+  costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
+  characters at most: not the related-video or podcast links under it) names a followed player of that sport
+  (their full name or a hashtag of it, a nickname fans typed, or their surname when no other followed player
+  of the sport has it); asks YouTube about the new ones, 1 unit for every 50, which also says whether the
+  maker declared paid promotion in it; and keeps those that pass the hard
   filters (embeddable, public, playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
   again for its pace, and every stored video is read again weekly and dropped once removed, private, no
@@ -420,8 +422,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how fast it's watched between its last two reads and its like ratio, times its
   channel's trust (high while a running sport lists it, what the admin panel's Feed tab sets, lower for each
-  of its videos fans hid or reported). A verdict that it isn't about the player, is paid for or has a risk
-  keeps the row but never serves it; the admin's approve, hide or pin stands over the judge. Each row is also
+  of its videos fans hid or reported). Only a share about the player is served: a verdict that it only
+  mentions them, isn't about them, is paid for or has a risk keeps the row but never serves it; the admin's approve, hide or pin stands over the judge. Each row is also
   tied to the player's moment it was published within two days after, so the Feed groups it there. Features,
   verdict and score are kept apart: `python -m sports_follow.curator rescore` works every score out again
   without fetching, and `--rejudge` asks the judge again first. The admin panel's Feed tab (`/admin/feed`)
@@ -562,16 +564,18 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   match moment, a milestone, an interview or analysis, news, a rumour, a promo…), how interesting it is (0 to 1),
   its risks (betting, misinformation, deepfake, abuse, restream), whether it's sponsored, and one line a fan reads
   under "Why this is here". Rules decide alone when they're sure: a paid-partnership flag, an ad hashtag or a
-  discount code is a sponsored promo; a betting or fantasy brand (not one in the player's own team name) is ruled
+  discount code (or YouTube's "Includes paid promotion") is a sponsored promo; a betting or fantasy brand (not one in the player's own team name) is ruled
   out; a video that can't play here, or a full-length one from a channel nobody vouches for, is a restream. They
-  also settle that a post from one of the player's own handles is theirs. Everything else goes to a small model
+  also settle that a post from one of the player's own handles is theirs, and that nothing else is. Everything else goes to a small model
   through the gateway (`SPORTS_FOLLOW_CURATE_MODEL`), with the sport's `content_hints`, and what the rules settled
   stands over what it says. The judge is a pure function, with no database and no fetching, and `judge_many`
   runs the model's calls side by side; a candidate the model can't judge now (or with `SPORTS_FOLLOW_CURATE_AI=0`)
   is left unjudged, to try again. To tune it, label candidates by hand and run
   `python -m sports_follow.curate candidates.jsonl --labels labels.jsonl`: it prints the verdicts as JSONL and how
   often each field agrees with the labels, then each disagreement (`--rules-only` makes no model calls).
-  `tests/fixtures/curate_*.jsonl` are 32 made-up ones across cricket, chess and esports.
+  `tests/fixtures/curate_*.jsonl` are 41 made-up ones across cricket, football, chess and esports, among them a
+  channel's own boilerplate (subscribe and membership calls, socials, its own merch, academy, app or podcast, a
+  sponsor's link under a video about something else), which isn't sponsorship, beside real sponsorship.
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
