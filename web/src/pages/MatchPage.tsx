@@ -274,7 +274,10 @@ export function MatchPage() {
 
       {view?.Match && (
         <ErrorBoundary fallback={<BlockError />} resetKey={match.page}>
-          <view.Match page={match.page as never} live={live} />
+          {/* In the sport's colours, as the board is (its marks and the fan's players). */}
+          <div data-sport={key} style={{ display: 'contents' }}>
+            <view.Match page={match.page as never} live={live} yours={yours.map((p) => p.name)} />
+          </div>
         </ErrorBoundary>
       )}
       {events.length > 0 && (

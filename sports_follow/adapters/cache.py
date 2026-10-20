@@ -146,9 +146,11 @@ class Cache:
         self._flights: dict[str, list[Any]] = {}  # key -> [its lock, threads holding or waiting for it]
         _caches.add(self)
 
-    def read(self, key: str, ttl: float, fetch: Callable[[], T]) -> T:
+    def read(self, key: str, ttl: float, fetch: Callable[[], T], keep: float = 0) -> T:
         """The document for key: a copy younger than ttl seconds, from this process or Redis, else fetch().
-        A failed fetch keeps nothing. With ttl 0 (or less), fetched every time and never kept."""
+        A failed fetch keeps nothing. With ttl 0 (or less), fetched every time and never kept. What's fetched
+        stays in Redis for keep seconds where that's longer than ttl: for a caller whose next read may take a
+        longer ttl (OpenDota's match, asked again every few minutes till it's parsed, then never)."""
         if ttl <= 0:
             return fetch()
         hit = self._local(key, ttl)
@@ -166,7 +168,7 @@ class Cache:
                 data = fetch()
             finally:
                 stack.pop()
-            self._keep(key, sent[0], data, ttl)
+            self._keep(key, sent[0], data, max(ttl, keep))
             return data
 
     def peek(self, key: str, ttl: float) -> Any:
