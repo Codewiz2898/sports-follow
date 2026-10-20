@@ -40,7 +40,11 @@ log = logging.getLogger("sports_follow.candidates")
 MIN_SECONDS, MAX_SECONDS = 60, 20 * 60  # how long a kept video runs
 SECOND_READ_AFTER = timedelta(days=1)  # a kept video's views and likes are read again this long after
 RECHECK_AFTER = timedelta(days=7)  # every stored video is read again this often, and dropped once gone
-REFUSED_FOR = 7 * 86400  # seconds a refused video isn't asked about again
+# Seconds a refused video isn't asked about again: a week for what doesn't change, an hour for what does (a Premiere
+# not aired yet is "live", an upload still processing "private", one not yet visible "gone").
+REFUSED_FOR = {"length": 7 * 86400, "not embeddable": 7 * 86400, "blocked": 7 * 86400}
+REFUSED_AWHILE = 3600
+STALE_AFTER = timedelta(days=30)  # a row no check has read for this long goes, whatever its source's state
 READS_PER_RUN = 2000  # the most stored videos one run reads again: 40 requests
 SHORT_NAME = 4  # a one-word name (a surname, a nickname) shorter than this never names anyone by itself
 _POSSESSIVE = re.compile(r"['’`]s\b", re.I)  # "Kohli's": the name, not "kohlis" (naming.words drops apostrophes)
@@ -88,7 +92,8 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
 
     - every name of two words or more, in each of its plain spellings, and run together as a hashtag writes it
       ("virat kohli", "#viratkohli");
-    - their own name when it's one word (a handle, "TenZ"; a mononym, "Neymar") of three letters or more;
+    - their own name when it's one word (a handle, "TenZ"; a mononym, "Neymar") of three letters or more, that no
+      other of these players has in any of their names;
     - a one-word nickname, and the last word of their name ("Bumrah"), when it's at least SHORT_NAME letters and
       no other of these players has that word in any of their names (two Sharmas followed: "Sharma" names neither).
     """
@@ -111,7 +116,7 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
                     found.add(tuple(spelling))
                     if len(spelling) <= 3:
                         found.add(("".join(spelling),))
-                elif len(spelling) == 1 and ((name == p.name and len(spelling[0]) >= 3) or theirs(spelling[0], p.player_id)):
+                elif len(spelling) == 1 and ((name == p.name and len(spelling[0]) >= 3 and owners.get(spelling[0]) == {p.player_id}) or theirs(spelling[0], p.player_id)):
                     found.add(tuple(spelling))
         for spelling in naming.spellings(p.name):
             if len(spelling) >= 2 and theirs(spelling[-1], p.player_id):
@@ -125,13 +130,28 @@ def _holds(words: list[str], phrase: tuple[str, ...]) -> bool:
     return any(tuple(words[i:i + n]) == phrase for i, w in enumerate(words) if w == phrase[0])
 
 
-def named(upload: Upload, names: Iterable[tuple[str, ...]]) -> tuple[str, str] | None:
-    """The name (its words) a video's title, else its description, names a player by, and where: ("virat
-    kohli", "title"); None if neither does. The longest name found wins."""
-    ordered = sorted(names, key=lambda p: (-len(p), p))
+Texts = list[tuple[str, list[str], set[str]]]
+
+
+def texts(upload: Upload) -> Texts:
+    """A video's title and description as words, each once: (where, its words, the set of them)."""
+    out = []
     for where, text in (("title", upload.title), ("description", upload.description)):
         words = naming.words(_POSSESSIVE.sub("", text))
-        present = set(words)
+        out.append((where, words, set(words)))
+    return out
+
+
+def _longest_first(names: Iterable[tuple[str, ...]]) -> list[tuple[str, ...]]:
+    return sorted(names, key=lambda p: (-len(p), p))
+
+
+def named(upload: Upload, names: Iterable[tuple[str, ...]], read: Texts | None = None) -> tuple[str, str] | None:
+    """The name (its words) a video's title, else its description, names a player by, and where: ("virat
+    kohli", "title"); None if neither does. The longest name found wins. read: the upload's texts(), when the
+    caller already has them."""
+    ordered = _longest_first(names)
+    for where, words, present in read if read is not None else texts(upload):
         for phrase in ordered:
             if phrase[0] in present and _holds(words, phrase):
                 return " ".join(phrase), where
@@ -231,7 +251,7 @@ def _remember_refused(source: VideoSource, why: dict[str, str]) -> None:
     try:
         pipe = bus.sync_redis().pipeline()
         for video_id, reason in why.items():
-            pipe.set(_refused_key(source, video_id), reason, ex=REFUSED_FOR)
+            pipe.set(_refused_key(source, video_id), reason, ex=REFUSED_FOR.get(reason.split(" in ")[0], REFUSED_AWHILE))
         pipe.execute()
     except Exception:  # noqa: BLE001
         pass
@@ -252,11 +272,13 @@ class Found:
 
 
 def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Found]:
-    """Each upload, once for each of these players it names."""
+    """Each upload, once for each of these players it names. Each upload's text is read into words once."""
+    ordered = {p.player_id: _longest_first(names.get(p.player_id, ())) for p in players}
     out = []
     for upload in uploads:
+        read = texts(upload)
         for p in players:
-            hit = named(upload, names.get(p.player_id, ()))
+            hit = named(upload, ordered[p.player_id], read)
             if hit:
                 out.append(Found(p.player_id, p.sport, upload, *hit))
     return out
@@ -400,9 +422,17 @@ def second_reads(source: VideoSource, now: datetime) -> dict[str, int]:
 def check(now: datetime | None = None) -> dict[str, int]:
     """Read again every stored video not read for RECHECK_AFTER, for each running video source, and drop those
     gone (removed, private, no longer embeddable, or blocked in FEED_COUNTRY). Run daily, so each video is read
-    once a week, and a run cut short is taken up the next day."""
+    once a week, and a run cut short is taken up the next day. A row no check has read for STALE_AFTER goes
+    too, whatever its source's state."""
     now = now or datetime.now(timezone.utc)
     totals = {"read": 0, "dropped": 0}
+    # Rows no check could read for a month (their source turned off, or without its key) go: what's shown must
+    # have been confirmed lately, and YouTube's terms keep its data 30 days at most without reading it again.
+    with db.session() as session:
+        stale = session.execute(delete(FeedCandidate).where(FeedCandidate.checked_at < now - STALE_AFTER).returning(FeedCandidate.id)).all()
+    if stale:
+        log.info("feed: dropped %d candidate(s) no check has read for %d days", len(stale), STALE_AFTER.days)
+        totals["dropped"] += len(stale)
     for source in videos():
         with db.session() as session:
             ids = _stale(session, source, now)

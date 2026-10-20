@@ -265,6 +265,7 @@ without a ruling from FIDE or the platform are misinformation."""
         "UCM-ONC2bCHytG2mYtKDmIeA",  # Saint Louis Chess Club: commentary, interviews
         "UChDxbOUQRXEZ1zdI14Zyx9w",  # Chess Vibes: game analysis
         "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE: interviews, features
+        "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: commentary on his own games and others'
     )
 
 

@@ -25,6 +25,7 @@ class Redis:
 
     def __init__(self):
         self.data: dict[str, str] = {}
+        self.ttl: dict[str, int | None] = {}
 
     def mget(self, keys):
         return [self.data.get(k) for k in keys]
@@ -34,6 +35,7 @@ class Redis:
 
     def set(self, key, value, ex=None):
         self.data[key] = value
+        self.ttl[key] = ex
 
     def execute(self):
         return []
@@ -189,3 +191,32 @@ def test_a_followed_player_is_known_by_their_aliases(world):
     with db_module.session() as s:
         assert candidates.followed(s)[0].sport == "cricket"
         assert s.scalar(select(func.count()).select_from(FeedCandidate)) == 0
+
+
+def test_a_premiere_not_aired_yet_is_asked_about_again_within_the_hour(world):
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed(("premiere000", "Kohli: the documentary", ""), ("shortclip00", "Kohli in 30 seconds", ""))
+    world.videos["premiere000"] = video("premiere000", duration="P0D", live="upcoming")
+    world.videos["shortclip00"] = video("shortclip00", duration="PT30S")
+    candidates.poll(NOW)
+    assert rows() == []
+    expiries = {k.rsplit(":", 1)[1]: v for k, v in world.redis.ttl.items()}
+    assert expiries == {"premiere000": candidates.REFUSED_AWHILE, "shortclip00": 7 * 86400}
+    # It aired: once the hour is up (Redis forgets it), it's asked about again and kept; the Short isn't asked again.
+    del world.redis.data["feed:refused:youtube:premiere000"]
+    world.videos["premiere000"] = video("premiere000", duration="PT9M")
+    candidates.poll(NOW + timedelta(hours=1, minutes=5))
+    assert rows() == [(kohli, "premiere000")]
+    assert [r.url.params["id"] for r in world.asked if r.url.path.endswith("/videos")] == ["premiere000,shortclip00", "premiere000"]
+
+
+def test_a_row_no_check_could_read_for_a_month_goes(world, monkeypatch):
+    from tests.test_feed_fetch import youtube
+
+    player("Virat Kohli")
+    world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
+    world.videos["kohli000001"] = video("kohli000001")
+    candidates.poll(NOW)
+    monkeypatch.setattr(youtube, "key", lambda: None)  # the key taken away: nothing can read it again
+    assert candidates.check(NOW + timedelta(days=29)) == {"read": 0, "dropped": 0} and len(rows()) == 1
+    assert candidates.check(NOW + timedelta(days=31)) == {"read": 0, "dropped": 1} and rows() == []

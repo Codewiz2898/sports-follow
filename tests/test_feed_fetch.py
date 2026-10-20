@@ -310,10 +310,14 @@ def test_names_match_in_any_plain_spelling():
     assert candidates.named(up("Müller: the Raumdeuter"), names[4]) == ("muller", "title")
 
 
-def test_a_one_word_handle_is_its_own_name():
+def test_a_one_word_handle_is_its_own_name_while_nobody_else_followed_has_it():
     names = candidates.phrases([TENZ])
     assert candidates.named(up("TenZ on the new agent"), names[5]) == ("tenz", "title")
     assert candidates.named(up("Tyson Ngo interview"), names[5]) == ("tyson ngo", "title")
+    # Another followed pro's name has the word too: the handle alone names neither.
+    names = candidates.phrases([TENZ, Followed(8, "valorant", "Tenz Kim", [])])
+    assert candidates.named(up("TenZ on the new agent"), names[5]) is None
+    assert candidates.named(up("Tenz Kim on the new agent"), names[8]) == ("tenz kim", "title")
 
 
 def test_each_upload_is_matched_once_for_each_player_it_names():

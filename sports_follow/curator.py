@@ -96,7 +96,7 @@ class CuratorSettings:
 
 
 def main() -> None:
-    run_worker(CuratorSettings)  # type: ignore[arg-type]
+    run_worker(CuratorSettings)  # type: ignore[arg-type]  # arq types its settings as a dict; it reads a class's attributes too
 
 
 if __name__ == "__main__":

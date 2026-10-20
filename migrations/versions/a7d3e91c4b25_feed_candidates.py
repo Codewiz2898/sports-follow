@@ -3,7 +3,7 @@ one row per player and item, going with the player. The verdict, score and judge
 the later stages (the judge, the ranking) fill them.
 
 Revision ID: a7d3e91c4b25
-Revises: 9f38e7d26f75
+Revises: e2b9c4f7a1d3
 Create Date: 2026-10-20
 """
 
@@ -14,7 +14,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "a7d3e91c4b25"
-down_revision = "9f38e7d26f75"
+down_revision = "e2b9c4f7a1d3"
 branch_labels = None
 depends_on = None
 

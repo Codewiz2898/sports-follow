@@ -286,8 +286,9 @@ then Credentials, Create credentials, API key, restricted to that API). Save it 
 `~/.config/sports-follow/youtube-key` (`chmod 600`), then send it and restart the curator:
 ```bash
 deploy/push-secrets.sh deploy@<server-ip>
-ssh deploy@<server-ip> 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml up -d --force-recreate curator'
+ssh deploy@<server-ip> 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml up -d --force-recreate api worker curator'
 ```
+(The API and the worker too: each process reads the key once, for the admin panel and the metrics.)
 `settings.env` already lists `youtube`; without the key the admin panel's Sources tab says "No token on the
 server" under Feed, and nothing else changes. Its free quota is 10,000 units a day; the panel shows what's spent.
 

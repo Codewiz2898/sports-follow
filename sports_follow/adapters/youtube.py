@@ -95,7 +95,6 @@ def parse_feed(text: str) -> list[Upload]:
         video_id = entry.findtext("yt:videoId", "", _NS).strip()
         if not VIDEO_ID.fullmatch(video_id):
             continue
-        link = entry.find("atom:link[@rel='alternate']", _NS)
         thumb = entry.find("media:group/media:thumbnail", _NS)
         out.append(Upload(
             video_id=video_id,
@@ -103,7 +102,7 @@ def parse_feed(text: str) -> list[Upload]:
             channel=entry.findtext("atom:author/atom:name", "", _NS).strip(),
             title=entry.findtext("atom:title", "", _NS).strip(),
             description=entry.findtext("media:group/media:description", "", _NS).strip(),
-            url=(link.get("href") if link is not None else None) or f"https://www.youtube.com/watch?v={video_id}",
+            url=f"https://www.youtube.com/watch?v={video_id}",  # whichever way it was found, the same (a Short's feed link differs)
             published=_time(entry.findtext("atom:published", None, _NS)),
             thumbnail=thumb.get("url") if thumb is not None else None,
         ))

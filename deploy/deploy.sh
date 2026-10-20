@@ -98,7 +98,8 @@ do_rollback() {
   git checkout --quiet --detach "$to"
   docker tag "sports-follow:$to" sports-follow:latest
   # Not the migrate service: the older code doesn't know the newer migrations, and the database keeps them.
-  c up -d --no-build --no-deps caddy api worker gateway backup
+  # The curator too, where that commit has one; one from before it had none, and --remove-orphans stops this one's.
+  c up -d --no-build --no-deps --remove-orphans caddy api worker gateway backup $(c config --services | grep -x curator || true)
   wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
   echo "$to" >"$STATE/live"
   rm -f "$STATE/previous"   # a second rollback would only go back to the bad deploy
