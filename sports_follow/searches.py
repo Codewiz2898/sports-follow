@@ -7,13 +7,15 @@ Everton", "wins game 4", after the player's name. A followed player's key moment
 (queue), one search per player and game: a later moment of theirs in the game takes it over (the brace over the goal)
 until its last run, and it looks for videos published since the first.
 
-Each search runs twice (run): FIRST_AFTER the moment, and again SECOND_AFTER it, as edits keep coming; one not run by
-then runs once, as its last. What it finds goes the way a channel's uploads go: kept where it names the player and
+Each search runs twice (run): FIRST_AFTER the moment, and again SECOND_AFTER it (and at least RUNS_APART after its
+first), as edits keep coming; one not run by then runs once, as its last. A run no source answered is tried again at
+the next poll. A search whose moment is taken back (a goal ruled out) goes, and the game's moments that stand queue
+it again. What it finds goes the way a channel's uploads go: kept where it names the player and
 passes the hard filters (candidates.keep), unless it's stored for them already, with the moment it was searched for;
 then judged and ranked with the rest (curator.rank_new).
 
-A search costs a hundred reads of a source's allowance, so they're capped: FEED_MOMENT_SEARCHES runs a day (UTC), the
-biggest moments first when there are more, and none while less than KEEP_SHARE of the source's tightest window is
+A search costs a hundred reads of a source's allowance, so they're capped: FEED_MOMENT_SEARCHES runs in any 24 hours
+(so a source's own quota day, wherever it starts, holds no more), the biggest moments first when there are more, and none while less than KEEP_SHARE of the source's tightest window is
 left, which is the channel poll's and the weekly check's. They run in the feed's lane, a background one
 (adapters/budget.py). With no source that can search running (no key), nothing is queued or run.
 """
@@ -36,6 +38,8 @@ log = logging.getLogger("sports_follow.searches")
 
 FIRST_AFTER = timedelta(hours=3)  # a moment's first search: its first edits are up
 SECOND_AFTER = timedelta(hours=24)  # and its last, a day on
+RUNS_APART = timedelta(hours=8)  # a search the cap held back runs its last no sooner than this after its first
+DAY = timedelta(hours=24)  # the cap's window, rolling
 GIVE_UP = timedelta(hours=48)  # a search not run by then (the cap bound for two days) isn't: its moment is old news
 KEEP_SHARE = 0.25  # searches stop while less than this share of a source's tightest window is left
 
@@ -50,11 +54,14 @@ def queue(now: datetime | None = None) -> dict[str, int]:
     (Sport.search_words), not taken back, one per player and game: a later moment in a game takes over the game's
     search until its last run. Returns how many were queued and taken over."""
     now = now or datetime.now(timezone.utc)
-    counts = {"queued": 0, "taken over": 0}
+    counts = {"queued": 0, "taken over": 0, "taken back": 0}
     if not searching() or FEED_MOMENT_SEARCHES <= 0:
         return counts
     with db.session() as session:
         taken_back = select(Moment.corrects).where(Moment.corrects.is_not(None))
+        # A search whose moment was taken back since: gone, before its last run, and queued again below from what stands.
+        counts["taken back"] = len(session.execute(delete(FeedSearch).where(FeedSearch.second_at.is_(None), FeedSearch.moment_id.in_(taken_back))
+                                                   .returning(FeedSearch.id)).all())
         rows = session.execute(
             select(Moment.id, Moment.player_id, Moment.event_id, Moment.kind, Moment.key, Moment.title, Moment.body, Moment.priority, Moment.created_at,
                    Player.name, Player.sport, Event.title.label("game"), Event.competition, Event.venue)
@@ -100,33 +107,38 @@ def _room(source: VideoSource) -> bool:
     return True
 
 
-def spent(day: datetime) -> int:
+def spent(since: datetime) -> int:
     """Searches run since then: each run counts, first and last."""
     with db.session() as session:
-        firsts = session.scalar(select(func.count()).where(FeedSearch.first_at >= day)) or 0
-        lasts = session.scalar(select(func.count()).where(FeedSearch.second_at >= day)) or 0
+        firsts = session.scalar(select(func.count()).where(FeedSearch.first_at >= since)) or 0
+        lasts = session.scalar(select(func.count()).where(FeedSearch.second_at >= since)) or 0
     return firsts + lasts
 
 
 def run(now: datetime | None = None) -> dict[str, int]:
-    """Run the searches that are due, the biggest moments first, up to what's left of the day's FEED_MOMENT_SEARCHES,
-    and keep what they find. Drops searches GIVE_UP old. Returns what it did."""
+    """Run the searches that are due, the biggest moments first, up to what's left of FEED_MOMENT_SEARCHES in the last
+    DAY, and keep what they find. Drops searches GIVE_UP old (once none of their runs counts against the cap). Returns
+    what it did."""
     now = now or datetime.now(timezone.utc)
     counts = {"searched": 0, "found": 0, "kept": 0, "refused": 0, "dropped": 0}
     sources = searching()
     if not sources or FEED_MOMENT_SEARCHES <= 0:
         return counts
+    since = now - DAY
     with db.session() as session:
-        counts["dropped"] = len(session.execute(delete(FeedSearch).where(FeedSearch.fired_at < now - GIVE_UP).returning(FeedSearch.id)).all())
-    left = FEED_MOMENT_SEARCHES - spent(now.replace(hour=0, minute=0, second=0, microsecond=0))
+        old = delete(FeedSearch).where(FeedSearch.fired_at < now - GIVE_UP, or_(FeedSearch.first_at.is_(None), FeedSearch.first_at < since),
+                                       or_(FeedSearch.second_at.is_(None), FeedSearch.second_at < since))
+        counts["dropped"] = len(session.execute(old.returning(FeedSearch.id)).all())
+    left = FEED_MOMENT_SEARCHES - spent(since)
     if left <= 0:
         return counts
     with db.session() as session:
         due = session.execute(
             select(FeedSearch.id, FeedSearch.player_id, FeedSearch.moment_id, FeedSearch.query, FeedSearch.fired_at, Player.sport)
             .join(Player, Player.id == FeedSearch.player_id)
-            .where(FeedSearch.second_at.is_(None), FeedSearch.fired_at <= now - FIRST_AFTER,
-                   or_(FeedSearch.first_at.is_(None), FeedSearch.fired_at <= now - SECOND_AFTER))
+            .where(FeedSearch.second_at.is_(None), FeedSearch.fired_at <= now - FIRST_AFTER, FeedSearch.fired_at >= now - GIVE_UP,
+                   or_(FeedSearch.first_at.is_(None), (FeedSearch.fired_at <= now - SECOND_AFTER) & (FeedSearch.first_at <= now - RUNS_APART)),
+                   exists().where(Follow.player_id == FeedSearch.player_id))
             .order_by(FeedSearch.priority.desc(), FeedSearch.fired_at, FeedSearch.id).limit(left)).all()  # fmt: skip
         if not due:
             return counts
@@ -134,11 +146,11 @@ def run(now: datetime | None = None) -> dict[str, int]:
     names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
     for s in due:
         target = players.get(s.player_id)
-        if target is None:
-            continue  # no longer followed: it waits, and goes at GIVE_UP
+        if target is None or not sports.on(s.sport):
+            continue  # its sport turned off: it waits, and goes at GIVE_UP
         if target.sport not in names:
             names[target.sport] = candidates.phrases([p for p in players.values() if p.sport == target.sport])
-        kept = 0
+        kept, answered = 0, False
         for source in sources:
             if shutdown.stopping.is_set() or not _room(source):
                 return _done(counts)
@@ -150,6 +162,7 @@ def run(now: datetime | None = None) -> dict[str, int]:
             except AdapterError as exc:
                 log.info("feed: %s search %r failed: %s", source.system, s.query, exc)
                 continue
+            answered = True
             found = [candidates.Found(f.player_id, f.sport, f.upload, f.name, f.where, s.moment_id) for f in candidates.match(uploads, [target], names[target.sport])]
             counts["found"] += len(found)
             try:
@@ -159,6 +172,8 @@ def run(now: datetime | None = None) -> dict[str, int]:
                 got = {}
             kept += got.get("kept", 0)
             counts["refused"] += got.get("refused", 0)
+        if not answered:
+            continue  # tried again at the next poll
         counts["searched"] += 1
         counts["kept"] += kept
         with db.session() as session:

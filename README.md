@@ -429,16 +429,18 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Without the key the source is off, the admin panel says so, and nothing else changes.
 - **Big moments are searched for too** (`sports_follow/searches.py`, BHA-303): fans post edits of a hundred or a
   brace within hours, mostly on channels no sport lists. After each poll the curator queues a search for each key
-  moment of a followed player's (not one taken back) that its sport has words for (`Sport.search_words`: "century
+  moment of a followed player's (not one taken back; a search whose moment is taken back goes) that its sport has words for (`Sport.search_words`: "century
   Lord's", "brace Liverpool vs Everton", "wins game 4"), after the player's name: one per player and game, `feed_search`,
   which a later moment in the game takes over (the brace over the goal) until its last run. Each runs twice, three
   hours after the moment and a day after, for videos published since, most viewed first, embeddable and syndicated,
-  as a viewer in India finds them; one the cap held back for a day runs once, and one two days old is dropped. What
+  as a viewer in India finds them; one the cap held back for a day runs once, its last at least eight hours after
+  its first, a run no source answered is tried again, and one two days old is dropped. What
   it finds goes the channel poll's way: kept where it names the player and passes the hard filters, unless it's
   stored for them already, with its moment attached, then judged and ranked. A search costs 100 units, so they're
-  capped at `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` runs a day (40, 4,000 units: 20 moments searched twice), the
-  biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
-  which stays the channel poll's and the weekly check's. Off without the key.
+  capped at `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` runs in any 24 hours (40, 4,000 units: 20 moments searched twice;
+  rolling, so YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
+  which stays the channel poll's and the weekly check's. The ranking keeps a searched video's moment while it
+  stands, rather than the biggest one near it. Off without the key.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -676,7 +678,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
-| `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches a day (`searches.py`), each run counted (a moment's search runs twice; 100 YouTube units each); the biggest moments first; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; 100 YouTube units each); the biggest moments first; `0` turns them off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |

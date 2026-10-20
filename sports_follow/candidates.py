@@ -327,6 +327,8 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {}}}
             else:
                 values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
+            if f.moment_id is not None:
+                values["candidate"]["searched_for"] = f.moment_id  # the ranking keeps it while it stands (rank.rescore)
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
                 with session.begin_nested():

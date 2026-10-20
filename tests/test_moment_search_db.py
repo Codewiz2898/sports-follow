@@ -91,9 +91,9 @@ def test_a_big_moment_of_a_followed_player_queues_one_search_in_its_sports_words
     mid = fire(kohli, lords, hundred())
     fire(kohli, lords, Found("fifty", "key", "Kohli reaches 50", "", "50", 70))  # no words for a fifty: not searched
     fire(nobody, lords, hundred("Rohit Sharma"))  # nobody follows him
-    assert searches.queue(NOW + timedelta(minutes=5)) == {"queued": 1, "taken over": 0}
+    assert searches.queue(NOW + timedelta(minutes=5)) == {"queued": 1, "taken over": 0, "taken back": 0}
     assert queued() == [(kohli, mid, "Virat Kohli century Lord's", 90, None, None)]
-    assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 0, "taken over": 0}  # once
+    assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 0, "taken over": 0, "taken back": 0}  # once
 
 
 def test_a_later_moment_in_the_game_takes_its_search_over_until_its_last_run(world):
@@ -102,7 +102,7 @@ def test_a_later_moment_in_the_game_takes_its_search_over_until_its_last_run(wor
     fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah", "1–0 · 12'", "goal@101", 85))
     searches.queue(NOW + timedelta(minutes=5))
     second = fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah (2)", "2–0 · 40'", "goal@140", 90), at=NOW + timedelta(minutes=30))
-    assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 0, "taken over": 1}
+    assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 0, "taken over": 1, "taken back": 0}
     [(_, moment, query, priority, _, _)] = queued()
     assert (moment, query, priority) == (second, "Mohamed Salah brace Liverpool vs Everton", 90)
     with db_module.session() as s:
@@ -161,19 +161,81 @@ def test_the_days_cap_runs_the_biggest_moments_first(world, monkeypatch):
     with db_module.session() as s:
         ran = dict(s.execute(select(FeedSearch.query, FeedSearch.first_at)).all())
     assert ran == {"Jasprit Bumrah 5 wickets Ground 1": FIRST, "Virat Kohli century Ground 0": FIRST, "Shubman Gill century Ground 2": None}
-    assert searches.run(FIRST + timedelta(hours=1))["searched"] == 0  # the day's two are spent
-    # The next day: Gill's search is a day old, so it runs once, as its last; the other two have their second runs.
-    tomorrow = NOW.replace(hour=0) + timedelta(days=1)
-    assert SECOND >= tomorrow
-    assert searches.run(SECOND)["searched"] == 2
+    assert searches.run(FIRST + timedelta(hours=1))["searched"] == 0  # the two of these 24 hours are spent
+    assert searches.run(SECOND)["searched"] == 0  # a day on, but the first runs are still within the last 24 hours
+    # 24 hours after the first runs: Gill's search is over a day old, so it runs once, as its last; the other two
+    # have their second runs, and go first.
+    later = FIRST + searches.DAY + timedelta(minutes=1)
+    assert searches.run(later)["searched"] == 2
     with db_module.session() as s:
         last = {q: (f, l) for q, f, l in s.execute(select(FeedSearch.query, FeedSearch.first_at, FeedSearch.second_at))}
-    assert last["Jasprit Bumrah 5 wickets Ground 1"] == (FIRST, SECOND) and last["Virat Kohli century Ground 0"] == (FIRST, SECOND)
+    assert last["Jasprit Bumrah 5 wickets Ground 1"] == (FIRST, later) and last["Virat Kohli century Ground 0"] == (FIRST, later)
     assert last["Shubman Gill century Ground 2"] == (None, None)
     monkeypatch.setattr(searches, "FEED_MOMENT_SEARCHES", 3)
-    assert searches.run(SECOND + timedelta(minutes=30))["searched"] == 1
-    # Two days on, the searches go.
-    assert searches.run(NOW + searches.GIVE_UP + timedelta(minutes=1))["dropped"] == 3 and queued() == []
+    assert searches.run(later + timedelta(minutes=30))["searched"] == 1
+    # Two days on, the searches go, once their runs no longer count against the cap.
+    assert searches.run(NOW + searches.GIVE_UP + timedelta(minutes=1))["dropped"] == 0
+    assert searches.run(later + timedelta(minutes=30) + searches.DAY + timedelta(minutes=1))["dropped"] == 3 and queued() == []
+
+
+def test_a_search_the_cap_held_back_runs_its_last_well_after_its_first(world, monkeypatch):
+    fire(player("Virat Kohli"), game("England vs India", venue="Lord's"), hundred())
+    searches.queue(NOW + timedelta(minutes=5))
+    late = NOW + timedelta(hours=23)
+    assert searches.run(late)["searched"] == 1
+    assert searches.run(SECOND + timedelta(minutes=5))["searched"] == 0  # due a day on, but it ran an hour ago
+    assert searches.run(late + searches.RUNS_APART)["searched"] == 1
+    [(_, _, _, _, first_at, second_at)] = queued()
+    assert (first_at, second_at) == (late, late + searches.RUNS_APART)
+
+
+def test_a_search_no_source_answered_is_tried_again(world):
+    fire(player("Virat Kohli"), game("England vs India", venue="Lord's"), hundred())
+    searches.queue(NOW + timedelta(minutes=5))
+    world.error = (500, "backendError")
+    assert searches.run(FIRST)["searched"] == 0 and queued()[0][4] is None
+    world.error = None
+    assert searches.run(FIRST + timedelta(minutes=30))["searched"] == 1 and searches.spent(NOW) == 1
+
+
+def test_a_sport_turned_off_has_its_queued_searches_held(world, monkeypatch):
+    from sports_follow import sports
+
+    fire(player("Virat Kohli"), game("England vs India", venue="Lord's"), hundred())
+    searches.queue(NOW + timedelta(minutes=5))
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "cricket"])
+    assert searches.run(FIRST)["searched"] == 0 and world.api_calls("/search") == 0
+
+
+def test_a_moment_taken_back_after_its_search_was_queued_takes_the_search_back_to_what_stands(world):
+    salah = player("Mohamed Salah", sport="football")
+    derby = game("Liverpool vs Everton", sport="football")
+    first = fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah", "", "goal@101", 85))
+    fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah (2)", "", "goal@140", 85), at=NOW + timedelta(minutes=20))
+    searches.queue(NOW + timedelta(minutes=25))
+    assert queued()[0][2] == "Mohamed Salah brace Liverpool vs Everton"
+    fire(salah, derby, Found("correction", "key", "Goal ruled out", "", "goal:goal@140", 85), at=NOW + timedelta(minutes=30))
+    assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 1, "taken over": 0, "taken back": 1}
+    [(_, moment, query, _, _, _)] = queued()
+    assert (moment, query) == (first, "Mohamed Salah goal Liverpool vs Everton")
+
+
+def test_the_ranking_keeps_the_moment_a_search_found_a_video_for(world, monkeypatch):
+    from sports_follow import rank
+
+    kohli = player("Virat Kohli")
+    lords = game("England vs India", venue="Lord's")
+    fire(kohli, lords, Found("wickets", "key", "Kohli takes 5 wickets", "", "w5", 95), at=NOW - timedelta(hours=1))  # bigger, and near
+    mid = fire(kohli, lords, hundred())
+    searches.queue(NOW + timedelta(minutes=5))
+    world.found["Virat Kohli century Lord's"] = [{**hit("kohliedit01", "Virat Kohli 100 at Lord's"),
+                                                   "snippet": {**hit("kohliedit01", "Virat Kohli 100 at Lord's")["snippet"], "publishedAt": "2026-10-20T08:00:00Z"}}]
+    world.videos["kohliedit01"] = video("kohliedit01")
+    searches.run(FIRST)
+    with db_module.session() as s:
+        s.execute(update(FeedCandidate).values(verdict={"about_player": "yes"}))
+    rank.rescore(FIRST)
+    assert kept() == [(kohli, "kohliedit01", mid)]
 
 
 def test_no_room_left_in_the_days_quota_holds_the_searches(world):

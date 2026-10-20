@@ -110,7 +110,7 @@ def test_a_search_spends_a_hundred_units_of_the_days_quota(fake):
 def test_without_a_key_no_source_searches(monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
     assert searches.searching() == []
-    assert searches.queue(NOW) == {"queued": 0, "taken over": 0}  # no database read either
+    assert searches.queue(NOW) == {"queued": 0, "taken over": 0, "taken back": 0}  # no database read either
     assert searches.run(NOW)["searched"] == 0
 
 

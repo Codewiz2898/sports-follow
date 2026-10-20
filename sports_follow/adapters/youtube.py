@@ -6,7 +6,7 @@ answers 404 or 500 for a while, for no reason it gives. When it doesn't answer a
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
 (how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
 videos.list: 1 unit for up to 50 videos. A big moment of a followed player is searched for (search.list, 100
-units: searches.py), from any channel, twice: the curator keeps those searches to a daily cap
+units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
 (SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
