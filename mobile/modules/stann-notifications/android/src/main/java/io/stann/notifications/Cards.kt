@@ -251,7 +251,7 @@ internal object Cards {
   /** A notification's colours: its sport's block and the words on it (Sport.colour's "sport" and "on"), or, with
    *  sport colours off on this phone (Alerts' Settings), every sport's block in the app's ink, white on it, and
    *  the icon in stann's blue: quieter beside other apps' notifications. */
-  private class Look(d: Map<String, String>, own: Boolean) {
+  private class Look(d: Map<String, String>, private val own: Boolean) {
     val colour = if (own) colour(d["colour"], BLUE) else INK
     val ink = if (own) colour(d["ink"], Color.WHITE) else Color.WHITE
     val accent = if (own) colour else BLUE // the icon's tint, and a Live Update's bar
@@ -263,9 +263,10 @@ internal object Cards {
       for (id in words) v.setTextColor(id, ink)
     }
 
-    /** The live tag of an opened card: an ink pill, or on an ink block a white one with ink words. */
+    /** The live tag of an opened card: an ink pill, or with sport colours off, on the ink block, a white one with
+     *  ink words. */
     fun pill(v: RemoteViews) {
-      if (colour != INK) return
+      if (own) return
       v.setInt(R.id.stann_tag, "setBackgroundResource", R.drawable.stann_pill_light)
       v.setTextColor(R.id.stann_tag, INK)
     }

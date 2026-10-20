@@ -4,9 +4,9 @@ import android.content.Context
 
 /** What the notifications keep on the phone, for when the app isn't running: where the API is and the FCM token
  *  the app registered with it (for a button that calls it), whether they wear each sport's colour or all one,
- *  whether live cards are on, and the games whose live
- *  card the fan stopped. The server is told both (src/push.ts, ActionReceiver) and sends no card the phone would
- *  throw away; these catch any that come. */
+ *  whether live cards are on, and the games whose live card the fan stopped. The server is told about live cards
+ *  and stopped games (src/push.ts, ActionReceiver) and sends no card the phone would throw away; these catch any
+ *  that come. The colours are the phone's alone. */
 internal object Settings {
   private const val DEFAULT_API = "https://stann.in"
   private const val STOPPED_KEPT = 30 // the newest games stopped; older ones are long over (the server keeps as many)
