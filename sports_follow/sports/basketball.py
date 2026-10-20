@@ -140,5 +140,13 @@ class Basketball(Sport):
             stats.append({"label": "MIN", "value": avg(minutes)})
         return stats
 
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a career high, a 40 or 50-point game, a triple-double, a scoring landmark, an All-Star, MVP or \
+championship. A match moment: a dunk, a block, a buzzer-beater, a clutch shot. Trade talk before a team \
+announces it is rumour. Full-game uploads are restreams."""
+
 
 SPORT = Basketball()

@@ -48,6 +48,9 @@ class Player(Base):
     nationality: Mapped[str | None] = mapped_column(String(120))
     role: Mapped[str | None] = mapped_column(String(200))
     teams: Mapped[list] = mapped_column(JSONB, default=list)
+    # Their own accounts, [{"platform": "x", "handle": "imVkohli"}]: the Feed's judge (curate.py) takes a share
+    # from one of them as the player's own. Set with `python -m sports_follow.players socials`.
+    socials: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     wikidata_qid: Mapped[str | None] = mapped_column(String(20))
     disambiguation: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()

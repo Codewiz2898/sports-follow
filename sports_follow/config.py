@@ -102,6 +102,10 @@ AGENT = os.environ.get("SPORTS_FOLLOW_AGENT", "1") != "0"
 # Live scores researched by the AI agent, for sports no source covers. Off by default: those players'
 # pages come from the agent without live scores or alerts, and no model calls go to watching games.
 AGENT_LIVE = AGENT and os.environ.get("SPORTS_FOLLOW_AGENT_LIVE", "0") == "1"
+# The content judge's model stage (curate.py): a share about a player its rules can't settle goes to a small
+# model through the same gateway. "0" (or the agent off) keeps the rules alone: what they settle is judged, the
+# rest waits unjudged, and nothing unjudged reaches a fan.
+CURATE_AI = AGENT and os.environ.get("SPORTS_FOLLOW_CURATE_AI", "1") != "0"
 
 # The Android app (mobile/): its package name and the SHA-256 fingerprints of its signing certificates (comma
 # separated), published at /.well-known/assetlinks.json so stann.in links open it (App Links).

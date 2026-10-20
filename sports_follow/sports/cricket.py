@@ -339,5 +339,15 @@ class Cricket(Sport):
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         return batting_bowling(lines)
 
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a fifty, a hundred or double hundred, a five-wicket haul, a hat-trick, a career landmark (10,000 runs, \
+100 Tests, 500 wickets), a captaincy or a trophy (World Cup, IPL). A match moment: a six, a wicket, a catch, a \
+run-out, a last-over finish. Fantasy team picks ("Dream11 prediction", "GL team", "C/VC picks") are betting. Full \
+innings or whole-match uploads by anyone but a board or broadcaster are restreams. Selection and squad news from \
+a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
+
 
 SPORT = Cricket()

@@ -577,3 +577,14 @@ class Sport:
 
     def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
         return self.games
+
+    # ---- the Feed's content judge (curate.py)
+
+    # A video longer than this (seconds) from a channel nobody vouches for is taken for a re-upload of a whole game,
+    # and not shown; None where long videos are normal, for the judge's model to tell apart.
+    restream_after: int | None = 20 * 60
+
+    def content_hints(self) -> str:
+        """A few lines the content judge reads about this sport: what a milestone and a big moment are here, and
+        what's a promo, a rumour or a re-upload in its fans' world. "" for none: the judge's own rules alone."""
+        return ""

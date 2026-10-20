@@ -457,5 +457,15 @@ class Football(Sport):
                 stats.append({"label": "Shots (on target)", "value": f"{shots} ({on_target})"})
         return stats
 
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a club or career goal landmark (100th, 500th), a hat-trick, a debut, 100 caps, a trophy (league, cup, \
+Champions League, World Cup), an individual award (Ballon d'Or, Golden Boot). A match moment: a goal, an assist, a \
+save, a red card, a missed penalty. Transfers and injuries reported by clubs or outlets are news; "here we go", \
+"done deal" or "sources" from aggregator accounts before a club confirms are rumours. Full-match or full-half \
+uploads are restreams; extended highlights from a league or broadcaster are official."""
+
 
 SPORT = Football()

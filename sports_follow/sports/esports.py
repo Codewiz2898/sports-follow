@@ -423,6 +423,17 @@ class Esports(Sport):
     def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
         return ("lobby", "lobbies") if any(_placed(r.get("result")) for r in items) else ("series", "series")
 
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a big tournament win (a Major, Worlds, Masters, a world championship), an MVP, a record. A match \
+moment: a clutch, an ace or pentakill, a team wipe, a chicken dinner. Roster moves a team announces are news; \
+"leaks" and "sources say" before that are rumours. Skin betting, case-opening and gambling sites are betting; a \
+sponsor's peripheral or energy drink held up in a clip is a promo. Full VOD re-uploads of a broadcast are \
+restreams; a player's own stream highlights aren't."""
+
+
 
 class Game(Esports):
     """One esports game, a sport of its own: its key (the registry's, the settings' and the search filter's),
