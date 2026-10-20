@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 # of any other shape is refused before anything is sent.
 DIGITS = re.compile(r"[0-9]{1,12}")
 
-# A typed name only athletes nobody here follows have, a US college player's (Provider.recognise,
-# structured.identify): there's no one to follow by it, and the research agent isn't sent to look.
+# A typed name only athletes nobody here follows have (Provider.recognise, structured.identify): there's
+# no one to follow by it, and the research agent isn't sent to look.
 NotFound = Literal["not found"]
 NOT_FOUND: Final[NotFound] = "not found"
 
@@ -253,8 +253,8 @@ class Provider:
     search: LiveSearch | None = None
     # recognise(query, adapters): the (adapter, ref) a full typed name surely means; False when the name
     # is ambiguous, which ends the lookup (the agent decides); NOT_FOUND when only athletes nobody here
-    # follows have it (a US college player), which ends it too, with no research; None to leave it to the
-    # next provider.
+    # follows have it, which no research follows unless a later provider has someone by it; None to leave
+    # it to the next provider.
     recognise: Callable[[str, list["Adapter"]], "tuple[Adapter, PlayerRef] | bool | NotFound | None"] | None = None
     # research(adapters): its public API as the research agent's prompt points to it, given its running
     # adapters ("https://lichess.org/api/broadcast/top"), for an API the agent can read without a key of

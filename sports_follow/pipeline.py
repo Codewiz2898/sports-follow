@@ -56,8 +56,9 @@ BUILD_LOCK = 20 * 60
 # Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
 AGENT_OFF = "The research agent is off and no live source has this player."
 # Why a first build failed for a typed name only athletes nobody here follows have (structured.identify's
-# NOT_FOUND): no page, and no research.
-NOT_FOLLOWED = "Only athletes nobody here follows, US college players, have this name."
+# NOT_FOUND): no page, and no research. Its fan's text, which asking again answers at once (server.follow).
+NOT_FOLLOWED = "Only athletes nobody here follows have this name."
+NOT_FOUND_TEXT = "No player here goes by this name. Check the spelling, or pick them from the search results."
 
 _llm = None
 
@@ -545,7 +546,7 @@ def fan_message(raw: str) -> str:
     if raw == AGENT_OFF:
         return "No live source has this player, so there's no page to show yet."
     if raw == NOT_FOLLOWED:
-        return "No player here goes by this name. Check the spelling, or pick them from the search results."
+        return NOT_FOUND_TEXT
     text = raw.lower()
     if "budget_exceeded" in text:
         # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.

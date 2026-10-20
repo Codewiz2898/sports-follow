@@ -76,6 +76,7 @@ def profile_link(athlete: dict[str, Any]) -> str | None:
 
 
 COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
+NAME_HITS = 10  # athletes a lookup by name reads (ESPN's limit is per kind of hit: ten players, ten articles)
 
 
 def college(item: dict[str, Any]) -> bool:
@@ -88,7 +89,7 @@ def college(item: dict[str, Any]) -> bool:
 def search_athletes(name: str, sport_uid: str) -> list[dict[str, Any]]:
     """ESPN search hits of type player in one sport (uid prefix "s:600~" soccer, "s:200~" cricket), college
     athletes left out: ESPN may list a pro's own college record before the pro ("A'Ja Wilson, NCAAW")."""
-    data = get_json(f"{WEB}/search/v2?query={quote(name)}&limit=10", ttl=3600)
+    data = get_json(f"{WEB}/search/v2?query={quote(name)}&limit={NAME_HITS}", ttl=3600)
     hits = []
     for group in data.get("results", []):
         if group.get("type") != "player":
@@ -189,14 +190,15 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
     (any sport, covered or not) is a question for the agent, since "John Smith" is dozens of people and
     the first one found is rarely the one meant (False). So is an athlete in a sport we don't cover (Max
     Verstappen). College athletes don't count: a name only they have, by which no lookup here reaches
-    anyone else, isn't found ("Caitlyn Clark", a Division III guard; NOT_FOUND). No athlete by that name
-    leaves it to the next provider (None)."""
+    anyone else, isn't found ("Caitlyn Clark", a Division III guard; NOT_FOUND), unless they fill the page.
+    No athlete by that name leaves it to the next provider (None)."""
     wanted = sorted(naming.words(query))
     try:
-        data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit=10", ttl=3600)
+        data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit={NAME_HITS}", ttl=3600)
     except AdapterError:
         return False
-    namesakes = [item for group in data.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if sorted(naming.words(item.get("displayName", ""))) == wanted]
+    hits = [item for group in data.get("results", []) if group.get("type") == "player" for item in group.get("contents", [])]
+    namesakes = [item for item in hits if sorted(naming.words(item.get("displayName", ""))) == wanted]
     # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces star),
     # and nobody here follows college athletes: the professionals among the namesakes are who a fan means.
     pros = [n for n in namesakes if not college(n)]
@@ -219,8 +221,9 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
             found.append((adapter, ref))
     if len(found) == 1:
         return found[0]
-    if namesakes and not pros and not reached:
+    if namesakes and not pros and not reached and len(hits) < NAME_HITS:
         # Only college athletes have the name: a misspelt star ("Caitlyn Clark") isn't researched either.
+        # A page full of them may hide a pro below it ("Taylor Smith"), so that one is the agent's.
         log.info("identify %r: only college athletes have the name; not found", query)
         return NOT_FOUND
     if found or namesakes:

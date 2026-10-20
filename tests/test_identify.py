@@ -1,7 +1,7 @@
 """Recognising a typed name from the structured sources alone (structured.identify), end to end on what
 ESPN and Lichess answered on 2026-10-15 (tests/fixtures/espn, tests/fixtures/lichess), trimmed to what
 the code reads, and FIDE's searches to the rows these cases need; the Nikola Jokić and Max Verstappen
-searches are from 2026-09-29, and the Brandon Boston ones from 2026-10-20.
+searches are from 2026-09-29, and the Brandon Boston and FIDE Caitlyn Clark ones from 2026-10-20.
 
 identify asks ESPN's search first and reads the athlete from the adapter of their sport; when ESPN knows
 nobody by the name, Lichess looks in FIDE's list. Each request is answered from a recording, and one
@@ -32,6 +32,9 @@ RECORDED = {
     SEARCH.format("Caitlin%20Clark"): "espn/search-caitlin-clark",
     ATHLETE.format("basketball/wnba/athletes/4433403"): "espn/basketball-athlete-caitlin-clark",
     SEARCH.format("Caitlyn%20Clark"): "espn/search-caitlyn-clark",  # no college athlete's record is recorded: none is read
+    f"{FIDE}?q=Caitlyn%20Clark": "lichess/fide-search-caitlyn-clark",
+    f"{FIDE}?q=caitlyn": "lichess/fide-search-caitlyn",
+    f"{FIDE}?q=clark": "lichess/fide-search-clark",
     SEARCH.format("A%27ja%20Wilson"): "espn/search-aja-wilson",
     ATHLETE.format("basketball/wnba/athletes/3149391"): "espn/basketball-athlete-aja-wilson",
     SEARCH.format("Brandon%20Boston"): "espn/search-brandon-boston",
@@ -156,8 +159,29 @@ def test_a_misspelling_only_a_college_player_has_isnt_found(web):
     # BHA-213: a common misspelling of Caitlin Clark. ESPN has one athlete by it, Bridgewater State's
     # Division III guard (NCAAW, 5324154), and nobody here follows college athletes, as search and the
     # registry leave them out: the name isn't found, and the agent isn't sent to research it either (decided
-    # 20 Oct 2026: cheaper, though a misspelt star gets no result). Her record isn't read, nor FIDE's list.
+    # 20 Oct 2026: cheaper, though a misspelt star gets no result). Her record isn't read; FIDE's list,
+    # which could have a chess player by the name, has none.
     assert structured.identify("Caitlyn Clark") == structured.NOT_FOUND
+    assert web.asked == [SEARCH.format("Caitlyn%20Clark"), f"{FIDE}?q=Caitlyn%20Clark", f"{FIDE}?q=caitlyn", f"{FIDE}?q=clark"]
+
+
+def test_a_name_a_college_player_and_a_chess_player_share_is_the_chess_players(web):
+    # ESPN's answer with an NCAAM player by Gukesh Dommaraju's name added by hand: ESPN has no one we
+    # follow by it, but FIDE's list does, so it's his.
+    web.answers[SEARCH.format("Gukesh%20Dommaraju")]["results"] = [{"type": "player", "contents": [
+        {"uid": "s:40~l:41~a:9999999", "displayName": "Gukesh Dommaraju", "subtitle": "Somewhere State", "description": "NCAAM", "sport": "basketball"}]}]
+    found = structured.identify("Gukesh Dommaraju")
+    assert isinstance(found, tuple) and (found[0].system, found[1].athlete_id) == ("lichess_chess", "46616543")
+    assert web.asked == [SEARCH.format("Gukesh%20Dommaraju"), f"{FIDE}?q=Gukesh%20Dommaraju"]
+
+
+def test_a_name_college_players_fill_espns_page_with_goes_to_the_agent(web):
+    # ESPN lists ten athletes by name at most. Ten college players called Caitlyn Clark (made by hand
+    # from the one) may hide a pro below them, as "Taylor Smith" fills the page with NCAAW players, so
+    # the agent decides.
+    [hit] = web.answers[SEARCH.format("Caitlyn%20Clark")]["results"][0]["contents"]
+    web.answers[SEARCH.format("Caitlyn%20Clark")]["results"][0]["contents"] = [{**hit, "uid": f"s:40~l:54~a:{5324154 + i}"} for i in range(10)]
+    assert structured.identify("Caitlyn Clark") is None
     assert web.asked == [SEARCH.format("Caitlyn%20Clark")]
 
 

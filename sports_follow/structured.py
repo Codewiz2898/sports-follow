@@ -97,21 +97,24 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | NotFound | None:
 
     Only a full name that exactly one source claims counts: "Caitlin Clark" yes; "Clark", a typo,
     or a name two sports share go to the research agent, which decides as before (None). A name only
-    athletes nobody here follows have, US college players, is NOT_FOUND: nobody to research either.
+    athletes nobody here follows have is NOT_FOUND, unless a later provider has someone by it: nobody to
+    research either.
     """
     if len(_name_key(query)) < 2:
         return None
     # Each provider that can recognise a name is asked in turn (adapters.base.Provider.recognise): ESPN
     # first, as it knows namesakes in every sport, then Lichess's FIDE list.
+    not_found = False
     for provider, adapters in providers():
         if provider.recognise is None:
             continue
         found = provider.recognise(query, adapters)
         if found is False:
             return None
-        if found == NOT_FOUND or isinstance(found, tuple):
+        if isinstance(found, tuple):
             return found
-    return None
+        not_found = not_found or found == NOT_FOUND
+    return NOT_FOUND if not_found else None
 
 
 # ---------------------------------------------------------------- binding

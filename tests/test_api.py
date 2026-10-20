@@ -305,6 +305,26 @@ def test_a_follow_that_fails_gives_its_research_back_everywhere_it_was_counted(a
     assert len(counts) == 3 and set(counts.values()) == {0}  # the fan's day, the address's day, the hour
 
 
+def test_asking_again_for_a_name_no_one_followed_here_has_costs_no_research(api, monkeypatch):
+    # BHA-213: "Caitlyn Clark" is only a college player's name, so its page failed without research.
+    # "Try again" (or another fan typing it) would find the same: it says so at once, counted nowhere.
+    plain = Db.get
+
+    def get(self, model, key):
+        if key == 2:
+            if model is PlayerCard:
+                return SimpleNamespace(player_id=2, status="failed", card={"status": "failed"}, error=pipeline.NOT_FOUND_TEXT)
+            if model is Player:
+                return SimpleNamespace(id=2, name="Caitlyn Clark")
+        return plain(self, model, key)
+
+    monkeypatch.setattr(Db, "get", get)
+    answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 2})
+    assert (answer.status_code, answer.json()["detail"]) == (404, "No player here goes by this name. Check the spelling, or pick them from the search results.")
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert api.queue.jobs == []
+
+
 def test_a_research_that_fails_to_start_is_given_back(api, monkeypatch):
     """A registry athlete no source has: the agent builds them, and that counts, unless creating them fails."""
     person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})

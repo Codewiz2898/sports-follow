@@ -825,7 +825,7 @@ the native app's, and the TWA loses its full screen.
   minutes) before the adapter is bound, because the agent is what says which sport it belongs to.
 - A typed name that only a US college athlete has on ESPN ("Caitlyn Clark", for Caitlin Clark) isn't
   found, and the agent isn't sent: college players aren't followed here, so a misspelt star gets no page.
-  The fan's AI research for it is still counted.
+  The first try counts as one of the fan's AI researches; asking again answers at once and doesn't.
 - Cricket: ESPN serves no career stats, so the Stats tab shows recent form computed from the player's
   scorecards in the last 30 days. Domestic matches often have no scorecard, so no player line.
 - Football: national-team games show up for every player of that nationality's team; a player who
