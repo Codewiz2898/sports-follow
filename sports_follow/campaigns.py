@@ -34,7 +34,7 @@ import argparse
 import logging
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -58,6 +58,7 @@ TAKEN = frozenset({
     "privacy", "go",  # BHA-239's short links
     "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
 })
+NEAR = timedelta(hours=3)  # a player's game this close to one on their campaign's schedule is that game (player_ids)
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in
 ZONE_LABEL = "IST"
 TITLE_MAX, EVENT_MAX, LINE_MAX, LABEL_MAX = 80, 120, 240, 40
@@ -76,14 +77,15 @@ def get(db: Session, slug: str) -> Campaign | None:
     return db.scalar(select(Campaign).where(Campaign.slug == slug.strip().lower()))
 
 
-def player_ids(db: Session) -> set[int]:
-    """Every campaign's players here, by their player ids, of campaigns whose sport is on: its own (by their registry
-    ids) and its whole teams' (by their ids in the team's source). Whose games are a campaign's: the ones fans are
-    reminded to call (predictions_push.py)."""
+def player_ids(db: Session, at: datetime) -> set[int]:
+    """The players here, by their player ids, of the campaigns (of a sport that's on) with a game on their schedule
+    within NEAR of `at`: their own (by their registry ids) and their whole teams' (by their ids in the team's source).
+    A game of theirs starting then is a campaign's game, which fans are reminded to call (predictions_push.py); their
+    other games, before the event or after it, aren't."""
     qids: set[str] = set()
     refs: set[tuple[str, str]] = set()
     for c in db.scalars(select(Campaign)):
-        if not sports.on(c.sport):
+        if not sports.on(c.sport) or not any(abs(datetime.fromisoformat(g["start_utc"]) - at) <= NEAR for g in c.games or [] if g.get("start_utc")):
             continue
         qids.update(c.players or [])
         refs.update((t["system"], p["athlete_id"]) for t in c.teams or [] for p in t.get("players") or [] if t.get("system") and p.get("athlete_id"))

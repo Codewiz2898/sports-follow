@@ -3,7 +3,8 @@ each pick went once its question settles, with the fan's place in their league.
 
 The reminder goes once a game, LEAD before its first question closes (and not once there's under LAST left), to the
 fans who follow a player in it, a team in it or the game itself and haven't picked; only for a campaign's games
-(campaigns.player_ids): the big events fans came for, not every board a followed player sits at. How a pick went
+(campaigns.player_ids: a game of a campaign's players near one on its schedule): the big events fans came for, not
+every board a followed player sits at. How a pick went
 goes once a question settles, to every fan who picked it: right or not, the points, and their best place among their
 leagues. A voided question tells no one.
 
@@ -18,14 +19,18 @@ nothing twice.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+from urllib.parse import urlparse
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from . import campaigns, logs, notify, predictions, sports
+from . import campaigns, logs, metrics, notify, predictions, sports
 from .db import session
 from .models import Event, EventPlayer, EventTeam, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, Question, TeamFollow
 from .moments import DEFAULT_LEVEL
@@ -109,12 +114,10 @@ def remind(now: datetime) -> list[tuple]:
     with session() as db:
         due = list(db.scalars(select(Question).where(Question.status == predictions.OPEN, Question.reminded_at.is_(None), Question.locks_at > now + LAST,
                                                      Question.locks_at <= now + LEAD).with_for_update(skip_locked=True)))
-        if not due:
-            return []
-        theirs = campaigns.player_ids(db)
         for q in due:
             q.reminded_at = now
             ids = _events(db, q)
+            theirs = campaigns.player_ids(db, q.locks_at or now)
             if not sports.on(q.sport) or not ids or not theirs:
                 continue
             if db.scalar(select(EventPlayer.event_id).where(EventPlayer.event_id.in_(ids), EventPlayer.player_id.in_(theirs)).limit(1)) is None:
@@ -137,12 +140,13 @@ def _label(q: Question, key: str | None) -> str:
 
 
 def tell(now: datetime) -> list[tuple]:
-    """How each pick went, for the questions settled since the last run, logged: one job per device. A voided
-    question is marked and tells no one."""
+    """How each pick went, for the questions settled since the last run, oldest first (a game's pushes replace each
+    other: the latest stays), logged: one job per device. A voided question is marked and tells no one; settled
+    again (predictions.score clears its mark), it's told then."""
     jobs: list[tuple] = []
     with session() as db:
         due = list(db.scalars(select(Question).where(Question.status.in_((predictions.SETTLED, predictions.VOIDED)), Question.told_at.is_(None),
-                                                     Question.settled_at >= now - FRESH).with_for_update(skip_locked=True)))
+                                                     Question.settled_at >= now - FRESH).order_by(Question.settled_at, Question.position).with_for_update(skip_locked=True)))
         for q in due:
             q.told_at = now
             if q.status != predictions.SETTLED or not sports.on(q.sport):
@@ -156,8 +160,8 @@ def tell(now: datetime) -> list[tuple]:
             # Hears it unless they muted the game, or set every follow of theirs in it to "off".
             fans = [f for f in picks if f not in muted and not (f in levels and levels[f] <= {"off"})]
             places = _places(db, set(fans))
-            recent = set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.kind.in_(("pick", "called")),
-                                                                      Notification.event_id == q.event_id, Notification.created_at >= now - LOUD_GAP))) if fans else set()
+            recent = set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.kind.in_(notify.CALLS),
+                                                                      Notification.event_id.in_(ids), Notification.created_at >= now - LOUD_GAP))) if fans and ids else set()
             answer = _label(q, q.answer)
             for fan in fans:
                 option, points = picks[fan]
@@ -176,7 +180,8 @@ def tell(now: datetime) -> list[tuple]:
 
 def _jobs(db: Session, fans: list[str], q: Question, kind: str, title: str, body: str, loud: dict[str, bool], ttl: int, now: datetime) -> list[tuple]:
     """A notification row for each fan with a device, and a job for each of their newest devices: (notification id,
-    device, payload, ttl, tag)."""
+    device, payload, ttl, topic). The tag a phone replaces the game's last call with is the game's; the Web Push topic
+    (RFC 8030: at most 32 characters, URL-safe base64) is a digest of it."""
     if not fans:
         return []
     devices: dict[str, list[PushSubscription]] = {}
@@ -185,6 +190,7 @@ def _jobs(db: Session, fans: list[str], q: Question, kind: str, title: str, body
         if len(mine) < notify.MAX_DEVICES:
             mine.append(d)
     tag = f"call-{q.game}"
+    topic = "c" + base64.urlsafe_b64encode(hashlib.blake2b(q.game.encode(), digest_size=15).digest()).decode()  # 1 + 20 characters
     jobs = []
     for fan, theirs in devices.items():
         row = Notification(fan_id=fan, event_id=q.event_id, player_id=None, moment_ids=[], kind=kind, lines=[title], loud=loud.get(fan, True), devices=len(theirs), delivered=0, created_at=now)
@@ -192,7 +198,7 @@ def _jobs(db: Session, fans: list[str], q: Question, kind: str, title: str, body
         db.flush()
         payload = {"id": row.id, "title": title, "body": body, "url": f"/match/{q.match}", "tag": tag, "event_id": q.event_id, "kind": kind, "loud": row.loud}
         for d in theirs:
-            jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": notify.quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, ttl, tag))
+            jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**payload, "quiet": notify.quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, ttl, topic))
     return jobs
 
 
@@ -201,8 +207,10 @@ def _send(jobs: list[tuple]) -> int:
     notification's deliveries, each device's health. Returns how many devices took one."""
     if not jobs:
         return 0
-    futures = [(notification_id, device, _wire.submit(logs.carried(notify.deliver), device, payload, ttl, tag)) for notification_id, device, payload, ttl, tag in jobs]
+    futures = [(notification_id, device, _wire.submit(logs.carried(notify.deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
     results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
+    # On the Notifications dashboard with moments' pushes (deploy/grafana/): each device's push service and its answer.
+    metrics.pushes([("fcm" if device[1] == "fcm" else urlparse(device[2]).hostname, error) for (_, device, _), (_, _, error) in zip(futures, results)])
     notify.settle([(device_id, error) for _, device_id, error in results])
     delivered: dict[int, int] = {}
     for notification_id, _, error in results:

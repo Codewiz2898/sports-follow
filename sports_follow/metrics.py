@@ -113,9 +113,10 @@ def job(name: str, outcome: str, seconds: float, waited: float | None) -> None:
                     explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited), {"job_name": name})
 
 
-def pushes(results: Iterable[tuple[str | None, int | str | None]], waited: float) -> None:
-    """A batch's pushes (notify.send): each device's push service and what it answered (None: took it), and
-    how long the batch's oldest moment waited, from its poll or build finding it to its pushes."""
+def pushes(results: Iterable[tuple[str | None, int | str | None]], waited: float | None = None) -> None:
+    """A batch's pushes (notify.send, predictions_push): each device's push service and what it answered (None: took
+    it), and how long the batch's oldest moment waited, from its poll or build finding it to its pushes (None for
+    pushes that aren't moments')."""
     counted: Counter[tuple[str, str]] = Counter()
     for service, error in results:
         result = "delivered" if error is None else "gone" if error in (404, 410) else "failed"
@@ -123,8 +124,9 @@ def pushes(results: Iterable[tuple[str | None, int | str | None]], waited: float
     counter = _instrument("counter", "sports_follow.pushes", "{push}", "Pushes to devices by push service and result")
     for (service, result), n in counted.items():
         counter.add(n, {"push_service": service, "result": result})
-    _instrument("histogram", "sports_follow.push.wait", "s", "How long a batch's oldest moment waited for its pushes",
-                explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited))
+    if waited is not None:
+        _instrument("histogram", "sports_follow.push.wait", "s", "How long a batch's oldest moment waited for its pushes",
+                    explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited))
 
 
 def moment(kind: str) -> None:

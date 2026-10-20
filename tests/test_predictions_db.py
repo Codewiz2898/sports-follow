@@ -45,7 +45,7 @@ def db(monkeypatch):
     engine_ = create_engine(URL or "postgresql+psycopg://")
     with engine_.begin() as c:
         c.execute(text("TRUNCATE account, account_session, player, event, event_state, event_player, player_line, follow, match_follow, moment, notification, "
-                       "push_subscription, prediction_question, prediction_pick, prediction_league, prediction_member, campaign RESTART IDENTITY CASCADE"))
+                       "push_subscription, prediction_question, prediction_pick, prediction_league, prediction_member, campaign, team RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine_, expire_on_commit=False)
 
     @contextmanager
