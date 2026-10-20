@@ -23,7 +23,139 @@ export interface BattleRoyaleState {
 // map its best player's numbers), or a lobby's whole standings and who won each of its matches.
 export interface SeriesMap { n: number; status: string; winner?: string | null; best?: string | null }
 export interface StandingRow { place: number; name: string; points: number; kills: number; wins: number }
-export interface EsportsPage { maps?: SeriesMap[]; standings?: StandingRow[]; games?: { n: number; map?: string | null; winner?: string | null }[] }
+export interface EsportsPage {
+  maps?: SeriesMap[]
+  standings?: StandingRow[]
+  games?: { n: number; map?: string | null; winner?: string | null }[]
+  teams?: PageTeam[] // the series' two teams, by the ids the detail names them by
+  detail?: { maps: MapDetail[] } | null
+}
+
+// What a source told the page about each finished map (the server's dota.map_detail, for Dota 2): how it went
+// in a line a moment, both sides' totals, one side's lead by minute with marks on it (a Roshan), every
+// player with their items, and the draft in order. Its words are the server's; this only lays them out.
+export interface PageTeam { id: string; name: string; short: string }
+export interface MapMoment { t: number; clock: string; title: string; note?: string | null; team?: string | null; mark?: string | null }
+export interface MapPlayer { id?: string | null; name: string; team: string; as?: string | null; kda?: number[] | null; gpm?: number | null; numbers: string[]; items: string[]; note?: string | null }
+export interface DraftTurn { hero: string; team: string; pick: boolean; player?: string | null }
+export interface MapMark { t: number; team: string; label: string; name: string }
+export interface MapDetail {
+  n: number
+  length?: string | null
+  winner?: string | null
+  sides?: Record<string, string> // team id -> "Radiant" | "Dire"
+  lead?: { team: string; what: string; by_minute: number[] } | null
+  marks?: MapMark[]
+  totals?: { label: string; values: Record<string, string> }[]
+  events?: MapMoment[]
+  columns?: string[]
+  players?: MapPlayer[]
+  draft?: DraftTurn[]
+}
+
+/** A map's lead by minute from one team's side: up is theirs. */
+export function leadOf(map: MapDetail, team: string): number[] {
+  const lead = map.lead?.by_minute ?? []
+  return map.lead?.team === team ? lead : lead.map((v) => -v)
+}
+
+/** "4.4k", "850". */
+export function amount(n: number): string {
+  return Math.abs(n) >= 1000 ? `${(Math.abs(n) / 1000).toFixed(1)}k` : String(Math.abs(n))
+}
+
+/** Points along a lead line in a w×h box (x from pad to w-pad, zero across the middle), scaled to its
+ * biggest lead (at least `floor`), with where each minute and amount falls. */
+export function leadLine(values: number[], w: number, h: number, pad = 10, floor = 2000) {
+  const top = Math.max(floor, ...values.map((v) => Math.abs(v)))
+  const mid = h / 2
+  const half = mid - pad
+  const x = (minute: number) => pad + (values.length > 1 ? (minute * (w - 2 * pad)) / (values.length - 1) : 0)
+  const y = (v: number) => mid - (v / top) * half
+  return { x, y, mid, top, points: values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ') }
+}
+
+/** The series' best player so far, over the maps whose players are in: the most kills, then the fewest
+ * deaths, as each map's best is picked. */
+export function seriesBest(maps: MapDetail[]): { name: string; kda: string; maps: number; gpm: number } | null {
+  const by = new Map<string, { k: number; d: number; a: number; gpm: number; maps: number }>()
+  for (const m of maps) {
+    for (const p of m.players ?? []) {
+      if (!p.name || !p.kda) continue
+      const t = by.get(p.name) ?? { k: 0, d: 0, a: 0, gpm: 0, maps: 0 }
+      by.set(p.name, { k: t.k + p.kda[0], d: t.d + p.kda[1], a: t.a + p.kda[2], gpm: t.gpm + (p.gpm ?? 0), maps: t.maps + 1 })
+    }
+  }
+  const best = [...by.entries()].sort(([, x], [, y]) => y.k - x.k || x.d - y.d)[0]
+  return best ? { name: best[0], kda: `${best[1].k}/${best[1].d}/${best[1].a}`, maps: best[1].maps, gpm: Math.round(best[1].gpm / best[1].maps) } : null
+}
+
+/** A map's best player, as the series' is picked: "watson 19/5/14, Anti-Mage". */
+export function mapBest(map: MapDetail): string | null {
+  const best = [...(map.players ?? [])].filter((p) => p.name && p.kda).sort((x, y) => (y.kda?.[0] ?? 0) - (x.kda?.[0] ?? 0) || (x.kda?.[1] ?? 0) - (y.kda?.[1] ?? 0))[0]
+  return best ? `${best.name} ${best.kda?.join('/')}, ${best.as}` : null
+}
+
+/** A ban of a hero someone on the other side played earlier in the series, with how that went: "watson's
+ * 14/0/14 in map 3" (the latest such map). */
+export function banNote(maps: MapDetail[], map: MapDetail, turn: DraftTurn): string | null {
+  if (turn.pick) return null
+  const earlier = maps.filter((m) => m.n < map.n).sort((a, b) => b.n - a.n)
+  for (const m of earlier) {
+    const p = (m.players ?? []).find((q) => q.as === turn.hero && q.team !== turn.team)
+    if (p && p.name) return `${p.name}'s ${p.kda ? p.kda.join('/') : p.as} in map ${m.n}`
+  }
+  return null
+}
+
+/** Heroes banned in every map with a draft, once there are two. */
+export function everyMapBans(maps: MapDetail[]): string[] {
+  const drafted = maps.filter((m) => (m.draft ?? []).length)
+  if (drafted.length < 2) return []
+  const [first, ...rest] = drafted.map((m) => new Set((m.draft ?? []).filter((d) => !d.pick).map((d) => d.hero)))
+  return [...first].filter((hero) => rest.every((s) => s.has(hero))).sort()
+}
+
+/** A draft's turns in runs of bans and picks, as captains make them ("Bans · 7", "Picks · 2"), each turn
+ * with its place in the order. */
+export function draftRounds(draft: DraftTurn[]): { pick: boolean; turns: { turn: DraftTurn; order: number }[] }[] {
+  const rounds: { pick: boolean; turns: { turn: DraftTurn; order: number }[] }[] = []
+  draft.forEach((turn, i) => {
+    const last = rounds[rounds.length - 1]
+    if (last && last.pick === turn.pick) last.turns.push({ turn, order: i + 1 })
+    else rounds.push({ pick: turn.pick, turns: [{ turn, order: i + 1 }] })
+  })
+  return rounds
+}
+
+/** Each of a team's players with their hero in every map (null where they didn't play it), in the order
+ * they first appear. */
+export function whoPlayed(maps: MapDetail[], team: string): { name: string; heroes: (string | null)[] }[] {
+  const names: string[] = []
+  for (const m of maps) for (const p of m.players ?? []) if (p.team === team && p.name && !names.includes(p.name)) names.push(p.name)
+  return names.map((name) => ({ name, heroes: maps.map((m) => (m.players ?? []).find((p) => p.name === name)?.as ?? null) }))
+}
+
+/** A player across the series' maps: each map's hero and line, whether their side took it, and their totals. */
+export function acrossMaps(maps: MapDetail[], name: string): { maps: { n: number; as: string; line: string; won: boolean }[]; kda: string | null; note: string | null } {
+  const played = maps.flatMap((m) => {
+    const p = (m.players ?? []).find((q) => q.name === name)
+    return p ? [{ m, p }] : []
+  })
+  const sum = played.reduce((t, { p }) => (p.kda ? [t[0] + p.kda[0], t[1] + p.kda[1], t[2] + p.kda[2]] : t), [0, 0, 0])
+  const last = played[played.length - 1]
+  return {
+    maps: played.map(({ m, p }) => ({ n: m.n, as: p.as ?? '', line: p.numbers[0] ?? '', won: m.winner === p.team })),
+    kda: played.some(({ p }) => p.kda) ? sum.join('/') : null,
+    note: last?.p.note ? `Map ${last.m.n}: ${last.p.note}` : null,
+  }
+}
+
+/** Whether a name is one of the fan's players in the game (its match page's "yours"). */
+export function isYours(name: string, yours: string[] | undefined): boolean {
+  const n = name.trim().toLowerCase()
+  return !!n && (yours ?? []).some((y) => y.trim().toLowerCase() === n)
+}
 
 /** Who won each of a lobby's matches so far, in a line: "M1 (Erangel): GodLike · M2: Soul"; "" before any. */
 export function lobbyWinners(page: EsportsPage): string {

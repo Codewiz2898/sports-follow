@@ -61,6 +61,17 @@ def team_key(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", fold(name)).split())
 
 
+# Words in an esports team's name that don't tell it apart ("Team Spirit", "Tundra Esports").
+TEAM_FILLER = frozenset({"team", "esports", "esport", "gaming", "club", "the", "gg"})
+
+
+def short_team(name: str | None) -> str:
+    """An esports team's name without its filler words, as fans say it: "Team Spirit" -> "Spirit", "Tundra
+    Esports" -> "Tundra"; the whole name when it's all filler ("Team")."""
+    kept = [w for w in (name or "").split() if team_key(w) not in TEAM_FILLER]
+    return " ".join(kept) or (name or "")
+
+
 def names_match(wanted: str, found: str) -> bool:
     """Accept a search hit only if the surnames agree and every word of the shorter name is in the
     longer one (an initial stands for its word): "Ronaldo" is Cristiano Ronaldo and "Jasprit Bumrah" is

@@ -156,7 +156,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Basketball | ESPN (NBA, WNBA; NCAA if researched) | team schedule, every phase | score, quarters, box-score line | season averages |
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
   | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
-  | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data); Dota 2 also inside the map, from OpenDota | team's series and maps won; a Dota player's kills, deaths, assists, GPM and heroes |
+  | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data); Dota 2 also inside the map, from OpenDota, and on its match page each finished map's gold by minute, how it went, every player's items and the draft | team's series and maps won; a Dota player's kills, deaths, assists, GPM and heroes |
   | Esports, PUBG | PUBG's official API (PC tournaments) | the player's lobbies, found as each match ends (no schedule) | standings and every player's finishes, damage, assists and knocks, after each match | own and team form over 14 days |
   | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
 
@@ -194,9 +194,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   games coming up, or a followed player's, their results included), at most six a minute of a source's
   allowance. A read that finds the game over is read once more half an hour on, when the source has filled
   in what it hadn't at the whistle (and every half hour while the source says it's partial: a chess round
-  still on, moves or a Dota map's numbers not read yet); that one is kept a week and not asked for again
+  still on, moves or a Dota map OpenDota hasn't parsed yet); that one is kept a week and not asked for again
   till then, so a crowd opening yesterday's final costs its source two reads. One that finds it not there
-  is the last for hours. The page shows Live now's copy
+  is the last for hours. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
+  and draft come only with the page's own read (each poll's state is stored and sent to every card, so it
+  stays small), as the state's `detail`, and show under whichever board is newest. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
@@ -779,7 +781,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get no page (AI-built ones with `SPORTS_FOLLOW_RESEARCH=1`) |
 | `SPORTS_FOLLOW_PANDASCORE_RESERVE` | `300` | PandaScore requests an hour (of 1,000) kept for live series and fans; refreshes, the history lane and the registry import stop below it |
 | `SPORTS_FOLLOW_ESPORTS_GAMES` | every team title | the titles whose pros the registry imports (PandaScore slugs: `valorant,cs-go,league-of-legends,dota-2,mlbb,kog,r6-siege,ow,rl,cod-mw,lol-wild-rift`; `cs-go` is CS2, `kog` Honor of Kings), of the games that run. Naming a few imports just those, and removes only their stale players |
-| `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
+| `SPORTS_FOLLOW_OPENDOTA` | `1` | `0` turns off OpenDota's Dota 2 map data (kills, clock, gold lead live; each player's hero and numbers after each map, and on the match page its gold by minute, moments, items and draft), laid over PandaScore's Dota 2 series; no key, 60 requests a minute and 3,000 a day |
 | `SPORTS_FOLLOW_PUBG_TOKEN` | from `~/.config/sports-follow/pubg-token` | PUBG developer API key (PUBG esports); the worker indexes recent tournaments every 10 minutes |
 | `SPORTS_FOLLOW_YOUTUBE_KEY` | from `~/.config/sports-follow/youtube-key` (or `SPORTS_FOLLOW_YOUTUBE_KEY_FILE`) | YouTube Data API v3 key: the feed's videos, read by the curator; without it the source is off |
 | `SPORTS_FOLLOW_LIQUIPEDIA_TOKEN` | from `~/.config/sports-follow/liquipedia-token` | LiquipediaDB API key (battle royale esports: BGMI, Free Fire); the free key is for non-commercial use only |

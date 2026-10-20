@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
+from .. import naming
 from .base import VOID, Ask, Fired, Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage, words
 
 if TYPE_CHECKING:
@@ -307,7 +308,9 @@ class Esports(Sport):
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
         Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
-        won each of its matches."""
+        won each of its matches. A series whose source told the page more about each finished map (the
+        state's "detail": a Dota 2 map's gold by minute, how it went, every player and the draft) has that
+        too, by map, with the two teams it names by id."""
         if state.get("kind") == "battle_royale":
             teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
             return {
@@ -323,7 +326,13 @@ class Esports(Sport):
             who = best and names.get(best[0], ("", ""))[0]
             maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
                          "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
-        return {"maps": maps} if maps else {}
+        if not maps:
+            return {}
+        told = state.get("detail") or {}
+        if not told.get("maps"):
+            return {"maps": maps}
+        sides = [{"id": t.get("id"), "name": t.get("name"), "short": naming.short_team(t.get("name"))} for t in state.get("teams") or []]
+        return {"maps": maps, "teams": sides, "detail": {"maps": told["maps"]}}
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the

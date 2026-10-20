@@ -580,11 +580,15 @@ class PandascoreEsports(Adapter):
         except Exception:  # Redis down: no memory, the fallback still works
             return {}
 
-    def _dota(self, m: dict[str, Any], snap: Snapshot) -> bool:
+    def _dota(self, m: dict[str, Any], snap: Snapshot, detail: bool = False) -> bool:
         """A Dota 2 series on now (or just over) gains what OpenDota knows inside its maps: the map being
         played, and each finished map's numbers for both rosters' players. Anything OpenDota can't say
         leaves the series as PandaScore has it. Returns whether that's all there will be: False while a
-        finished map's numbers are missing (OpenDota down, or the map not parsed yet)."""
+        finished map's numbers are missing (OpenDota down, or the map not parsed yet).
+
+        With detail (the match page's own read, not a poll, whose every state is stored and sent to each
+        card), each finished map's part of the page as well (dota.map_detail), as the state's "detail": the
+        same OpenDota matches, so no more requests but the item names, kept a week."""
         if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
             return True
         teams = snap.state.get("teams") or []
@@ -605,17 +609,24 @@ class PandascoreEsports(Adapter):
                 # Nothing seen live (the worker started mid-series): OpenDota's last hundred pro matches.
                 begin = _time(m.get("begin_at") or m.get("scheduled_at"))
                 numbered = dota.number_maps(dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
-            maps, parsed = [], 0
+            names = {str(p["id"]): p.get("name") or "" for p in roster if p.get("id") is not None}
+            items = opendota.items() if detail else {}
+            maps, parts, parsed = [], [], 0
             for n, match_id in numbered if players else []:
                 details = opendota.match(match_id)
                 if details:
                     maps.append({"n": n, "match_id": match_id, "players": dota.map_stats(details, players, heroes)})
-                    parsed += all(p.get("kills") is not None for p in details.get("players") or [{}])
+                    parsed += opendota.parsed(details)
+                    part = dota.map_detail(details, n, teams, players, names, heroes, items) if detail else None
+                    if part:
+                        parts.append(part)
             live = dota.live_map(game, teams, players, heroes, len(finished) + 1) if game else None
         except AdapterError as exc:
             log.info("dota %s: no OpenDota data: %s", m.get("id"), exc)
             return False
         snap.state["dota"] = {"maps": maps, "live": live}
+        if parts:
+            snap.state["detail"] = {"maps": parts}
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
@@ -658,7 +669,7 @@ class PandascoreEsports(Adapter):
         if not found or (m.get("videogame") or {}).get("slug") not in self._on():
             return None  # a game turned off (or one it doesn't cover) has no page, as its series aren't polled
         f, snap = found[0], parse_match(m)
-        whole = self._dota(m, snap)
+        whole = self._dota(m, snap, detail=True)
         # A finished Dota 2 series whose maps OpenDota hasn't all got yet is read again, for a while: past
         # DOTA_WAIT after it ended, a map OpenDota hasn't got isn't coming.
         ended = _time(m.get("end_at"))

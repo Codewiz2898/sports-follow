@@ -9,3 +9,73 @@
 .linescore.lobby td:first-child, .linescore.lobby th:first-child, .linescore.lobby td.who, .linescore.lobby th:nth-child(2) { text-align: left; }
 .linescore.lobby td.who { width: 100%; color: var(--text); overflow-wrap: anywhere; }
 .linescore.lobby tr.ours td { color: var(--sport-on-ink); font-weight: 800; }
+
+/* A finished map in depth (a Dota 2 map from OpenDota): the first team's side is up and wears the sport's
+   colour; the second's is down and ink. The fan's players are tinted with the sport's colour. */
+.map-row { display: grid; grid-template-columns: 64px 92px minmax(0, 1fr); gap: 10px; align-items: center; }
+.spark { display: block; overflow: visible; }
+.spark .zero, .lead-graph .zero { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.spark .line, .lead-graph .line { fill: none; stroke: var(--text); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.lead-graph svg { display: block; width: 100%; max-width: 520px; height: auto; margin: 0 auto; touch-action: pan-y; }
+.lead-graph .axis { font: 700 11px var(--body); fill: var(--muted); }
+.lead-graph .fill.up { fill: color-mix(in srgb, var(--sport) 24%, transparent); }
+.lead-graph .fill.down { fill: rgba(13, 13, 13, 0.1); }
+.lead-graph .cross { stroke: var(--muted); stroke-width: 1.5; }
+.lead-graph .mark circle { fill: var(--text); stroke: var(--surface); stroke-width: 2; }
+.lead-graph .mark text { font: 800 10px var(--body); fill: var(--surface); }
+.lead-graph .mark.first circle { fill: var(--sport); }
+.lead-graph .mark.first text { fill: var(--on-sport); }
+.mark-key { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px; background: var(--text); color: var(--surface); font-size: 10px; font-weight: 800; }
+.mark-key.first { background: var(--sport); color: var(--on-sport); }
+.totals { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; row-gap: 0; }
+.totals > .dsp { font-size: 16px; padding-bottom: 6px; }
+.totals .num { font-size: 22px; padding: 8px 0; border-top: 1px solid var(--line); }
+.totals .eyebrow { padding: 8px 0; border-top: 1px solid var(--line); align-self: stretch; display: flex; align-items: center; }
+.map-moments > li { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.map-moments > li .num { font-size: 16px; color: var(--muted); }
+.map-moments > li:last-child .num { color: var(--live-text); }
+.map-moments > li.yours, .map-players .player.yours, .who-played .yours { background: color-mix(in srgb, var(--sport) 13%, var(--surface)); }
+.map-moments > li.yours { margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 12px; }
+.map-players { padding: 4px 16px 10px; }
+.map-players .team-rule { display: flex; align-items: center; gap: 10px; padding: 12px 0 4px; }
+.map-players .team-rule::after { content: ""; flex: 1; height: 2px; background: var(--text); }
+.map-players .team-rule .dsp { font-size: 16px; }
+.map-players .player { display: grid; grid-template-columns: minmax(0, 1fr) 62px 38px 48px; column-gap: 6px; row-gap: 4px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.map-players .team-rule + .player, .map-players .player.head { border-top: 0; }
+.map-players .player.head { padding: 10px 0 0; }
+.map-players .player.head .eyebrow { text-align: right; letter-spacing: 0.04em; }
+.map-players .player.head .eyebrow:nth-child(2) { text-align: left; }
+.map-players .player.yours { margin: 0 -10px; padding: 9px 10px; border-radius: 12px; border-top-color: transparent; }
+.map-players .player .name { font-size: 18px; overflow-wrap: anywhere; }
+.map-players .player .num { font-size: 16px; text-align: right; }
+.map-players .player .num:nth-child(2) { text-align: left; }
+.map-players .player .items { grid-column: 1 / -1; }
+.draft { display: grid; grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); gap: 6px 8px; align-items: center; padding: 14px; }
+.draft > .dsp { font-size: 18px; padding-bottom: 4px; }
+.draft .round { grid-column: 1 / -1; text-align: center; padding: 10px 0 2px; border-top: 1px solid var(--line); }
+.draft .order { font-size: 13px; color: var(--muted); text-align: center; }
+.draft .side { display: flex; flex-direction: column; min-width: 0; }
+.draft .side.right { align-items: flex-end; text-align: right; }
+.draft .ban { display: flex; flex-direction: column; color: var(--muted); font-size: 14px; }
+.draft .side.right .ban { align-items: flex-end; }
+.draft .ban .tiny { color: var(--text); font-weight: 700; }
+.draft .pick { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 12px; background: var(--text); color: var(--surface); width: 100%; }
+.draft .side.right .pick { align-items: flex-end; }
+.draft .pick .dsp { font-size: 18px; overflow-wrap: anywhere; }
+.draft .pick.yours { background: var(--sport); color: var(--on-sport); }
+.best-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 18px; background: var(--text); color: var(--surface); }
+.best-card .eyebrow { color: var(--sport-on-ink); }
+.across { display: grid; grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); gap: 6px; }
+.across > span { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 12px; background: var(--bg); text-align: center; }
+.across > span.won { background: var(--text); color: var(--surface); }
+.across .num { font-size: 14px; }
+.who-played { display: grid; column-gap: 0; padding: 12px 16px; }
+.who-played .team { grid-column: 1 / -1; font-size: 18px; padding-bottom: 6px; }
+.who-played .team.next { margin-top: 12px; padding-top: 14px; border-top: 2px solid var(--text); }
+.who-played .head { padding: 0 6px 6px 0; }
+.who-played .who { grid-column: 1 / -1; padding: 8px 0 3px; border-top: 1px solid var(--line); }
+.who-played .who .dsp { font-size: 16px; overflow-wrap: anywhere; }
+.who-played .played { font-size: 12px; font-weight: 700; line-height: 1.25; padding: 0 6px 9px 0; min-width: 0; }
+.who-played .who.yours { margin: 0 -8px; padding: 8px 8px 3px; border-radius: 10px 10px 0 0; border-top-color: transparent; }
+.who-played .played.yours:nth-child(2) { margin-left: -8px; padding-left: 8px; border-radius: 0 0 0 10px; }
+.who-played .played.yours:last-child { margin-right: -8px; padding-right: 8px; border-radius: 0 0 10px 0; }
