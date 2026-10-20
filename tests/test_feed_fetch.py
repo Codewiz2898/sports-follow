@@ -329,14 +329,16 @@ def test_each_upload_is_matched_once_for_each_player_it_names():
 # ---------------------------------------------------------------- what a row keeps
 
 
-def test_a_candidates_numbers_keep_its_first_read_and_its_latest():
+def test_a_candidates_numbers_keep_its_first_read_and_its_latest_two():
     first = candidates.features(facts(views=100, likes=5), NOW)
     assert first == {"views": 100, "likes": 5, "seconds": 300, "reads": [{"at": NOW.isoformat(), "views": 100, "likes": 5}]}
     later = NOW.replace(day=21)
     second = candidates.read_again(first, facts(views=900, likes=40), later)
     third = candidates.read_again(second, facts(views=1500, likes=60), later.replace(day=28))
     assert second["views"] == 900 and [r["views"] for r in second["reads"]] == [100, 900]
-    assert [r["views"] for r in third["reads"]] == [100, 1500] and third["seconds"] == 300
+    fourth = candidates.read_again(third, facts(views=1600, likes=61), later.replace(day=30))
+    assert [r["views"] for r in third["reads"]] == [100, 900, 1500] and third["seconds"] == 300
+    assert [r["views"] for r in fourth["reads"]] == [100, 1500, 1600]
 
 
 def test_a_candidate_keeps_what_was_fetched_and_the_name_it_was_kept_for():

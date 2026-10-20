@@ -53,3 +53,5 @@
 .feed-admin-thumb img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; background: var(--raised); }
 .feed-admin-row .title { overflow-wrap: anywhere; }
 @media (max-width: 560px) { .feed-admin-row { grid-template-columns: minmax(0, 1fr); } }
+.feed-admin-shows { flex-wrap: wrap; max-width: 100%; }
+.feed-admin-shows button { white-space: nowrap; padding: 0 12px; }

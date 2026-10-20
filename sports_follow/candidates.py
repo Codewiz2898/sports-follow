@@ -210,9 +210,11 @@ def features(facts: VideoFacts, at: datetime) -> dict[str, Any]:
 
 
 def read_again(kept: dict[str, Any], facts: VideoFacts, at: datetime) -> dict[str, Any]:
-    """A stored candidate's numbers after reading it again: the latest views and likes, and two reads, the
-    first and this one, for its pace."""
-    reads = list(kept.get("reads") or [])[:1] + [_read(facts, at)]
+    """A stored candidate's numbers after reading it again: the latest views and likes, and three reads at most,
+    the first, the one before this and this one: its pace now is between the last two (rank.growth), so an
+    old video still being watched shows as one."""
+    before = list(kept.get("reads") or [])
+    reads = before[:1] + before[1:][-1:] + [_read(facts, at)]
     return {**kept, "views": facts.views, "likes": facts.likes, "reads": reads}
 
 

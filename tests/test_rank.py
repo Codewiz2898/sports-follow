@@ -41,6 +41,8 @@ def test_views_an_hour_come_from_the_two_reads_else_from_its_life_so_far():
     # A read minutes after it's out counts as an hour of its life, not a burst.
     assert rank.pace(numbers(read(0, 600)), NOW - timedelta(minutes=5), NOW) == pytest.approx(600.0)
     assert rank.pace(numbers(read(0, 600)), None, NOW) == 0.0
+    # Three reads: how fast it's watched lately, between the last two.
+    assert rank.growth(numbers(read(24 * 30, 1_000), read(24 * 7, 500_000), read(1, 516_700))) == pytest.approx(100.0)
     # Reads that fell (YouTube recounting) aren't negative.
     assert rank.growth(numbers(read(30, 5_000), read(6, 4_000))) == 0.0
 
@@ -112,7 +114,7 @@ def test_a_share_is_about_the_biggest_moment_in_the_two_days_before_it():
 
 def test_older_videos_still_being_watched_are_evergreen():
     old = NOW - timedelta(days=40)
-    growing = numbers(read(24 * 8, 900_000), read(1, 960_000))
+    growing = numbers(read(24 * 39, 2_000), read(24 * 8, 900_000), read(1, 960_000))
     assert rank.evergreen(growing, old, NOW)
     assert not rank.evergreen(growing, NOW - timedelta(days=3), NOW)  # still this week's
     assert not rank.evergreen(numbers(read(24 * 8, 900_000), read(1, 900_100)), old, NOW)  # hardly watched now

@@ -16,9 +16,9 @@ The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
     trust x (INTEREST x the judge's interest + PACE x how fast it's watched + LIKES x its like ratio)
 
-How fast it's watched is views an hour between the two reads (the first when it was found, the latest from a
-later read: a re-read every FRESH_EVERY while it's under FRESH_FOR old, then the weekly check), or over its
-whole life while there's one read. A channel's trust is high when a running sport lists it, lower for one
+How fast it's watched is views an hour between its last two reads (the first when it was found, then a re-read
+every few hours while it's under two days old, then the weekly check), or over its whole life while there's
+one read. A channel's trust is high when a running sport lists it, lower for one
 no sport lists any more, what the admin panel sets for it (controls.channel_trust: 0 hides it), and lower
 again for each item of its that fans hid or reported.
 
@@ -90,11 +90,12 @@ def whole(value: Any) -> int | None:
 
 
 def growth(features: dict[str, Any]) -> float | None:
-    """Views an hour between a row's first and latest reads; None with one read (or reads an hour apart or less)."""
+    """Views an hour between a row's last two reads (candidates.read_again keeps the first and the latest two):
+    how fast it's watched lately. None with one read, or reads an hour apart or less."""
     reads = [r for r in features.get("reads") or [] if isinstance(r, dict)]
     if len(reads) < 2:
         return None
-    first, last = reads[0], reads[-1]
+    first, last = reads[-2], reads[-1]
     a, b, va, vb = when(first.get("at")), when(last.get("at")), whole(first.get("views")), whole(last.get("views"))
     if a is None or b is None or va is None or vb is None or (b - a) <= timedelta(hours=1):
         return None

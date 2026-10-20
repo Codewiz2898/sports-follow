@@ -436,7 +436,7 @@ class FeedCandidate(Base):
     # What was fetched, as the source gave it: title, description, channel, published, thumbnail, and which of
     # the player's names it was kept for.
     candidate: Mapped[dict] = mapped_column(JSONB, default=dict)
-    # Numbers for ranking: views, likes, seconds, and the first and latest reads of views and likes, with when.
+    # Numbers for ranking: views, likes, seconds, and reads of views and likes with when: the first and the latest two.
     features: Mapped[dict] = mapped_column(JSONB, default=dict)
     fetched_at: Mapped[datetime] = _now()
     checked_at: Mapped[datetime] = _now()  # when the source last said it's still there and still plays here

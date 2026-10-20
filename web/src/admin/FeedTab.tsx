@@ -71,7 +71,7 @@ export function FeedTab() {
         </div>
       </div>
       {error && <div className="error-box" role="alert">{error}</div>}
-      <div className="segmented" role="group" aria-label="Show">
+      <div className="segmented feed-admin-shows" role="group" aria-label="Show">
         {SHOWS.map(([key, label]) => <button key={key} type="button" aria-pressed={show === key} onClick={() => setShow(key)}>{label}</button>)}
       </div>
       {!rows ? <div className="card empty"><span className="spinner" /></div> : !rows.length ? (
