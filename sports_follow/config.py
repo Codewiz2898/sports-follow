@@ -49,7 +49,8 @@ def user_agent(site: str, contact: str) -> str:
 
 USER_AGENT = user_agent(SITE_URL, CONTACT_EMAIL)
 
-# How long a full card stays fresh before the scheduler rebuilds it (seconds).
+# How long the research agent's words on a page stay fresh: a page only it writes is researched again when a fan
+# opens it after this (seconds; pipeline.agent_due).
 CARD_MAX_AGE = int(os.environ.get("SPORTS_FOLLOW_CARD_MAX_AGE", 6 * 3600))
 # How often a live (or about-to-start) player gets a live check (seconds).
 LIVE_CHECK_INTERVAL = int(os.environ.get("SPORTS_FOLLOW_LIVE_INTERVAL", 60))
