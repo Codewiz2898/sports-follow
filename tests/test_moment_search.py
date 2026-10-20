@@ -125,11 +125,11 @@ def test_a_costly_request_is_refused_whole_and_not_counted():
 
 
 def test_searches_leave_a_quarter_of_the_day_to_the_channel_poll_and_the_weekly_check(fake):
-    assert searches._room(SOURCE)
+    assert searches.room(SOURCE)
     budget.take(youtube.BUDGET, cost=6400)  # 2,600 of the 9,000 spendable left: a search would leave 2,500
-    assert searches._room(SOURCE)
+    assert searches.room(SOURCE)
     budget.take(youtube.BUDGET)
-    assert not searches._room(SOURCE)
+    assert not searches.room(SOURCE)
     budget.observe(youtube.BUDGET, "", 3000, 3600)  # what the source says is left counts too
     assert budget.room(youtube.BUDGET) == (3000 - youtube.MARGIN, youtube.PER_DAY)
 

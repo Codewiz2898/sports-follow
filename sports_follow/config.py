@@ -91,6 +91,12 @@ FEED_COUNTRY = os.environ.get("SPORTS_FOLLOW_FEED_COUNTRY", "IN").strip().upper(
 # Searches in any 24 hours for fans' videos of followed players' big moments (searches.py), each run counted: a
 # moment's search runs twice. The biggest moments go first when there are more. 0 turns them off.
 FEED_MOMENT_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MOMENT_SEARCHES", 40)))
+# Searches in any 24 hours for a followed player with nothing to watch this week (sweeps.py: the gap search), the
+# most followed first. 0 turns them off.
+FEED_GAP_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_GAP_SEARCHES", 20)))
+# Searches in any 7 days for a followed player's most watched videos ever (sweeps.py: the famous sweep), spread
+# over the week's days; each player at most once a month. 0 turns them off.
+FEED_FAMOUS_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES", 35)))
 
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters

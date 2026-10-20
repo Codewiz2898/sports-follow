@@ -143,6 +143,9 @@ tournament and tour channels' highlights are official."""
         "https://www.thehindu.com/sport/tennis/feeder/default.rss": "The Hindu",
     }
 
+    def video_words(self) -> str:
+        return "tennis"
+
     def search_words(self, fired: Fired) -> str | None:
         """An upset, or a win from the semi-finals on, at the tournament."""
         late, word = stage(fired.game, fired.competition)

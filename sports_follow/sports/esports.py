@@ -498,6 +498,10 @@ restreams; a player's own stream highlights aren't."""
         "https://www.ginx.tv/en/rss": "GINX TV",
     }
 
+    def video_words(self) -> str:
+        """The game's name: a player's videos are titled by it ("TenZ Valorant")."""
+        return self.label
+
     def search_words(self, fired: Fired) -> str | None:
         """A series won from the semi-finals on, or a lobby won ("win the lobby"), at the event: league play's wins
         are too many for a day's searches."""

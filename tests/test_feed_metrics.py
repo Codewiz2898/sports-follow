@@ -81,8 +81,8 @@ def test_what_a_search_finds_that_was_stored_or_refused_already_counts_as_spent_
 def test_a_moment_search_counts_its_units_by_sport(measured):  # noqa: F811
     metrics.feed_search("cricket", 100)
     metrics.feed_search("cricket", 100)
-    assert counts(measured, "sports_follow.feed.searches") == {("cricket",): 2}
-    assert counts(measured, "sports_follow.feed.search_units") == {("cricket",): 200}
+    assert counts(measured, "sports_follow.feed.searches") == {("cricket", "search"): 2}
+    assert counts(measured, "sports_follow.feed.search_units") == {("cricket", "search"): 200}
 
 
 # ---------------------------------------------------------------- the judge

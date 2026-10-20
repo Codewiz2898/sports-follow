@@ -148,11 +148,14 @@ def pace_part(per_hour: float) -> float:
 
 
 def stream(source: str, kept: dict[str, Any] | None) -> str:
-    """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, or
-    a channel."""
+    """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, a
+    sweep's (gap, famous: sweeps.py), or a channel."""
     if is_story(source):
         return "news"
-    return "search" if (kept or {}).get("searched_for") is not None else "channels"
+    kept = kept or {}
+    if kept.get("searched_for") is not None:
+        return "search"
+    return kept["stream"] if kept.get("stream") in metrics.STREAMS else "channels"
 
 
 def passes(verdict: dict[str, Any] | None) -> bool:

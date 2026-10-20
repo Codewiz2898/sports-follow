@@ -162,6 +162,9 @@ announces it is rumour. Full-game uploads are restreams."""
         "https://www.theguardian.com/sport/nba/rss": "The Guardian",
     }
 
+    def video_words(self) -> str:
+        return "basketball"
+
     def search_words(self, fired: Fired) -> str | None:
         """40 points or more, or a triple-double, in the game."""
         if fired.kind == "points" and number(fired.detail) >= 40:

@@ -489,6 +489,9 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "https://www.thehindu.com/sport/football/feeder/default.rss": "The Hindu",
     }
 
+    def video_words(self) -> str:
+        return "football"
+
     def search_words(self, fired: Fired) -> str | None:
         """A goal, a brace or a hat-trick (the player's goals in the game so far), in the game: "brace Liverpool vs
         Everton". A later goal in the same game takes over its search before that runs (searches.py)."""

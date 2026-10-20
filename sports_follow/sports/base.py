@@ -684,6 +684,13 @@ class Sport:
     # and a short description (README.md, "Adding or removing"), never a search engine's feed of other sites.
     news_feeds: dict[str, str] = {}
 
+    def video_words(self) -> str:
+        """Words that, after a player's name, find videos about them on a video source's search when there's no moment
+        to name (sweeps.py: a player with nothing to watch this week, and their most watched ever): the sport as its
+        fans' titles name it ("cricket", "Valorant"), so the search finds this player and not a namesake. "" for the
+        name alone."""
+        return ""
+
     def search_words(self, fired: Fired) -> str | None:
         """Words that, after the player's name, find fans' videos of this moment on a video source's search: "hundred
         Lord's", "brace Liverpool vs Everton", "wins game 4". None for a moment not worth a search (most aren't:

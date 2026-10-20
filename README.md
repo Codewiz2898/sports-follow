@@ -44,6 +44,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ poll_channels, every 30 min: each sport's trusted channels, and the searches due for
                                 │    followed players' big moments (searches.py, capped a day) ──▶ feed_candidates,
                                 │    then the judge reads what's new and rank.py scores it (no source, the model only)
+                                ├─ sweep, daily: a search for each followed player with nothing to watch this week,
+                                │    and for a few players' most watched ever (sweeps.py, capped) ──▶ feed_candidates
                                 └─ check_videos, daily: stored videos not read for a week, dropped once gone
                                          │
                                        adapters/ ──▶ YouTube feeds and Data API v3 (the feed's videos)
@@ -509,6 +511,30 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rolling, so YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
   which stays the channel poll's and the weekly check's. The ranking keeps a searched video's moment while it
   stands, rather than the biggest one near it. Off without the key.
+- **Players with nothing to watch are searched for, and so are their most watched** (`sports_follow/sweeps.py`,
+  BHA-336): a channel's feed holds only its latest 15 uploads and most games fire no big moment, so a followed
+  player can go a week with nothing. Once a day (08:15 UTC, just after YouTube's quota day starts; again at 20:15, which only does what a missed morning
+  run didn't) the curator runs a
+  **gap search** for each followed player with nothing the Feed would serve published in the last 7 days (the
+  coverage gauge's test): their name and their sport's words (`Sport.video_words`: "Shreyas Iyer cricket", "TenZ
+  Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
+  them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20, 2,000 units); a
+  player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
+  **famous sweep**: each followed player's most watched videos ever (no date limit), for "The ones everyone's seen",
+  each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` in any 7 days (35) and a seventh of that a
+  day (5, 500 units), the longest unswept first and the most followed of those, so a cap that binds gets round
+  everyone before anyone's swept again. What they find goes the moment search's way (hard filters, the judge,
+  the ranking; what's stored already isn't kept again, and counts as `already_stored`). Each search is a
+  `feed_sweep` row with what it found and kept, and each kept candidate names its sweep, so
+  `python -m sports_follow.curator sweeps` lists the last week's with what each serves (`--run` runs the day's
+  first). In the feed's funnel they're the `gap` and `famous` streams. Moment searches come first: sweeps stop while
+  less than half the day's units is left. At 19 followed players (17 uncovered) a day costs at most 17 gap
+  searches, fewer once the 3-day wait kicks in, plus the famous sweep's 500 units on its first 4 days and about 60
+  a day averaged over the month after: under 2,300 units on the heaviest day. At 500 the caps bind: 2,525 units a
+  day at most (20 gap and 5 famous searches, each with a `videos.list` read of its results), and the famous sweep
+  gets round each player every 14 weeks rather than monthly. With the moment searches' 4,000 that's 6,525 of the
+  9,000 spendable, but sweeps get only what moment searches leave: after a day of 40 moment searches (and the poll
+  and the check) less than half the window is left, and that day's sweeps don't run. Off without the key.
 - **News comes from publishers' own feeds** (`sports_follow/news.py`, `sports_follow/adapters/publisher_rss.py`,
   BHA-325), into the same pipeline as videos. Every 20 minutes the curator reads each RSS or Atom feed a running sport
   lists (`Sport.news_feeds`), through the source cache (a feed at most every 15 minutes) and conditionally (the ETag
@@ -578,7 +604,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   feed of other sites; each publisher's terms for headlines with links are noted in the pull request that adds it),
   and which of its moments the feed searches for
   fans' videos of, in what words (`search_words`: a hundred and the ground, a brace and the game; `None` for the
-  rest). Shared code
+  rest), and the words a search for one of its players' videos adds to their name (`video_words`: "cricket", a
+  game's own name). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -793,6 +820,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; 100 YouTube units each); the biggest moments first; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; 100 YouTube units each; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |

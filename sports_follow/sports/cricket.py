@@ -374,6 +374,9 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "https://www.thehindu.com/sport/cricket/feeder/default.rss": "The Hindu",
     }
 
+    def video_words(self) -> str:
+        return "cricket"
+
     def search_words(self, fired: Fired) -> str | None:
         """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
         knock and where it was ("Kohli century Lord's")."""

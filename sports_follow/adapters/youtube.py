@@ -8,7 +8,10 @@ uploads playlist is read from the API instead (playlistItems.list, 1 unit). What
 videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
 maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list, 100
 units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
-(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left.
+(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left. A followed
+player with nothing to watch this week is searched for once a day, and each one's most watched videos once a month
+(sweeps.py), under caps of their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and
+none while less than half the day's units is left.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
 the repo), an API key of a Google Cloud project with the YouTube Data API v3 turned on. Without one the source
@@ -306,12 +309,13 @@ class YouTube(VideoSource):
             out |= parse_videos(_get("videos", {"part": PARTS, "id": ",".join(part), "maxResults": str(self.batch)}, max_age))
         return out
 
-    def search(self, query: str, after: datetime, country: str) -> list[Upload]:
-        """search.list (100 units, never cached): videos published after then, most viewed first, that may be
-        embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
+    def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:
+        """search.list (100 units, never cached): videos published after then (or ever, for None), most viewed
+        first, that may be embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
         params = {
             "part": "snippet", "type": "video", "q": query, "order": "viewCount", "maxResults": str(SEARCH_RESULTS),
-            "publishedAfter": after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": country,
         }  # fmt: skip
+        if after is not None:
+            params["publishedAfter"] = after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return parse_search(_fetch("search", params, cost=SEARCH_COST))

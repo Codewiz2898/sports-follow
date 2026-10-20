@@ -98,11 +98,12 @@ def queue(now: datetime | None = None) -> dict[str, int]:
     return counts
 
 
-def _room(source: VideoSource) -> bool:
-    """Whether a search leaves the source more than KEEP_SHARE of each budget's tightest window."""
+def room(source: VideoSource, share: float = KEEP_SHARE) -> bool:
+    """Whether a search leaves the source more than this share of each budget's tightest window (a sweep's is more:
+    sweeps.KEEP_SHARE)."""
     for b in source.budgets():
-        room = budget.room(b)
-        if room is not None and room[0] - (source.search_cost or 0) < KEEP_SHARE * room[1]:
+        left = budget.room(b)
+        if left is not None and left[0] - (source.search_cost or 0) < share * left[1]:
             return False
     return True
 
@@ -152,7 +153,7 @@ def run(now: datetime | None = None) -> dict[str, int]:
             names[target.sport] = candidates.phrases([p for p in players.values() if p.sport == target.sport])
         kept, answered = 0, False
         for source in sources:
-            if shutdown.stopping.is_set() or not _room(source):
+            if shutdown.stopping.is_set() or not room(source):
                 return _done(counts)
             try:
                 uploads = source.search(s.query, s.fired_at, FEED_COUNTRY)

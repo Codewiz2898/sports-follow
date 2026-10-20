@@ -287,6 +287,7 @@ class Found:
     name: str
     where: str
     moment_id: int | None = None  # the moment it was searched for (searches.py); the ranking works it out for the rest
+    sweep: int | None = None  # the sweep that found it (sweeps.py: a FeedSweep's id)
 
 
 def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Found]:
@@ -343,6 +344,8 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
             if f.moment_id is not None:
                 values["candidate"]["searched_for"] = f.moment_id  # the ranking keeps it while it stands (rank.rescore)
+            if f.sweep is not None:
+                values["candidate"] |= {"swept": f.sweep, "stream": stream}  # what it served (sweeps.report), and its stream (rank.stream)
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
                 with session.begin_nested():
