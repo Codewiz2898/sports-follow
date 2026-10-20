@@ -189,9 +189,14 @@ def _game_key(event_id: int, kind_detail: str) -> str:
 def told(db: Session, player_id: int, event_id: int) -> list[tuple[str, str]]:
     """The moments stored for a player in a game, oldest first, as each one's kind and detail (read back
     from its key): what the sport may take back (moments.detect)."""
-    prefix = _key(event_id, player_id, "")
     keys = db.scalars(select(Moment.key).where(Moment.player_id == player_id, Moment.event_id == event_id).order_by(Moment.id))
-    return [(kind, detail) for kind, _, detail in (key.removeprefix(prefix).partition(":") for key in keys)]
+    return [kind_detail(key, event_id, player_id) for key in keys]
+
+
+def kind_detail(key: str, event_id: int | None, player_id: int) -> tuple[str, str]:
+    """A player's moment's kind and detail, read back from its key."""
+    kind, _, detail = key.removeprefix(_key(event_id, player_id, "")).partition(":")
+    return kind, detail
 
 
 def _key(event_id: int | None, player_id: int, kind_detail: str) -> str:

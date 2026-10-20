@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage
+from .base import Fired, Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -443,6 +443,16 @@ restreams; a player's own stream highlights aren't."""
         "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
         "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A series won from the semi-finals on, or a lobby won ("win the lobby"), at the event: league play's wins
+        are too many for a day's searches."""
+        if fired.kind != "final" or " win" not in fired.title:
+            return None
+        late, word = stage(fired.body, fired.game)
+        if "win the lobby" in fired.title or late >= 2:
+            return words("wins", word.lower() if late else "", fired.competition)
+        return None
 
 
 class Game(Esports):

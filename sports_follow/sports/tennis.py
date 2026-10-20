@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import ORDINAL, Found, Glance, Line, Played, Poster, Seen, Sport, num, number, short, stat, values
+from .base import ORDINAL, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, num, number, short, stage, stat, values, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -136,6 +136,15 @@ tournament and tour channels' highlights are official."""
         "UCaBIVVpHjq6j3tSyxwTE-8Q",  # WTA: highlights, interviews
         "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel: analysis
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """An upset, or a win from the semi-finals on, at the tournament."""
+        late, word = stage(fired.game, fired.competition)
+        if fired.kind == "upset":
+            return words("upset", fired.competition)
+        if fired.kind == "final" and ": won" in fired.title.lower() and late >= 2:
+            return words("wins", word.lower(), fired.competition)
+        return None
 
 
 SPORT = Tennis()

@@ -275,6 +275,7 @@ class Found:
     upload: Upload
     name: str
     where: str
+    moment_id: int | None = None  # the moment it was searched for (searches.py); the ranking works it out for the rest
 
 
 def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Found]:
@@ -326,10 +327,13 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {}}}
             else:
                 values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
+            if f.moment_id is not None:
+                values["candidate"]["searched_for"] = f.moment_id  # the ranking keeps it while it stands (rank.rescore)
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
                 with session.begin_nested():
-                    added = session.scalar(insert(FeedCandidate).values(player_id=f.player_id, source=source.system, external_id=vid, fetched_at=now, checked_at=now, **values)
+                    added = session.scalar(insert(FeedCandidate).values(player_id=f.player_id, source=source.system, external_id=vid, fetched_at=now, checked_at=now,
+                                                                        moment_id=f.moment_id, **values)
                                            .on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))
                     counts["kept"] += added is not None
             except Exception as exc:  # noqa: BLE001

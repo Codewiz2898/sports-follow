@@ -5,7 +5,9 @@ A channel's uploads come from its public feed (youtube.com/feeds/videos.xml), wh
 answers 404 or 500 for a while, for no reason it gives. When it doesn't answer and there's a key, the channel's
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
 (how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
-videos.list: 1 unit for up to 50 videos. Search (search.list, 100 units) is never used.
+videos.list: 1 unit for up to 50 videos. A big moment of a followed player is searched for (search.list, 100
+units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
+(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
 the repo), an API key of a Google Cloud project with the YouTube Data API v3 turned on. Without one the source
@@ -39,7 +41,9 @@ from .base import AdapterError, Provider, Upload, VideoFacts, VideoSource
 API = "https://www.googleapis.com/youtube/v3"
 FEEDS = "https://www.youtube.com/feeds/"
 KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_YOUTUBE_KEY_FILE", Path.home() / ".config" / "sports-follow" / "youtube-key"))
-PER_DAY = 10_000  # units; each request this module sends costs 1
+PER_DAY = 10_000  # units; each request this module sends costs 1, but a search
+SEARCH_COST = 100  # units a search.list costs, whatever it finds
+SEARCH_RESULTS = 25  # videos a search lists (50 at most, for the same units): the most watched of them
 # Never spent: a day counted in UTC isn't YouTube's (Pacific), and another process may count a moment late.
 MARGIN = 1_000
 # Not "youtube" alone: that's also a platform players have accounts on (curate.py), not only this source.
@@ -133,10 +137,10 @@ def reset_in(now: datetime | None = None) -> float:
     return (midnight - pacific).total_seconds()
 
 
-def _fetch(path: str, params: dict[str, str]) -> dict[str, Any]:
+def _fetch(path: str, params: dict[str, str], cost: int = 1) -> dict[str, Any]:
     if not key():
         raise AdapterError("no YouTube key (~/.config/sports-follow/youtube-key)")
-    budget.take(BUDGET)
+    budget.take(BUDGET, cost=cost)
     try:
         # The key in a header, not the query string: it stays out of every URL a log line or a span may show.
         res = _client.get(f"{API}/{path}", params=params, headers={"x-goog-api-key": key() or ""})
@@ -183,6 +187,28 @@ def parse_playlist(data: dict[str, Any]) -> list[Upload]:
             url=f"https://www.youtube.com/watch?v={video_id}",
             published=_time(snippet.get("publishedAt")),
             thumbnail=thumb,
+        ))
+    return out
+
+
+def parse_search(data: dict[str, Any]) -> list[Upload]:
+    """search.list's items as uploads, in the order it ranked them; its descriptions are cut short."""
+    out = []
+    for item in data.get("items") or []:
+        video_id = str((item.get("id") or {}).get("videoId") or "")
+        if not VIDEO_ID.fullmatch(video_id):
+            continue  # a channel or a playlist
+        snippet = item.get("snippet") or {}
+        thumbs = snippet.get("thumbnails") or {}
+        out.append(Upload(
+            video_id=video_id,
+            channel_id=str(snippet.get("channelId") or ""),
+            channel=str(snippet.get("channelTitle") or ""),
+            title=str(snippet.get("title") or ""),
+            description=str(snippet.get("description") or ""),
+            url=f"https://www.youtube.com/watch?v={video_id}",
+            published=_time(snippet.get("publishedAt")),
+            thumbnail=next((thumbs[k].get("url") for k in ("high", "medium", "default") if isinstance(thumbs.get(k), dict)), None),
         ))
     return out
 
@@ -243,6 +269,7 @@ class YouTube(VideoSource):
     id_pattern = VIDEO_ID
     channel_pattern = CHANNEL_ID
     platform = "youtube"
+    search_cost = SEARCH_COST
 
     def embed(self, video_id: str) -> dict[str, str] | None:
         """The app plays YouTube's own embedded player (youtube-nocookie.com), by the video's id."""
@@ -274,3 +301,13 @@ class YouTube(VideoSource):
             part = ids[i:i + self.batch]
             out |= parse_videos(_get("videos", {"part": "snippet,contentDetails,statistics,status", "id": ",".join(part), "maxResults": str(self.batch)}, max_age))
         return out
+
+    def search(self, query: str, after: datetime, country: str) -> list[Upload]:
+        """search.list (100 units, never cached): videos published after then, most viewed first, that may be
+        embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
+        params = {
+            "part": "snippet", "type": "video", "q": query, "order": "viewCount", "maxResults": str(SEARCH_RESULTS),
+            "publishedAfter": after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": country,
+        }  # fmt: skip
+        return parse_search(_fetch("search", params, cost=SEARCH_COST))

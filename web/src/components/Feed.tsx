@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Card, type Feed, type FeedItem, type FeedShare, type FeedVerdict } from '../api'
-import { dateOnly, day, parseDate, safeHref, shortName } from '../format'
+import { ago, duration, feedOf, fromTheFans, postFrom, views, without, type FeedKind } from '../feed'
+import { safeHref, shortName } from '../format'
 import { useFollowing } from '../following'
 import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
@@ -14,9 +15,6 @@ import { Rail } from './Rail'
  * tapped; a post is a snippet and a link to where it was posted; news is a headline. Each card's "…" says why
  * it's here and takes the fan's word on it, which hides it from them at once.
  */
-
-type Kind = FeedItem['kind']
-const KINDS: [Kind, string][] = [['video', 'Videos'], ['post', 'Posts'], ['news', 'News']]
 
 /** Dev only: ?feed-sample on a player's page or Today shows made-up videos and posts (dev/feedSample.ts). */
 const SAMPLE = import.meta.env.DEV && typeof location !== 'undefined' && new URLSearchParams(location.search).has('feed-sample')
@@ -50,42 +48,6 @@ export function useFeed(playerId: number, name: string, news: string) {
   }, [playerId])
 
   return { feed, error, hide }
-}
-
-function without(feed: Feed, id: string): Feed {
-  const groups = feed.groups.map((g) => ({ ...g, items: g.items.filter((i) => i.id !== id) })).filter((g) => g.items.length)
-  const evergreen = feed.evergreen.filter((i) => i.id !== id)
-  return { ...feed, groups, evergreen, count: groups.reduce((n, g) => n + g.items.length, 0) + evergreen.length }
-}
-
-/** "9h ago", "3 days ago", then the date; a story known only by its day, that day. */
-function ago(at: string | null, now: number, short = false): string {
-  const d = parseDate(at)
-  if (!d) return ''
-  if (dateOnly(at)) return day(at)
-  const mins = Math.max(1, Math.floor((now - d.getTime()) / 6e4))
-  if (mins < 60) return short ? `${mins}m` : `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return short ? `${hours}h` : `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return short ? `${days}d` : days === 1 ? '1 day ago' : `${days} days ago`
-  return day(at)
-}
-
-/** 1122 seconds is "18:42"; an hour or more "1:02:03". */
-function duration(seconds: number | null | undefined): string {
-  if (seconds == null || seconds <= 0) return ''
-  const s = Math.round(seconds)
-  const [h, m, r] = [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
-  const two = (n: number) => String(n).padStart(2, '0')
-  return h ? `${h}:${two(m)}:${two(r)}` : `${m}:${two(r)}`
-}
-
-/** 41000 views is "41K views". */
-function views(n: number | null | undefined): string {
-  if (n == null) return ''
-  const short = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
-  return `${short} ${n === 1 ? 'view' : 'views'}`
 }
 
 /** YouTube's own thumbnail of a video. Its stand-in for one it has none for (gone, or never was) is a grey
@@ -148,7 +110,7 @@ export function PostCard({ item, name, now, onMore }: { item: FeedItem; name: st
     <article className="card feed-card post">
       <div className="row" style={{ gap: 10, justifyContent: 'flex-start' }}>
         {own ? <span className="pill ink">From {shortName(name)}</span> : <span className="pill feed-fan">Fan</span>}
-        <span className="tiny muted ellipsis" style={{ fontWeight: 700, flex: 1 }}>{own ? `On ${where}` : `${item.source} on ${where}`}</span>
+        <span className="tiny muted ellipsis" style={{ fontWeight: 700, flex: 1 }}>{postFrom(item)}</span>
         {onMore && <More onClick={onMore} />}
       </div>
       <p className="feed-words clamp3">{item.title}</p>
@@ -221,16 +183,11 @@ function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; name: stri
 
 /** The Feed tab: what kind (a filter, never a sort), the groups in the order things happened, the famous ones last. */
 export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed | null; error: string | null; name: string; sport: string; now: number; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
-  const [kind, setKind] = useState<Kind | null>(null)
+  const [kind, setKind] = useState<FeedKind | null>(null)
   const [open, setOpen] = useState<FeedItem | null>(null)
   if (!feed) return error ? <div className="error-box">{error}</div> : <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
 
-  const all = [...feed.groups.flatMap((g) => g.items), ...feed.evergreen]
-  const present = KINDS.filter(([k]) => all.some((i) => i.kind === k))
-  const shown = kind && present.some(([k]) => k === kind) ? kind : null  // a kind whose last item was hidden
-  const pick = (i: FeedItem) => !shown || i.kind === shown
-  const groups = feed.groups.map((g) => ({ ...g, items: g.items.filter(pick) })).filter((g) => g.items.length)
-  const evergreen = feed.evergreen.filter(pick)
+  const { present, shown, groups, evergreen } = feedOf(feed, kind)  // shown: none once its last item was hidden
 
   return (
     <div className="section feed" data-sport={sportKey(sport)}>
@@ -311,17 +268,11 @@ function Evergreen({ item, onMore }: { item: FeedItem; onMore: () => void }) {
   )
 }
 
-/** The first video or post, the feed's top: news never leads "From the fans" or Today's rail (the Wire has news). */
-function shares(feed: Feed | null): FeedItem[] {
-  return feed ? feed.groups.flatMap((g) => g.items).filter((i) => i.kind !== 'news') : []
-}
-
 /** Overview's "From the fans": the top video or post, a line of the player's own post, and the way to the rest. */
 export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | null; name: string; sport: string; now: number; onAll: () => void }) {
-  const items = shares(feed)
-  if (!feed || !items.length) return null
-  const [top] = items
-  const line = top.kind === 'video' ? items.find((i) => i.kind === 'post' && i.post?.own) ?? items.find((i) => i.kind === 'post') : undefined
+  const lead = fromTheFans(feed)
+  if (!feed || !lead) return null
+  const { top, line } = lead
   return (
     <section className="section" aria-label="From the fans" data-sport={sportKey(sport)}>
       <SectionHead title="From the fans">
@@ -368,8 +319,7 @@ export function FromYourPlayers({ shares: rows, now }: { shares: { card: Card; i
       {rows.map(({ card, item }) => {
         const name = shortName(card.player.name)
         const own = item.kind === 'post' && item.post?.own
-        const where = item.post?.platform ?? ''
-        const from = item.kind === 'post' ? (own ? `On ${where}` : `${item.source} on ${where}`) : item.source
+        const from = item.kind === 'post' ? postFrom(item) : item.source
         return (
           <Link key={`${card.player_id}:${item.id}`} to={`/player/${card.player_id}?tab=feed`} className="feed-share" data-sport={sportKey(card.player.sport)}>
             {item.kind === 'video' && <span className="feed-share-play" aria-hidden="true">{play(16)}</span>}

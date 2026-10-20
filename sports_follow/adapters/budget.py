@@ -228,11 +228,12 @@ def _headroom(budget: Budget, lane_name: str) -> int:
     return budget.reserve if lane_name in BACKGROUND else 0
 
 
-def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None:
+def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: int = 1) -> None:
     """Count one request this lane is about to send, or refuse it (RateLimited): the source asked us to
     slow down, what it says is left is down to the margin (or, for a background lane, the reserve), a
     window's allowance less the same is spent, or so is the fans' share of a scarce source. A refused
-    request isn't counted."""
+    request isn't counted. cost: what the request spends of each window, where a source prices its calls apart
+    (a search worth a hundred reads)."""
     budget = effective(budget)
     lane_name = lane_name or lane()
     now = time.time()
@@ -242,7 +243,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
         raise RateLimited(f"{budget.name} asked us to slow down; paused until it's over")
     keep = _headroom(budget, lane_name)
     left = _store_call("get", _left_key(budget, bucket))
-    if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
+    if budget.windows and left is not None and left - cost < min(w.margin for w in budget.windows) + keep:
         _note(budget, lane_name, "refused", now)
         raise RateLimited(f"{budget.name} says {left} requests are left{f' ({bucket})' if bucket else ''}: kept for {'live games' if keep else 'the margin'}")
     # (key, ttl, limit, why): the fans' share of a scarce source first, then each window less what this lane leaves.
@@ -258,9 +259,9 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
     taken: list[tuple[str, int]] = []
     for key, ttl, limit, why in counts:
         taken.append((key, ttl))
-        if _store_call("incr", key, ttl) > limit:
+        if _store_call("incr", key, ttl, cost) > limit:
             for k, t in taken:
-                _store_call("incr", k, t, -1)
+                _store_call("incr", k, t, -cost)
             _note(budget, lane_name, "refused", now)
             if lane_name == "fan":
                 log.warning("source budgets: a fan request refused: %s", why)
@@ -281,6 +282,21 @@ def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
     if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
         return False
     return all((_store_call("get", _window_key(budget, bucket, w, now)) or 0) < w.requests - w.margin - keep for w in budget.windows)
+
+
+def room(budget: Budget, bucket: str = "", lane_name: str = "feed") -> tuple[int, int] | None:
+    """What this lane may still spend of the source's tightest window now, and that window's allowance: (left, of).
+    What the source says is left counts too, against its first window. None for a source with no published limit."""
+    budget = effective(budget)
+    if not budget.windows:
+        return None
+    now = time.time()
+    keep = _headroom(budget, lane_name)
+    rooms = [(w.requests - w.margin - keep - (_store_call("get", _window_key(budget, bucket, w, now)) or 0), w.requests) for w in budget.windows]
+    said = _store_call("get", _left_key(budget, bucket))
+    if said is not None:
+        rooms.append((said - min(w.margin for w in budget.windows) - keep, budget.windows[0].requests))
+    return min(rooms, key=lambda r: r[0])
 
 
 def observe(budget: Budget, bucket: str, left: int, resets_in: float) -> None:

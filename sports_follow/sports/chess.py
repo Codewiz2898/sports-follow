@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Glance, Line, Played, Poster, Seen, Sport, stat
+from .base import Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -267,6 +267,12 @@ without a ruling from FIDE or the platform are misinformation."""
         "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE: interviews, features
         "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: commentary on his own games and others'
     )
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A win, in its game ("wins game 4"): its fixture's title names the round."""
+        if fired.kind != "final" or ": won" not in fired.title.lower():
+            return None
+        return words("wins", fired.game or fired.competition)
 
 
 SPORT = Chess()
