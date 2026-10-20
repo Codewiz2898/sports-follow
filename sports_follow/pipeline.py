@@ -476,7 +476,8 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
                 _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
             if AGENT_LIVE:
                 _write_live(db, player, report["live"], now)
-        fresh = _write_news(db, player, report["news"])
+        # A bound player's news is the publishers' (news.py): the agent writes only their background (BHA-334).
+        fresh = [] if bound else _write_news(db, player, report["news"])
 
         if card_row is None:
             card_row = PlayerCard(player_id=player.id, version=0)
@@ -486,6 +487,8 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         version = (card_row.version or 0) + 1
         card = _card_from_report(player, report, version, now)
         card["player"] = keep_profile(previous.get("player") or {}, card["player"])
+        if bound:
+            card["news"] = previous.get("news") or []
         if (previous.get("freshness") or {}).get("profile"):
             card["freshness"]["profile"] = previous["freshness"]["profile"]
         if not bound and not AGENT_LIVE:
@@ -846,7 +849,9 @@ def build_card(player_id: int) -> None:
         if not (AGENT and wanted):
             _without_agent(player_id)
             return
-        for event in follow_player(llm(), name, structured.describe(player_id)):
+        with session() as db:
+            background_only = structured.binding(db, player_id) is not None  # a live source has the rest
+        for event in follow_player(llm(), name, structured.describe(player_id), background_only=background_only):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)
             bus.extend(lock, BUILD_LOCK, token)  # held while the agent is working, however long that takes

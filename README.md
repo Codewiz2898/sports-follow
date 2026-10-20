@@ -120,8 +120,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on a clock. A player with an article and a live source never sends it. A player no live source has gets no page at all
   unless `SPORTS_FOLLOW_RESEARCH=1`, when the agent writes their whole page as before (games and news too,
   again after `SPORTS_FOLLOW_CARD_MAX_AGE`); so pages build and rebuild without the gateway for everything
-  this covers. News for players with a live source is no longer the agent's (publisher feeds are a
-  separate piece). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
+  this covers. For a player with a live source the agent is asked for the background alone
+  (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
+  alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three

@@ -175,7 +175,7 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
     db = FakeDb(stale, from_source, *cards, answers={"Follow.id": 1, "Player.sport": "Hurling"})  # followed, a sport the agent covers
     clock, runs = [NOW], {1: [], 2: []}
 
-    def timing_out(llm, name, known):
+    def timing_out(llm, name, known, **_):
         runs[1 if name == "Player One" else 2].append(int((clock[0] - NOW).total_seconds() // 60))
         raise AgentError("Model call failed (timeout): openrouter moonshotai/kimi-k2.6:nitro: timeout")
         yield
@@ -199,7 +199,7 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
     later = NOW + timedelta(hours=20)
     assert bus.try_lock("build:1", 900) and not pipeline.agent_due(1, cards[0].card, later)
     bus.release("build:1")
-    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: iter([{"type": "result", "data": {}}]))
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **_: iter([{"type": "result", "data": {}}]))
     monkeypatch.setattr(pipeline, "apply_report", lambda player_id, report: player_id)
     monkeypatch.setattr(structured, "bind", lambda player_id: False)
     pipeline.build_card(1)
@@ -287,7 +287,7 @@ def test_a_build_that_outlives_its_lock_never_frees_the_next_ones(monkeypatch, r
     card = PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7))
     held, extended, second = [], [], []
 
-    def outlived(llm, name, known):
+    def outlived(llm, name, known, **_):
         held.append(redis.ttl["lock:build:1"])
         redis.ttl["lock:build:1"] = 5  # minutes of research later
         yield {"type": "progress", "message": "Searching the web…"}
@@ -342,6 +342,24 @@ def test_an_agent_run_stops_at_its_time_limit(monkeypatch):
         list(agent.follow_player(model, "Player One"))
     assert clock[0] <= agent.RUN_LIMIT
     assert model.timeouts == [300_000, 300_000, 200_000]  # the last call gets only the time that's left
+
+
+def test_a_background_only_run_asks_for_who_they_are_and_nothing_else():
+    from sports_follow import agent
+    from llm_providers import LlmError
+
+    asked = []
+
+    class Model:
+        def complete(self, **request):
+            asked.append(request["messages"][0]["content"])
+            raise LlmError("auth", "stop")
+
+    for background_only in (True, False):
+        with pytest.raises(AgentError):
+            list(agent.follow_player(Model(), "Player One", background_only=background_only))
+    assert "Write only who they are" in asked[0] and "leave news, upcoming, recent_results and season_stats empty" in asked[0]
+    assert "the latest news" in asked[1] and "Write only who they are" not in asked[1]
 
 
 # ---------------------------------------------------------------- source refreshes
@@ -504,7 +522,8 @@ def test_a_report_folded_into_a_bound_player_keeps_the_sources_sections(monkeypa
     card = card_row.card
     assert guessed == []
     assert {k: card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")} == {k: source_card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")}
-    assert card_row.is_live and card["news"] == [{"headline": "Kohli in the nets"}] and card["player"]["teams"] == ["India"]
+    # The agent's news isn't a bound player's either: theirs is the publishers' (BHA-334).
+    assert card_row.is_live and card["news"] == [] and card["player"]["teams"] == ["India"]
     assert card["sources"] == ["https://espncricinfo.com/player/253802", "https://example.org/kohli"]
 
 
