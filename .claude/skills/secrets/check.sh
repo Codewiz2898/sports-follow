@@ -30,6 +30,13 @@ EOF
   *.env)
     echo "$name: variables $(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$f" | paste -sd ' ' -)"
     exit ;;
+  admin-password)   # the password's hash, then (after `admin code`) a second line, totp:<key>
+    lines=$(grep -c '[^[:space:]]' "$f" || true)
+    if [ "$lines" = 1 ]; then echo "$name: the password's hash, no authenticator key yet (python -m sports_follow.admin code)"
+    elif [ "$lines" = 2 ] && [ "$(sed -n 2p "$f" | grep -c '^totp:' || true)" = 1 ]; then echo "$name: the password's hash and an authenticator key"
+    else echo "$name: $lines lines, not a hash and a totp: line: make it again (python -m sports_follow.admin password, then code)"; exit 1
+    fi
+    exit ;;
 esac
 
 # Whitespace: around the value the app strips it (fine); inside it, or a second line, the key is broken.

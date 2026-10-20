@@ -74,7 +74,9 @@ Why each part is separate:
    source on (its real token file) only when the round needs it, say so on the board, and keep hunters
    off loops against it. The admin panel, the feed's YouTube, Android pushes and Linear are off too: the
    real keys are production's (the `secrets` skill). To test the panel, give the stack a password of its
-   own: `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password <venv>/bin/python -m sports_follow.admin password`.
+   own: `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password <venv>/bin/python -m sports_follow.admin password`,
+   and set that same `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password` in the environment above
+   in place of `<scratch>/none`.
 6. **The API and web**, as preview servers: two entries in the worktree's `.claude/launch.json`, never
    committed (they hold your scratchpad's paths):
 
