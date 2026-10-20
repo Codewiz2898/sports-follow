@@ -108,6 +108,11 @@ async def build_card(ctx, player_id: int) -> None:
     await in_lane('refresh', pipeline.build_card, player_id)
 
 
+async def reread_profile(ctx, player_id: int) -> None:
+    """A player's profile from Wikidata and Wikipedia, read again a month after the last (wiki.py)."""
+    await in_lane('refresh', pipeline.reread_profile, player_id)
+
+
 async def refresh_live(ctx, player_id: int) -> None:
     await in_lane('live', pipeline.refresh_live, player_id)
 
@@ -347,6 +352,8 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("build_card", player_id)
     for player_id in due.refreshes:
         await ctx["redis"].enqueue_job("refresh_structured", player_id)
+    for player_id in due.profiles:
+        await ctx["redis"].enqueue_job("reread_profile", player_id, _job_id=f"reread-profile:{player_id}")
     for team_id in due.teams:
         await ctx["redis"].enqueue_job("refresh_team", team_id)
     for event_id in due.polls:
@@ -363,13 +370,13 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
     if await _in_tick_pool(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
-    if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives:
-        log.info("tick: %d builds, %d refreshes, %d team refreshes, %d polls, %d poll lanes, %d agent live checks",
-                 len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives))
+    if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives or due.profiles:
+        log.info("tick: %d builds, %d refreshes, %d team refreshes, %d polls, %d poll lanes, %d agent live checks, %d profiles",
+                 len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives), len(due.profiles))
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
+    functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
     cron_jobs = [

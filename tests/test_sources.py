@@ -13,8 +13,9 @@ from sports_follow import agent, search, sports
 from sports_follow.adapters import ADAPTERS, KNOWN, VIDEOS, Provider, budget, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
-# Every module in adapters/ is a source's, but what all of them share: what an adapter is, and the budget.
-SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base", "budget"}
+# Every module in adapters/ is a source's, but what all of them share: what an adapter is, the budget, and the
+# cache their answers are kept in (which Wikidata's and Wikipedia's are kept in too: wiki.py).
+SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base", "budget", "cache"}
 
 
 def test_every_source_describes_itself():

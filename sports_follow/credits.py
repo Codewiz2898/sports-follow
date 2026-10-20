@@ -1,9 +1,10 @@
 """Credits: where the app's scores, ratings, evaluations, words, photos and code come from (the Credits page).
 
 Built from what this build runs, so a public build (licensed sources only) credits exactly those and
-a development build also names ESPN. Lichess's broadcast games are CC BY-SA 4.0, which requires the
-credit and the licence link; Sportmonks, Wikidata and the rest don't require one, but fans should
-know where a score comes from and that it isn't an official record. Every player photo shown is listed
+a development build also names ESPN. Lichess's broadcast games and Wikipedia's articles (each player's
+About paragraph, wiki.py) are CC BY-SA 4.0, which requires the credit and the licence link; Sportmonks,
+Wikidata and the rest don't require one, but fans should know where a score comes from and that it isn't
+an official record. Every player photo shown is listed
 with its author and licence (photos.py): the licences fans may see them under all ask for the credit.
 """
 
@@ -12,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from . import engine
+from . import engine, wiki
 from .adapters import ADAPTERS, KNOWN, providers
 from .agent import MODEL
 from .config import APP_NAME
@@ -96,9 +97,15 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
     also: list[dict[str, Any]] = [{
         "name": "Wikidata",
         "url": "https://www.wikidata.org",
-        "what": "Player search: names, other names, teams and birth dates for about 320,000 athletes.",
+        "what": "Player search, and the facts on each player's page: names, other names, teams, birth dates, countries, positions and major awards for about 320,000 athletes.",
         "licence": "CC0 1.0",
         "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    }, {
+        "name": "Wikipedia",
+        "url": "https://en.wikipedia.org",
+        "what": "The About paragraph on a player's page: the summary of their English Wikipedia article, linked under it.",
+        "licence": wiki.LICENCE,
+        "licence_url": wiki.LICENCE_URL,
     }]
     if photos:
         also.append({
@@ -120,7 +127,7 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
         also += [
             {
                 "name": "AI",
-                "what": f"Player profiles, news summaries, and pages for sports without a live source are written by an AI model ({_model()}) from the sources linked on each page.",
+                "what": f"The background of a player Wikipedia has no article on, news summaries, and pages for sports without a live source are written by an AI model ({_model()}) from the sources linked on each page.",
                 "note": "It can get things wrong: check the linked sources before relying on a detail.",
             },
             {

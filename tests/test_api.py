@@ -969,6 +969,28 @@ def test_the_card_sends_the_live_sources_own_notes(api):
     assert live["live_note"] and live["lag_note"]
 
 
+# ---------------------------------------------------------------- the research agent, when a fan opens a page (BHA-324)
+
+
+def test_opening_a_page_only_the_agent_writes_researches_it_once_a_minute_at_most(api, monkeypatch):
+    card = {"player_id": 1, "version": 3, "status": "ready", "live": {"is_live": False, "player_stats": []}, "player": {"name": "A Hurler"}}
+    api.redis.data[bus.card_key(1)] = json.dumps(card)
+    due = [True]
+    monkeypatch.setattr(pipeline, "agent_due", lambda player_id, c: due[0] and c["version"] == 3)
+    for _ in range(3):
+        assert api.call("GET", "/api/players/1/card", fan="fan").status_code == 200
+    assert [job[0] for job in api.queue.jobs] == ["build_card"]  # one research, however many open it
+    due[0] = False
+    del api.redis.data["research:1"]
+    assert api.call("GET", "/api/players/1/card", fan="fan").status_code == 200 and len(api.queue.jobs) == 1
+
+    def broken(player_id, c):
+        raise RuntimeError("Redis is down")
+
+    monkeypatch.setattr(pipeline, "agent_due", broken)
+    assert api.call("GET", "/api/players/1/card", fan="fan").status_code == 200  # never fails the page
+
+
 # ---------------------------------------------------------------- the card is the fan's own (BUG-038)
 
 
@@ -1212,8 +1234,9 @@ def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
 
 
 def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_a_model(api, monkeypatch):
-    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): an esports pro picked in search is followed from PandaScore
-    # with no build queued, and a name or registry athlete no source has is refused, counted nowhere.
+    # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): an esports pro picked in search is followed from PandaScore,
+    # its build queued to read the profile from Wikidata and Wikipedia (no model), and a name or registry
+    # athlete no source has is refused, counted nowhere.
     from sports_follow import config
 
     monkeypatch.setattr(config, "AGENT", False)
@@ -1223,7 +1246,7 @@ def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_
     monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, True))
     answer = api.call("POST", "/api/follows", fan="fan", body={"system": tenz.system, "athlete_id": tenz.athlete_id})
     assert answer.status_code == 200 and answer.json()["player_id"] == 5
-    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured", "build_card"]
 
     person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
     monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
@@ -1236,7 +1259,7 @@ def test_without_the_agent_a_pick_follows_from_its_source_and_nothing_waits_for_
     for body, said in [({"qid": "Q99", "sport": "football"}, "No live source has Some One's games"), ({"query": "Brand New Name"}, "Pick an athlete from the search results")]:
         answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
         assert answer.status_code == 404 and answer.json()["detail"].startswith(said), body
-    assert [job[0] for job in api.queue.jobs] == ["refresh_structured"]
+    assert [job[0] for job in api.queue.jobs] == ["refresh_structured", "build_card"]
     assert not any(k.startswith("research") for k in api.redis.data)
     assert api.call("GET", "/api/config").json()["research"] is False
 
