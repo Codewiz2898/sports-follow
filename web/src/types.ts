@@ -18,6 +18,15 @@ export interface Photo {
   crop?: { x: number; y: number; w: number; h: number }
 }
 
+/** Where a player's About paragraph comes from, when it isn't the research agent's: their Wikipedia article,
+ * shown under it with its licence (sports_follow/wiki.py). */
+export interface AboutSource {
+  source: string  // "Wikipedia"
+  url?: string | null  // the article
+  licence: string  // "CC BY-SA 4.0"
+  licence_url: string
+}
+
 export interface PlayerProfile {
   name: string
   sport: string
@@ -26,6 +35,12 @@ export interface PlayerProfile {
   role?: string | null
   teams: string[]
   summary?: string
+  about?: AboutSource | null
+  born?: string | null  // "1988-11-05", or "1988" when only the year is known
+  honours?: string[]  // "Ballon d'Or ×8"
+  // Which fields Wikidata and Wikipedia gave ({"born": "wikidata", "summary": "wikipedia"}); the rest are a
+  // live source's or the research agent's.
+  profile_from?: Record<string, string>
   disambiguation?: string | null
   photo?: Photo | null
 }
@@ -61,7 +76,7 @@ export interface LiveStatus {
 
 export interface Provenance { source: string; url?: string | null; at: string }
 
-export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null }
+export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null; outlets?: number | null }  // outlets: how many ran the story
 
 export interface UpcomingEvent {
   title: string
@@ -120,6 +135,7 @@ export interface Card {
   player: PlayerProfile
   live: LiveStatus
   news: NewsItem[]
+  stories?: NewsItem[]  // the publishers' stories the curator served (sports_follow/rank.py cards): shown in place of news
   upcoming: UpcomingEvent[]
   recent_results?: RecentResult[]
   season_stats?: Stat[]
@@ -275,6 +291,7 @@ export interface FeedItem {
   published_at: string | null  // an instant, or a bare day for a story known only by its day
   reason: string
   summary?: string | null
+  outlets?: number | null  // a story's: how many outlets ran it, when more than one
   video?: { youtube_id: string; duration: number | null; views: number | null } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
@@ -359,6 +376,7 @@ export interface Campaign {
   teams: CampaignTeam[]
   games: CampaignGame[]
   zone: { name: string; label: string }
+  predictions?: Prediction[]  // its players' games to call, open first, then settled lately (sports_follow/predictions.py)
 }
 
 /** A whole team on a campaign page: following it follows every player on its roster, as its source lists them. */
@@ -436,6 +454,7 @@ export interface Match {
   fixtures: string[]
   refreshing: boolean  // a newer read is on its way: look again in a moment
   follow?: MatchFollowState
+  predictions?: Prediction[]  // what fans call before it starts (sports_follow/predictions.py); a server before them sends none
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.
@@ -488,3 +507,54 @@ export interface SportInfo {
 // sports: those the app lists, in order; groups: sports that stand for several of them and aren't listed (esports,
 // every game), as a name no listed sport has ("Esports", "Call of Duty: Mobile") is drawn; other: any other sport.
 export interface SportCatalog { sports: SportInfo[]; groups?: SportInfo[]; other: SportInfo }
+
+/** One answer to a question, and how fans split on it: picks and share (whole percents adding up to 100) come only
+ * once this fan has picked, or the question's closed, so the crowd doesn't pick for them. */
+export interface PredictionOption { key: string; label: string; picks?: number; share?: number }
+
+/** A question fans call before a game, or a map of a series, starts (sports_follow/predictions.py): "Who wins?" of
+ * a chess game, "Who takes map 2?". Open until its game or map starts (locks_at, for the first one), then closed;
+ * settled once its board says (answer: an option's key), or voided ("void": a map the series didn't need). A right
+ * pick scores 100 less the share who picked the same, at least 10; worth is what this fan's would score now. */
+export interface Prediction {
+  id: number
+  ask: string  // which question in its game: "result", "map2"
+  title: string
+  game: string  // its game's title: "Gukesh D vs Javokhir Sindarov"
+  sport: string  // a sport's key
+  match: string  // its game's address after /match/
+  status: 'open' | 'closed' | 'settled' | 'void'
+  locks_at: string | null
+  answer: string | null
+  picks: number  // how many fans picked
+  split_from: number  // picks before an open question's split shows: with fewer, it would tell a fan a friend's pick
+  options: PredictionOption[]
+  mine: string | null  // this fan's pick
+  points: number | null  // what it scored, once settled
+  worth: number | null  // what it would score, were it right, now
+  friends?: { name: string; you: boolean; option?: string }[]  // on a league's page: who picked, and what once it's closed
+  waiting?: string[]  // and who hasn't yet, while it's open
+}
+
+/** Today's calls (GET /api/me/predictions): open questions on the fan's games, soonest first, and their picks settled lately. */
+export interface MyPredictions { open: Prediction[]; settled: Prediction[] }
+
+/** A league of friends calling games together (needs an account to make or join): its invite code, its table (members'
+ * points on questions settled since it was made; level on points, the same place) and its members' calls. */
+export interface FriendLeague {
+  code: string
+  name: string
+  created_at: string | null
+  members: number
+  table: { place: number; name: string; points: number; right: number; played: number; you: boolean }[]
+  questions: Prediction[]
+}
+
+/** A league as the fan's list of theirs shows it (GET /api/me/leagues). */
+export interface FriendLeagueSummary { code: string; name: string; members: number; place: number | null; points: number }
+
+/** What an invite link shows anyone (GET /api/leagues/<code>/invite): who made it, by their name in it. */
+export interface LeagueInvite { code: string; name: string; members: number; by: string | null; member: boolean }
+
+/** The predictions numbers on the admin panel's Users tab. */
+export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }

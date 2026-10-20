@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
-from .base import Fired, Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage, words
+from .base import VOID, Ask, Fired, Found, Line, Notable, Played, Poster, Seen, Sport, joined, ordinal, stage, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -53,6 +53,11 @@ def lobby_result(fixture: Fixture, team_ids: list[str], key: Callable[[str], str
     if ours is None:
         return ""
     return f"{ordinal(ours['place'])} of {r.get('teams')} · {points(ours['points'])} pts"
+
+
+def _map_of(ask: str) -> int:
+    """A map's question's number: "map2" is 2; 0 for a question that isn't a map's."""
+    return int(ask[3:]) if ask.startswith("map") and ask[3:].isdigit() else 0
 
 
 # ---------------------------------------------------------------- moments
@@ -302,7 +307,9 @@ class Esports(Sport):
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
         Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
-        won each of its matches."""
+        won each of its matches. A series whose source told the page more about each finished map (the
+        state's "page_detail": a Dota 2 map's gold by minute, how it went, every player and the draft) has
+        that too, by map, with the two teams it names by id and their short names."""
         if state.get("kind") == "battle_royale":
             teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
             return {
@@ -318,7 +325,12 @@ class Esports(Sport):
             who = best and names.get(best[0], ("", ""))[0]
             maps.append({"n": m.get("n"), "status": m.get("status"), "winner": teams.get(m.get("winner")),
                          "best": f"{who} {best[1]['kills']}/{best[1]['deaths']}/{best[1]['assists']} on {best[1]['hero']}" if best and who else None})
-        return {"maps": maps} if maps else {}
+        if not maps:
+            return {}
+        told = state.get("page_detail") or {}
+        if not told.get("maps") or len(told.get("teams") or []) != 2:
+            return {"maps": maps}
+        return {"maps": maps, "teams": told["teams"], "detail": {"maps": told["maps"]}}
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
@@ -332,6 +344,42 @@ class Esports(Sport):
         if winner is None or loser is None or not winner.get("name"):
             return ""
         return f"{winner['name']} won by forfeit" if state.get("forfeit") else f"{winner['name']} won {winner.get('score')}–{loser.get('score')}"
+
+    # ---- predictions (predictions.py): who takes each map of a series
+
+    predicts = True
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """Who takes each map, for a series of two teams: a question for every map its source lists ahead (a best
+        of five lists five), the first closing as the series starts, each later one as its own map does. A lobby
+        asks nothing yet."""
+        teams = state.get("teams") or []
+        if state.get("kind") != "esports" or len(teams) != 2 or not all(isinstance(t, dict) and t.get("id") and t.get("name") for t in teams):
+            return []
+        options = tuple((str(t["id"]), str(t["name"])) for t in teams)
+        numbers = sorted({m["n"] for m in state.get("maps") or [] if isinstance(m.get("n"), int) and m["n"] > 0})
+        return [Ask(f"map{n}", f"Who takes map {n}?", options, order=n, first=n == numbers[0]) for n in numbers]
+
+    def closed(self, ask: str, status: str | None, state: dict[str, Any]) -> bool:
+        """Its map has begun (or one after it has), or the series is over; or, the series under way, its map isn't
+        listed any more: one the series won't need."""
+        n = _map_of(ask)
+        if status == "final" or state.get("cancelled"):
+            return True
+        maps = [m for m in state.get("maps") or [] if isinstance(m.get("n"), int)]
+        if status == "live" and not any(m["n"] == n for m in maps):
+            return True
+        return any(m["n"] >= n and (m.get("status") in ("running", "finished") or m.get("winner")) for m in maps)
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """The team that took the map, by its id; VOID for a map the series ended without (a 2–0 in a best of
+        three, a forfeit), or one of a series called off."""
+        n = _map_of(ask)
+        teams = {str(t.get("id")) for t in state.get("teams") or [] if isinstance(t, dict)}
+        won = next((str(m["winner"]) for m in state.get("maps") or [] if m.get("n") == n and m.get("winner")), None)
+        if won is not None:
+            return won if won in teams else None
+        return VOID if status == "final" or state.get("cancelled") else None
 
     def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
         """A series from one side's, as every sport's ("T1 won 3–1 v Gen.G"), or by forfeit ("NRG lost by forfeit
@@ -443,6 +491,16 @@ restreams; a player's own stream highlights aren't."""
         "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
         "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
     )
+    news_feeds = {  # for every game, as the channels are: HLTV is Counter-Strike's, VLR.gg Valorant's
+        "https://www.dexerto.com/feed/category/esports/": "Dexerto",
+        "https://www.hltv.org/rss/news": "HLTV",
+        "https://www.vlr.gg/rss": "VLR.gg",
+        "https://www.ginx.tv/en/rss": "GINX TV",
+    }
+
+    def video_words(self) -> str:
+        """The game's name: a player's videos are titled by it ("TenZ Valorant")."""
+        return self.label
 
     def search_words(self, fired: Fired) -> str | None:
         """A series won from the semi-finals on, or a lobby won ("win the lobby"), at the event: league play's wins
@@ -468,6 +526,8 @@ class Game(Esports):
         # Fans can follow its teams (teams.py): a team title's. A battle royale's teams are a lobby's, a dozen or more
         # a game, whose results are standings, not one side's against another's.
         self.follow_teams = teams
+        # Fans call its series' maps (predictions.py): a team title's. A lobby asks nothing yet, so its games aren't read ahead.
+        self.predicts = teams
         self.pattern = pattern or re.escape(label.lower()).replace("\\ ", " ")
 
     def __repr__(self) -> str:

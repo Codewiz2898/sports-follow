@@ -5,9 +5,13 @@ A channel's uploads come from its public feed (youtube.com/feeds/videos.xml), wh
 answers 404 or 500 for a while, for no reason it gives. When it doesn't answer and there's a key, the channel's
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
 (how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
-videos.list: 1 unit for up to 50 videos. A big moment of a followed player is searched for (search.list, 100
+videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
+maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list, 100
 units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
-(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left.
+(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left. A followed
+player with nothing to watch this week is searched for once a day, and each one's most watched videos once a month
+(sweeps.py), under caps of their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and
+none while less than half the day's units is left.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
 the repo), an API key of a Google Cloud project with the YouTube Data API v3 turned on. Without one the source
@@ -54,6 +58,8 @@ FEED_TTL = 20 * 60  # a channel's latest uploads, read again after this: the cur
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
 _NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015", "media": "http://search.yahoo.com/mrss/"}
+# What videos.list is asked of each video: 1 unit a request whichever parts it names.
+PARTS = "snippet,contentDetails,statistics,status,paidProductPlacementDetails"
 _DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?")
 
 PROVIDER = Provider(
@@ -238,7 +244,7 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
         video_id = str(item.get("id") or "")
         if not VIDEO_ID.fullmatch(video_id):
             continue
-        details, stats, status, snippet = (item.get(k) or {} for k in ("contentDetails", "statistics", "status", "snippet"))
+        details, stats, status, snippet, placement = (item.get(k) or {} for k in ("contentDetails", "statistics", "status", "snippet", "paidProductPlacementDetails"))
         region = details.get("regionRestriction") or {}
         allowed = region.get("allowed")
         out[video_id] = VideoFacts(
@@ -251,6 +257,7 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
             live=snippet.get("liveBroadcastContent") in ("live", "upcoming"),
             allowed=tuple(allowed) if isinstance(allowed, list) else None,
             blocked=tuple(region.get("blocked") or ()),
+            paid=placement.get("hasPaidProductPlacement") is True,
             raw={
                 "contentDetails": details,
                 "statistics": stats,
@@ -299,15 +306,16 @@ class YouTube(VideoSource):
         out: dict[str, VideoFacts] = {}
         for i in range(0, len(ids), self.batch):
             part = ids[i:i + self.batch]
-            out |= parse_videos(_get("videos", {"part": "snippet,contentDetails,statistics,status", "id": ",".join(part), "maxResults": str(self.batch)}, max_age))
+            out |= parse_videos(_get("videos", {"part": PARTS, "id": ",".join(part), "maxResults": str(self.batch)}, max_age))
         return out
 
-    def search(self, query: str, after: datetime, country: str) -> list[Upload]:
-        """search.list (100 units, never cached): videos published after then, most viewed first, that may be
-        embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
+    def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:
+        """search.list (100 units, never cached): videos published after then (or ever, for None), most viewed
+        first, that may be embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
         params = {
             "part": "snippet", "type": "video", "q": query, "order": "viewCount", "maxResults": str(SEARCH_RESULTS),
-            "publishedAfter": after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": country,
         }  # fmt: skip
+        if after is not None:
+            params["publishedAfter"] = after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return parse_search(_fetch("search", params, cost=SEARCH_COST))

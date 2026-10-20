@@ -5,7 +5,7 @@
 
 import { ahead, countdown, dateOnly, day, dayLabel, lineStats, outcome, parseDate, playedOn, shortName, shortWhen } from './format'
 import { factsOf, factsOfKind } from './sports/facts'
-import type { Card, FollowedTeam, LatestResult, LiveStatus, Stat, UpcomingEvent } from './types'
+import type { Card, FollowedTeam, LatestResult, LiveStatus, NewsItem, Stat, UpcomingEvent } from './types'
 
 export const WON = { W: 'Won', D: 'Drew', L: 'Lost' } as const
 
@@ -31,7 +31,31 @@ export function statusLine(card: Card, progress: string[] | undefined, now: numb
   if (last && now - lastAt < 14 * 864e5) return last.result
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
   if (card.player.status === 'retired') return 'Retired · news only'
-  return card.news?.[0]?.headline ?? sport
+  return newsOf(card)[0]?.headline ?? sport
+}
+
+/** A card's news: the publishers' stories the curator served, else the research agent's. */
+export function newsOf(card: Pick<Card, 'news' | 'stories'>): NewsItem[] {
+  return card.stories?.length ? card.stories : (card.news ?? [])
+}
+
+/** The line over a ready page still being filled in: a page from a live source has its scores; one from
+ * Wikipedia alone (no source) its profile. */
+export function pendingLine(card: Pick<Card, 'pending' | 'provenance'>): string {
+  const what = card.pending?.includes('news') ? 'news and background, about two minutes' : 'their background'
+  return `${card.provenance ? 'Scores and fixtures are live. ' : ''}Still gathering ${what}.`
+}
+
+/** "5 November 1988"; a year alone as it is. */
+export function bornOn(value: string): string {
+  if (/^\d{4}$/.test(value)) return value
+  const d = new Date(`${value}T12:00:00Z`)
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+}
+
+/** Who they are in a line, from Wikidata (sports_follow/wiki.py): born, country, at most four honours. */
+export function profileFacts(p: Pick<Card['player'], 'born' | 'nationality' | 'honours'>): string[] {
+  return [p.born && `Born ${bornOn(p.born)}`, p.nationality, ...(p.honours ?? []).slice(0, 4)].filter((f): f is string => Boolean(f))
 }
 
 /** What a followed team's tile says, as a player's does: its game on now, then a game this week, then its last

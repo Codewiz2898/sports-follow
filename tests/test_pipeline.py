@@ -18,6 +18,14 @@ from sports_follow.adapters import AdapterError
 from sports_follow.agent import AgentError
 from sports_follow.models import Player, PlayerCard, SourceBinding
 
+
+@pytest.fixture(autouse=True)
+def research_on(monkeypatch):
+    """These tests cover pages for players no live source has, which the agent writes with research on
+    (config.RESEARCH, off by default): on here, and off with the agent in the tests that turn it off."""
+    monkeypatch.setattr(config, "RESEARCH", True)
+
+
 NOW = datetime(2026, 10, 13, 7, 40, tzinfo=timezone.utc)
 
 
@@ -164,10 +172,10 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
         PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7)),
         PlayerCard(player_id=2, status="ready", card={"status": "ready", "pending": ["profile", "news"]}, version=1, built_at=None),
     ]
-    db = FakeDb(stale, from_source, *cards)
+    db = FakeDb(stale, from_source, *cards, answers={"Follow.id": 1, "Player.sport": "Hurling"})  # followed, a sport the agent covers
     clock, runs = [NOW], {1: [], 2: []}
 
-    def timing_out(llm, name, known):
+    def timing_out(llm, name, known, **_):
         runs[1 if name == "Player One" else 2].append(int((clock[0] - NOW).total_seconds() // 60))
         raise AgentError("Model call failed (timeout): openrouter moonshotai/kimi-k2.6:nitro: timeout")
         yield
@@ -178,9 +186,10 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
     monkeypatch.setattr(pipeline, "llm", lambda: None)
     monkeypatch.setattr(pipeline, "follow_player", timing_out)
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
-    for minute in range(12 * 60):  # the scheduler's tick, once a minute for 12 hours
+    for minute in range(12 * 60):  # the scheduler's tick, and a fan opening each page, once a minute for 12 hours
         clock[0] = NOW + timedelta(minutes=minute)
-        for player_id in pipeline.due_work(clock[0]).builds:
+        opened = [c.player_id for c in cards if pipeline.agent_due(c.player_id, c.card, clock[0])]
+        for player_id in dict.fromkeys([*pipeline.due_work(clock[0]).builds, *opened]):
             pipeline.build_card(player_id)
     # 30 minutes, then an hour, 2, 4, and never more than CARD_MAX_AGE (6 hours) apart.
     assert runs == {1: [0, 30, 90, 210, 450], 2: [0, 30, 90, 210, 450]}
@@ -188,9 +197,9 @@ def test_a_failing_rebuild_waits_longer_each_time(monkeypatch, redis):
 
     # A build still running is never queued twice, and one that succeeds starts the count again.
     later = NOW + timedelta(hours=20)
-    assert bus.try_lock("build:1", 900) and not pipeline.rebuild_due(cards[0], later)
+    assert bus.try_lock("build:1", 900) and not pipeline.agent_due(1, cards[0].card, later)
     bus.release("build:1")
-    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: iter([{"type": "result", "data": {}}]))
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **_: iter([{"type": "result", "data": {}}]))
     monkeypatch.setattr(pipeline, "apply_report", lambda player_id, report: player_id)
     monkeypatch.setattr(structured, "bind", lambda player_id: False)
     pipeline.build_card(1)
@@ -236,6 +245,7 @@ def test_without_the_agent_a_sources_page_is_whole_and_nothing_waits_for_a_model
         return player_id
 
     monkeypatch.setattr(config, "AGENT", False)
+    monkeypatch.setattr(config, "RESEARCH", False)
     monkeypatch.setattr(config, "CARD_MAX_AGE", 6 * 3600)
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
     monkeypatch.setattr(pipeline, "llm", lambda: pytest.fail("the model was asked"))
@@ -246,14 +256,16 @@ def test_without_the_agent_a_sources_page_is_whole_and_nothing_waits_for_a_model
     for minute in range(0, 24 * 60, 30):  # a day of the scheduler's ticks
         for player_id in pipeline.due_work(NOW + timedelta(minutes=minute)).builds:
             pipeline.build_card(player_id)
-    assert published[1] == {"status": "ready", "version": 5, "upcoming": [{"title": "Sentinels v G2"}]}  # nothing pending
+    # Nothing pending; the profile was looked for (it has no Wikidata person here) and when is noted.
+    assert {k: v for k, v in published[1].items() if k not in ("player", "freshness")} == {"status": "ready", "version": 6, "upcoming": [{"title": "Sentinels v G2"}]}
     assert sorted(looked_up) == ["Someone", "aspas"]  # each typed name looked up once, in the sources
-    assert [(c.status, c.version) for c in cards] == [("ready", 5), ("ready", 1), ("failed", 0), ("ready", 7)]
+    assert [(c.status, c.version) for c in cards] == [("ready", 6), ("ready", 2), ("failed", 1), ("ready", 7)]
     assert cards[2].card["error"] == "No live source has this player, so there's no page to show yet."
 
 
-@pytest.mark.parametrize("agent, pending", [(True, ["profile", "news"]), (False, None)])
-def test_a_pick_waits_for_the_profile_and_news_only_with_the_agent(monkeypatch, agent, pending):
+@pytest.mark.parametrize("agent", [True, False])
+def test_a_pick_waits_for_its_profile_with_or_without_the_agent(monkeypatch, agent):
+    # The profile comes from Wikidata and Wikipedia, not a model: the build queued with the pick reads it.
     db = FakeDb()
     monkeypatch.setattr(config, "AGENT", agent)
     monkeypatch.setattr(pipeline, "session", lambda: nullcontext(db))
@@ -262,7 +274,7 @@ def test_a_pick_waits_for_the_profile_and_news_only_with_the_agent(monkeypatch, 
     ref = SimpleNamespace(system="pandascore_esports", athlete_id="8742", name="TenZ", team_ids=["1"], team_names=["Sentinels"], profile_url=None, game="Valorant")
     _, created = pipeline.start_from_pick(SimpleNamespace(sports=("valorant",), sport_of=lambda ref: "valorant"), ref)
     [card] = [r for r in db.rows if isinstance(r, PlayerCard)]
-    assert created and card.status == "ready" and card.card.get("pending") == pending
+    assert created and card.status == "ready" and card.card.get("pending") == ["profile"]
 
 
 def test_a_typed_name_only_a_college_player_has_fails_without_the_agent(monkeypatch, redis):
@@ -298,7 +310,7 @@ def test_a_build_that_outlives_its_lock_never_frees_the_next_ones(monkeypatch, r
     card = PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7))
     held, extended, second = [], [], []
 
-    def outlived(llm, name, known):
+    def outlived(llm, name, known, **_):
         held.append(redis.ttl["lock:build:1"])
         redis.ttl["lock:build:1"] = 5  # minutes of research later
         yield {"type": "progress", "message": "Searching the web…"}
@@ -353,6 +365,24 @@ def test_an_agent_run_stops_at_its_time_limit(monkeypatch):
         list(agent.follow_player(model, "Player One"))
     assert clock[0] <= agent.RUN_LIMIT
     assert model.timeouts == [300_000, 300_000, 200_000]  # the last call gets only the time that's left
+
+
+def test_a_background_only_run_asks_for_who_they_are_and_nothing_else():
+    from sports_follow import agent
+    from llm_providers import LlmError
+
+    asked = []
+
+    class Model:
+        def complete(self, **request):
+            asked.append(request["messages"][0]["content"])
+            raise LlmError("auth", "stop")
+
+    for background_only in (True, False):
+        with pytest.raises(AgentError):
+            list(agent.follow_player(Model(), "Player One", background_only=background_only))
+    assert "Write only who they are" in asked[0] and "leave news, upcoming, recent_results and season_stats empty" in asked[0]
+    assert "the latest news" in asked[1] and "Write only who they are" not in asked[1]
 
 
 # ---------------------------------------------------------------- source refreshes
@@ -515,7 +545,8 @@ def test_a_report_folded_into_a_bound_player_keeps_the_sources_sections(monkeypa
     card = card_row.card
     assert guessed == []
     assert {k: card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")} == {k: source_card[k] for k in ("live", "upcoming", "recent_results", "season_stats", "provenance")}
-    assert card_row.is_live and card["news"] == [{"headline": "Kohli in the nets"}] and card["player"]["teams"] == ["India"]
+    # The agent's news isn't a bound player's either: theirs is the publishers' (BHA-334).
+    assert card_row.is_live and card["news"] == [] and card["player"]["teams"] == ["India"]
     assert card["sources"] == ["https://espncricinfo.com/player/253802", "https://example.org/kohli"]
 
 

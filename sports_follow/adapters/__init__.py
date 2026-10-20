@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import controls, sports
 from ..config import SOURCES
-from .base import NOT_FOUND, Absence, Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, NotFound, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Upload, VideoFacts, VideoSource
+from .base import NOT_FOUND, Absence, Adapter, AdapterError, Article, Fixture, Line, LiveGame, LiveSearch, NewsSource, NotFound, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Upload, VideoFacts, VideoSource
 from .espn_basketball import EspnBasketball
 from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
@@ -20,6 +20,7 @@ from .lichess_chess import LichessChess
 from .liquipedia_esports import LiquipediaEsports
 from .pandascore_esports import PandascoreEsports
 from .pubg_esports import PubgEsports
+from .publisher_rss import PublisherRss
 from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
 from .youtube import YouTube
@@ -48,6 +49,11 @@ ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
 VIDEOS: dict[str, VideoSource] = {v.system: v for v in (
     YouTube(),
 )}
+# Every source of stories about players, for the feed (news.py). Each takes the feeds of its own shape that a sport
+# lists (Sport.news_feeds); like VIDEOS, adding one is its module plus an entry here.
+NEWS: dict[str, NewsSource] = {n.system: n for n in (
+    PublisherRss(),
+)}
 
 
 def videos() -> list[VideoSource]:
@@ -56,6 +62,19 @@ def videos() -> list[VideoSource]:
     curator's: those of the sports that run."""
     off = controls.current().sources_off
     return [v for v in VIDEOS.values() if v.available() and (not SOURCES or v.system in SOURCES) and v.system not in off]
+
+
+def news() -> list[NewsSource]:
+    """The news sources that run now, as videos() says of video sources. Which sports' feeds they read is the
+    curator's: those of the sports that run."""
+    off = controls.current().sources_off
+    return [n for n in NEWS.values() if n.available() and (not SOURCES or n.system in SOURCES) and n.system not in off]
+
+
+def feed_source(system: str) -> VideoSource | NewsSource | None:
+    """The feed's source a stored row names (FeedCandidate.source): a video source or a news source, which says what
+    its rows are (kind) and where (platform); None for one no longer known."""
+    return VIDEOS.get(system) or NEWS.get(system)
 
 
 def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: Sequence[sports.Sport] = sports.ALL) -> dict[str, Adapter]:
@@ -153,6 +172,7 @@ def source_name(system: str) -> str:
 
 
 __all__ = [
-    "ADAPTERS", "ALL", "KNOWN", "NOT_FOUND", "VIDEOS", "Absence", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "NotFound", "PlayerRef", "Provider", "SourceTeam",
-    "Roster", "Rostered", "SearchResult", "Snapshot", "Upload", "VideoFacts", "VideoSource", "for_sport", "pick", "providers", "serving", "source_name", "videos",
+    "ADAPTERS", "ALL", "KNOWN", "NEWS", "NOT_FOUND", "VIDEOS", "Absence", "Adapter", "AdapterError", "Article", "Fixture", "Line", "LiveGame", "LiveSearch", "NewsSource", "NotFound", "PlayerRef",
+    "Provider", "SourceTeam", "Roster", "Rostered", "SearchResult", "Snapshot", "Upload", "VideoFacts", "VideoSource", "feed_source", "for_sport", "news", "pick",
+    "providers", "serving", "source_name", "videos",
 ]

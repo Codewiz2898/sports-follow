@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedShare, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedShare, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -82,6 +82,18 @@ export function endpoints(request: Request) {
     /** Follow a whole team on a campaign page (its roster's players), or all of its own players, in one call. */
     campaignFollow: (slug: string, which: { team: string } | { players: true }) =>
       request<{ player_ids: number[]; failed: number }>(`/api/campaigns/${encodeURIComponent(slug)}/follow`, json('POST', which)),
+    // Calling games (sports_follow/predictions.py): a pick on a question, or taking it back, while it's open; today's calls.
+    pick: (questionId: number, option: string) => request<{ question: Prediction }>(`/api/predictions/${questionId}/pick`, json('PUT', { option })),
+    unpick: (questionId: number) => request<{ question: Prediction }>(`/api/predictions/${questionId}/pick`, { method: 'DELETE' }),
+    myPredictions: () => request<MyPredictions>('/api/me/predictions'),
+    // Leagues of friends: making or joining one needs an account (a 401 says so).
+    myLeagues: () => request<{ leagues: FriendLeagueSummary[] }>('/api/me/leagues'),
+    makeLeague: (name: string, member: string) => request<{ league: FriendLeague }>('/api/leagues', json('POST', { name, member })),
+    friendLeague: (code: string) => request<{ league: FriendLeague }>(`/api/leagues/${encodeURIComponent(code)}`),
+    leagueInvite: (code: string) => request<{ invite: LeagueInvite }>(`/api/leagues/${encodeURIComponent(code)}/invite`),
+    joinLeague: (code: string, member: string) => request<{ league: FriendLeague }>(`/api/leagues/${encodeURIComponent(code)}/join`, json('POST', { member })),
+    leaveLeague: (code: string) => request<{ left: boolean }>(`/api/leagues/${encodeURIComponent(code)}/me`, { method: 'DELETE' }),
+    leagueShared: (code: string) => request<{ ok: boolean }>(`/api/leagues/${encodeURIComponent(code)}/shared`, { method: 'POST' }),
     /** Where this fan came from: the first link's tags (s=, utm_…) and its page; the server keeps the first. */
     visitSource: (tags: Record<string, string>, path: string) => request<{ ok: boolean }>('/api/me/source', json('POST', { ...tags, path })),
   }

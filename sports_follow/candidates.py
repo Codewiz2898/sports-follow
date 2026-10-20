@@ -3,8 +3,9 @@ candidates for the later stages to judge and rank (feed_candidates). Run by the 
 a request: the feed reads what's here and never waits on it.
 
 Every half hour (poll), for each running video source (adapters.videos): the latest uploads of each channel a
-running sport lists (Sport.video_channels), and of those, each one whose title or description names a followed
-player of that sport (named) is a candidate for that player. What the source says of the new ones (one request
+running sport lists (Sport.video_channels), and of those, each one whose title or the opening of its description
+names a followed player of that sport (named) is a candidate for that player: not a name in the link lists further
+down (related videos, podcasts, a channel's other series), which are about someone else. What the source says of the new ones (one request
 for every 50) then decides, with the hard filters alone, which are kept (refused): a video that may be embedded,
 is public, plays in FEED_COUNTRY, isn't a live stream and runs 1 to 20 minutes. Whether it's any good is the
 judge's to say, later. A video refused is remembered for a week, so it isn't asked about again while it's still
@@ -31,8 +32,8 @@ from sqlalchemy import delete, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, db, metrics, naming, shutdown, sports
-from .adapters import AdapterError, Upload, VideoFacts, VideoSource, budget, videos
+from . import bus, db, feedstats, metrics, naming, shutdown, sports
+from .adapters import NEWS, AdapterError, Upload, VideoFacts, VideoSource, budget, videos
 from .config import FEED_COUNTRY
 from .models import Athlete, FeedCandidate, Follow, Player, PlayerAlias, PlayerIdentity
 
@@ -59,25 +60,28 @@ _POSSESSIVE = re.compile(r"['’`]s\b", re.I)  # "Kohli's": the name, not "kohli
 
 @dataclass
 class Followed:
-    """A followed player as the feed looks for them: their sport (its key) and every name they go by."""
+    """A followed player as the feed looks for them: their sport (its key), every name they go by, and the sides
+    they turn out for (their teams, their country), which tell a namesake apart in a story (news.py)."""
 
     player_id: int
     sport: str
     name: str
     aliases: list[str] = field(default_factory=list)
+    teams: list[str] = field(default_factory=list)
 
 
 def followed(session: Session) -> list[Followed]:
     """Every player at least one fan follows, with their sport and the names they go by: their own, what fans
     typed to find them, and the registry's other names for them."""
-    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid).where(exists().where(Follow.player_id == Player.id))).all()
-    out = {pid: Followed(pid, sports.family(sport), name) for pid, name, sport, _ in rows}
+    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid, Player.teams, Player.nationality)
+                           .where(exists().where(Follow.player_id == Player.id))).all()  # fmt: skip
+    out = {pid: Followed(pid, sports.family(sport), name, teams=_sides(teams, country)) for pid, name, sport, _, teams, country in rows}
     if not out:
         return []
     for pid, alias in session.execute(select(PlayerAlias.player_id, PlayerAlias.alias).where(PlayerAlias.player_id.in_(out))):
         out[pid].aliases.append(alias.replace("-", " "))
     qids: dict[str, set[int]] = {}
-    for pid, _, _, qid in rows:
+    for pid, _, _, qid, _, _ in rows:
         if qid:
             qids.setdefault(qid, set()).add(pid)
     for pid, qid in session.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(out), PlayerIdentity.system == "wikidata")):
@@ -88,6 +92,12 @@ def followed(session: Session) -> list[Followed]:
                 if out[pid].sport in ("", sports.family(sport)) or not sports.get(out[pid].sport):
                     out[pid].aliases += [name, *(a for a in aliases or [] if isinstance(a, str))]
     return list(out.values())
+
+
+def _sides(teams: Any, country: str | None) -> list[str]:
+    """A player's teams (as Player.teams keeps them: names, or {"name": …}) and their country, as names."""
+    names = [t if isinstance(t, str) else str((t or {}).get("name") or "") for t in (teams if isinstance(teams, list) else [])]
+    return [n for n in dict.fromkeys([*names, country or ""]) if n.strip()]
 
 
 def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
@@ -138,9 +148,9 @@ Texts = list[tuple[str, list[str], set[str]]]
 
 
 def texts(upload: Upload) -> Texts:
-    """A video's title and description as words, each once: (where, its words, the set of them)."""
+    """A video's title and its description's opening (naming.lead) as words, each once: (where, its words, the set of them)."""
     out = []
-    for where, text in (("title", upload.title), ("description", upload.description)):
+    for where, text in (("title", upload.title), ("description", naming.lead(upload.description))):
         words = naming.words(_POSSESSIVE.sub("", text))
         out.append((where, words, set(words)))
     return out
@@ -151,7 +161,7 @@ def _longest_first(names: Iterable[tuple[str, ...]]) -> list[tuple[str, ...]]:
 
 
 def named(upload: Upload, names: Iterable[tuple[str, ...]], read: Texts | None = None) -> tuple[str, str] | None:
-    """The name (its words) a video's title, else its description, names a player by, and where: ("virat
+    """The name (its words) a video's title, else its description's opening, names a player by, and where: ("virat
     kohli", "title"); None if neither does. The longest name found wins. read: the upload's texts(), when the
     caller already has them."""
     ordered = _longest_first(names)
@@ -231,6 +241,7 @@ def candidate(upload: Upload, name: str, where: str, sport: str, facts: VideoFac
         "where": where,
         "sport": sport,
         "details": {k: v for k, v in (facts.raw if facts else {}).items() if k != "statistics"},
+        "paid": facts.paid if facts else False,
     }
 
 
@@ -276,6 +287,7 @@ class Found:
     name: str
     where: str
     moment_id: int | None = None  # the moment it was searched for (searches.py); the ranking works it out for the rest
+    sweep: int | None = None  # the sweep that found it (sweeps.py: a FeedSweep's id)
 
 
 def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Found]:
@@ -291,10 +303,10 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
     return out
 
 
-def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, int]:
+def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
     """Store what's new of what was found: a video already kept for someone else is kept for this player too,
     as it is; the rest are asked about (a request per 50, with no transaction open meanwhile) and kept if no
-    hard filter refuses them."""
+    hard filter refuses them. stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
     counts = {"kept": 0, "refused": 0}
     ids = sorted({f.upload.video_id for f in found})
     if not ids:
@@ -309,6 +321,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
+        feedstats.keep_counted(stream, found, have)
         return counts
     skip = _was_refused(source, sorted({f.upload.video_id for f in new} - stored.keys()))
     ask = sorted({f.upload.video_id for f in new} - stored.keys() - skip)
@@ -316,6 +329,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
     why = {v: r for v in ask if (r := refused(facts.get(v)))}
     _remember_refused(source, why)
     counts["refused"] = len(why)
+    stored_for: list[str] = []  # a sport for each row stored
     with db.session() as session:
         for f in new:
             vid = f.upload.video_id
@@ -324,11 +338,14 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
             if vid in stored:
                 same = stored[vid]
                 values = {"url": same["url"], "features": same["features"],
-                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {}}}
+                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {},
+                                        "paid": same["candidate"].get("paid") is True}}
             else:
                 values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
             if f.moment_id is not None:
                 values["candidate"]["searched_for"] = f.moment_id  # the ranking keeps it while it stands (rank.rescore)
+            if f.sweep is not None:
+                values["candidate"] |= {"swept": f.sweep, "stream": stream}  # what it served (sweeps.report), and its stream (rank.stream)
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
                 with session.begin_nested():
@@ -336,8 +353,10 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
                                                                         moment_id=f.moment_id, **values)
                                            .on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))
                     counts["kept"] += added is not None
+                    stored_for += [f.sport] if added is not None else []
             except Exception as exc:  # noqa: BLE001
                 log.info("feed: %s %s for player %s not kept: %s", source.system, vid, f.player_id, type(exc).__name__)
+    feedstats.keep_counted(stream, found, have, skip, why, facts, stored_for)
     return counts
 
 
@@ -372,7 +391,9 @@ def poll(now: datetime | None = None) -> dict[str, int]:
             if keys not in by_sports:
                 group = [p for p in players if p.sport in keys]
                 by_sports[keys] = (group, phrases(group))
-            found += match(theirs, *by_sports[keys])
+            matched = match(theirs, *by_sports[keys])
+            feedstats.read_channel(channel, keys, theirs, matched, now)
+            found += matched
         totals["found"] += len(found)
         try:
             counts = keep(source, found, now)
@@ -413,6 +434,11 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 log.info("feed: %s dropped %d stored video(s): %s", source.system, len(dead), ", ".join(f"{v} ({w})" for v, w in sorted(dead.items())))
             for row in session.scalars(select(FeedCandidate).where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_([v for v in part if v not in dead]))):
                 row.features = read_again(row.features or {}, facts[row.external_id], now)
+                paid = facts[row.external_id].paid
+                if (row.candidate or {}).get("paid") is not paid:
+                    row.candidate = {**(row.candidate or {}), "paid": paid}
+                    if paid:  # declared after it was judged: unserved until the judge says again (the rules: a promo)
+                        row.verdict, row.judged_at, row.score = None, None, None
                 row.checked_at = now
         counts["read"] += len(part) - len(dead)
         counts["dropped"] += len(dead)
@@ -456,8 +482,10 @@ def check(now: datetime | None = None) -> dict[str, int]:
     totals = {"read": 0, "dropped": 0}
     # Rows no check could read for a month (their source turned off, or without its key) go: what's shown must
     # have been confirmed lately, and YouTube's terms keep its data 30 days at most without reading it again.
+    # A publisher's story (news.py) is never read again: the weekly prune drops it by age instead.
     with db.session() as session:
-        stale = session.execute(delete(FeedCandidate).where(FeedCandidate.checked_at < now - STALE_AFTER).returning(FeedCandidate.id)).all()
+        stale = session.execute(delete(FeedCandidate).where(FeedCandidate.checked_at < now - STALE_AFTER, FeedCandidate.source.not_in(list(NEWS)))
+                                .returning(FeedCandidate.id)).all()  # fmt: skip
     if stale:
         log.info("feed: dropped %d candidate(s) no check has read for %d days", len(stale), STALE_AFTER.days)
         totals["dropped"] += len(stale)

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BackIcon, SearchIcon } from '../components/Icons'
 import { day, relative } from '../format'
-import { admin, type AccountDetail, type AccountRow, type Overview } from './api'
+import { admin, type AccountDetail, type AccountRow, type Overview, type PredictionNumbers } from './api'
 import { Note, count, useFailure } from './shared'
 
 const TYPING_MS = 250
@@ -14,6 +14,7 @@ export function UsersTab() {
   const query = params.get('q') ?? ''
   const [typed, setTyped] = useState(query)
   const [overview, setOverview] = useState<Overview | null>(null)
+  const [calls, setCalls] = useState<PredictionNumbers | null>(null)
   const [rows, setRows] = useState<AccountRow[] | null>(null)
   const [next, setNext] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -27,6 +28,7 @@ export function UsersTab() {
     admin.users(query).then((r) => {
       if (!current) return
       setOverview(r.overview)
+      setCalls(r.predictions ?? null)
       setRows(r.accounts)
       setNext(r.next)
     }, (e) => current && setError(failed(e)))
@@ -53,6 +55,16 @@ export function UsersTab() {
           <Stat value={overview.blocked} label="Blocked" />
           <Stat value={overview.anonymous} label="Anonymous fans following someone" />
           <Stat value={overview.devices} label="Devices with alerts on" />
+        </div>
+      )}
+      {calls && (
+        <div className="stat-grid" aria-label="Predictions with friends">
+          <Stat value={calls.leagues_3} label="Leagues of 3 or more" />
+          <Stat value={calls.leagues} label="Leagues" />
+          <Stat value={calls.invites_shared} label="Invites shared" />
+          <Stat value={calls.invites_opened} label="Invites opened" />
+          <Stat value={calls.pickers} label="Fans who called a game" />
+          <Stat value={calls.game_day_returns} label="Came back on another game day" />
         </div>
       )}
       <Note>Fans without an account are anonymous (a cookie on their device) and aren't listed. Blocking an account signs it out everywhere and stops it signing in; its device can still use the app anonymously.</Note>

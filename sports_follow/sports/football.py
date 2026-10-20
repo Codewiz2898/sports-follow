@@ -203,6 +203,12 @@ class Football(Sport):
     follow_teams = True
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
+    honours = {
+        "Q166177": "Ballon d'Or", "Q2291862": "Ballon d'Or", "Q59411480": "Ballon d'Or Féminin",
+        "Q182529": "FIFA World Player of the Year", "Q10869150": "FIFA World Player of the Year",
+        "Q28156245": "The Best FIFA Men's Player", "Q28196702": "The Best FIFA Women's Player",
+        "Q233454": "European Golden Shoe", "Q17355204": "World Cup Golden Ball",
+    }
     athletes = 260_000
     no_line = "Not in the matchday squad"
     team_sheet_before = 75 * 60  # the Premier League's since 2024-25; most leagues publish about an hour ahead
@@ -476,6 +482,15 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
         "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.theguardian.com/football/rss": "The Guardian",
+        "https://www.skysports.com/rss/11095": "Sky Sports",
+        "https://www.thehindu.com/sport/football/feeder/default.rss": "The Hindu",
+    }
+
+    def video_words(self) -> str:
+        return "football"
 
     def search_words(self, fired: Fired) -> str | None:
         """A goal, a brace or a hat-trick (the player's goals in the game so far), in the game: "brace Liverpool vs

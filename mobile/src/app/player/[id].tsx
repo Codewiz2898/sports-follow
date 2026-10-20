@@ -6,15 +6,15 @@
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, levelText } from '../../../../web/src/alerts'
-import { day, outcome, playedOn, relative, shortName } from '../../../../web/src/format'
-import { bareScore, highlight, lastChecked, liveLag, liveUpdates, nextGame } from '../../../../web/src/lines'
+import { day, outcome, playedOn, relative, safeHref, shortName } from '../../../../web/src/format'
+import { bareScore, highlight, lastChecked, liveLag, liveUpdates, newsOf, nextGame, pendingLine, profileFacts } from '../../../../web/src/lines'
 import { sharePlayer } from '../../../../web/src/share'
 import { useAccount } from '../../account'
 import { useActivity } from '../../activity'
-import { api, type Card, type Feed } from '../../api'
+import { api, type AboutSource, type Card, type Feed } from '../../api'
 import { BuildProgress, formMarks, FormStrip, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SourceNote, StatGrid, UpcomingList } from '../../blocks'
 import { toneOf, useSports } from '../../catalog'
 import { useNow } from '../../clock'
@@ -67,7 +67,7 @@ export default function PlayerScreen() {
   useEffect(() => { if (params.tab === 'feed') setTab('feed') }, [params.tab]) // a link to this page's Feed, while on it
 
   // The Feed reads rows, never a model: it loads with the page, for Overview's "From the fans" and the tab.
-  const feed = useFeed(playerId, card?.player.name ?? '', (card?.news ?? []).map((n) => n.url).join(' '))
+  const feed = useFeed(playerId, card?.player.name ?? '', (card ? newsOf(card) : []).map((n) => n.url).join(' '))
 
   if (!card) {
     return (
@@ -143,7 +143,7 @@ export default function PlayerScreen() {
           {card.pending ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Spinner />
-              <Text style={[t.small, t.muted, { flex: 1 }]}>Scores and fixtures are live. Still gathering news and background, about two minutes.</Text>
+              <Text style={[t.small, t.muted, { flex: 1 }]}>{pendingLine(card)}</Text>
             </View>
           ) : null}
           {card.pending_error ? <Text style={[t.small, t.muted]}>News and background couldn't be gathered: {card.pending_error}</Text> : null}
@@ -189,6 +189,8 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
   const word = last && highlight(sports.drawn(p.sport), last.player_contribution)
   const score = last && bareScore(last.result)
   const sportName = sports.name(p.sport) || 'this sport'
+  const news = newsOf(card)
+  const facts = profileFacts(p)
 
   return (
     <>
@@ -266,21 +268,35 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
         </View>
       ) : null}
 
-      {(card.news ?? []).length > 0 ? (
+      {news.length > 0 ? (
         <View style={{ gap: 10 }}>
-          <SectionHead title="News" right={(card.news ?? []).length > 2 ? <Btn kind="link" label="All news" onPress={() => show('feed')} /> : undefined} />
-          <NewsList items={(card.news ?? []).slice(0, 2)} brief empty="" />
+          <SectionHead title="News" right={news.length > 2 ? <Btn kind="link" label="All news" onPress={() => show('feed')} /> : undefined} />
+          <NewsList items={news.slice(0, 2)} brief empty="" />
         </View>
       ) : null}
 
-      {p.summary ? (
+      {p.summary || facts.length > 0 ? (
         <View style={{ gap: 10 }}>
           <SectionHead title="About" />
-          <Text style={t.body}>{p.summary}</Text>
+          {facts.length > 0 ? <Text style={[t.small, t.muted]}>{facts.join(' · ')}</Text> : null}
+          {p.summary ? <Text style={t.body}>{p.summary}</Text> : null}
+          {p.summary && p.about ? <AboutCredit about={p.about} /> : null}
           {p.disambiguation ? <Text style={[t.tiny, t.muted]}>{p.disambiguation}</Text> : null}
         </View>
       ) : null}
     </>
+  )
+}
+
+/** "From Wikipedia, CC BY-SA 4.0" under text taken from it, each a link: the licence asks for it wherever the text shows. */
+function AboutCredit({ about }: { about: AboutSource }) {
+  const page = safeHref(about.url)
+  const licence = safeHref(about.licence_url)
+  return (
+    <Text style={[t.tiny, t.muted]}>
+      From {page ? <Text accessibilityRole="link" onPress={() => { Linking.openURL(page).catch(() => {}) }} style={t.link}>{about.source}</Text> : about.source}
+      {', '}{licence ? <Text accessibilityRole="link" onPress={() => { Linking.openURL(licence).catch(() => {}) }} style={t.link}>{about.licence}</Text> : about.licence}
+    </Text>
   )
 }
 

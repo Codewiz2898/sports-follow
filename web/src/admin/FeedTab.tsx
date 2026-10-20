@@ -115,6 +115,10 @@ export function FeedTab() {
                   {c.listed ? 'Listed by a sport' : 'No sport lists it'} · trust {c.effective.toFixed(2)} · {count(c.candidates)} found, {count(c.served)} served
                   {c.feedback > 0 && ` · fans' feedback ${c.feedback}`}
                 </span>
+                <span className="small muted">
+                  30 days: {count(c.yield.read)} uploads, {count(c.yield.matched)} about someone followed, {count(c.yield.kept)} kept, {count(c.yield.served)} served
+                  {' · '}{c.yield.last_upload ? `last upload ${relative(c.yield.last_upload)}` : 'no upload seen'}
+                </span>
               </div>
               <label className="sr-only" htmlFor={`trust-${c.channel_id}`}>Trust for {c.name || c.channel_id}</label>
               <select id={`trust-${c.channel_id}`} className="field compact" style={{ width: 'auto' }} disabled={busy === c.channel_id}

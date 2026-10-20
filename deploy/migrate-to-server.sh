@@ -7,7 +7,7 @@
 # 2. Secrets (push-secrets.sh): the API tokens; the server makes its own keys, and seals all of it.
 # 3. The first deploy (deploy.sh, on the server): build, migrations, start, wait until healthy.
 # 4. The registry (seed-registry.sh): the Mac's athletes, instead of an hour of Wikidata queries there.
-# 5. Checks against the live site: healthy, licensed sources only (no ESPN in the credits), the registry.
+# 5. Checks against the live site: healthy, no development-only source (no ESPN in the credits), the registry.
 # Not moved, on purpose: the Mac's games, results and news (much of it from ESPN, which only development
 # may use), and its fans and follows (development cookies for localhost, which no browser sends to the
 # server's address). The server builds pages again as fans follow.
@@ -67,7 +67,7 @@ credits=$(curl -fsS -m 10 "https://$domain/api/credits") || die "https://$domain
 if grep -qi espn <<<"$credits"; then
   die "the credits name ESPN, so the server runs a development-only source: check SPORTS_FOLLOW_SOURCES in deploy/settings.env"
 fi
-say "sources: licensed only (no ESPN in the credits)"
+say "sources: no development-only source (no ESPN in the credits)"
 server_athletes=$(ssh -o BatchMode=yes "$TARGET" "$REMOTE_DB -c 'select count(*) from athlete'")
 [ "$server_athletes" = "$mac_athletes" ] || die "the server has $server_athletes athletes, the Mac $mac_athletes"
 say "registry: $server_athletes athletes, the same as the Mac"

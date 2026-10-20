@@ -59,6 +59,12 @@ Why each part is separate:
        SPORTS_FOLLOW_PUBG_TOKEN_FILE=<scratch>/none
        SPORTS_FOLLOW_LIQUIPEDIA_TOKEN_FILE=<scratch>/none
        SPORTS_FOLLOW_LICHESS_TOKEN_FILE=<scratch>/none
+       SPORTS_FOLLOW_YOUTUBE_KEY_FILE=<scratch>/none
+       SPORTS_FOLLOW_RESEND_KEY_FILE=<scratch>/none
+       SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE=<scratch>/none
+       SPORTS_FOLLOW_FCM_KEY_FILE=<scratch>/none
+       SPORTS_FOLLOW_LINEAR_KEY_FILE=<scratch>/none
+       SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/none
        LLM_GATEWAY_URL=http://127.0.0.1:9
        LLM_PROVIDERS_KEYS_FILE=<scratch>/none
        SPORTS_FOLLOW_MAIL_LOG=1
@@ -66,7 +72,11 @@ Why each part is separate:
    That leaves ESPN (unofficial, no key, development only) and Lichess without a token; the research
    agent is off (nothing answers at its gateway address) and sign-in codes go to the log. Turn a paid
    source on (its real token file) only when the round needs it, say so on the board, and keep hunters
-   off loops against it.
+   off loops against it. The admin panel, the feed's YouTube, Android pushes and Linear are off too: the
+   real keys are production's (the `secrets` skill). To test the panel, give the stack a password of its
+   own: `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password <venv>/bin/python -m sports_follow.admin password`,
+   and set that same `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password` in the environment above
+   in place of `<scratch>/none`.
 6. **The API and web**, as preview servers: two entries in the worktree's `.claude/launch.json`, never
    committed (they hold your scratchpad's paths):
 

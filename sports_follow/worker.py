@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, predictions_push, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -106,6 +106,11 @@ async def in_lane(lane: str, fn, *args):
 
 async def build_card(ctx, player_id: int) -> None:
     await in_lane('refresh', pipeline.build_card, player_id)
+
+
+async def reread_profile(ctx, player_id: int) -> None:
+    """A player's profile from Wikidata and Wikipedia, read again a month after the last (wiki.py)."""
+    await in_lane('refresh', pipeline.reread_profile, player_id)
 
 
 async def refresh_live(ctx, player_id: int) -> None:
@@ -222,6 +227,24 @@ async def read_match(ctx, system: str, game: str) -> None:
     open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
     the allowance kept for followed players' live games."""
     await in_lane('refresh', match.read, system, game)
+    await asyncio.to_thread(predictions.made, system, game)  # the questions its board asks, if it's to come
+
+
+async def prepare_questions(ctx) -> None:
+    """The questions of fans' games coming up within a day, made ahead from a read of each (predictions.prepare):
+    every ten minutes, so a fan can call a game, and be asked to, before its poller arms it."""
+    if await _missed(ctx, "prepare_questions"):
+        return
+    for system, game in await asyncio.to_thread(predictions.prepare):
+        await ctx["redis"].enqueue_job("read_match", system, game, _job_id=f"read_match:{system}:{game}")
+
+
+async def prediction_pushes(ctx) -> None:
+    """"Make your pick" before a campaign's games, and how each pick went once settled (predictions_push.py): every
+    minute."""
+    if await _missed(ctx, "prediction_pushes"):
+        return
+    await asyncio.to_thread(predictions_push.run)
 
 
 async def read_league(ctx, system: str) -> None:
@@ -347,6 +370,8 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("build_card", player_id)
     for player_id in due.refreshes:
         await ctx["redis"].enqueue_job("refresh_structured", player_id)
+    for player_id in due.profiles:
+        await ctx["redis"].enqueue_job("reread_profile", player_id, _job_id=f"reread-profile:{player_id}")
     for team_id in due.teams:
         await ctx["redis"].enqueue_job("refresh_team", team_id)
     for event_id in due.polls:
@@ -363,13 +388,13 @@ async def tick(ctx) -> None:
         await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
     if await _in_tick_pool(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
-    if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives:
-        log.info("tick: %d builds, %d refreshes, %d team refreshes, %d polls, %d poll lanes, %d agent live checks",
-                 len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives))
+    if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives or due.profiles:
+        log.info("tick: %d builds, %d refreshes, %d team refreshes, %d polls, %d poll lanes, %d agent live checks, %d profiles",
+                 len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives), len(due.profiles))
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
+    functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
     cron_jobs = [
@@ -384,6 +409,8 @@ class WorkerSettings:
         # Before Europe's matchdays get going, and after most of the day's news is in.
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
+        cron(_logged(prepare_questions, quiet=True), minute=set(range(4, 60, 10)), second=20, run_at_startup=True, timeout=300),
+        cron(_logged(prediction_pushes, quiet=True), second=50, timeout=120),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

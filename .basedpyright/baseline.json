@@ -264,16 +264,6 @@
                 }
             }
         ],
-        "./sports_follow/adapters/opendota.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 29,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./sports_follow/adapters/pandascore_esports.py": [
             {
                 "code": "reportOptionalMemberAccess",

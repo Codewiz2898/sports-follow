@@ -42,6 +42,7 @@ class Basketball(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_basketball": "P3685", "nba": "P3647", "wnba": "P3588", "bref_nba": "P2685", "bref_wnba": "P4561"}
+    honours = {"Q222047": "NBA Most Valuable Player", "Q1339172": "WNBA Most Valuable Player"}
     athletes = 9_612
     no_line = "Not on the game's roster"
     leagues = ("nba", "wnba")
@@ -155,6 +156,14 @@ announces it is rumour. Full-game uploads are restreams."""
         "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
         "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",
+        "https://www.theguardian.com/sport/nba/rss": "The Guardian",
+    }
+
+    def video_words(self) -> str:
+        return "basketball"
 
     def search_words(self, fired: Fired) -> str | None:
         """40 points or more, or a triple-double, in the game."""

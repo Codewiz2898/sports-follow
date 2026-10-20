@@ -17,7 +17,9 @@ def test_a_public_build_credits_its_licensed_sources_only():
     assert page["data"][0]["what"].startswith("Football and cricket: ")
     lichess = page["data"][1]
     assert (lichess["licence"], lichess["licence_url"]) == ("Broadcast games: CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/")
-    assert _names(page["also"]) == ["Wikidata", "FIDE", "Stockfish", "AI", "News publishers"]
+    assert _names(page["also"]) == ["Wikidata", "Wikipedia", "FIDE", "Stockfish", "AI", "News publishers"]
+    wikipedia = page["also"][1]  # each player's About paragraph is CC BY-SA, which asks for the credit and the licence
+    assert (wikipedia["licence"], wikipedia["licence_url"]) == ("CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/")
 
 
 def test_a_development_build_also_names_espn():

@@ -153,6 +153,10 @@ class Cricket(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_cricket": "P2697"}
+    honours = {
+        "Q7526820": "ICC Cricketer of the Year", "Q8027398": "Wisden Leading Cricketer in the World",
+        "Q26910896": "Wisden Leading Woman Cricketer in the World", "Q3569447": "Wisden Cricketer of the Year",
+    }
     athletes = 19_745
     no_line = "Did not bat or bowl"
     nation_first = True  # India before Royal Challengers Bengaluru
@@ -362,6 +366,16 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
         "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",
+        "https://www.theguardian.com/sport/cricket/rss": "The Guardian",
+        "https://www.skysports.com/rss/12040": "Sky Sports",
+        "https://www.thehindu.com/sport/cricket/feeder/default.rss": "The Hindu",
+    }
+
+    def video_words(self) -> str:
+        return "cricket"
 
     def search_words(self, fired: Fired) -> str | None:
         """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the

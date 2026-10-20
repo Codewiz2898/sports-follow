@@ -19,7 +19,8 @@ alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the chec
 
 Only Caddy is published. Postgres, the two Redis (`redis`: jobs, locks, budgets, cards; `cache`: what
 the data sources answered), the gateway and the API talk on the compose network. The
-build runs licensed sources only (`settings.env`): Sportmonks football and cricket, and Lichess.
+build runs licensed sources (`settings.env`): Sportmonks football and cricket, Lichess, PandaScore, PUBG and
+YouTube, plus OpenDota by choice (BHA-208). Never ESPN, which is for development.
 
 | File | What |
 |---|---|
@@ -115,10 +116,11 @@ ssh ubuntu@<server-ip> "sudo RECOVERY_KEY='$(cat ~/sports-follow-recovery.pub)' 
 ```
 On a provider whose first login is root, it's `ssh root@<server-ip> "RECOVERY_KEY=… bash -s" < …` instead.
 
-The repo is private, so the first run stops and prints a key for the server to read it with: add it under
+The server reads the repo with a key of its own, so the first run stops and prints it: add it under
 [Settings → Deploy keys](https://github.com/Codewiz2898/sports-follow/settings/keys/new) with write access
-off. Deploys fetch with it too. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the server.) Then
-run the setup again as `deploy` (root can't log in by then):
+off. Deploys fetch with it too. The repo is public, but the key stays: it works either way, and nothing
+changes if the repo goes private again. (It isn't `DEPLOY_KEY`, which lets GitHub Actions into the
+server.) Then run the setup again as `deploy` (root can't log in by then):
 ```bash
 ssh deploy@<server-ip> 'sudo bash -s' < deploy/server-setup.sh
 ```
@@ -170,8 +172,8 @@ deploy/migrate-to-server.sh deploy@<server-ip>
 2. **Secrets:** `push-secrets.sh`.
 3. **First deploy:** `deploy.sh deploy`, run on the server.
 4. **Registry:** `seed-registry.sh`.
-5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so only
-   licensed sources run), and the server's registry has as many athletes as the Mac's.
+5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so no
+   development-only source runs), and the server's registry has as many athletes as the Mac's.
 
 Each step is one of the scripts above, and running it again is safe.
 
@@ -278,7 +280,7 @@ Then the pros go into search. PUBG's come by themselves: the worker reads them f
 every six hours, the first time within ten minutes of starting. PandaScore's come with the weekly import
 (Mondays), or now, in an hour or two (paced, so live series keep their share of the hourly 1,000):
 `c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
-`/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
+`/credits` then lists PandaScore, PUBG and OpenDota, and searching a pro's handle ("TenZ") finds them.
 
 **The feed's videos** (you, once): the curator reads YouTube with an API key of a Google Cloud project that has
 the YouTube Data API v3 turned on (the Firebase project's will do: APIs & Services, enable "YouTube Data API v3",
@@ -300,9 +302,10 @@ restart the API and the worker, as for the esports tokens above. `https://<domai
 new key in the Firebase console, send it, restart, then delete the old key there.
 
 **Without an OpenRouter key**, set `SPORTS_FOLLOW_AGENT=0` in `settings.env` and deploy: pages come from
-the sources alone (sports with a source keep their scores, games, stats, live and alerts), nothing offers
-AI research, and pages the agent built before (sports with no source here) stay as they were, no longer
-updated. With the key but out of credit, source pages work too; they say why news is missing.
+the sources, Wikidata and Wikipedia alone (scores, games, stats, live and alerts, profiles), and a player
+with no English article has no background. With the key but out of credit, pages work too. Players no
+live source has get no page unless `SPORTS_FOLLOW_RESEARCH=1` (the agent then writes them whole, offered as
+AI research); pages the agent built before stay as they were, no longer updated.
 
 **On a new server**, after `server-setup.sh` and before its first deploy, restore from the sealed copy
 instead of running `push-secrets.sh`:
@@ -549,6 +552,9 @@ first failures after a deploy count:
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
 | Someone signed in to the admin panel | a sign-in to `/admin` worked in the last 5 minutes (it says how many): if it wasn't you, see "The admin panel" |
 | Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
+| The feed has kept nothing for a day | for 30 minutes, no video has been kept from any channel or moment search in the last 24 hours, given a day of the curator's readings (its counts start at 0 while a video source runs) |
+| The feed's judge is failing | over 5 candidates of one kind the judge couldn't answer for in an hour (out of credit, timeout, invalid output, declined, unavailable; not the model turned off) |
+| A sport's followed players have no videos | for a day (of the curator's readings), none of a sport's followed players had a servable video published in the last 7 days |
 
 **Setting it up** (you, once):
 1. **Sign up** at grafana.com (free) and create a stack.
@@ -676,7 +682,7 @@ whole traces (Alloy's tail sampling) in between.
 
 ## Dashboards
 
-Five dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+Six dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
 from the traces, log lines and metrics (above), so they need nothing more on the server:
 
 | Dashboard | Shows | From |
@@ -685,6 +691,7 @@ from the traces, log lines and metrics (above), so they need nothing more on the
 | **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
 | **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
 | **Notifications** | moments found by kind; pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines and metrics, the "opened" requests |
+| **Feed** | the feed's funnel by sport (uploads read, matched, kept, judged, passed, served) and kept by stream; what wasn't kept, by reason; each sport's coverage (followed players with a servable video this week); the judge's verdicts, errors by kind and time; moment searches, what they kept and served, and units per served video (sweeps' searches count in the funnel as the `gap` and `famous` streams); YouTube's units and requests; the curator's warnings | the curator's metrics (`feedstats.py`), the worker's source readings, the curator's log lines |
 | **Errors** | errors from the API, the worker and the web app, grouped by what failed and where, with how many lines and when each was first and last seen; the error lines with their stacks | lines with an exception, and the web app's error lines |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
@@ -773,7 +780,7 @@ secrets. Their data is as of the newest off-site dump: the daily one, off-site w
    [Setting up the GitHub deploys](#setting-up-the-github-deploys-you-once): a new key, and the new
    server's host key in `DEPLOY_KNOWN_HOSTS`.
 6. **Check it:**
-   - `https://<domain>/api/health`, a search, and `/credits` (licensed sources only);
+   - `https://<domain>/api/health`, a search, and `/credits` (no ESPN);
    - an existing phone is still signed in, with its players;
    - the Grafana email "The server stopped sending metrics" resolves once Alloy reports from the new
      server.

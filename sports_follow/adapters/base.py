@@ -457,6 +457,7 @@ class VideoFacts:
     live: bool = False  # a live stream, now or to come, rather than a video
     allowed: tuple[str, ...] | None = None  # the only countries it plays in (ISO 3166-1 alpha-2), where the source limits it
     blocked: tuple[str, ...] = ()  # countries it doesn't play in
+    paid: bool = False  # its maker declared paid promotion in it (YouTube's "Includes paid promotion")
     raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
 
     def plays_in(self, country: str) -> bool:
@@ -473,7 +474,7 @@ class VideoSource:
     uploads(channel_id) lists a channel's latest videos, cheaply (the source's public feed), and facts(ids)
     what the source says of each of up to `batch` videos now; a video it leaves out is gone (removed, made
     private). A source that can search (search_cost set) finds videos from any channel too, for a moment's search
-    (searches.py). Each raises AdapterError when the source can't be read, and budget.RateLimited when its
+    (searches.py), and a player's with nothing to watch, or their most watched ever (sweeps.py). Each raises AdapterError when the source can't be read, and budget.RateLimited when its
     allowance is spent."""
 
     system: str  # "youtube": the feed's rows name their source by it
@@ -483,6 +484,7 @@ class VideoSource:
     id_pattern: re.Pattern[str]  # the shape of its video ids
     channel_pattern: re.Pattern[str]  # and of its channels', as a sport lists them
     platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
+    kind = "video"  # what its rows are, as the Feed's judge knows kinds (curate.Kind)
     batch = 50  # the most videos one facts() call asks about
     search_cost: int | None = None  # what one search() spends of its budget; None: it can't search
 
@@ -507,9 +509,54 @@ class VideoSource:
         """max_age: the oldest read (seconds) the cache may answer with; 0 asks the source."""
         raise NotImplementedError
 
-    def search(self, query: str, after: datetime, country: str) -> list[Upload]:
-        """Videos from any channel that the query finds, published after then, most watched first: only ones that
-        may be embedded and played outside the source's own site, as a viewer in this country finds them."""
+    def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:
+        """Videos from any channel that the query finds, published after then (or ever, for None), most watched
+        first: only ones that may be embedded and played outside the source's own site, as a viewer in this country
+        finds them."""
+        raise NotImplementedError
+
+
+@dataclass
+class Article:
+    """One story a publisher's feed lists (a news source's articles()): what the feed's news poll (news.py) reads
+    a followed player's name in. Never the story itself: its headline, a link to it and the feed's own short
+    description."""
+
+    url: str  # where it is, on the publisher's site, one way however it was linked (no tracking parameters, no fragment)
+    title: str
+    description: str  # the feed's summary as plain text, cut short (a sentence or two)
+    outlet: str  # the publisher, as the feed names itself ("BBC Sport")
+    feed: str  # the feed it was listed in, as a sport lists it
+    published: datetime | None = None
+
+
+class NewsSource:
+    """A source of stories about players, for the feed (news.py): each sport names the publishers' feeds it reads
+    (Sport.news_feeds), and a source takes those of the shape its feed addresses have (feed_pattern). Like a video
+    source it describes itself, so nothing else names it: adding one is its module plus one entry in adapters.NEWS.
+
+    articles(feed, outlet) lists a feed's latest stories, in the feed's order, each credited to the outlet (the name
+    the sport gives the publisher); it raises AdapterError when the feed can't be read,
+    and budget.RateLimited when its allowance is spent."""
+
+    system: str  # the feed's rows name their source by it
+    name: str
+    provider: Provider
+    covers: str  # what it covers, as the admin panel lists it
+    feed_pattern: re.Pattern[str]  # the shape of the feed addresses it reads, as a sport lists them
+    platform = "other"  # where its stories are, as the Feed's judge knows sources (curate.Source)
+    kind = "article"  # what its rows are, as the Feed's judge knows kinds (curate.Kind)
+
+    @classmethod
+    def available(cls) -> bool:
+        """Whether this build can run it: a source with a key needs its key."""
+        return True
+
+    def budgets(self) -> tuple[Budget, ...]:
+        """What its requests spend (adapters/budget.py)."""
+        return self.provider.budgets
+
+    def articles(self, feed: str, outlet: str = "") -> list[Article]:
         raise NotImplementedError
 
 

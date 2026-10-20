@@ -55,6 +55,13 @@ def test_a_discount_code_is_sponsored(text):
     assert (v := curate.rules(candidate(text=text)).final) and v.sponsored and v.kind == "promo"
 
 
+def test_a_code_under_a_videos_opening_is_the_models_to_weigh():
+    footer = "Why Arjun Mehra must open in Perth.\n\nUse code COVER20 for 20% off the Coverdrive Academy: https://example.test/academy"
+    assert curate.rules(candidate(kind="video", source="youtube", title="Mehra at the top?", text=footer)).final is None
+    assert curate.rules(candidate(kind="video", source="youtube", title="Mehra's bat: use code BAT20", text="")).final.sponsored  # type: ignore[union-attr]
+    assert curate.rules(candidate(text="Love this kit.\n\nUse code ARJUN20 for 20% off")).final.sponsored  # type: ignore[union-attr]  # a post's caption is all its own
+
+
 @pytest.mark.parametrize("text", ["Cracking the code with Arjun Mehra", "Mehra explains the code behind his opening", "code like this is rare", "Code GOAT"])
 def test_the_word_code_alone_is_no_discount(text):
     assert curate.rules(candidate(text=text)).final is None
@@ -190,6 +197,24 @@ def test_what_the_rules_settled_stands_over_the_model():
     assert "own accounts" in llm.calls[0]["messages"][0]["content"]
 
 
+def test_only_the_players_own_accounts_make_a_share_theirs():
+    by_player = {**GOOD, "by": "player"}
+    # A channel named after the player, calling itself their home, isn't one of their accounts.
+    fan_page = candidate(kind="video", source="youtube", author_name="Arjun Mehra", author_handle="UCarjunmehrafanclub0000000", text="The official home of Arjun Mehra fans.")
+    assert curate.judge(fan_page, FakeGateway(by_player)).by == "unknown"  # type: ignore[arg-type]
+    assert curate.judge(candidate(kind="article", source="rss", author_name="Arjun Mehra"), FakeGateway(by_player)).by == "outlet"  # type: ignore[arg-type]
+    # A creator the fetcher knows stays one; the player's own handle is theirs, whatever the model says.
+    assert curate.judge(candidate(author_kind="creator"), FakeGateway(by_player)).by == "fan_or_creator"  # type: ignore[arg-type]
+    assert curate.judge(candidate(author_handle="@ArjunMehra18"), FakeGateway(GOOD)).by == "player"  # type: ignore[arg-type]
+
+
+def test_the_judge_is_told_a_channels_own_boilerplate_is_not_sponsorship():
+    prompt = curate.system_prompt("cricket")
+    assert "boilerplate is never sponsorship" in prompt and "podcast" in prompt and "academy" in prompt
+    said = Judged.model_fields["sponsored"].description or ""
+    assert "boilerplate" in said and "membership" in said
+
+
 def test_a_verdict_off_the_schema_is_sent_back_once_and_a_silent_reply_asked_again():
     llm = FakeGateway({**GOOD, "by": "creator"}, None, GOOD)
     v = curate.judge(candidate(), llm)  # type: ignore[arg-type]
@@ -308,6 +333,11 @@ def test_socials_are_set_checked_and_cleared():
         players.set_socials(found, [("myspace", "tom")])
     with pytest.raises(players.Refused, match="handle"):
         players.set_socials(found, [("x", "not a handle")])
+    # A video source's account is its channel's id, never its @name.
+    players.set_socials(found, [("youtube", "UC" + "k" * 22)])
+    assert page.socials == [{"platform": "youtube", "handle": "UC" + "k" * 22}]
+    with pytest.raises(players.Refused, match="channel's id"):
+        players.set_socials(found, [("youtube", "@ViratKohli")])
     with pytest.raises(players.Refused, match="page"):
         players.set_socials(players.Found(), [("x", "a")])
     players.set_socials(found, [])

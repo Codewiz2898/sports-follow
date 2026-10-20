@@ -65,6 +65,9 @@ def vapid_subject(site: str) -> str:
 
 VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT") or vapid_subject(SITE_URL)
 MAX_FAILURES = 5
+# The kinds of a fan's notification rows that aren't moments' (predictions_push.py: "Make your pick", how a pick went):
+# the noise rules for moments (alerts.plan) don't count them as the game's pushes, nor their lines as its story.
+CALLS = ("pick", "called")
 MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
 # A push's JSON before encryption, in bytes. Push services promise only 4,096 bytes encrypted (RFC 8030)
@@ -361,7 +364,7 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(events))) if events else []:
         muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
-    earlier = select(Notification).where(Notification.fan_id.in_(devices), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
     for n in db.scalars(earlier):
         sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 

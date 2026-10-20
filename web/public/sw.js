@@ -110,9 +110,10 @@ self.addEventListener('push', (event) => {
 })
 
 async function show(data) {
-  // With the app open and in front, the moment shows as a toast in the page instead.
+  // With the app open and in front, the moment shows as a toast in the page instead. A test, and a call's push
+  // ("Make your pick", how a pick went: sports_follow/predictions_push.py), have no toast: they show anyway.
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-  if (data.kind !== 'test' && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
+  if (!['test', 'pick', 'called'].includes(data.kind) && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
   await self.registration.showNotification(data.title || '%APP_NAME%', options(data))
   return badge()
 }

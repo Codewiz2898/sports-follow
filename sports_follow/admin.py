@@ -38,8 +38,8 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from . import accounts, controls, rank, sports
-from .adapters import ADAPTERS, ALL, KNOWN, VIDEOS, budget, videos
+from . import accounts, controls, feedstats, rank, sports
+from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
 
@@ -247,7 +247,27 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "running": v in feeding and sport_on,
             "budgets": [b.name for b in v.budgets()],
         })
-    every = [*KNOWN.values(), *VIDEOS.values()]
+    # And its news sources: every sport's publishers' feeds are theirs to read.
+    reading = news()
+    for system, n in NEWS.items():
+        sport_on = any(n.feed_pattern.fullmatch(f) for s in sports.ENABLED for f in s.news_feeds)
+        out.append({
+            "system": system,
+            "name": n.name,
+            "provider": n.provider.name,
+            "covers": n.covers,
+            "sport": "",
+            "sport_label": "Feed",
+            "licensed": n.provider.licensed,
+            "token": n.available(),
+            "allowed": not SOURCES or system in SOURCES,
+            "sport_on": sport_on,
+            "on": system not in off,
+            "running": n in reading and sport_on,
+            "budgets": [b.name for b in n.budgets()],
+        })
+    fetching = [*feeding, *reading]
+    every = [*KNOWN.values(), *VIDEOS.values(), *NEWS.values()]
     used = {(r["source"], r["lane"]): r for r in budget.usage(budget.known(), now)}
     budgets = []
     for b in budget.known():
@@ -255,7 +275,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
         budgets.append({
             "name": b.name,
             "sources": list(dict.fromkeys(a.name for a in every if b in a.budgets())),
-            "running": any(b in a.budgets() for a in [*running.values(), *feeding]),
+            "running": any(b in a.budgets() for a in [*running.values(), *fetching]),
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
@@ -266,7 +286,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
 
 
 def set_source(system: str, on: bool) -> None:
-    if system not in KNOWN and system not in VIDEOS:
+    if system not in KNOWN and system not in VIDEOS and system not in NEWS:
         raise LookupError(system)
     controls.turn_source(system, on)
 
@@ -459,22 +479,26 @@ def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:
 
 def channels_view(db: Session) -> list[dict[str, Any]]:
     """Every video channel a running sport lists or a candidate came from: how far it's trusted (the panel's
-    word, else the default), and how many of its candidates there are, served, and hidden or reported by fans."""
+    word, else the default), and how many of its candidates there are, served, and hidden or reported by fans;
+    and its yield over the last 30 days (feedstats.channel_yield): uploads read, those naming a followed player,
+    kept and served, and when it last posted."""
     each = select(FeedCandidate.candidate["channel_id"].astext.label("cid"), FeedCandidate.candidate["channel"].astext.label("name"), FeedCandidate.score).subquery()
     found = db.execute(select(each.c.cid, func.max(each.c.name), func.count(), func.count(each.c.score)).group_by(each.c.cid)).all()
     listed, set_by_admin = rank.listed_channels(), controls.current().channel_trust
     names = {cid: name for cid, name, _, _ in found}
     counts = {cid: (n, scored) for cid, _, n, scored in found}
     said = rank.channel_feedback(db)
+    every = sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c))
+    yields = feedstats.channel_yield(db, every, listed)
     out = []
-    for cid in sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c)):
+    for cid in every:
         if not cid:
             continue
         n, scored = counts.get(cid, (0, 0))
         out.append({
             "channel_id": cid, "name": names.get(cid) or "", "listed": cid in listed, "trust": set_by_admin.get(cid),
             "default": rank.LISTED if cid in listed else rank.UNLISTED, "effective": round(rank.trust(cid, listed, set_by_admin, said.get(cid, 0.0)), 3),
-            "candidates": n, "served": scored, "feedback": round(said.get(cid, 0.0), 2),
+            "candidates": n, "served": scored, "feedback": round(said.get(cid, 0.0), 2), "yield": yields[cid],
         })  # fmt: skip
     return out
 

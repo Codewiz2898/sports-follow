@@ -25,7 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, livecards, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
+from . import bus, engine, livecards, matches, metrics, moments, naming, notify, predictions, registry, shutdown, sports, tracing
 from .adapters import ADAPTERS, KNOWN, NOT_FOUND, Adapter, AdapterError, Fixture, Line, NotFound, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -696,13 +696,14 @@ def batched(system: str | None) -> bool:
 
 
 def watched() -> Any:
-    """The events the poller looks after: a followed player is in it, or a fan follows the game by itself
-    (matches.py). A select of event ids."""
-    return select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id))).union(matches.watched())
+    """The events the poller looks after: a followed player is in it, a fan follows the game by itself
+    (matches.py), or a fan's pick waits on a question it settles (predictions.py). A select of event ids."""
+    return select(EventPlayer.event_id).where(EventPlayer.player_id.in_(select(Follow.player_id))).union(matches.watched(), predictions.watched())
 
 
 def lane_events(system: str) -> list[int]:
-    """The armed and live events this source polls with a followed player in them, or followed by themselves."""
+    """The armed and live events this source polls with a followed player in them, followed by themselves, or with
+    a pick waiting on them."""
     with session() as db:
         return list(db.scalars(
             select(Event.id)
@@ -852,7 +853,8 @@ def _watching(event_id: int) -> tuple[dict[str, Any], Adapter, list[tuple[int, s
             .join(Player, Player.id == PlayerIdentity.player_id)
             .where(EventPlayer.event_id == event_id, PlayerIdentity.system == adapter.system, PlayerIdentity.player_id.in_(followed))
         ).all()
-        itself = sports.on(event.sport) and matches.followed(db, event_id)
+        # Followed by itself, or a pick waits on a question it settles (predictions.py).
+        itself = sports.on(event.sport) and (matches.followed(db, event_id) or predictions.waiting(db, event_id))
     on = [(pid, xid) for pid, xid, sport in watchers if sports.on(sport)]
     return (live_binding, adapter, on) if on or itself else None
 
@@ -906,6 +908,13 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             db.add(EventState(event_id=event_id, as_of=now, status=snap.status, score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))
         if not (snap.status == "scheduled" and event.status == "armed"):
             event.status = snap.status
+        # Its questions (predictions.py): made while it's to come, closed as it starts, settled from its board. A
+        # fault there costs this poll nothing else.
+        try:
+            with db.begin_nested():
+                predictions.polled(db, event, snap.status, snap.state, now)
+        except Exception:
+            log.exception("poll %s: predictions", event_id)
 
         for player_id, athlete_id in watchers:
             line = snap.lines.get(athlete_id)

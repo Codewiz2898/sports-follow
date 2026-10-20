@@ -1,10 +1,13 @@
-"""From an agent report to the registry and a player card.
+"""From a source, Wikidata and Wikipedia, or an agent report, to the registry and a player card.
 
-The research agent says who a player is and writes the profile and news. For sports with a
-structured adapter (structured.py), the player is then bound to that source, which owns the
-fixtures, results, stats and live score from then on; for every other sport the agent's report
-fills those sections too. Both write the same tables (player, event, event_state, player_line,
-news_item), so the card and the API don't care where a section came from.
+A player with a Wikidata person gets the profile on their page (birth date, country, teams, role,
+honours) from Wikidata and the About paragraph from their English Wikipedia article (wiki.py), with no
+model. For sports with a structured adapter (structured.py), the player is bound to that source, which
+owns their name, teams, fixtures, results, stats and live score. The research agent writes only what
+neither covers (needs_agent), when a fan opens the page: the background of a player with a live source and
+no article, monthly, and, with research on (config.RESEARCH), the whole page of a player no source has,
+saying who they are. A player no live source has gets no page otherwise. All of them write the same tables (player, event, event_state,
+player_line, news_item), so the card and the API don't care where a section came from.
 """
 
 from __future__ import annotations
@@ -19,12 +22,12 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, matches, metrics, moments, notify, photos, shutdown, sports, structured
+from . import bus, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -53,8 +56,8 @@ BUILD_RETRY = 30 * 60
 # which is longer than an agent run may take (agent.RUN_LIMIT). arq's timeout doesn't stop the build's
 # thread, so the lock, not the job, says a build is still running.
 BUILD_LOCK = 20 * 60
-# Why a build failed with the agent off (config.AGENT): a player no source has (fan_message says so).
-AGENT_OFF = "The research agent is off and no live source has this player."
+# Why a build failed without research (config.RESEARCH, or the agent off): a player no source has (fan_message says so).
+AGENT_OFF = "No live source has this player, and research is off."
 # Why a first build failed for a typed name only athletes nobody here follows have (structured.identify's
 # NOT_FOUND): no page, and no research. Its fan's text, which asking again answers at once for NOT_FOUND_FOR
 # (server.follow); after that the sources are asked again, as a college player may have turned pro.
@@ -260,12 +263,9 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
 def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
     """A fan picked this exact athlete in search: their player, created and bound if new.
 
-    Returns (player_id, created). A new player's card is published at once from the source with
-    profile and news pending (none with the agent off: the source's page is the whole page); the caller
-    queues the fixtures refresh and the agent build.
+    Returns (player_id, created). A new player's card is published at once from the source with its
+    profile pending; the caller queues the fixtures refresh and the build, which reads the profile.
     """
-    from .config import AGENT
-
     sport = structured.sport_name(adapter, ref)
 
     def create(db: Session) -> tuple[int, dict[str, Any] | None]:
@@ -280,7 +280,7 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         _claim(db, player.id, ref.system, ref.athlete_id, ref.profile_url)
         # The plain name becomes an alias only if it's free: typing it keeps finding whoever had it first.
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
-        card = {**placeholder_card(player), "status": "ready", "version": 1} | ({"pending": ["profile", "news"]} if AGENT else {})
+        card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile"]}
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
         return player.id, card
 
@@ -457,8 +457,14 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         # A bound player's games come from their source; the agent's guesses would only duplicate them.
         # That holds for the player a typed name was just folded into, too ("Kohli" into Virat Kohli).
         bound = structured.binding(db, player.id) is not None
-        player.nationality = p.get("nationality")
-        player.role = p.get("role")
+        card_row = db.get(PlayerCard, player.id)
+        previous = (card_row.card or {}) if card_row is not None else {}
+        # What Wikidata and Wikipedia gave the page wins over the agent's (keep_profile).
+        theirs = set((previous.get("player") or {}).get("profile_from") or {})
+        if "nationality" not in theirs:
+            player.nationality = p.get("nationality")
+        if "role" not in theirs:
+            player.role = p.get("role")
         player.disambiguation = p.get("disambiguation")
         if bound:
             # The source already said exactly who this is; the agent adds to that and never renames or
@@ -468,16 +474,17 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
             player.name = p["name"]
             player.sport = p["sport"]
             player.status = p["status"]
-            player.teams = p.get("teams") or []
+            if "teams" not in theirs:
+                player.teams = p.get("teams") or []
 
         if not bound:
             for u in report["upcoming"]:
                 _upsert_event(db, player, title=u["title"], competition=u["competition"], start=_parse_time(u.get("start_utc")), venue=u.get("venue"), notes=u.get("notes"), status="scheduled")
             if AGENT_LIVE:
                 _write_live(db, player, report["live"], now)
-        fresh = _write_news(db, player, report["news"])
+        # A bound player's news is the publishers' (news.py): the agent writes only their background (BHA-334).
+        fresh = [] if bound else _write_news(db, player, report["news"])
 
-        card_row = db.get(PlayerCard, player.id)
         if card_row is None:
             card_row = PlayerCard(player_id=player.id, version=0)
             db.add(card_row)
@@ -485,10 +492,19 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         new_moments = notify.record(db, player.id, None, news_moments(player.name, fresh, now)) if card_row.built_at else []
         version = (card_row.version or 0) + 1
         card = _card_from_report(player, report, version, now)
+        card["player"] = keep_profile(previous.get("player") or {}, card["player"])
+        if bound:
+            # Nor what an earlier agent wrote: the page's news is the publishers' stories alone (BHA-334).
+            card["news"] = []
+            card["freshness"].pop("news", None)
+        if (previous.get("freshness") or {}).get("profile"):
+            card["freshness"]["profile"] = previous["freshness"]["profile"]
         if not bound and not AGENT_LIVE:
             # No source covers this sport and the agent doesn't watch games: say so rather than show a
             # score from the moment the page was built.
             card["live"] = {"is_live": False, "player_stats": [], "available": False}
+        if (card_row.card or {}).get("stories"):
+            card["stories"] = card_row.card["stories"]  # the publishers' stories the curator put there (rank.cards) stay
         if bound and card_row.status == "ready":
             previous = card_row.card or {}
             for section in structured.OWNED:
@@ -625,11 +641,191 @@ def mark_failed(player_id: int, message: str, result: str = "failed") -> None:
     bus.store_card(player_id, card)
 
 
+# ---------------------------------------------------------------- the profile, from Wikidata and Wikipedia (wiki.py)
+
+# A profile Wikidata or Wikipedia couldn't give (they didn't answer, or asked us to wait) is asked for again after this.
+PROFILE_RETRY = 3600
+PROFILES_PER_TICK = 5  # monthly re-reads queued a minute at most: three requests each, one at a time
+WIKIPEDIA = {"source": "Wikipedia", "licence": wiki.LICENCE, "licence_url": wiki.LICENCE_URL}
+
+
+def player_qid(db: Session, player_id: int) -> str | None:
+    """The player's Wikidata person: their "wikidata" identity, or the qid a player in an athlete's second
+    sport carries (start_from_registry). An esports pro's registry id is their source's ("pandascore:20401"):
+    their person is the one their registry row was matched to (roster_wikidata.py), if any."""
+    held = db.scalar(select(PlayerIdentity.external_id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata"))
+    qid = held or db.scalar(select(Player.wikidata_qid).where(Player.id == player_id))
+    if qid and not wiki.QID.fullmatch(qid):
+        ids = db.scalar(select(Athlete.ids).where(Athlete.qid == qid).limit(1)) or {}
+        qid = ids.get("wikidata")
+    return qid if isinstance(qid, str) and wiki.QID.fullmatch(qid) else None
+
+
+def merge_profile(player: dict[str, Any], found: wiki.Profile | None, bound: bool) -> dict[str, Any]:
+    """A card's player section with what Wikidata and Wikipedia say in it, and in profile_from which they
+    gave ({"born": "wikidata", "summary": "wikipedia"}). A live source's facts win (a bound player's teams
+    are their source's); Wikidata's and Wikipedia's win over the research agent's. What they gave before and
+    no longer say (an award taken back, an article deleted) goes. Pure, so it's tested without the network."""
+    out = dict(player)
+    for key in (player.get("profile_from") or {}):
+        out.pop(key, None)
+        if key == "summary":
+            out.pop("about", None)
+    given: dict[str, str] = {}
+    if found is not None:
+        facts = {"born": found.born, "nationality": found.nationality, "role": found.role, "honours": found.honours, "teams": None if bound else found.teams}
+        for key, value in facts.items():
+            if value:
+                out[key], given[key] = value, "wikidata"
+        if found.summary:
+            out["summary"], out["about"], given["summary"] = found.summary, {**WIKIPEDIA, "url": found.article}, "wikipedia"
+    out["profile_from"] = given
+    return out
+
+
+def keep_profile(previous: dict[str, Any], player: dict[str, Any]) -> dict[str, Any]:
+    """An agent report's player section, with what Wikidata and Wikipedia gave the page before kept over it."""
+    theirs = previous.get("profile_from") or {}
+    kept = {key: previous[key] for key in (*theirs, *(["about"] if "summary" in theirs else [])) if key in previous}
+    return {**player, **kept, "profile_from": theirs}
+
+
+def _has_profile(found: wiki.Profile | None) -> bool:
+    return found is not None and any((found.summary, found.born, found.nationality, found.role, found.teams, found.honours))
+
+
+def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> dict[str, Any] | None:
+    """Put a profile read from Wikidata and Wikipedia on the player and their card, and publish it. A first
+    build with something to show is ready with it: the profile is a page, the research agent's part can follow.
+    A player no live source has gets one only with research (config.RESEARCH). Returns the card, or None if
+    the player is gone."""
+    from .config import AGENT_LIVE, RESEARCH
+
+    with session() as db:
+        player = db.get(Player, player_id)
+        card_row = db.get(PlayerCard, player_id)
+        if player is None or card_row is None:
+            return None
+        bound = structured.binding(db, player_id) is not None
+        card = dict(card_row.card or placeholder_card(player))
+        before = (card.get("player") or {}).get("profile_from") or {}
+        merged = merge_profile(card.get("player") or {}, found, bound)
+        given = merged["profile_from"]
+        if "nationality" in given:
+            player.nationality = merged["nationality"]
+        if "role" in given:
+            player.role = merged["role"]
+        if "teams" in given:
+            player.teams = merged["teams"]
+        elif "teams" in before:  # Wikidata's, and it lists none now: they're nobody's player
+            player.teams = merged["teams"] = []
+        elif "teams" not in merged:
+            merged["teams"] = list(player.teams or [])
+        version = (card_row.version or 0) + 1
+        card |= {"player": merged, "version": version, "freshness": {**(card.get("freshness") or {}), "profile": now.isoformat()}}
+        if card_row.status != "ready" and _has_profile(found) and (bound or RESEARCH):
+            card |= {"status": "ready"}
+            card.pop("error", None)
+            if not bound:
+                if not AGENT_LIVE:
+                    card["live"] = {"is_live": False, "player_stats": [], "available": False}
+                # The agent's games and news follow: the page says they're coming, and why not if it fails (mark_failed).
+                card["pending"] = ["news"]
+            card_row.status, card_row.error = "ready", None
+        card_row.card, card_row.version, card_row.freshness = card, version, card["freshness"]
+    bus.store_card(player_id, card)
+    return card
+
+
+def refresh_profile(player_id: int, ttl: float = wiki.MAX_AGE) -> None:
+    """Read the player's profile from Wikidata and Wikipedia (copies younger than ttl seconds will do) and put
+    it on their page. A player with no Wikidata person has none (and loses one they had: their page says when
+    that was found, so the scheduler doesn't ask every minute); one Wikimedia didn't answer for keeps what
+    their page has, and is asked about again after PROFILE_RETRY."""
+    with session() as db:
+        qid = player_qid(db, player_id)
+        sport = db.scalar(select(Player.sport).where(Player.id == player_id))
+    try:
+        found = wiki.read(qid, sport, ttl) if qid else None
+    except wiki.Unavailable as exc:
+        log.warning("profile %s (%s): %s", player_id, qid, exc)
+        bus.cooldown(f"profileretry:{player_id}", PROFILE_RETRY)
+        return
+    apply_profile(player_id, found, _now())
+
+
+def reread_profile(player_id: int) -> None:
+    """The scheduler's monthly read of a player's profile (due_work): the month's copy is too old."""
+    lock = f"profile:{player_id}"
+    token = bus.try_lock(lock, 300)
+    if not token:
+        return
+    try:
+        refresh_profile(player_id, wiki.REREAD)
+    finally:
+        bus.release(lock, token)
+
+
+def profile_due(card: PlayerCard, has_qid: bool, now: datetime) -> bool:
+    """Whether a ready page's profile should be read again: never read, or read a month ago."""
+    if card.status != "ready" or not has_qid:
+        return False
+    read_at = _parse_time((card.freshness or {}).get("profile"))
+    stale = read_at is None or read_at < now - timedelta(seconds=wiki.MAX_AGE)
+    return stale and not bus.is_locked(f"profile:{card.player_id}") and not bus.is_locked(f"profileretry:{card.player_id}")
+
+
+# How often the research agent writes a background again (a player with a live source and no article): a
+# biography changes about as often as the profile beside it (Bharath, 21 Oct).
+BACKGROUND_EVERY = wiki.MAX_AGE
+
+
+def _has_about(card: dict[str, Any] | None) -> bool:
+    return bool(((card or {}).get("player") or {}).get("about"))
+
+
+def needs_agent(db: Session, player_id: int, card: dict[str, Any] | None) -> bool:
+    """Whether the research agent has a part on this page: the background of a player with a live source
+    and no English Wikipedia article, or, with research (config.RESEARCH), the whole page of a player no
+    live source has. What Wikidata and Wikipedia gave stays over what it writes (keep_profile)."""
+    from .config import RESEARCH
+
+    if structured.binding(db, player_id) is None:
+        return RESEARCH
+    return not _has_about(card)
+
+
+def agent_due(player_id: int, card: dict[str, Any], now: datetime | None = None) -> bool:
+    """Whether a fan opening this page should send the research agent: it's on (config.AGENT), the page has a
+    part it writes (needs_agent), of a sport this build runs and a player someone follows, ready, with no
+    build running and none backing off after a failure, and its words are old: a background over
+    BACKGROUND_EVERY, a page no source has over CARD_MAX_AGE. Only a page fans open is researched again,
+    never on a clock."""
+    from .config import AGENT, CARD_MAX_AGE
+
+    now = now or _now()
+    if not AGENT or card.get("status") != "ready" or (_has_about(card) and card.get("provenance")):
+        return False
+    built = _parse_time(card.get("built_at"))
+    if built is not None and built > now - timedelta(seconds=min(CARD_MAX_AGE, BACKGROUND_EVERY)):
+        return False
+    if bus.is_locked(f"build:{player_id}") or _backing_off(player_id, now):
+        return False
+    with session() as db:
+        sport = db.scalar(select(Player.sport).where(Player.id == player_id))
+        followed = db.scalar(select(Follow.id).where(Follow.player_id == player_id).limit(1)) is not None
+        every = BACKGROUND_EVERY if structured.binding(db, player_id) is not None else CARD_MAX_AGE
+        fresh = built is not None and built > now - timedelta(seconds=every)
+        return followed and not fresh and sports.on(sport) and needs_agent(db, player_id, card)
+
+
 # ---------------------------------------------------------------- jobs (run in a worker thread)
 
 
 def build_card(player_id: int) -> None:
-    """Run the research agent for one player and publish the result. Progress goes to the player's channel."""
+    """Build or rebuild one player's page and publish it: from a live source a typed name is found in, then
+    the profile from Wikidata and Wikipedia, then the research agent, for a page neither has anything for
+    (needs_agent). Progress goes to the player's channel."""
     lock = f"build:{player_id}"
     token = bus.try_lock(lock, BUILD_LOCK)
     if not token:
@@ -651,8 +847,8 @@ def build_card(player_id: int) -> None:
             # now could only find a namesake.
             from_registry = db.scalar(select(PlayerIdentity.id).where(PlayerIdentity.player_id == player_id, PlayerIdentity.system == "wikidata")) is not None
         if first_build and not from_registry:
-            # A name one source recognizes gets its page from that source in seconds (no model needed); the
-            # agent then adds the profile and news. Anything else waits for the agent to say who it is.
+            # A name one source recognizes gets its page from that source in seconds (no model needed). Anything
+            # else waits for the agent to say who it is.
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
             found = structured.identify(name)
             if found == structured.NOT_FOUND:
@@ -664,12 +860,19 @@ def build_card(player_id: int) -> None:
                 if landed is None or landed != player_id:
                     return  # the athlete was already followed under another name: that page serves this fan
                 name = found[1].name
-                if AGENT:
-                    bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Scores and fixtures are in. Researching news and background…"})
-        if not AGENT:
+        try:
+            refresh_profile(player_id)
+        except Exception:  # a profile that can't be read never stops the rest of the page
+            log.exception("build %s: the profile couldn't be read", player_id)
+        with session() as db:
+            card_row = db.get(PlayerCard, player_id)
+            wanted = card_row is not None and needs_agent(db, player_id, card_row.card)
+        if not (AGENT and wanted):
             _without_agent(player_id)
             return
-        for event in follow_player(llm(), name, structured.describe(player_id)):
+        with session() as db:
+            background_only = structured.binding(db, player_id) is not None  # a live source has the rest
+        for event in follow_player(llm(), name, structured.describe(player_id), background_only=background_only):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)
             bus.extend(lock, BUILD_LOCK, token)  # held while the agent is working, however long that takes
@@ -698,8 +901,6 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
     Returns the player the name landed on: this one, or an existing player who already holds the
     athlete (followed earlier under another spelling), into which this one is folded.
     """
-    from .config import AGENT
-
     sport = structured.sport_name(adapter, ref)  # "Football", "Cricket", "Chess"; an esports pro's game: "CS2", "BGMI"
     individual = ref.team_ids == [ref.athlete_id]
     moved_from = None
@@ -720,7 +921,7 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
             card_row = db.get(PlayerCard, player.id)
             if card_row is not None and card_row.status != "ready":
                 version = (card_row.version or 0) + 1
-                card = {**placeholder_card(player), "status": "ready", "version": version} | ({"pending": ["profile", "news"]} if AGENT else {})
+                card = {**placeholder_card(player), "status": "ready", "version": version, "pending": ["profile"]}
                 card_row.card, card_row.status, card_row.version, card_row.error = card, "ready", version, None
         landed = player.id
     if moved_from is not None:
@@ -740,9 +941,11 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
 
 
 def _without_agent(player_id: int) -> None:
-    """A build with the research agent off (config.AGENT), once a typed name has been looked up in the
-    sources (build_card). A page that exists stays as it is: one from a source that was waiting for the
-    profile and news stops waiting. A first build no source took can't be made."""
+    """A build that doesn't send the research agent, because it's off (config.AGENT) or the page has no part
+    for it (needs_agent: its About from Wikipedia and its games from a live source, or no live source and no
+    research), once a typed name has been looked up in the sources
+    and the profile read (build_card). A page that exists stays as it is: one from a source that was waiting
+    for its profile stops waiting. A first build with nothing to show can't be made."""
     with session() as db:
         card_row = db.get(PlayerCard, player_id)
         if card_row is None or (card_row.status == "ready" and not (card_row.card or {}).get("pending")):
@@ -788,28 +991,25 @@ def refresh_live(player_id: int) -> None:
 
 @dataclass
 class Due:
-    builds: list[int] = field(default_factory=list)  # players whose card needs the research agent
+    builds: list[int] = field(default_factory=list)  # players whose first page nobody is building (build_card)
     lives: list[int] = field(default_factory=list)  # unbound players who need an agent live check
     refreshes: list[int] = field(default_factory=list)  # bound players whose fixtures and stats are stale
     polls: list[int] = field(default_factory=list)  # events with a live binding that are armed or live
     lanes: list[str] = field(default_factory=list)  # sources whose armed and live events are polled together
     teams: list[int] = field(default_factory=list)  # followed teams whose games are stale (teams.refresh)
+    profiles: list[int] = field(default_factory=list)  # players whose profile was read a month ago (reread_profile)
 
 
 def rebuild_due(card: PlayerCard, now: datetime) -> bool:
-    """Whether the research agent should build this card now: a first build nobody is running, or a ready
-    card that is stale or never got the agent's profile and news (published from a source).
+    """Whether the scheduler should build this card now: a first build nobody is running, or a source's page
+    still waiting for its profile (the build queued with it was lost).
 
-    A failed card is left alone: it waits for a fan to retry. A ready card whose rebuild failed waits
-    for its back_off, and none is queued again while its build is still running, so nothing loops.
-    With the agent off (config.AGENT) a ready card has nothing to gain from one: only a first build and
-    a source's page still waiting for the agent are settled (_without_agent).
+    The research agent's pages are researched again when a fan opens them (agent_due), not on a clock, and
+    profiles are read again monthly (profile_due). A failed card is left alone: it waits for a fan to retry.
+    A card whose build failed waits for its back_off, and none is queued again while its build is still
+    running, so nothing loops.
     """
-    from .config import AGENT, CARD_MAX_AGE
-
-    stale = card.built_at is None or card.built_at < now - timedelta(seconds=CARD_MAX_AGE)
-    waiting = stale if AGENT else bool((card.card or {}).get("pending"))
-    wanted = card.status == "building" or (card.status == "ready" and waiting)
+    wanted = card.status == "building" or (card.status == "ready" and bool((card.card or {}).get("pending")))
     return wanted and not bus.is_locked(f"build:{card.player_id}") and not _backing_off(card.player_id, now)
 
 
@@ -865,6 +1065,8 @@ def due_work(now: datetime | None = None) -> Due:
         # of a player their fan follows, where the game's here as several.
         matches.lapse(db, now)
         matches.settle(db)
+        # Questions whose game's start has come close, and those its game never answered (predictions.py).
+        predictions.sweep(db, now)
         # Followed teams' games, read again as often as a followed player's (teams.py): their events, linked to
         # them, are polled below as games followed by themselves are.
         due.teams = teams.due(db, now)
@@ -881,6 +1083,8 @@ def due_work(now: datetime | None = None) -> Due:
         room = {name: structured.spare(running[name]) for name, _ in bindings.values()}
         fixtures_stale = now - timedelta(seconds=FIXTURES_MAX_AGE)
         sport_of = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_(followed))).all())
+        with_qid = set(db.scalars(select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.player_id.in_(followed))).all())
+        with_qid |= set(db.scalars(select(Player.id).where(Player.wikidata_qid.is_not(None), Player.id.in_(followed))).all())
         for card in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(followed))):
             pid = card.player_id
             if not sports.on(sport_of.get(pid)):
@@ -889,6 +1093,8 @@ def due_work(now: datetime | None = None) -> Due:
                 due.builds.append(pid)
             if card.status != "ready":
                 continue
+            if len(due.profiles) < PROFILES_PER_TICK and pid not in due.builds and profile_due(card, pid in with_qid, now):
+                due.profiles.append(pid)
             if pid in bindings:
                 adapter, health = bindings[pid]
                 checked = _parse_time((card.freshness or {}).get("fixtures"))
@@ -923,7 +1129,9 @@ def due_work(now: datetime | None = None) -> Due:
         # players' games keep the reserve. A follow of a game here as two events (a chess board) moves first to
         # the one a player its fan follows is in (matches.settle).
         theirs = {event_id for event_id, _, _ in armed}
-        itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.id.in_(matches.watched()))).all()
+        # And games a pick waits on (predictions.py), as games followed by themselves.
+        watched = or_(Event.id.in_(matches.watched()), Event.id.in_(predictions.watched()))
+        itself = db.execute(select(Event.id, Event.live_binding, Event.sport).where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), watched)).all()
         for event_id, live_binding, sport in itself:
             source = (live_binding or {}).get("adapter")
             if not sports.on(sport) or source not in running:

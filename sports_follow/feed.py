@@ -6,8 +6,10 @@ serve time: their hidden items out, grouped around the player's moments, newest 
 a model or a source: it reads rows, so a feed is as fast as a follow list, and with nothing judged it is just
 the news the player's page already has.
 
-`judged` is where the pipeline plugs in: the rows the curator judged and scored (rank.py), served as videos
-beside the card's news. Their score fades with age (HALF_LIFE); a page holds one video from each channel and
+`judged` is where the pipeline plugs in: the rows the curator judged and scored (rank.py), served as videos,
+and stories from the publishers' feeds (news.py) as news, each with the number of outlets that ran it. While a
+player has any of those stories they are the feed's news, and the curator puts them on the card too (news_for,
+rank.cards), so the player page's news is theirs; without any, the card's news is. Their score fades with age (HALF_LIFE); a page holds one video from each channel and
 PER_MOMENT around each moment; older ones still being watched are "the ones everyone's seen" (evergreen). If
 reading them fails, a feed is the card's news alone (never emptier than the News tab was), and Today's rail,
 which takes no news (the Wire has it), is empty.
@@ -32,7 +34,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import rank
-from .adapters import VIDEOS
+from .adapters import VIDEOS, feed_source
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, PlayerCard
 
 log = logging.getLogger("sports_follow.feed")
@@ -46,6 +48,7 @@ THIS_WEEK = "This week"
 EARLIER = "Earlier"
 HALF_LIFE = timedelta(days=3)  # a video's score halves over this, so last week's best gives way to today's
 PER_MOMENT = 2  # videos on a page around one moment: the best two of the many edits of one goal
+NEWS_ON_CARD = 10  # stories a player page's news holds (news_for), newest first
 
 
 class Video(BaseModel):
@@ -70,7 +73,8 @@ class Item(BaseModel):
     # the app shows as that day wherever the fan is, never as a time.
     published_at: str | None = None
     reason: str  # "Why this is here", one line, shown as it is
-    summary: str | None = None  # a story's first lines
+    summary: str | None = None  # a story's first lines: the feed's own short description, never the story
+    outlets: int | None = None  # how many outlets ran the story, where the curator counted them (news.py)
     video: Video | None = None
     post: Post | None = None
 
@@ -113,9 +117,10 @@ def item_id(url: str) -> str:
     return hashlib.blake2b(url.encode(), digest_size=8).hexdigest()
 
 
-def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None) -> dict[int, list[Candidate]]:
+def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[Candidate]]:
     """The judge's kept items for each player, best first: the rows the curator scored and nobody hid (rank.py),
-    their score faded by age. {} if they can't be read: a feed is then the news alone, and never an error."""
+    their score faded by age. {} if they can't be read: a feed is then the news alone, and never an error; with
+    strict, the error is raised instead (the curator mustn't take a failed read for nothing served)."""
     if not player_ids:
         return {}
     now = now or datetime.now(timezone.utc)
@@ -128,16 +133,22 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None) 
             ).all()  # fmt: skip
         out: dict[int, list[Candidate]] = {}
         for r in rows:
+            known = feed_source(r.source)
             source = VIDEOS.get(r.source)
             try:
-                embed = source.embed(r.external_id) if source else None
-                c = _video(embed, source.name if source else "", r, now)
+                if known is not None and known.kind == "article":
+                    c = _story(r, now)
+                else:
+                    embed = source.embed(r.external_id) if source else None
+                    c = _video(embed, source.name if source else "", r, now)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
                 out.setdefault(r.player_id, []).append(c)
         return {pid: _ranked(theirs) for pid, theirs in out.items()}
     except Exception:
+        if strict:
+            raise
         log.exception("feed: the judged videos couldn't be read; serving the news alone")
         return {}
 
@@ -162,6 +173,47 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
     )  # fmt: skip
     channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
     return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned)
+
+
+def _faded(score: float, pinned: bool, published: datetime | None, now: datetime) -> float:
+    """A row's score faded by age, a pinned one only past its pin."""
+    age = (now - published) if published else HALF_LIFE * 4
+    return score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE) + (rank.PIN if pinned else 0.0)
+
+
+def _story(r: Any, now: datetime) -> Candidate | None:
+    """A scored story (news.py) as a news item: its headline, outlet, time and link, the feed's own short description,
+    and how many outlets ran it; its score faded by age as a video's is."""
+    kept, verdict = r.candidate or {}, r.verdict or {}
+    title = str(kept.get("title") or "").strip()
+    if not title:
+        return None
+    pinned = r.review == "pinned"
+    published = rank.when(kept.get("published"))
+    outlet = str(kept.get("channel") or "").strip()
+    outlets = rank.whole((r.features or {}).get("outlets"))
+    item = Item(
+        id=item_id(r.url), kind="news", tag=rank.tag(verdict, story=True), title=title, url=r.url, source=outlet,
+        published_at=str(kept.get("published") or "") or None,
+        reason=str(verdict.get("reason") or "").strip() or (f"A story from {outlet}." if outlet else "A story from a publisher this sport reads."),
+        summary=str(kept.get("description") or "").strip() or None, outlets=outlets if outlets and outlets > 1 else None,
+    )  # fmt: skip
+    faded = _faded((r.score or 0.0) - (rank.PIN if pinned else 0.0), pinned, published, now)
+    return Candidate(item=item, moment_id=r.moment_id, score=round(faded, 6), channel=str(kept.get("channel_id") or ""), pinned=pinned)
+
+
+def news_for(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[dict[str, Any]]]:
+    """Each player's stories the curator served (news.py), newest first, NEWS_ON_CARD at most, in the shape of a card's
+    news (headline, url, source, published, summary, outlets): what the curator keeps on the card as "stories"
+    (rank.cards), which a player page shows in place of its news. A player with none is left out, and so is
+    everyone if they can't be read (with strict, an error)."""
+    out: dict[int, list[dict[str, Any]]] = {}
+    for pid, theirs in judged(db, player_ids, now, strict).items():
+        stories = sorted((c.item for c in theirs if c.item.kind == "news"), key=lambda i: -(_when(i.published_at) or datetime.min.replace(tzinfo=timezone.utc)).timestamp())
+        if stories:
+            out[pid] = [{"headline": i.title, "url": i.url, "source": i.source, "published": i.published_at, "summary": i.summary or "", "outlets": i.outlets}
+                        for i in stories[:NEWS_ON_CARD]]  # fmt: skip
+    return out
 
 
 def _page(candidates: list[Candidate]) -> list[Candidate]:
@@ -229,8 +281,10 @@ def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> 
 
 
 def _candidates(db: Session, player_id: int, card: dict[str, Any], now: datetime | None = None) -> list[Candidate]:
-    """Everything the player's feed could show anyone: the judge's kept items, then the card's news."""
-    return [*judged(db, [player_id], now).get(player_id, []), *_news(card)]
+    """Everything the player's feed could show anyone: the judge's kept items, then the card's news, unless the
+    judge kept stories of theirs (news.py), which are the news then."""
+    kept = judged(db, [player_id], now).get(player_id, [])
+    return [*kept, *([] if any(c.item.kind == "news" for c in kept) else _news(card))]
 
 
 def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]) -> list[Candidate]:

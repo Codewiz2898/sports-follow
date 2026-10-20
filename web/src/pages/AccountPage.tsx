@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useAccount } from '../account'
+import { afterSignIn, useAccount } from '../account'
 import { ApiError, api, type Account } from '../api'
 import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
@@ -36,9 +36,9 @@ const GOOGLE_ERRORS: Record<string, string> = {
 /** An iPhone home-screen app: Google's sign-in leaves it for a browser sheet, not yet tried there. */
 const IPHONE_APP = /iPhone|iPad|iPod/.test(navigator.userAgent) && window.matchMedia('(display-mode: standalone)').matches
 
-function GoogleButton() {
+function GoogleButton({ back }: { back?: string }) {
   return (
-    <a href="/api/auth/google/start" className="btn google">
+    <a href="/api/auth/google/start" className="btn google" onClick={() => { if (back) afterSignIn(back) }}>
       <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
         <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
         <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
@@ -61,7 +61,11 @@ function readPending(): { email: string; sentAt: number } | null {
   return null
 }
 
-function SignIn({ failed }: { failed: string | null }) {
+/**
+ * Signing in with a code by email (or Google): the account page's, and a league invite's, which comes back to
+ * `back` once signed in and says why in `intro` instead of the account page's hero.
+ */
+export function SignIn({ failed, back, intro }: { failed: string | null; back?: string; intro?: ReactNode }) {
   const { config, signedIn } = useAccount()
   const pending = readPending()
   const [email, setEmail] = useState(pending?.email ?? '')
@@ -102,7 +106,7 @@ function SignIn({ failed }: { failed: string | null }) {
     try {
       const account: Account = await api.emailVerify(sentTo, value)
       try { localStorage.removeItem(PENDING) } catch { /* storage blocked */ }
-      signedIn(account)
+      signedIn(account, back)
     } catch (e) {
       setError((e as Error).message)
       setCode('')
@@ -131,18 +135,20 @@ function SignIn({ failed }: { failed: string | null }) {
   const google = Boolean(config?.google_sign_in) && !IPHONE_APP
   return (
     <>
-      <section className="hero" data-sport="other" aria-label="Sign in">
-        <span className="dsp" style={{ fontSize: 44 }}>Save your players</span>
-        <p style={{ fontWeight: 600, maxWidth: '38ch' }}>
-          Sign in to keep your players, alerts and muted games on every phone and computer. Everything you follow on this device comes with you.
-        </p>
-      </section>
+      {intro ?? (
+        <section className="hero" data-sport="other" aria-label="Sign in">
+          <span className="dsp" style={{ fontSize: 44 }}>Save your players</span>
+          <p style={{ fontWeight: 600, maxWidth: '38ch' }}>
+            Sign in to keep your players, alerts and muted games on every phone and computer. Everything you follow on this device comes with you.
+          </p>
+        </section>
+      )}
 
       {emailOff && !google ? (
         <div className="card empty small">Signing in isn't set up on this server yet.</div>
       ) : sentTo === null ? (
         <form className="card card-pad stack" style={{ gap: 12 }} onSubmit={onEmail}>
-          {google && <GoogleButton />}
+          {google && <GoogleButton back={back} />}
           {google && !emailOff && <span className="or small muted">or</span>}
           {!emailOff && (
             <>
