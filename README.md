@@ -410,7 +410,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   again for its pace, and every stored video is read again weekly and dropped once removed, private, no
   longer embeddable or blocked in India. Whether one is any good is for the later stages (the judge's
   `verdict`, then a `score`); the feed only reads the table and never waits on the curator. YouTube's
-  free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube` budget with 1,000
+  free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
   never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day.
   Without the key the source is off, the admin panel says so, and nothing else changes.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in

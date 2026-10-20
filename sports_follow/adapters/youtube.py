@@ -42,7 +42,8 @@ KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_YOUTUBE_KEY_FILE", Path.home() / "
 PER_DAY = 10_000  # units; each request this module sends costs 1
 # Never spent: a day counted in UTC isn't YouTube's (Pacific), and another process may count a moment late.
 MARGIN = 1_000
-BUDGET = budget.Budget("youtube", windows=(budget.Window(86400, PER_DAY, margin=MARGIN),))
+# Not "youtube" alone: that's also a platform players have accounts on (curate.py), not only this source.
+BUDGET = budget.Budget("youtube-data", windows=(budget.Window(86400, PER_DAY, margin=MARGIN),))
 FEED_BUDGET = budget.Budget("youtube-feeds", urls=(FEEDS,))  # the channels' public feeds: free, counted only
 FEED_TTL = 20 * 60  # a channel's latest uploads, read again after this: the curator polls every half hour
 
