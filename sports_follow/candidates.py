@@ -52,10 +52,6 @@ REFUSED_AWHILE = 3600
 STALE_AFTER = timedelta(days=30)  # a row no check has read for this long goes, whatever its source's state
 READS_PER_RUN = 2000  # the most stored videos one run reads again: 40 requests
 SHORT_NAME = 4  # a one-word name (a surname, a nickname) shorter than this never names anyone by itself
-# How much of a description can name a player: its first paragraph, up to the first blank line or a line with a
-# link in it, and no more than this many characters (cut at a word).
-LEAD_MAX = 300
-_LINK = re.compile(r"https?://|www\.", re.I)
 _POSSESSIVE = re.compile(r"['’`]s\b", re.I)  # "Kohli's": the name, not "kohlis" (naming.words drops apostrophes)
 
 
@@ -142,21 +138,10 @@ def _holds(words: list[str], phrase: tuple[str, ...]) -> bool:
 Texts = list[tuple[str, list[str], set[str]]]
 
 
-def lead(description: str) -> str:
-    """A description's opening, the only part of it that names who a video is about (LEAD_MAX)."""
-    kept: list[str] = []
-    for line in description.strip().splitlines():
-        if not line.strip() or (kept and _LINK.search(line)):
-            break
-        kept.append(line)
-    text = "\n".join(kept)
-    return text if len(text) <= LEAD_MAX else text[: LEAD_MAX + 1].rsplit(None, 1)[0]
-
-
 def texts(upload: Upload) -> Texts:
-    """A video's title and its description's opening (lead) as words, each once: (where, its words, the set of them)."""
+    """A video's title and its description's opening (naming.lead) as words, each once: (where, its words, the set of them)."""
     out = []
-    for where, text in (("title", upload.title), ("description", lead(upload.description))):
+    for where, text in (("title", upload.title), ("description", naming.lead(upload.description))):
         words = naming.words(_POSSESSIVE.sub("", text))
         out.append((where, words, set(words)))
     return out
@@ -431,8 +416,11 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 log.info("feed: %s dropped %d stored video(s): %s", source.system, len(dead), ", ".join(f"{v} ({w})" for v, w in sorted(dead.items())))
             for row in session.scalars(select(FeedCandidate).where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_([v for v in part if v not in dead]))):
                 row.features = read_again(row.features or {}, facts[row.external_id], now)
-                if (row.candidate or {}).get("paid") is not facts[row.external_id].paid:
-                    row.candidate = {**(row.candidate or {}), "paid": facts[row.external_id].paid}  # declared after it was kept
+                paid = facts[row.external_id].paid
+                if (row.candidate or {}).get("paid") is not paid:
+                    row.candidate = {**(row.candidate or {}), "paid": paid}
+                    if paid:  # declared after it was judged: unserved until the judge says again (the rules: a promo)
+                        row.verdict, row.judged_at, row.score = None, None, None
                 row.checked_at = now
         counts["read"] += len(part) - len(dead)
         counts["dropped"] += len(dead)

@@ -55,6 +55,13 @@ def test_a_discount_code_is_sponsored(text):
     assert (v := curate.rules(candidate(text=text)).final) and v.sponsored and v.kind == "promo"
 
 
+def test_a_code_under_a_videos_opening_is_the_models_to_weigh():
+    footer = "Why Arjun Mehra must open in Perth.\n\nUse code COVER20 for 20% off the Coverdrive Academy: https://example.test/academy"
+    assert curate.rules(candidate(kind="video", source="youtube", title="Mehra at the top?", text=footer)).final is None
+    assert curate.rules(candidate(kind="video", source="youtube", title="Mehra's bat: use code BAT20", text="")).final.sponsored  # type: ignore[union-attr]
+    assert curate.rules(candidate(text="Love this kit.\n\nUse code ARJUN20 for 20% off")).final.sponsored  # type: ignore[union-attr]  # a post's caption is all its own
+
+
 @pytest.mark.parametrize("text", ["Cracking the code with Arjun Mehra", "Mehra explains the code behind his opening", "code like this is rare", "Code GOAT"])
 def test_the_word_code_alone_is_no_discount(text):
     assert curate.rules(candidate(text=text)).final is None
@@ -326,6 +333,11 @@ def test_socials_are_set_checked_and_cleared():
         players.set_socials(found, [("myspace", "tom")])
     with pytest.raises(players.Refused, match="handle"):
         players.set_socials(found, [("x", "not a handle")])
+    # A video source's account is its channel's id, never its @name.
+    players.set_socials(found, [("youtube", "UC" + "k" * 22)])
+    assert page.socials == [{"platform": "youtube", "handle": "UC" + "k" * 22}]
+    with pytest.raises(players.Refused, match="channel's id"):
+        players.set_socials(found, [("youtube", "@ViratKohli")])
     with pytest.raises(players.Refused, match="page"):
         players.set_socials(players.Found(), [("x", "a")])
     players.set_socials(found, [])

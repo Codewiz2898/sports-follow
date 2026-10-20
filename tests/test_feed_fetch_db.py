@@ -133,6 +133,7 @@ def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
     with db_module.session() as s:
         row = s.scalar(select(FeedCandidate))
         assert row is not None and row.features["views"] == 2500 and row.checked_at == later and row.candidate["paid"] is True
+        assert row.verdict is None and row.score is None  # judged again before it's served: the rules make it a promo
         assert [(r["views"], r["at"]) for r in row.features["reads"]] == [(100, NOW.isoformat()), (2500, later.isoformat())]
     candidates.poll(later + timedelta(minutes=30))
     assert world.api_calls("/videos") == 2  # read twice, then left to the weekly check

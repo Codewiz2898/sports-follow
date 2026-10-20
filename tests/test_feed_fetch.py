@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from sports_follow import candidates, sports
+from sports_follow import candidates, naming, sports
 from sports_follow.adapters import VIDEOS, AdapterError, Upload, VideoFacts, budget, videos, youtube
 from sports_follow.candidates import Followed
 
@@ -328,9 +328,10 @@ def test_only_a_descriptions_opening_names_who_a_video_is_about():
     assert candidates.named(up("Who opens in Perth?", "Why Jasprit Bumrah should lead the attack.\n\nPodcast: https://example.test/pod"), names[7]) == ("jasprit bumrah", "description")
     # A description with no break is read only so far.
     long = "A look back at a great season for the whole side. " * 6 + "Virat Kohli"
-    assert len(long) > candidates.LEAD_MAX and candidates.named(up("Season review", long), names[1]) is None
-    assert candidates.lead("  Opening line\nsecond line\n\nlinks") == "Opening line\nsecond line"
-    assert candidates.lead("Watch: https://example.test/1\nmore") == "Watch: https://example.test/1\nmore"  # a link in the first line is still the opening
+    assert len(long) > naming.LEAD_MAX and candidates.named(up("Season review", long), names[1]) is None
+    assert naming.lead("  Opening line\nsecond line\n\nlinks") == "Opening line\nsecond line"
+    assert naming.lead("Watch: https://example.test/1\nmore") == "Watch: https://example.test/1\nmore"  # a link in the first line is still the opening
+    assert naming.lead("x" * 294 + " Kohli more") == "x" * 294 + " Kohli"  # a word ending at the cut stays whole
 
 
 def test_names_match_in_any_plain_spelling():

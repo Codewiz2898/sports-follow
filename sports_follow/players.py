@@ -14,6 +14,7 @@
     .venv/bin/python -m sports_follow.players starter list                 # the pins, and each sport's top players
     .venv/bin/python -m sports_follow.players starter refresh              # find the top players now (daily anyway)
     .venv/bin/python -m sports_follow.players socials 17 x=imVkohli instagram=virat.kohli  # their own accounts (curate.py)
+    .venv/bin/python -m sports_follow.players socials 17 youtube=UC...              # a video source's account is its channel id
     .venv/bin/python -m sports_follow.players socials 17                   # show them; --clear takes them all off
 
 What's decided is kept in athlete_override, which every registry import respects (registry.upsert and the
@@ -37,7 +38,9 @@ added. Pinning one keeps them in the registry too, so no import drops them; remo
 starter row with them, and takes them off every campaign page (campaigns.py).
 
 Socials are a followed player's own accounts (player.socials), which the Feed's judge reads to know a share is
-theirs (curate.py). Setting them replaces what the page had; removing the page takes them with it.
+theirs (curate.py), and nothing else is. On a platform a video source reads (adapters.VIDEOS) the account is
+the channel's id, as the source names its channels (its channel_pattern: YouTube's "UC…"), not its @name.
+Setting them replaces what the page had; removing the page takes them with it.
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, campaigns, curate, logs, photos, registry, roster_wikidata, search, sports, starters
-from .adapters import KNOWN, AdapterError
+from .adapters import KNOWN, VIDEOS, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
 
@@ -322,6 +325,9 @@ def set_socials(found: Found, handles: Sequence[tuple[str, str]]) -> list[Player
             raise Refused(f"unknown platform {platform!r}; choose from {', '.join(platforms)}")
         if not re.fullmatch(r"@?[\w.\-]{1,100}", handle):
             raise Refused(f"{handle!r} isn't a handle")
+        for source in VIDEOS.values():
+            if source.platform == platform and not source.channel_pattern.fullmatch(handle):
+                raise Refused(f"a {platform} account is its channel's id, as {source.name} writes it, not {handle!r}")
     socials = [{"platform": p, "handle": h} for p, h in dict.fromkeys((p, h.lstrip("@")) for p, h in handles)]
     for player in found.players:
         player.socials = socials

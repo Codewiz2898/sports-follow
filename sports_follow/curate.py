@@ -43,7 +43,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationErro
 from . import config, sports, tracing
 from .adapters import budget
 from .agent import GATEWAY_URL, _submit_tool, _token
-from .naming import fold
+from .naming import fold, lead
 
 log = logging.getLogger("sports_follow.curate")
 
@@ -273,7 +273,9 @@ def rules(c: Candidate) -> Facts:
         return final("promo", [], True, f"A paid partnership: {_who(c)} was paid to post this.", 0.2)
     if tags & AD_TAGS:
         return final("promo", [], True, f"Marked as an ad (#{sorted(tags & AD_TAGS)[0]}).", 0.15)
-    if DISCOUNT.search(words):
+    # A video's own: its title and the opening of its description. A code in the footer is the channel's (its
+    # academy, its merch, a sponsor of the channel's): the model weighs it with the rest.
+    if DISCOUNT.search(f"{c.title}\n{lead(c.text)}" if c.kind == "video" else words):
         return final("promo", [], True, "Carries a discount code: it's selling something.", 0.1)
     if c.kind == "video" and not c.platform_flags.embeddable:
         return final("other", ["restream"], False, "Its channel doesn't let it play outside the platform.")
