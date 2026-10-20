@@ -736,6 +736,9 @@ class Question(Base):
     locks_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the game's start, for its first question
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
 
 

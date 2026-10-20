@@ -45,7 +45,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from . import logs, players, registry, search, sports
 from .adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, SourceTeam
 from .db import session
-from .models import Athlete, Campaign
+from .models import Athlete, Campaign, Player, PlayerIdentity
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +74,25 @@ class Refused(ValueError):
 
 def get(db: Session, slug: str) -> Campaign | None:
     return db.scalar(select(Campaign).where(Campaign.slug == slug.strip().lower()))
+
+
+def player_ids(db: Session) -> set[int]:
+    """Every campaign's players here, by their player ids, of campaigns whose sport is on: its own (by their registry
+    ids) and its whole teams' (by their ids in the team's source). Whose games are a campaign's: the ones fans are
+    reminded to call (predictions_push.py)."""
+    qids: set[str] = set()
+    refs: set[tuple[str, str]] = set()
+    for c in db.scalars(select(Campaign)):
+        if not sports.on(c.sport):
+            continue
+        qids.update(c.players or [])
+        refs.update((t["system"], p["athlete_id"]) for t in c.teams or [] for p in t.get("players") or [] if t.get("system") and p.get("athlete_id"))
+    found = set(db.scalars(select(Player.id).where(Player.wikidata_qid.in_(qids)))) if qids else set()
+    for system, athlete_id in refs:
+        player_id = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id == athlete_id))
+        if player_id is not None:
+            found.add(player_id)
+    return found
 
 
 def _sport(key: str) -> sports.Sport:
