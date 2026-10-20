@@ -137,7 +137,6 @@ tournament and tour channels' highlights are official."""
         "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel: analysis
     )
     news_feeds = {
-        "https://feeds.bbci.co.uk/sport/tennis/rss.xml": "BBC Sport",
         "https://www.theguardian.com/sport/tennis/rss": "The Guardian",
         "https://www.skysports.com/rss/12110": "Sky Sports",
         "https://www.thehindu.com/sport/tennis/feeder/default.rss": "The Hindu",

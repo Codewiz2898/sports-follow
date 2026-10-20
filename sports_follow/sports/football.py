@@ -483,7 +483,6 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
         "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
     )
     news_feeds = {
-        "https://feeds.bbci.co.uk/sport/football/rss.xml": "BBC Sport",
         "https://www.theguardian.com/football/rss": "The Guardian",
         "https://www.skysports.com/rss/11095": "Sky Sports",
         "https://www.thehindu.com/sport/football/feeder/default.rss": "The Hindu",

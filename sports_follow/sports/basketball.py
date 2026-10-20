@@ -159,7 +159,6 @@ announces it is rumour. Full-game uploads are restreams."""
     news_feeds = {
         "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",
         "https://www.theguardian.com/sport/nba/rss": "The Guardian",
-        "https://feeds.bbci.co.uk/sport/basketball/rss.xml": "BBC Sport",
     }
 
     def search_words(self, fired: Fired) -> str | None:
