@@ -366,13 +366,12 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
         "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
     )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",
-        "https://feeds.bbci.co.uk/sport/cricket/rss.xml": "BBC Sport",
         "https://www.theguardian.com/sport/cricket/rss": "The Guardian",
         "https://www.skysports.com/rss/12040": "Sky Sports",
         "https://www.thehindu.com/sport/cricket/feeder/default.rss": "The Hindu",
-        "https://timesofindia.indiatimes.com/rssfeeds/54829575.cms": "The Times of India",
     }
 
     def search_words(self, fired: Fired) -> str | None:
