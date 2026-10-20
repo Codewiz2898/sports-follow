@@ -674,8 +674,9 @@ def _has_profile(found: wiki.Profile | None) -> bool:
 def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> dict[str, Any] | None:
     """Put a profile read from Wikidata and Wikipedia on the player and their card, and publish it. A first
     build with something to show is ready with it: the profile is a page, the research agent's part can follow.
-    Returns the card, or None if the player is gone."""
-    from .config import AGENT, AGENT_LIVE
+    A player no live source has gets one only with research (config.RESEARCH). Returns the card, or None if
+    the player is gone."""
+    from .config import AGENT_LIVE, RESEARCH
 
     with session() as db:
         player = db.get(Player, player_id)
@@ -699,13 +700,13 @@ def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> 
             merged["teams"] = list(player.teams or [])
         version = (card_row.version or 0) + 1
         card |= {"player": merged, "version": version, "freshness": {**(card.get("freshness") or {}), "profile": now.isoformat()}}
-        if card_row.status != "ready" and _has_profile(found):
+        if card_row.status != "ready" and _has_profile(found) and (bound or RESEARCH):
             card |= {"status": "ready"}
             card.pop("error", None)
-            if not bound and not AGENT_LIVE:
-                card["live"] = {"is_live": False, "player_stats": [], "available": False}
-            if AGENT and not _covered(card, bound):
-                # The agent's part follows: the page says it's coming, and why not if it fails (mark_failed).
+            if not bound:
+                if not AGENT_LIVE:
+                    card["live"] = {"is_live": False, "player_stats": [], "available": False}
+                # The agent's games and news follow: the page says they're coming, and why not if it fails (mark_failed).
                 card["pending"] = ["news"]
             card_row.status, card_row.error = "ready", None
         card_row.card, card_row.version, card_row.freshness = card, version, card["freshness"]
@@ -751,38 +752,48 @@ def profile_due(card: PlayerCard, has_qid: bool, now: datetime) -> bool:
     return stale and not bus.is_locked(f"profile:{card.player_id}") and not bus.is_locked(f"profileretry:{card.player_id}")
 
 
-def _covered(card: dict[str, Any] | None, bound: bool) -> bool:
-    """Whether a page has every section from somewhere other than the research agent: its About from
-    Wikipedia, and its games from a live source."""
-    return bool(((card or {}).get("player") or {}).get("about")) and bound
+# How often the research agent writes a background again (a player with a live source and no article): a
+# biography changes about as often as the profile beside it (Bharath, 21 Oct).
+BACKGROUND_EVERY = wiki.MAX_AGE
+
+
+def _has_about(card: dict[str, Any] | None) -> bool:
+    return bool(((card or {}).get("player") or {}).get("about"))
 
 
 def needs_agent(db: Session, player_id: int, card: dict[str, Any] | None) -> bool:
-    """Whether the research agent has a part on this page: a section neither Wikipedia nor a live source
-    covers. With no article, it writes the background; with no live source, the games and news. What
-    Wikidata and Wikipedia gave stays over what it writes (keep_profile)."""
-    return not _covered(card, structured.binding(db, player_id) is not None)
+    """Whether the research agent has a part on this page: the background of a player with a live source
+    and no English Wikipedia article, or, with research (config.RESEARCH), the whole page of a player no
+    live source has. What Wikidata and Wikipedia gave stays over what it writes (keep_profile)."""
+    from .config import RESEARCH
+
+    if structured.binding(db, player_id) is None:
+        return RESEARCH
+    return not _has_about(card)
 
 
 def agent_due(player_id: int, card: dict[str, Any], now: datetime | None = None) -> bool:
     """Whether a fan opening this page should send the research agent: it's on (config.AGENT), the page has a
-    part it writes (needs_agent), of a sport this build runs and a player someone follows, ready, and its
-    words are older than CARD_MAX_AGE, with no build running and none backing off after a failure. Only a
-    page fans open is researched again, never on a clock."""
+    part it writes (needs_agent), of a sport this build runs and a player someone follows, ready, with no
+    build running and none backing off after a failure, and its words are old: a background over
+    BACKGROUND_EVERY, a page no source has over CARD_MAX_AGE. Only a page fans open is researched again,
+    never on a clock."""
     from .config import AGENT, CARD_MAX_AGE
 
     now = now or _now()
-    if not AGENT or card.get("status") != "ready" or _covered(card, bool(card.get("provenance"))):
+    if not AGENT or card.get("status") != "ready" or (_has_about(card) and card.get("provenance")):
         return False
     built = _parse_time(card.get("built_at"))
-    if built is not None and built > now - timedelta(seconds=CARD_MAX_AGE):
+    if built is not None and built > now - timedelta(seconds=min(CARD_MAX_AGE, BACKGROUND_EVERY)):
         return False
     if bus.is_locked(f"build:{player_id}") or _backing_off(player_id, now):
         return False
     with session() as db:
         sport = db.scalar(select(Player.sport).where(Player.id == player_id))
         followed = db.scalar(select(Follow.id).where(Follow.player_id == player_id).limit(1)) is not None
-        return followed and sports.on(sport) and needs_agent(db, player_id, card)
+        every = BACKGROUND_EVERY if structured.binding(db, player_id) is not None else CARD_MAX_AGE
+        fresh = built is not None and built > now - timedelta(seconds=every)
+        return followed and not fresh and sports.on(sport) and needs_agent(db, player_id, card)
 
 
 # ---------------------------------------------------------------- jobs (run in a worker thread)
@@ -901,8 +912,9 @@ def _start_from_source(player_id: int, adapter: Any, ref: Any) -> int | None:
 
 
 def _without_agent(player_id: int) -> None:
-    """A build that doesn't send the research agent, because it's off (config.AGENT) or the page has its
-    profile from Wikipedia or a live source (needs_agent), once a typed name has been looked up in the sources
+    """A build that doesn't send the research agent, because it's off (config.AGENT) or the page has no part
+    for it (needs_agent: its About from Wikipedia and its games from a live source, or no live source and no
+    research), once a typed name has been looked up in the sources
     and the profile read (build_card). A page that exists stays as it is: one from a source that was waiting
     for its profile stops waiting. A first build with nothing to show can't be made."""
     with session() as db:
