@@ -139,5 +139,35 @@
     "threshold": 9.5,
     "summary": "{{ printf \"%.0f\" $values.A.Value }} wrong admin passwords or codes in the last hour. At 30 the sign-in stops taking tries for the rest of the hour; deploy/README.md (\"The admin panel\") says how to clear that.",
     "no_data": "OK"
+  },
+  {
+    "uid": "sf-feed-nothing-kept",
+    "title": "The feed has kept nothing for a day",
+    "for": "30m",
+    "expr": "sum(increase(sports_follow_feed_kept_total{job=\"sports-follow-curator\"}[24h]))",
+    "op": "lt",
+    "threshold": 0.5,
+    "summary": "No new video about a followed player has been kept from any channel or moment search for 24 hours, so the Feed is going stale. The Feed dashboard shows where the funnel stops: no uploads read (the YouTube key or its quota; c logs curator), nothing matched (no channel covers who fans follow), or everything refused (by reason).",
+    "no_data": "OK"
+  },
+  {
+    "uid": "sf-feed-judge-failing",
+    "title": "The feed's judge is failing",
+    "for": "0s",
+    "expr": "sum by (kind) (increase(sports_follow_feed_judge_errors_total{job=\"sports-follow-curator\", kind!=\"off\"}[1h]))",
+    "op": "gt",
+    "threshold": 5,
+    "summary": "{{ printf \"%.0f\" $values.A.Value }} candidates the judge couldn't answer for in the last hour ({{ $labels.kind }}): new videos stay unjudged and unserved until it answers. out_of_credit: the OpenRouter credit (or the gateway's daily budget) is spent, so top it up; timeout or unavailable: the llm-providers gateway or its provider; invalid_output: the model's answers. The Feed dashboard has the errors by kind; c logs curator has each one.",
+    "no_data": "OK"
+  },
+  {
+    "uid": "sf-feed-coverage-zero",
+    "title": "A sport's followed players have no videos",
+    "for": "0s",
+    "expr": "max by (sport) (max_over_time(sports_follow_feed_covered{job=\"sports-follow-curator\"}[1d])) == 0 and on (sport) min by (sport) (min_over_time(sports_follow_feed_followed{job=\"sports-follow-curator\"}[1d])) > 0 and on (sport) sum by (sport) (count_over_time(sports_follow_feed_followed{job=\"sports-follow-curator\"}[1d])) > 1200",
+    "op": "lt",
+    "threshold": 0.5,
+    "summary": "For a day, none of the players fans follow in {{ $labels.sport }} has had a video the Feed would serve (published in the last 7 days). Either no trusted channel covers them (add one to the sport's video_channels) or what's found isn't kept or passed: the Feed dashboard's funnel by sport, and the admin panel's Feed tab (each channel's yield), say which.",
+    "no_data": "OK"
   }
 ]

@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from . import accounts, controls, rank, sports
+from . import accounts, controls, feedstats, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, SOURCES
 from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
@@ -479,22 +479,26 @@ def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:
 
 def channels_view(db: Session) -> list[dict[str, Any]]:
     """Every video channel a running sport lists or a candidate came from: how far it's trusted (the panel's
-    word, else the default), and how many of its candidates there are, served, and hidden or reported by fans."""
+    word, else the default), and how many of its candidates there are, served, and hidden or reported by fans;
+    and its yield over the last 30 days (feedstats.channel_yield): uploads read, those naming a followed player,
+    kept and served, and when it last posted."""
     each = select(FeedCandidate.candidate["channel_id"].astext.label("cid"), FeedCandidate.candidate["channel"].astext.label("name"), FeedCandidate.score).subquery()
     found = db.execute(select(each.c.cid, func.max(each.c.name), func.count(), func.count(each.c.score)).group_by(each.c.cid)).all()
     listed, set_by_admin = rank.listed_channels(), controls.current().channel_trust
     names = {cid: name for cid, name, _, _ in found}
     counts = {cid: (n, scored) for cid, _, n, scored in found}
     said = rank.channel_feedback(db)
+    every = sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c))
+    yields = feedstats.channel_yield(db, every)
     out = []
-    for cid in sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c)):
+    for cid in every:
         if not cid:
             continue
         n, scored = counts.get(cid, (0, 0))
         out.append({
             "channel_id": cid, "name": names.get(cid) or "", "listed": cid in listed, "trust": set_by_admin.get(cid),
             "default": rank.LISTED if cid in listed else rank.UNLISTED, "effective": round(rank.trust(cid, listed, set_by_admin, said.get(cid, 0.0)), 3),
-            "candidates": n, "served": scored, "feedback": round(said.get(cid, 0.0), 2),
+            "candidates": n, "served": scored, "feedback": round(said.get(cid, 0.0), 2), "yield": yields[cid],
         })  # fmt: skip
     return out
 
