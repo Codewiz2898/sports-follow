@@ -14,6 +14,8 @@ never happens (18 Oct 2026). This blocks a Bash call that would get past that ga
 - starting a Deploy run, which in a private repository deploys at once: `gh workflow run` unless it spells
   out another workflow (ci.yml, "Deploy summary"; a number, a variable or xargs could be Deploy), or the
   Deploy workflow's `dispatches` in the API;
+- a gh alias for `workflow run` or `run rerun` (`gh alias set`, or any `gh alias import`), which would
+  hide them from this check;
 - re-running one, which deploys its commit again: `gh run rerun`, or `.../runs/<id>/rerun` or
   `.../jobs/<id>/rerun` in the API, when GitHub says the run is Deploy's, or can't say;
 - running `deploy.sh` other than `status`: a command line naming it may only read (grep, git, ls, cat and
@@ -66,6 +68,8 @@ DISPATCHES = re.compile(r"actions/workflows/([^/\s'\"]+)/dispatches", re.IGNOREC
 _GH = r"\bgh\b(?:[\s'\",)]+(?:-R|--repo)[\s'\",=]+[^\s'\",]+)?[\s'\",)]+"  # gh, maybe -R owner/repo
 WORKFLOW_RUN = re.compile(_GH + r"workflow[\s'\",]+run\b([^\n;&|)]*)", re.IGNORECASE)
 RUN_RERUN = re.compile(_GH + r"run[\s'\",]+rerun\b([^\n;&|)]*)", re.IGNORECASE)
+ALIAS = re.compile(_GH + r"alias[\s'\",]+(set|import)\b", re.IGNORECASE)  # `gh d` could then hide either
+HIDDEN = re.compile(r"\bworkflow\W+run\b|\brun\W+rerun\b", re.IGNORECASE)
 WORKFLOW_RUN_VALUES = {"-f", "-F", "--field", "--raw-field", "-r", "--ref", "-R", "--repo"}  # flags taking a value
 RERUN_API = re.compile(r"(?:repos/([^\s'\"]+?)/)?actions/(runs|jobs)/([^/\s'\"]+)/rerun", re.IGNORECASE)
 WORD = re.compile(r"'[^']*'|\"[^\"]*\"|[^\s'\",\[\]]+")
@@ -272,6 +276,8 @@ def starts_deploy(command: str, cwd: str) -> bool:
     A run or workflow the line doesn't spell out (a variable, xargs) counts as Deploy's."""
     if any(not other_workflow(name) for name in DISPATCHES.findall(command)):
         return True
+    if ALIAS.search(command) and (HIDDEN.search(command) or "import" in command.lower()):
+        return True  # an alias file's text isn't read: name the alias's command in the line
     if any(runs_deploy_workflow(words_after(match)) for match in WORKFLOW_RUN.finditer(command)):
         return True
     folder = directories(command, cwd)[-1]
@@ -322,7 +328,7 @@ def main() -> int:
     except Exception:
         return 0
     lowered = command.lower()
-    if not any(word in lowered for word in ("deploy", "environments", "graphql", "rollback", "workflow", "rerun")):
+    if not any(word in lowered for word in ("deploy", "environments", "graphql", "rollback", "workflow", "rerun", "alias")):
         return 0
     try:
         stop = blocked(command, call.get("cwd") or os.getcwd())

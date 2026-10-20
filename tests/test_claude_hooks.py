@@ -306,6 +306,7 @@ esac
         f"gh api -X POST {repo}/runs/222/rerun-failed-jobs",
         f"gh api -X POST {repo}/jobs/444/rerun",
         "gh run rerun --help",
+        "gh alias set prs 'pr list --author @me'",
         "gh workflow run --help",
         "gh workflow run CI --ref main",
         "gh workflow run -f x=1 ci.yml",
@@ -327,6 +328,9 @@ esac
         "gh workflow run ./.github/workflows/deploy.yml",
         "gh workflow run -f action=deploy",  # no workflow named: gh would ask, or read stdin
         "/opt/homebrew/bin/gh workflow run deploy.yml",
+        'gh alias set d "workflow run deploy.yml"',
+        "gh alias set rr 'run rerun'",
+        "gh alias import aliases.yml",
         "gh -R Codewiz2898/sports-follow workflow run deploy.yml",
         "bash -c 'gh workflow run deploy.yml'",
         "python3 -c \"import subprocess; subprocess.run(['gh', 'workflow', 'run', 'deploy.yml'])\"",
