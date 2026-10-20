@@ -673,6 +673,10 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
   sends it none it would throw away: the switch with its registration, a stop by `PUT /api/push/fcm/stopped/<event>`
   with its token (the newest 30 games each, kept on the phone too, so a card already on its way isn't shown).
 
+With Sport colours off in Alerts' Settings, the app draws both in the app's ink, white on it, with the icon in
+stann's blue (a Live Update, which Android draws itself, has a blue bar): quieter beside other apps'
+notifications. That's the phone's own choice, which the server never hears.
+
 The drawing is the app's own Expo module, `mobile/modules/stann-notifications` (Kotlin): it takes every FCM
 message ahead of expo-notifications, which still asks for permission and gives the token. Android can't load the
 app's fonts in a notification, so the module draws the display type (Anton) as pictures, from the app's own font
