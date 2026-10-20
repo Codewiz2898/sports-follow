@@ -684,7 +684,7 @@ that build too: turn them on under Alerts. Always pass
 ## Deploy
 
 One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
-[deploy/README.md](deploy/README.md). The public build runs licensed sources only.
+[deploy/README.md](deploy/README.md). The public build runs licensed sources, plus OpenDota by choice (BHA-208); never a development-only one (ESPN).
 
 ## Android app
 

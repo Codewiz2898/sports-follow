@@ -294,8 +294,8 @@ reached, the app says so plainly rather than looking broken.
    that look live are worse than an empty page.
 
 **Open questions**
-- Where the snapshot lives: a release on this (private) repo, or the object storage the off-site
-  backups will use.
+- Where the snapshot lives: the object storage the off-site backups use, kept private (decided 20 Oct
+  2026, BHA-55; a release on this repo would be public).
 - Wikidata is CC0, but the snapshot also holds ids found in ESPN and Sportmonks. Sportmonks' terms
   allow storing their data for our own app, not passing it on, so keep the snapshot private or strip
   those ids.

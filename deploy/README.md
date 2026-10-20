@@ -19,7 +19,8 @@ alloy (Grafana Alloy) ──▶ Grafana Cloud: the server's metrics and the chec
 
 Only Caddy is published. Postgres, the two Redis (`redis`: jobs, locks, budgets, cards; `cache`: what
 the data sources answered), the gateway and the API talk on the compose network. The
-build runs licensed sources only (`settings.env`): Sportmonks football and cricket, and Lichess.
+build runs licensed sources (`settings.env`): Sportmonks football and cricket, Lichess, PandaScore, PUBG and
+YouTube, plus OpenDota by choice (BHA-208). Never ESPN, which is for development.
 
 | File | What |
 |---|---|
@@ -171,8 +172,8 @@ deploy/migrate-to-server.sh deploy@<server-ip>
 2. **Secrets:** `push-secrets.sh`.
 3. **First deploy:** `deploy.sh deploy`, run on the server.
 4. **Registry:** `seed-registry.sh`.
-5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so only
-   licensed sources run), and the server's registry has as many athletes as the Mac's.
+5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so no
+   development-only source runs), and the server's registry has as many athletes as the Mac's.
 
 Each step is one of the scripts above, and running it again is safe.
 
@@ -279,7 +280,7 @@ Then the pros go into search. PUBG's come by themselves: the worker reads them f
 every six hours, the first time within ten minutes of starting. PandaScore's come with the weekly import
 (Mondays), or now, in an hour or two (paced, so live series keep their share of the hourly 1,000):
 `c exec worker python -m sports_follow.registry esports` (see [Operating](#operating) for `c`).
-`/credits` then lists PandaScore and PUBG, and searching a pro's handle ("TenZ") finds them.
+`/credits` then lists PandaScore, PUBG and OpenDota, and searching a pro's handle ("TenZ") finds them.
 
 **The feed's videos** (you, once): the curator reads YouTube with an API key of a Google Cloud project that has
 the YouTube Data API v3 turned on (the Firebase project's will do: APIs & Services, enable "YouTube Data API v3",
@@ -774,7 +775,7 @@ secrets. Their data is as of the newest off-site dump: the daily one, off-site w
    [Setting up the GitHub deploys](#setting-up-the-github-deploys-you-once): a new key, and the new
    server's host key in `DEPLOY_KNOWN_HOSTS`.
 6. **Check it:**
-   - `https://<domain>/api/health`, a search, and `/credits` (licensed sources only);
+   - `https://<domain>/api/health`, a search, and `/credits` (no ESPN);
    - an existing phone is still signed in, with its players;
    - the Grafana email "The server stopped sending metrics" resolves once Alloy reports from the new
      server.
