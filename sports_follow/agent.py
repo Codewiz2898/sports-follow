@@ -261,8 +261,8 @@ def follow_player(llm: Client, player: str, known: str | None = None, background
     if background_only:
         task = (
             "Write only who they are: the profile, with a summary of their career and where they are now. "
-            "Their games, stats and news come from elsewhere: leave news, upcoming, recent_results and "
-            "season_stats empty, and set is_live to false."
+            "Their games, stats and news come from elsewhere: don't search for news, fixtures or live scores, "
+            "leave news, upcoming, recent_results and season_stats empty, and set is_live to false."
         )
     else:
         task = (

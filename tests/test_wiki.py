@@ -338,7 +338,8 @@ def test_the_agents_run_for_a_bound_player_writes_no_news_and_sends_no_news_aler
     }
     pipeline.apply_report(7, report)
     card = page.published[7]
-    assert told == [] and card["news"] == [{"headline": "An older story"}] and card["stories"] == [{"headline": "A publisher's story"}]
+    assert told == [] and card["news"] == [] and card["stories"] == [{"headline": "A publisher's story"}]  # the old agent story goes too
+    assert "news" not in card["freshness"]
     assert card["player"]["summary"] == "The agent's background."
 
 
@@ -363,15 +364,16 @@ def test_a_page_with_no_article_and_no_source_is_researched_when_a_fan_opens_it(
     assert not pipeline.agent_due(7, {**page.row.card, "built_at": (NOW - timedelta(hours=1)).isoformat()}, NOW)  # researched an hour ago
     ran = []
     monkeypatch.setattr(pipeline, "llm", lambda: None)
-    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **_: ran.append(name) or iter(()))
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **kw: ran.append((name, kw)) or iter(()))
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
     pipeline.build_card(7)
-    assert ran == ["Asha Rao"] and page.published[7]["player"]["born"] == "1994-03-09"
+    # No live source: the whole page is the agent's, games and news too.
+    assert ran == [("Asha Rao", {"background_only": False})] and page.published[7]["player"]["born"] == "1994-03-09"
     # Research off (the default): a page no live source has is never researched.
     monkeypatch.setattr(config, "RESEARCH", False)
     assert not pipeline.agent_due(7, page.row.card, NOW)
     pipeline.build_card(7)
-    assert ran == ["Asha Rao"]
+    assert len(ran) == 1
 
 
 def test_a_background_the_agent_wrote_is_written_again_monthly(monkeypatch, redis):

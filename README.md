@@ -147,7 +147,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Structured sources where they exist, the agent everywhere else.** After the agent says who a
   player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
-  score; the agent keeps the profile and news. A player followed before their sport had an adapter is
+  score, the publishers their news (`news.py`), and the agent only writes a background Wikipedia has no
+  article for. A player followed before their sport had an adapter is
   bound by the next scheduled refresh.
 
   | Sport | Source | Fixtures | Live | Stats |
@@ -350,8 +351,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
       python -m sports_follow.campaigns show gukesh                           # also list, remove, refresh; player/team/game remove
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
-  points, a set, the start and the result; news from a rebuild adds injuries, transfers and
-  retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
+  points, a set, the start and the result; for a player no live source has (`SPORTS_FOLLOW_RESEARCH=1`), news
+  from a rebuild adds injuries, transfers and retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
   stable key) with a priority: a hundred over a fifty, a late equaliser over a fourth goal. The noise
   rules (`sports_follow/alerts.py`) then plan each fan's
   pushes: their level for the player (key moments, the default; everything; results only; off) says

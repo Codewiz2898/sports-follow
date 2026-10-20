@@ -488,7 +488,9 @@ def apply_report(player_id: int, report: dict[str, Any]) -> int:
         card = _card_from_report(player, report, version, now)
         card["player"] = keep_profile(previous.get("player") or {}, card["player"])
         if bound:
-            card["news"] = previous.get("news") or []
+            # Nor what an earlier agent wrote: the page's news is the publishers' stories alone (BHA-334).
+            card["news"] = []
+            card["freshness"].pop("news", None)
         if (previous.get("freshness") or {}).get("profile"):
             card["freshness"]["profile"] = previous["freshness"]["profile"]
         if not bound and not AGENT_LIVE:
