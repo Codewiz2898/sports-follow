@@ -22,6 +22,7 @@ import { TeamPage } from './pages/TeamPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
+import { FriendLeaguePage, InvitePage, LeaguesPage } from './pages/LeaguesPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
 import { loadSports } from './sports'
@@ -214,6 +215,9 @@ function App() {
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/me/leagues" element={<LeaguesPage />} />
+            <Route path="/league/:code" element={<FriendLeaguePage />} />
+            <Route path="/j/:code" element={<InvitePage />} />
             {/* A campaign page (stann.in/gukesh): any other one-word address; the server says if it's one. */}
             <Route path="/:slug" element={<CampaignPage notFound={<NotFound />} />} />
             <Route path="*" element={<NotFound />} />

@@ -6,6 +6,7 @@ import { allFollowed, campaignLive, campaignRows, followAllFailed, followAllWord
 import { LiveScoreboard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CheckIcon, PlusIcon } from '../components/Icons'
+import { CampaignCalls } from '../components/Picks'
 import { useLive } from '../components/LiveNow'
 import { useFollowToggle } from '../components/Starters'
 import { useNow } from '../clock'
@@ -86,6 +87,11 @@ function CampaignView({ c, reload }: { c: Campaign; reload: () => Promise<void> 
       )}
 
       <FollowBlocks c={c} follow={follow} reload={reload} keyLine={keyAlertsLine(info)} />
+
+      {/* Its players' games to call (sports_follow/predictions.py), and a league to start with friends. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={c.predictions}>
+        <CampaignCalls questions={c.predictions} />
+      </ErrorBoundary>
 
       {anyFollowed && <AlertsPrompt />}
 

@@ -8,6 +8,7 @@ import { Avatar, GameBoard, PlainScore, SectionHead, StatGrid } from '../compone
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
+import { Picks } from '../components/Picks'
 import { useFollowToggle } from '../components/Starters'
 import { dateTime, relative } from '../format'
 import { useFollowing } from '../following'
@@ -239,6 +240,11 @@ export function MatchPage() {
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
       {head.note && <p className="small muted" role="status">{head.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
+
+      {/* What fans call before it starts (sports_follow/predictions.py): none for a sport that asks nothing. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={match.predictions}>
+        <Picks questions={match.predictions} />
+      </ErrorBoundary>
 
       {(match.teams ?? []).length > 0 && (
         <ErrorBoundary fallback={<BlockError />} resetKey={match.teams}>
