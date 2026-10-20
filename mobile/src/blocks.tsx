@@ -7,6 +7,7 @@ import { useState, type ReactNode } from 'react'
 import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
+import { outlets } from '../../web/src/feed'
 import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
@@ -394,7 +395,7 @@ export function NewsList({ items, who, brief, empty }: { items: (NewsItem & { pl
         return (
           <Pressable key={n.url || n.headline} disabled={!url} onPress={() => url && Linking.openURL(url)} style={[b.listItem, i < items.length - 1 && b.listLine, { gap: 4 }]}>
             <Text style={[t.title, { fontSize: 16, lineHeight: 21 }]}>{n.headline}</Text>
-            <Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>{[who && n.players?.join(', '), n.source, n.published && day(n.published)].filter(Boolean).join(' · ')}</Text>
+            <Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>{[who && n.players?.join(', '), n.source, outlets(n.outlets), n.published && day(n.published)].filter(Boolean).join(' · ')}</Text>
             {!who && !brief && n.summary ? <Text style={[t.small, t.muted]}>{n.summary}</Text> : null}
           </Pressable>
         )
