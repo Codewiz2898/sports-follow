@@ -155,6 +155,25 @@ class Glance:
     marks: list[tuple[float, int]] = field(default_factory=list)
 
 
+# The answer to a question that won't have one (Sport.answer): a map never played, a game called off.
+VOID = "void"
+
+
+@dataclass(frozen=True)
+class Ask:
+    """A question fans call before a game, or a part of it, starts (predictions.py, Sport.asks): which one it is in
+    the game ("result", "map2"), its words ("Who wins?"), the answers to pick from as (key, label), each key a side's
+    id in the game's source or a word ("draw"), and where it comes in the game's list. A `first` question closes
+    when the game starts (its start time closes it too, should a poll be late); a later one (map 2) when its part
+    of the game does."""
+
+    key: str
+    title: str
+    options: tuple[tuple[str, str], ...]
+    order: int = 0
+    first: bool = True
+
+
 # How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
 # final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
 # those are read first.
@@ -590,6 +609,32 @@ class Sport:
     # they came from, not the sport's first.
     side_by_side = False
     engine = False  # live positions are evaluated by our engine (chess)
+
+    # ---- predictions (predictions.py): what fans call before a game, read off its board (Snapshot.state)
+
+    predicts = False  # it asks fans to call its games (asks): the worker reads its games coming up ahead, to ask in time
+
+    def board(self, state: dict[str, Any]) -> str:
+        """The game as its board tells it apart, where one game is under several fixtures (a chess board is one of
+        each player's): an id they share, so its questions are one set whichever address asks. "" where the
+        fixture is the game."""
+        return ""
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """The questions fans may call about this game, from its board before it starts: none, for a sport that
+        asks nothing (yet)."""
+        return []
+
+    def closed(self, ask: str, status: str | None, state: dict[str, Any]) -> bool:
+        """Whether a question's picks are closed, by the board: the game, or the part of it the question's about,
+        has started."""
+        return status in ("live", "final")
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """A question's answer, once the board says it: an option's key; VOID when it won't have one (a map the
+        series didn't need); None while it's still to come. A game called off waits for its new date: one that
+        never comes is voided by predictions.sweep."""
+        return None
 
     # ---- form (form.summarize)
 

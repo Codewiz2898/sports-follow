@@ -202,6 +202,25 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   down to its live reserve, so followed players' games keep it: the page and Today say its alerts are paused,
   and the late-games metric doesn't count it. `PUT`/`DELETE /api/match/<source>/<game id>/follow`,
   `DELETE /api/me/matches/<event id>`.
+- **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
+  fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
+  leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming
+  law, 2025), no odds. What's asked is each sport's (`Sport.asks`, below): a chess game's result (either player, or
+  a draw), who takes each map of a team esports series; other sports ask nothing yet. A question (`prediction_question`)
+  belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
+  id they share), and is made from its board the first time it's seen before the start: a poll of a followed
+  game, a look at its match page (which lists its questions), or the worker's read of a fan's game coming up
+  within a day (`prepare_questions`, every ten minutes, at most once every two hours a game till its board asks). It
+  closes as its game or map starts (`Sport.closed`; a first question's start time closes it too, and the server
+  refuses a pick after that) and settles from the board (`Sport.answer`): a right pick scores 100 less the share of
+  fans who picked the same, at least 10; a wrong one 0; a map the series didn't need is voided, as is a question
+  still unanswered three days past its start. A game a pick waits on is polled as a followed game is, till it
+  settles. Picks need no account (they're kept under the fan id and move into the account on sign-in); making or
+  joining a league needs one (`prediction_league`, `prediction_member`: a six-letter invite code, a name the
+  friends see, never the email). Fans see how everyone split once they've picked; friends' picks show in the
+  league once the question's closed; a league's table is its members' points on what settled since it was made.
+  `GET /api/me/predictions` lists a fan's open questions and recent results for Today; the admin panel's Users
+  tab counts leagues (and those of three or more), invites shared and opened, and fans who picked on two game days.
 - **Following a team** (`sports_follow/teams.py`, BHA-77): Arsenal, the Lakers, India's cricket side or T1,
   not only its players, in the sports whose teams can be followed (`Sport.follow_teams`: football, cricket,
   basketball, the esports team titles; not tennis or chess). The team registry (`team`) is one row per
@@ -460,7 +479,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   cards, chess's the board turning, esports' maps and lobby matches, tennis's sets, each from the side that
   won them), what its match page shows under the board (`match_page`: a football timeline, a cricket
   scorecard, an esports series by map, a finished chess game's moves; by default the source's key events)
-  and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), how an Android
+  and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), what fans may call
+  before a game and how its board answers it (`predicts`, `asks`, `closed`, `answer`, and `board` where one game is
+  under several fixtures: a chess game's result, each map of an esports series; predictions.py), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's
