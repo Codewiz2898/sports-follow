@@ -133,7 +133,8 @@ def moment(kind: str) -> None:
 
 
 def card(step: str, result: str, by: int = 1) -> None:
-    """A card built (pipeline.build_card) or a player's source read again (structured.refresh): ok or failed."""
+    """A card built (pipeline.build_card) or a player's source read again (structured.refresh): ok or failed;
+    or a build's not_found, a typed name only athletes nobody here follows have, which no alert counts."""
     _instrument("counter", "sports_follow.cards.updates", "{update}", "Card builds and refreshes, by result").add(by, {"step": step, "result": result})
 
 

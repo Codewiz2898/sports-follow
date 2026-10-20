@@ -265,6 +265,28 @@ def test_a_pick_waits_for_the_profile_and_news_only_with_the_agent(monkeypatch, 
     assert created and card.status == "ready" and card.card.get("pending") == pending
 
 
+def test_a_typed_name_only_a_college_player_has_fails_without_the_agent(monkeypatch, redis):
+    # BHA-213: "Caitlyn Clark" is only a Division III player's name (structured.identify: NOT_FOUND). The
+    # page fails at once, saying so, with the agent on but never sent; and a misspelling isn't a failed
+    # build for the alerts (3 an hour email Bharath).
+    typed = Player(id=1, slug="caitlyn-clark", name="Caitlyn Clark", sport=None, status="active", teams=[])
+    card = PlayerCard(player_id=1, status="building", card={"status": "building"}, version=0, built_at=None)
+    published, counted = {}, []
+    monkeypatch.setattr(config, "AGENT", True)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(FakeDb(typed, card)))
+    monkeypatch.setattr(pipeline, "llm", lambda: pytest.fail("the model was asked"))
+    monkeypatch.setattr(pipeline, "follow_player", lambda *args: pytest.fail("the agent was sent"))
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: None)
+    monkeypatch.setattr(structured, "identify", lambda name: structured.NOT_FOUND)
+    monkeypatch.setattr(pipeline.metrics, "card", lambda step, result, by=1: counted.append((step, result)))
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: published.__setitem__(player_id, card))
+    pipeline.build_card(1)
+    assert (card.status, card.error) == ("failed", "No player here goes by this name. Check the spelling, or pick them from the search results.")
+    assert published[1]["status"] == "failed" and published[1]["error"] == card.error
+    assert counted == [("build", "not_found")]
+    assert not bus.is_locked("build:1")
+
+
 # ---------------------------------------------------------------- one build at a time
 
 

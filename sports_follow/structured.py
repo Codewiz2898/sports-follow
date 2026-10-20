@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, livecards, matches, metrics, moments, naming, notify, registry, shutdown, sports, tracing
-from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, for_sport, providers, source_name
+from .adapters import ADAPTERS, KNOWN, NOT_FOUND, Adapter, AdapterError, Fixture, Line, NotFound, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
@@ -92,11 +92,12 @@ def _name_key(name: str) -> list[str]:
     return sorted(registry.words(name))
 
 
-def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
+def identify(query: str) -> tuple[Adapter, PlayerRef] | NotFound | None:
     """The one athlete a typed name means, found in the structured sources alone, or None.
 
     Only a full name that exactly one source claims counts: "Caitlin Clark" yes; "Clark", a typo,
-    or a name two sports share go to the research agent, which decides as before.
+    or a name two sports share go to the research agent, which decides as before (None). A name only
+    athletes nobody here follows have, US college players, is NOT_FOUND: nobody to research either.
     """
     if len(_name_key(query)) < 2:
         return None
@@ -108,7 +109,7 @@ def identify(query: str) -> tuple[Adapter, PlayerRef] | None:
         found = provider.recognise(query, adapters)
         if found is False:
             return None
-        if found:
+        if found == NOT_FOUND or isinstance(found, tuple):
             return found
     return None
 
