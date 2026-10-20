@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowedMatch, FollowedTeam, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedShare, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -64,6 +64,11 @@ export function endpoints(request: Request) {
     pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
     activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
     week: () => request<{ posters: WeekPoster[]; wire: WireRow[] }>('/api/me/week'),
+    // A player's Feed (sports_follow/feed.py), what the fan says about an item there, and Today's rail of it.
+    feed: (playerId: number) => request<Feed>(`/api/players/${playerId}/feed`),
+    feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
+      request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
+    myFeed: () => request<{ shares: FeedShare[] }>('/api/me/feed'),
     mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
     mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
     config: () => request<ServerConfig>('/api/config'),

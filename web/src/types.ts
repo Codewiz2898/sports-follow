@@ -260,6 +260,36 @@ export interface WeekPoster { id: number | null; player_id: number; player: stri
  */
 export interface WireRow { id: string; player_id: number | null; player: string; sport: string; tag: string; text: string; source: string | null; url: string; yours: boolean; at: string }
 
+/**
+ * A player's Feed (GET /api/players/<id>/feed, sports_follow/feed.py): videos, posts and news about them, judged
+ * before a fan sees it. A video plays in YouTube's no-cookie player once tapped; a post links to where it was
+ * posted. `reason` is the one line under "Why this is here".
+ */
+export interface FeedItem {
+  id: string
+  kind: 'video' | 'post' | 'news'
+  tag: string
+  title: string
+  url: string
+  source: string
+  published_at: string | null  // an instant, or a bare day for a story known only by its day
+  reason: string
+  summary?: string | null
+  video?: { youtube_id: string; duration: number | null; views: number | null } | null
+  post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
+}
+
+/** Items around one of the player's moments (`match` its game's page), or "This week" and "Earlier". */
+export interface FeedGroup { head: string; moment: boolean; when: string | null; match: string | null; items: FeedItem[] }
+
+export interface Feed { player_id: number; groups: FeedGroup[]; evergreen: FeedItem[]; count: number }
+
+/** Today's "From your players" (GET /api/me/feed): a followed player's top video or post. */
+export interface FeedShare { player_id: number; item: FeedItem }
+
+/** What a fan can say about an item from its "…" sheet. */
+export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
+
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =

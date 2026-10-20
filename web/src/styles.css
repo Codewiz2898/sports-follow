@@ -647,3 +647,72 @@ div.result-main { cursor: default; }
 .toasts { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 40; width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 8px; }
 .toast { display: flex; align-items: center; gap: 12px; padding: 12px 10px 12px 12px; border-radius: 20px; background: var(--text); color: var(--bg); box-shadow: 0 16px 40px rgba(13, 13, 13, 0.35); }
 .toast .muted { color: #a9abb0; }
+
+/* ---------------------------------------------------------------- feed (components/Feed.tsx) */
+/* A player's Feed: cards on paper, a kind tag in the sport's colour, the player's own posts in ink. Nothing here
+   is ever red: red stays for live. */
+.clamp2, .clamp3 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
+.clamp2 { -webkit-line-clamp: 2; }
+.clamp3 { -webkit-line-clamp: 3; }
+.ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+.feed-chip { height: 36px; padding: 0 14px; border-radius: 999px; border: 2px solid var(--text); background: transparent; color: var(--text); font-weight: 800; font-size: 13px; white-space: nowrap; flex-shrink: 0; cursor: pointer; }
+.feed-chip[aria-pressed='true'] { background: var(--text); color: var(--bg); }
+.feed-group { display: flex; flex-direction: column; gap: 10px; }
+.feed-head { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px; }
+.feed-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sport); flex-shrink: 0; }
+.feed-game { margin-left: auto; color: var(--text); text-decoration: underline; text-underline-offset: 3px; display: inline-flex; align-items: center; min-height: 36px; }
+/* A phone: one column, the cards in the group's order (each carries its place as `order`). A desktop: videos
+   on the left, the posts and stories beside them; a group of one kind flows over both columns. */
+.feed-grid, .feed-cols { display: flex; flex-direction: column; gap: 12px; }
+.feed-col { display: contents; }
+@media (min-width: 1024px) {
+  .feed-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; align-items: start; }
+  .feed-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+  .feed-col { display: flex; flex-direction: column; gap: 16px; }
+}
+.feed-card { display: flex; flex-direction: column; gap: 10px; }
+.feed-card.video { padding: 10px 10px 14px; }
+.feed-card.post { padding: 16px 18px; }
+.feed-card.news { padding: 14px 18px; flex-direction: row; align-items: flex-start; }
+.feed-body { display: flex; align-items: flex-start; gap: 10px; padding: 0 6px; }
+.feed-tag { height: 22px; padding: 0 9px; font-size: 10px; background: var(--sport); color: var(--on-sport); }
+/* A fan's or creator's post: the sport's colour as a ring, ink words, so it reads on white in every sport. */
+.feed-fan { height: 22px; padding: 0 9px; font-size: 10px; box-shadow: inset 0 0 0 2px var(--sport); color: var(--text); }
+.feed-card .pill.ink, .feed-line .pill.ink { height: 22px; padding: 0 9px; font-size: 10px; }
+.feed-words { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.4; color: var(--muted); font-style: italic; }
+.feed-more { width: 36px; height: 36px; margin: -6px -8px 0 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.feed-more:hover { background: var(--bg); color: var(--text); }
+/* YouTube's thumbnail behind a play button, in 16:9; the player takes its place once tapped. */
+.feed-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden; background: var(--text); display: flex; align-items: center; justify-content: center; }
+.feed-thumb img, .feed-thumb iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+.feed-play { position: relative; width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); cursor: pointer; }
+.feed-play:hover { background: #fff; }
+.feed-dur { position: absolute; right: 10px; bottom: 10px; height: 22px; padding: 0 8px; border-radius: 999px; background: rgba(13, 13, 13, 0.8); color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; line-height: 22px; }
+.feed-evergreen { display: flex; flex-direction: column; padding: 4px 16px; border-radius: var(--radius-card); background: var(--surface); }
+.feed-ever { display: flex; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.feed-ever:last-child { border-bottom: 0; }
+.feed-ever .feed-more { margin: 0 -8px 0 0; }
+.feed-ever-thumb { position: relative; width: 96px; height: 56px; border-radius: 10px; overflow: hidden; background: var(--text); color: var(--bg); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.feed-ever-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.feed-ever-thumb svg { position: relative; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6)); }
+@media (min-width: 1024px) {
+  .feed-evergreen { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0; background: transparent; }
+  .feed-ever { padding: 12px 16px; border: 0; border-radius: 16px; background: var(--surface); }
+}
+/* The "…" sheet: from the bottom on a phone, a box in the middle on a desktop. */
+.feed-sheet { width: 100%; max-width: 560px; margin: auto auto 0; padding: 0; border: 0; border-radius: 26px 26px 0 0; background: var(--surface); color: var(--text); }
+.feed-sheet::backdrop { background: rgba(13, 13, 13, 0.4); }
+.feed-sheet-box { display: flex; flex-direction: column; gap: 12px; padding: 18px 18px calc(28px + env(safe-area-inset-bottom, 0px)); }
+.feed-sheet .btn { width: 100%; height: 48px; }
+.feed-say { justify-content: flex-start; border-color: var(--line); }
+@media (min-width: 1024px) { .feed-sheet { max-width: 420px; margin: auto; border-radius: 26px; } }
+/* Overview's line of a post under the top video. */
+.feed-line { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 18px; border: 0; text-align: left; cursor: pointer; }
+/* Today's "From your players": a block of the player's sport colour per share. */
+.feed-share { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; width: 204px; min-height: 196px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }
+.feed-share .who { font-size: 30px; overflow-wrap: anywhere; }
+.feed-share .line { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.feed-share .line.said { font-style: italic; font-weight: 600; }
+.feed-share .from { font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--on-sport-soft); }
+.feed-share-play { position: absolute; right: 12px; top: 12px; width: 36px; height: 36px; border-radius: 50%; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; }
