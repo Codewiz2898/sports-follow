@@ -63,12 +63,15 @@ jobs:
       ACTION: ${{ inputs.action || 'deploy' }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       COMMIT: ${{ inputs.commit }}
-      PRIVATE: ${{ github.event.repository.private }}
     steps:
       - name: Still the newest, and who says go
         id: newest
         run: |
           go=true deploy=true
+          # Read now, not from the event: a run re-run after the repository went private keeps the payload
+          # it started with. Anything but a plain "false" counts as private, which deploys nothing by itself.
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private || true)
+          [ "$private" = false ] || private=true
           if [ -n "$COMMIT" ] && [ "$ACTION" = deploy ]; then
             # The commit a summary named, in full, and on main (deploy.sh refuses any other too).
             if ! [[ $COMMIT =~ ^[0-9a-f]{7,40}$ ]] ||
@@ -82,7 +85,7 @@ jobs:
             esac
           fi
           if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
-            if [ "$PRIVATE" = true ]; then
+            if [ "$private" = true ]; then
               # Nothing would hold the deploy job for you here: this run brings you the summary, and you
               # deploy it by hand.
               echo "::notice::To deploy ${SHA:0:7}: Actions → Deploy → Run workflow, with $SHA as the commit."
@@ -107,7 +110,7 @@ jobs:
             fi
           fi
           [ "$go" = true ] || deploy=false
-          { echo "go=$go"; echo "deploy=$deploy"; echo "sha=$SHA"; } >>"$GITHUB_OUTPUT"
+          { echo "go=$go"; echo "deploy=$deploy"; echo "sha=$SHA"; echo "private=$private"; } >>"$GITHUB_OUTPUT"
       # A run waiting for approval holds the production concurrency group, so the next one would queue
       # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
       # a deploy that's running isn't stopped: each run is read again just before its cancel and skipped
@@ -146,6 +149,7 @@ jobs:
         continue-on-error: true
         env:
           SHA: ${{ steps.newest.outputs.sha }}
+          PRIVATE: ${{ steps.newest.outputs.private }}
           REPLACED: ${{ steps.replaced.outputs.count }}
           APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
@@ -184,7 +188,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq .total_count)
+          # A push to main's CI, not a pull request's: a branch's own commit passes there but isn't main.
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=success&per_page=1" --jq .total_count)
           if [ "$passed" -eq 0 ]; then
             echo "::error::CI hasn't passed for ${SHA:0:7} (yet?). Deploy once it has."
             exit 1

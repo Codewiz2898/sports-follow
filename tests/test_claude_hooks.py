@@ -306,7 +306,12 @@ esac
         f"gh api -X POST {repo}/runs/222/rerun-failed-jobs",
         f"gh api -X POST {repo}/jobs/444/rerun",
         "gh run rerun --help",
+        "gh workflow run --help",
+        "gh workflow run CI --ref main",
+        "gh workflow run -f x=1 ci.yml",
         "grep -n workflow_run .github/workflows/deploy.yml",
+        'grep -n "workflow run" .github/workflows/deploy.yml',
+        'git log --grep "workflow run 5" --oneline',
         "echo 'Actions → Deploy → Run workflow, with the commit'",
     ]
     stops = [
@@ -316,6 +321,12 @@ esac
         "gh workflow run 'Deploy' -f action=rollback",
         "gh workflow run --ref main .github/workflows/deploy.yml",
         "gh workflow run 201234567",
+        'gh workflow run "$WF"',
+        "echo deploy.yml | xargs gh workflow run",
+        "gh workflow run $(gh workflow list | grep -w Deploy | cut -f3)",
+        "gh workflow run ./.github/workflows/deploy.yml",
+        "gh workflow run -f action=deploy",  # no workflow named: gh would ask, or read stdin
+        "/opt/homebrew/bin/gh workflow run deploy.yml",
         "gh -R Codewiz2898/sports-follow workflow run deploy.yml",
         "bash -c 'gh workflow run deploy.yml'",
         "python3 -c \"import subprocess; subprocess.run(['gh', 'workflow', 'run', 'deploy.yml'])\"",

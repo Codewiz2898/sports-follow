@@ -11,8 +11,9 @@ never happens (18 Oct 2026). This blocks a Bash call that would get past that ga
   or in a file the call feeds in (`@q.graphql`, `--input`, `< q`, `cat q |`);
 - changing an environment (its required reviewers): a POST, PUT, PATCH, DELETE or fields to
   `repos/<owner>/<repo>/environments/...`;
-- starting a Deploy run, which in a private repository deploys at once: `gh workflow run` naming the
-  Deploy workflow (deploy.yml, Deploy, or a workflow's number), or its `dispatches` in the API;
+- starting a Deploy run, which in a private repository deploys at once: `gh workflow run` unless it spells
+  out another workflow (ci.yml, "Deploy summary"; a number, a variable or xargs could be Deploy), or the
+  Deploy workflow's `dispatches` in the API;
 - re-running one, which deploys its commit again: `gh run rerun`, or `.../runs/<id>/rerun` or
   `.../jobs/<id>/rerun` in the API, when GitHub says the run is Deploy's, or can't say;
 - running `deploy.sh` other than `status`: a command line naming it may only read (grep, git, ls, cat and
@@ -59,11 +60,13 @@ ENVIRONMENT = re.compile(r"repos/\S+/environments\b")  # repos/o/r/, repos/$GITH
 CHANGES = re.compile(r"(\b|-X)(post|put|patch|delete)\b|(^|\s)(-[fF]\S*|--field|--raw-field|--input)", re.IGNORECASE)
 NAMES_DEPLOY = re.compile(r"(?<![\w-])deploy\.sh\b(?![\s'\"]+(status|help|-h|--help)\b)")
 FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)")  # when unreadable
-# Starting or re-running a Deploy run. What follows `workflow run` or `run rerun`, up to the end of that command,
-# split into words, quoted ones whole: in a shell line, or in a list a wrapper hands to subprocess.
+# Starting or re-running a Deploy run. What follows `gh workflow run` or `gh run rerun`, up to the end of that
+# command, split into words, quoted ones whole: in a shell line, or in a list a wrapper hands to subprocess.
 DISPATCHES = re.compile(r"actions/workflows/([^/\s'\"]+)/dispatches", re.IGNORECASE)
-WORKFLOW_RUN = re.compile(r"\bworkflow\W+run\b([^\n;&|)]*)", re.IGNORECASE)
-RUN_RERUN = re.compile(r"\brun\W+rerun\b([^\n;&|)]*)", re.IGNORECASE)
+_GH = r"\bgh\b(?:[\s'\",)]+(?:-R|--repo)[\s'\",=]+[^\s'\",]+)?[\s'\",)]+"  # gh, maybe -R owner/repo
+WORKFLOW_RUN = re.compile(_GH + r"workflow[\s'\",]+run\b([^\n;&|)]*)", re.IGNORECASE)
+RUN_RERUN = re.compile(_GH + r"run[\s'\",]+rerun\b([^\n;&|)]*)", re.IGNORECASE)
+WORKFLOW_RUN_VALUES = {"-f", "-F", "--field", "--raw-field", "-r", "--ref", "-R", "--repo"}  # flags taking a value
 RERUN_API = re.compile(r"(?:repos/([^\s'\"]+?)/)?actions/(runs|jobs)/([^/\s'\"]+)/rerun", re.IGNORECASE)
 WORD = re.compile(r"'[^']*'|\"[^\"]*\"|[^\s'\",\[\]]+")
 DEPLOY_WORKFLOW = {"deploy", "deploy.yml", "deploy.yaml", ".github/workflows/deploy.yml", ".github/workflows/deploy.yaml"}
@@ -214,7 +217,8 @@ def files_fed(command: str, cwd: str) -> list[str]:
 
 
 def words_after(match: re.Match[str]) -> list[str]:
-    return [w.strip("'\"") for w in WORD.findall(match.group(1))]
+    """The words after the match, unquoted, without what only separates a list's items (`', '`)."""
+    return [w for w in (w.strip("'\"") for w in WORD.findall(match.group(1))) if w.strip(" ,[]")]
 
 
 def gh_says(path: str, jq: str, cwd: str) -> str:
@@ -245,14 +249,31 @@ def other_workflow(name: str) -> bool:
     return bool(re.fullmatch(r"[\w.-]+\.ya?ml", name)) and name.lower() not in DEPLOY_WORKFLOW
 
 
+def runs_deploy_workflow(words: list[str]) -> bool:
+    """For `gh workflow run`'s words: whether the workflow it names could be Deploy. It must be spelled out, as
+    a file other than deploy.yml or a name other than Deploy; a number, a variable or none (xargs) could be."""
+    if {"-h", "--help"} & set(words):
+        return False
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w.startswith("-"):
+            i += 2 if w in WORKFLOW_RUN_VALUES else 1
+            continue
+        if any(c in w for c in "$`(") or w.isdigit():
+            return True
+        name = os.path.basename(w).lower()
+        return name in DEPLOY_WORKFLOW or (not other_workflow(name) and name.endswith((".yml", ".yaml")))
+    return True
+
+
 def starts_deploy(command: str, cwd: str) -> bool:
     """`gh workflow run` for the Deploy workflow, its dispatches in the API, or re-running one of its runs.
     A run or workflow the line doesn't spell out (a variable, xargs) counts as Deploy's."""
     if any(not other_workflow(name) for name in DISPATCHES.findall(command)):
         return True
-    for match in WORKFLOW_RUN.finditer(command):
-        if any(w.lower() in DEPLOY_WORKFLOW or w.isdigit() for w in words_after(match)):
-            return True
+    if any(runs_deploy_workflow(words_after(match)) for match in WORKFLOW_RUN.finditer(command)):
+        return True
     folder = directories(command, cwd)[-1]
     for match in RUN_RERUN.finditer(command):
         words = words_after(match)
@@ -308,7 +329,8 @@ def main() -> int:
     except Exception:  # anything else unexpected: stopped only if it plainly names a deploy
         stop = bool((GATE.search(command) and SENDS.search(command)) or MUTATIONS.search(command)
                     or NAMES_DEPLOY.search(command) or FORCED_TEXT.search(command)
-                    or any(not other_workflow(name) for name in DISPATCHES.findall(command)))
+                    or any(not other_workflow(name) for name in DISPATCHES.findall(command))
+                    or WORKFLOW_RUN.search(command) or RUN_RERUN.search(command))
     if stop:
         print(TELL, file=sys.stderr)
         return 2

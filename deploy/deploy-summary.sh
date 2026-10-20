@@ -23,7 +23,7 @@ GITHUB="${GITHUB_SERVER_URL:-https://github.com}/$REPO"
 APP_NAME=$(jq -r .name sports_follow/app.json)
 MAX_CHANGES=25
 
-usage() { echo "usage: deploy-summary.sh [--send] [<commit> <run-url>]" >&2; exit 2; }
+usage() { echo "usage: deploy-summary.sh [--send | --send-first] [--deploying] [<commit> <run-url>]" >&2; exit 2; }
 api() { local path=$1; shift; gh api "repos/$REPO/$path" "$@"; }
 when() { date -u -d "$1" '+%-d %b %H:%M UTC' 2>/dev/null || echo "$1"; }   # GNU date; macOS's shows it as it is
 joined() { paste -sd, - | sed 's/,/, /g'; }
@@ -180,9 +180,11 @@ else
     [ -s "$checks" ] || echo "- Nothing unusual: no database migration, no server changes, nothing to run by hand." >"$checks"
   fi
   count=$(wc -l <"$changes" | tr -d ' ')
-  if [ "$send" = first ] && { [ "$count" -gt 1 ] || [ "$want" = "$live" ]; }; then
-    echo "It isn't the first change since the live commit, so it comes with the morning's summary." >&2
-    send=0
+  if [ "$send" = first ]; then
+    if [ "$count" -gt 1 ] || [ "$want" = "$live" ]; then
+      echo "It isn't the first change since the live commit, so it comes with the morning's summary." >&2
+      send=0
+    else send=1; fi
   fi
   issues=$(grep -oiE '(^|[^a-z])(fix(e[sd])?|close[sd]?|resolve[sd]?) +BHA-[0-9]+((,| and|, and) +BHA-[0-9]+)*' "$texts" | grep -oE 'BHA-[0-9]+' |
     sort -t- -k2,2n -u | joined) || true

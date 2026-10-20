@@ -428,7 +428,8 @@ the site.
   to you at once, and every morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`;
   Actions → Deploy summary → Run workflow sends it now). Several merges in a day make one waiting
   deploy, one message when it starts and the morning's.
-- **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
+- **Without a required reviewer** on `production` (in a public repository), nothing deploys by itself: the
+  run fails and says so.
 - **Claude sessions never approve.** `gh` there runs as you, so GitHub would count their approval as yours; a hook
   (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, starting or re-running a Deploy run,
   changing the environment, and running `deploy.sh deploy` or `rollback`. A session sends you the run's link.
@@ -439,14 +440,15 @@ with **Before you deploy** in place of Before you approve, and stops there. The 
 live is sent to you at once, and every morning whatever is ready then: main's newest commit that CI passed,
 if it isn't live. To deploy it, Actions → Deploy → Run workflow, with the commit the summary names (left
 blank, it deploys the tip of main, which may have more). That run deploys at once and says what it brought.
+Before turning a repository private, cancel any deploy still waiting for approval: GitHub may stop holding it.
 
-**From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` and a commit on main (blank: the tip)
-or `rollback`. In a public repository it waits for your approval too. A deploy goes ahead only if the CI
-workflow passed for that commit. A run
-by hand cancels a deploy waiting after CI (a rollback would otherwise queue behind it); re-run that one
-later to deploy it. One catch: a rollback queued behind a deploy that's running is replaced if a merge's
-deploy queues too (GitHub keeps one run waiting per group), so after such a merge check that the rollback
-is still there. Deploys never run for pull requests: a fork's PR must not reach the deploy key.
+**From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` and a commit on main (blank: the
+tip) or `rollback`. In a public repository it waits for your approval too. A deploy goes ahead only if
+CI passed for that commit on main. A run by hand cancels a deploy waiting after CI (a rollback would
+otherwise queue behind it); in a public repository, re-run that one later to deploy it. One catch: a
+rollback queued behind a deploy that's running is replaced if a merge's deploy queues too (GitHub keeps
+one run waiting per group), so after such a merge check that the rollback is still there. Deploys never
+run for pull requests: a fork's PR must not reach the deploy key.
 
 **By hand:** `ssh deploy@<server-ip> /opt/sports-follow/deploy/deploy.sh deploy` (or `deploy <commit>`,
 `rollback`, `status`).
