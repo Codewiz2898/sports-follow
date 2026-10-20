@@ -243,5 +243,17 @@ class Chess(Sport):
         fmt = lambda x: (str(int(x)) if x == int(x) else f"{int(x)}½" if x > 1 else "½")  # noqa: E731
         return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
 
+    # ---- the Feed's content judge (curate.py)
+
+    restream_after = None  # analysis and players' own streams run for hours: the judge's model tells re-uploads
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a tournament win, a title or norm (GM, IM), a rating landmark (2700, 2800), a World Championship or \
+Candidates result, beating a much higher-rated player. A match moment: a brilliant sacrifice, a blunder, a \
+time-scramble finish. Long videos are normal here: game analysis and a player's own streams run for an hour or \
+more and are interview_or_analysis, not restreams; a copied official broadcast is a restream. Cheating claims \
+without a ruling from FIDE or the platform are misinformation."""
+
 
 SPORT = Chess()

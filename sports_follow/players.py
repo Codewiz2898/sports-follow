@@ -13,6 +13,8 @@
     .venv/bin/python -m sports_follow.players starter remove Q1234
     .venv/bin/python -m sports_follow.players starter list                 # the pins, and each sport's top players
     .venv/bin/python -m sports_follow.players starter refresh              # find the top players now (daily anyway)
+    .venv/bin/python -m sports_follow.players socials 17 x=imVkohli instagram=virat.kohli  # their own accounts (curate.py)
+    .venv/bin/python -m sports_follow.players socials 17                   # show them; --clear takes them all off
 
 What's decided is kept in athlete_override, which every registry import respects (registry.upsert and the
 stale and unseen deletes), so it holds on a running server without a deploy and the weekly import doesn't
@@ -33,6 +35,9 @@ Starters are the athletes a new fan is offered in each sport (starters.py): who'
 followed, and the best known, found by themselves; pinned starters come first, in the order they were
 added. Pinning one keeps them in the registry too, so no import drops them; removing the athlete takes their
 starter row with them, and takes them off every campaign page (campaigns.py).
+
+Socials are a followed player's own accounts (player.socials), which the Feed's judge reads to know a share is
+theirs (curate.py). Setting them replaces what the page had; removing the page takes them with it.
 """
 
 from __future__ import annotations
@@ -43,13 +48,13 @@ import secrets
 import sys
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Sequence
+from typing import Any, Sequence, get_args
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, campaigns, logs, photos, registry, roster_wikidata, search, sports, starters
+from . import bus, campaigns, curate, logs, photos, registry, roster_wikidata, search, sports, starters
 from .adapters import KNOWN, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
@@ -306,6 +311,23 @@ def forget_cards(player_ids: list[int]) -> None:
         bus.sync_redis().delete(*[bus.card_key(pid) for pid in player_ids])
 
 
+def set_socials(found: Found, handles: Sequence[tuple[str, str]]) -> list[Player]:
+    """Give the pages a reference found their player's own accounts (platform, handle), in place of what they
+    had; none clears them."""
+    if not found.players:
+        raise Refused("only a followed player's page has accounts, and no page has that id")
+    platforms = get_args(curate.Platform)
+    for platform, handle in handles:
+        if platform not in platforms:
+            raise Refused(f"unknown platform {platform!r}; choose from {', '.join(platforms)}")
+        if not re.fullmatch(r"@?[\w.\-]{1,100}", handle):
+            raise Refused(f"{handle!r} isn't a handle")
+    socials = [{"platform": p, "handle": h} for p, h in dict.fromkeys((p, h.lstrip("@")) for p, h in handles)]
+    for player in found.players:
+        player.socials = socials
+    return found.players
+
+
 # ---------------------------------------------------------------- the command
 
 
@@ -317,6 +339,13 @@ def _ids(values: list[str]) -> dict[str, str]:
             raise Refused(f"--id takes system=id, a source's system ({', '.join(KNOWN)}) and the athlete's id there, not {v!r}")
         out[system.strip()] = xid.strip()
     return out
+
+
+def _social(value: str) -> tuple[str, str]:
+    platform, sep, handle = value.partition("=")
+    if not sep or not platform.strip() or not handle.strip():
+        raise Refused(f"a handle is platform=handle, like x=imVkohli, not {value!r}")
+    return platform.strip().lower(), handle.strip()
 
 
 def main(argv: list[str], ask: Any = input) -> int:
@@ -360,6 +389,11 @@ def main(argv: list[str], ask: Any = input) -> int:
         x = s.add_parser(action, help=text)
         x.add_argument("ref", help="a registry id (Q1234), a player id or system:id")
         x.add_argument("--sport")
+    o = sub.add_parser("socials", help="show or set a followed player's own accounts, for the Feed's judge")
+    o.add_argument("ref", help="a player id, registry id or system:id")
+    o.add_argument("handles", nargs="*", help="platform=handle, e.g. x=imVkohli; replaces what they had")
+    o.add_argument("--sport")
+    o.add_argument("--clear", action="store_true", help="take every account off")
     args = parser.parse_args(argv)
     try:
         if args.command == "list":
@@ -427,6 +461,18 @@ def main(argv: list[str], ask: Any = input) -> int:
         elif args.command == "starter" and args.action == "refresh":
             for sport, n in starters.refresh().items():
                 print(f"{sport:10}  {n} top players playing lately or soon")
+        elif args.command == "socials":
+            with session() as db:
+                found = find(db, args.ref, args.sport)
+                if args.handles or args.clear:
+                    if args.handles and args.clear:
+                        raise Refused("--clear takes every account off; give handles or --clear, not both")
+                    set_socials(found, [_social(h) for h in args.handles])
+                if not found.players:
+                    raise Refused("only a followed player's page has accounts, and no page has that id")
+                for p in found.players:
+                    accounts = ", ".join(f"{x['platform']}=@{x['handle']}" for x in p.socials or [])
+                    print(f"{p.name} ({p.sport}, page {p.id}): {accounts or 'no accounts'}")
         elif args.command == "starter" and args.action == "add":
             with session() as db:
                 people = [registry.Person.of(a) for a in starter_athletes(find(db, args.ref, args.sport), args.sport)]

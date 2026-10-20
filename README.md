@@ -404,7 +404,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
-  how search shows its athletes, and its colours (a player's page and link previews are drawn in them). Shared code
+  how search shows its athletes, its colours (a player's page and link previews are drawn in them), and what the Feed's
+  content judge reads about it (`content_hints`: a few lines on what a milestone and a big moment are there, and what a
+  promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
+  vouches for may run before it's taken for a whole game re-uploaded, or `None` where long videos are normal, as in
+  chess). Shared code
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
@@ -469,7 +473,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
   `rematch <ref> [Q…]` takes that back, and the next weekly run may match them again. Unmatches are rows
   in `athlete_unmatch`, apart from the keep and remove decisions: a kept pro can be unmatched, and a
-  removed one stays unmatched, so restoring them doesn't bring the face back.
+  removed one stays unmatched, so restoring them doesn't bring the face back. `socials <ref> x=handle
+  instagram=handle …` gives a followed player's page their own accounts (`player.socials`), in place of what it
+  had, for the Feed's judge to know a share is theirs; with no handles it shows them, and `--clear` takes them off.
 - **Adding or removing a team** is a command too, `python -m sports_follow.teams` (`sports_follow/teams.py`).
   `import [system]` reads the running sources' lists now (the worker does it weekly); `list [name]` shows the
   registry's teams with their ids, and what's been decided. `add <system> <team id>` reads a team the lists
@@ -487,6 +493,23 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
   `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
   player takes their pin with them, and takes them off every campaign page.
+- **The Feed's content judge** (`sports_follow/curate.py`, BHA-297) decides whether a share about a player (an
+  unofficial video, a news headline, the player's own post) is fit to show, before any fan sees it. Given a
+  `Candidate` (what was found, who posted it, and who it was found for, with their own accounts) it returns a
+  `Verdict`: whether it's about the player (`subject`, `mention`, `no`), who made it, what kind of thing it is (a
+  match moment, a milestone, an interview or analysis, news, a rumour, a promo…), how interesting it is (0 to 1),
+  its risks (betting, misinformation, deepfake, abuse, restream), whether it's sponsored, and one line a fan reads
+  under "Why this is here". Rules decide alone when they're sure: a paid-partnership flag, an ad hashtag or a
+  discount code is a sponsored promo; a betting or fantasy brand (not one in the player's own team name) is ruled
+  out; a video that can't play here, or a full-length one from a channel nobody vouches for, is a restream. They
+  also settle that a post from one of the player's own handles is theirs. Everything else goes to a small model
+  through the gateway (`SPORTS_FOLLOW_CURATE_MODEL`), with the sport's `content_hints`, and what the rules settled
+  stands over what it says. The judge is a pure function, with no database and no fetching, and `judge_many`
+  runs the model's calls side by side; a candidate the model can't judge now (or with `SPORTS_FOLLOW_CURATE_AI=0`)
+  is left unjudged, to try again. To tune it, label candidates by hand and run
+  `python -m sports_follow.curate candidates.jsonl --labels labels.jsonl`: it prints the verdicts as JSONL and how
+  often each field agrees with the labels, then each disagreement (`--rules-only` makes no model calls).
+  `tests/fixtures/curate_*.jsonl` are 32 made-up ones across cricket, chess and esports.
 - **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
   reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
   `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
@@ -596,6 +619,8 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources alone (scores, games, stats, live and alerts, no profile or news), nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with the agent on |
+| `SPORTS_FOLLOW_CURATE_MODEL` | `openrouter:anthropic/claude-haiku-5.5` | the Feed's content judge's model (`curate.py`): small and cheap, about $0.0004 a verdict; any gateway model ref |
+| `SPORTS_FOLLOW_CURATE_AI` | `1` | `0` judges the Feed's shares by the rules alone: what they can't settle waits unjudged and isn't shown; off with the agent too |
 | `SPORTS_FOLLOW_LICHESS_TOKEN` | from `~/.config/sports-follow/lichess-token` | Lichess API token (scope `study:read`); broadcasts need it |
 | `SPORTS_FOLLOW_SPORTMONKS_TOKEN` | from `~/.config/sports-follow/sportmonks-token` | Sportmonks API token (football and cricket); with one, football reads Sportmonks instead of ESPN and followed footballers move over on their next refresh. Cricket stays on ESPN in a development build until the plan covers ODIs, Tests and the IPL; a build that lists `sportmonks_cricket` without `espn_cricket` uses it |
 | `SPORTS_FOLLOW_PANDASCORE_TOKEN` | from `~/.config/sports-follow/pandascore-token` | PandaScore API token (esports; the free plan is enough); without one, esports players get AI-built pages (none with `SPORTS_FOLLOW_AGENT=0`) |

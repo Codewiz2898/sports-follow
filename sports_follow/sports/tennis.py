@@ -121,5 +121,13 @@ class Tennis(Sport):
             won, lost = won + int(num(mine)), lost + int(num(theirs))
         return [{"label": "Sets", "value": f"{won}–{lost}"}] if won or lost else []
 
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a title, a Grand Slam, a first, a ranking landmark (career high, No. 1), a win streak. A match \
+moment: a match point, a tweener, a long rally, a comeback from a set down. Full-match uploads are restreams; \
+tournament and tour channels' highlights are official."""
+
 
 SPORT = Tennis()
