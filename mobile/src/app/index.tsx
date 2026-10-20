@@ -1,7 +1,7 @@
 // Today, the web's TodayPage.tsx: the day and the app's name, the fan's players as a strip, their live games as
 // scoreboards (each opening its match page) and the games they follow by themselves, a link to everything else
-// on now (the Live page), their results and their games coming up with the league's big ones after them, this
-// week's big moments and the Wire, and players to follow while they follow few. A fan with no players and no
+// on now (the Live page), their results, what fans and their players shared (feed.tsx), their games coming up
+// with the league's big ones after them, this week's big moments and the Wire, and players to follow while they follow few. A fan with no players and no
 // games gets the welcome first, once.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -17,6 +17,7 @@ import { useActivity } from '../activity'
 import { ComingCard, LiveScoreboard, openMatch, ResultCard } from '../blocks'
 import { useSports } from '../catalog'
 import { useNow } from '../clock'
+import { FromYourPlayers, useShares } from '../feed'
 import { useFollowing } from '../following'
 import { CloseIcon, SearchIcon, UserIcon } from '../icons'
 import { Rail } from '../rail'
@@ -132,6 +133,7 @@ export default function TodayScreen() {
   const { cards, loaded, failed, matches, matchesLoaded, teams } = following
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
+  const shares = useShares()
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
@@ -221,6 +223,9 @@ export default function TodayScreen() {
           ]}
         </Rail>
       ) : null}
+
+      {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
+      <FromYourPlayers shares={shares} now={now} />
 
       <SaveNudge />
 
