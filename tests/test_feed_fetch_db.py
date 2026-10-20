@@ -125,14 +125,14 @@ def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
     world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
     world.videos["kohli000001"] = video("kohli000001", views=100, likes=4)
     candidates.poll(NOW)
-    world.videos["kohli000001"] = video("kohli000001", views=2500, likes=90)
+    world.videos["kohli000001"] = video("kohli000001", views=2500, likes=90, paid=True)  # its maker declares paid promotion meanwhile
     candidates.poll(NOW + timedelta(hours=6))
     assert world.api_calls("/videos") == 1  # not a day yet
     later = NOW + timedelta(days=1, minutes=5)
     assert candidates.poll(later)["read_again"] == 1
     with db_module.session() as s:
         row = s.scalar(select(FeedCandidate))
-        assert row is not None and row.features["views"] == 2500 and row.checked_at == later
+        assert row is not None and row.features["views"] == 2500 and row.checked_at == later and row.candidate["paid"] is True
         assert [(r["views"], r["at"]) for r in row.features["reads"]] == [(100, NOW.isoformat()), (2500, later.isoformat())]
     candidates.poll(later + timedelta(minutes=30))
     assert world.api_calls("/videos") == 2  # read twice, then left to the weekly check

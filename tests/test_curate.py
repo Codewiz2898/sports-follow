@@ -190,6 +190,24 @@ def test_what_the_rules_settled_stands_over_the_model():
     assert "own accounts" in llm.calls[0]["messages"][0]["content"]
 
 
+def test_only_the_players_own_accounts_make_a_share_theirs():
+    by_player = {**GOOD, "by": "player"}
+    # A channel named after the player, calling itself their home, isn't one of their accounts.
+    fan_page = candidate(kind="video", source="youtube", author_name="Arjun Mehra", author_handle="UCarjunmehrafanclub0000000", text="The official home of Arjun Mehra fans.")
+    assert curate.judge(fan_page, FakeGateway(by_player)).by == "unknown"  # type: ignore[arg-type]
+    assert curate.judge(candidate(kind="article", source="rss", author_name="Arjun Mehra"), FakeGateway(by_player)).by == "outlet"  # type: ignore[arg-type]
+    # A creator the fetcher knows stays one; the player's own handle is theirs, whatever the model says.
+    assert curate.judge(candidate(author_kind="creator"), FakeGateway(by_player)).by == "fan_or_creator"  # type: ignore[arg-type]
+    assert curate.judge(candidate(author_handle="@ArjunMehra18"), FakeGateway(GOOD)).by == "player"  # type: ignore[arg-type]
+
+
+def test_the_judge_is_told_a_channels_own_boilerplate_is_not_sponsorship():
+    prompt = curate.system_prompt("cricket")
+    assert "boilerplate is never sponsorship" in prompt and "podcast" in prompt and "academy" in prompt
+    said = Judged.model_fields["sponsored"].description or ""
+    assert "boilerplate" in said and "membership" in said
+
+
 def test_a_verdict_off_the_schema_is_sent_back_once_and_a_silent_reply_asked_again():
     llm = FakeGateway({**GOOD, "by": "creator"}, None, GOOD)
     v = curate.judge(candidate(), llm)  # type: ignore[arg-type]

@@ -5,12 +5,12 @@ follow. Every candidate a fetcher finds (L0) is judged here before it can show (
 it, what it is, how interesting it is, what's wrong with it, and whether it's paid for, with one line a fan
 reads in the app's "Why this is here" sheet. Ranking each fan's feed at serve time (L2) reads the verdict.
 
-Two stages. The rules decide alone when they're sure: a paid-partnership flag, ad hashtags or a discount code
-(sponsored), a betting or fantasy brand (betting), a full-length video from nobody known or one that can't be
-played here (restream). They also settle facts for the model: a post from one of the player's own handles is
-by the player. Everything else goes to a small model through the llm-providers gateway, as the research
-agent's calls do (agent.py), with a few lines from the player's sport on what's big there
-(Sport.content_hints).
+Two stages. The rules decide alone when they're sure: a paid-partnership flag (YouTube's "Includes paid
+promotion" is one), ad hashtags or a discount code (sponsored), a betting or fantasy brand (betting), a
+full-length video from nobody known or one that can't be played here (restream). They also settle facts for the
+model: a post from one of the player's own handles is by the player, and nothing else is. Everything else goes
+to a small model through the llm-providers gateway, as the research agent's calls do (agent.py), with a few
+lines from the player's sport on what's big there (Sport.content_hints).
 
 judge() is a pure function of a Candidate: no database, no fetching. The curator process hands it candidates
 and stores what it says, so moving the judge to a service of its own later is only transport.
@@ -153,7 +153,7 @@ class Judged(BaseModel):
     kind: ContentKind = Field(description="match_moment: a play or moment from a game. milestone: a record, landmark or title. personal_or_fun: off the field. interview_or_analysis: the player talking, or someone breaking down their play. news: reported facts (injury, transfer, selection). rumour: unconfirmed claims. promo: selling something. other.")
     interest: float = Field(ge=0, le=1, description="How much a fan of this player would want to see it, 0 to 1. 0.8+ only for a big moment, milestone or genuinely new insight; a passing mention or a generic compilation is 0.3 or less.")
     risks: list[Risk] = Field(default=[], description="betting: promotes betting, gambling or fantasy apps. misinformation: presents false or unverified claims as fact. deepfake: edited or generated to put words or acts on the player that aren't theirs. abuse: insults, harassment or hate. restream: a full match or broadcast re-uploaded by someone without the rights.")
-    sponsored: bool = Field(description="True when someone paid for it or it sells a product or service, labelled or not.")
+    sponsored: bool = Field(description="True when a brand paid for this share, or it exists to sell something, labelled or not. Never for a channel's own boilerplate: subscribe or membership calls, its socials, its own merch, academy, app or podcast, or a sponsor's message or link in the description when the video is about something else.")
     reason: str = Field(description="One short line for a fan, saying why this is here or what it is, e.g. 'A fan edit of her winning moment in the final'. No more than 15 words, no hype.")
 
     @field_validator("reason")
@@ -302,12 +302,17 @@ match report naming them once, or a post about a teammate is a "mention". A name
 them, is "no".
 - Fans want moments, milestones, real insight and the player's own voice. Generic compilations, reaction \
 bait, clickbait titles and recycled old clips are low interest (0.3 or less). Be sparing with 0.8 and above.
-- Sponsored covers unlabelled promotion too: a product held up and named, an app to download, a giveaway \
-for following a brand.
+- sponsored is true only when a brand paid for the share or it exists to sell something: a product it shows \
+off and pitches, a partnership or paid promotion it declares, an app, course or service the share itself is \
+selling, a giveaway for following a brand. Unlabelled promotion counts when the selling is the point. A \
+channel's own boilerplate is never sponsorship: calls to subscribe, like or join its memberships, links to its \
+socials, its own merch, academy, app, podcast or newsletter, and a sponsor's message or link in the \
+description when the video is about something else. Judge what the share is about, not the links under it.
 - Rumours are claims no reliable source has confirmed: transfer talk from aggregator accounts, "sources \
 say", dating gossip. News is reported by an outlet as fact.
 - Name a risk only when it's there: betting (gambling, fantasy apps, skin betting), misinformation (false or \
-unverified claims as fact, fake quotes), deepfake (edited or generated words or acts), abuse (insults, \
+unverified claims as fact, fake quotes; a rumour that says it's unconfirmed, or a promo, isn't misinformation \
+for that alone), deepfake (edited or generated words or acts), abuse (insults, \
 harassment, hate), restream (a full match or broadcast re-uploaded without the rights).
 - The reason is one plain line a fan reads under "Why this is here": what it is, in 15 words or fewer. No \
 hype, no emoji, no "this video".
@@ -340,9 +345,14 @@ def _shown(c: Candidate, facts: Facts) -> str:
     return "\n\n".join(lines)
 
 
-def _settle(judged: Judged, facts: Facts) -> Verdict:
-    """The model's verdict, with what the rules settled standing over it: who made it."""
-    return Verdict(**{**judged.model_dump(), "by": facts.by or judged.by, "stage": "model"})
+def _settle(c: Candidate, judged: Judged, facts: Facts) -> Verdict:
+    """The model's verdict, with what the rules settled standing over it: who made it. Only the player's own
+    accounts make a share theirs (the rules say so when it's one): a channel named after them, or saying it's
+    their home, isn't one."""
+    by = facts.by or judged.by
+    if by == "player" and facts.by != "player":
+        by = "outlet" if c.kind == "article" else "unknown"
+    return Verdict(**{**judged.model_dump(), "by": by, "stage": "model"})
 
 
 @cache
@@ -375,7 +385,7 @@ def _ask(llm: Client, c: Candidate, facts: Facts) -> Verdict:
             messages += [r.message, {"role": "user", "content": "Please call submit_verdict now with your verdict."}]
             continue
         try:
-            return _settle(Judged.model_validate(submit.args), facts)
+            return _settle(c, Judged.model_validate(submit.args), facts)
         except ValidationError as exc:
             log.warning("curate: verdict rejected, %d errors, first: %s", exc.error_count(), exc.errors()[0])
             messages += [r.message, {"role": "tool", "tool_call_id": submit.id, "content": f"Input did not match the schema, please resubmit: {exc}"}]

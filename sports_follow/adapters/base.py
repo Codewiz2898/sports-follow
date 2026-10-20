@@ -450,6 +450,7 @@ class VideoFacts:
     live: bool = False  # a live stream, now or to come, rather than a video
     allowed: tuple[str, ...] | None = None  # the only countries it plays in (ISO 3166-1 alpha-2), where the source limits it
     blocked: tuple[str, ...] = ()  # countries it doesn't play in
+    paid: bool = False  # its maker declared paid promotion in it (YouTube's "Includes paid promotion")
     raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
 
     def plays_in(self, country: str) -> bool:
