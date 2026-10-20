@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from sports_follow import candidates, sports
+from sports_follow import candidates, naming, sports
 from sports_follow.adapters import VIDEOS, AdapterError, Upload, VideoFacts, budget, videos, youtube
 from sports_follow.candidates import Followed
 
@@ -46,7 +46,7 @@ def feed(*entries: tuple[str, str, str]) -> str:
 
 
 def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 300, embeddable: bool = True, privacy: str = "public",
-          region: dict | None = None, live: str = "none") -> dict:
+          region: dict | None = None, live: str = "none", paid: bool | None = None) -> dict:
     """One item of videos.list, as YouTube sends it."""
     details = {"duration": duration, "dimension": "2d", "definition": "hd", "caption": "false", **({"regionRestriction": region} if region else {})}
     return {
@@ -55,6 +55,7 @@ def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 3
         "contentDetails": details,
         "statistics": {"viewCount": str(views), "likeCount": str(likes), "commentCount": "12"},
         "status": {"uploadStatus": "processed", "privacyStatus": privacy, "license": "youtube", "embeddable": embeddable, "publicStatsViewable": True},
+        **({"paidProductPlacementDetails": {"hasPaidProductPlacement": paid}} if paid is not None else {}),
     }
 
 
@@ -173,6 +174,17 @@ def test_a_video_is_read_as_its_facts(fake):
     assert (f.seconds, f.views, f.likes, f.embeddable, f.public, f.live, f.blocked) == (3723, 5000, 300, True, True, False, ("IN", "PK"))
     assert not f.plays_in("IN") and f.plays_in("GB") and "missing0000" not in facts
     assert f.raw["status"]["privacyStatus"] == "public" and f.raw["snippet"] == {"liveBroadcastContent": "none", "categoryId": "17", "tags": ["cricket"]}
+    assert not f.paid
+
+
+def test_a_declared_paid_promotion_is_read_in_the_same_unit(fake):
+    fake.videos.update({"promoted000": video("promoted000", paid=True), "unpromoted0": video("unpromoted0", paid=False)})
+    with budget.in_lane("feed"):
+        got = SOURCE.facts(["promoted000", "unpromoted0"])
+    assert got["promoted000"].paid and not got["unpromoted0"].paid
+    [asked] = fake.asked
+    assert "paidProductPlacementDetails" in asked.url.params["part"].split(",")
+    assert budget.standing(youtube.BUDGET)["windows"][0]["used"] == 1
 
 
 def test_each_request_is_one_unit_of_the_days_quota_for_up_to_fifty_videos(fake):
@@ -303,6 +315,25 @@ def test_a_player_is_named_by_their_full_name_a_hashtag_or_a_surname_only_they_h
     assert candidates.named(up("King Kohli returns"), names[1]) == ("king kohli", "title")  # the longest name found
 
 
+def test_only_a_descriptions_opening_names_who_a_video_is_about():
+    names = candidates.phrases([KOHLI, BUMRAH])
+    related = ("Our pick of the best spells this season, ball by ball.\n\nRelated videos:\n"
+               "Virat Kohli's 52nd hundred: https://www.youtube.com/watch?v=aaaaaaaaaaa\nBumrah on the yorker: https://youtu.be/bbbbbbbbbbb")
+    assert candidates.named(up("Spells of the season", related), names[1]) is None
+    assert candidates.named(up("Spells of the season", related), names[7]) is None
+    # A podcast's links straight under the opening, with no blank line between them.
+    podcast = "Selection talk before the first Test.\nListen on Spotify: https://example.test/pod\nLast week: Jasprit Bumrah on his comeback https://example.test/ep9"
+    assert candidates.named(up("Who opens in Perth?", podcast), names[7]) is None
+    # Named in the opening, it counts, a link list under it or not.
+    assert candidates.named(up("Who opens in Perth?", "Why Jasprit Bumrah should lead the attack.\n\nPodcast: https://example.test/pod"), names[7]) == ("jasprit bumrah", "description")
+    # A description with no break is read only so far.
+    long = "A look back at a great season for the whole side. " * 6 + "Virat Kohli"
+    assert len(long) > naming.LEAD_MAX and candidates.named(up("Season review", long), names[1]) is None
+    assert naming.lead("  Opening line\nsecond line\n\nlinks") == "Opening line\nsecond line"
+    assert naming.lead("Watch: https://example.test/1\nmore") == "Watch: https://example.test/1\nmore"  # a link in the first line is still the opening
+    assert naming.lead("x" * 294 + " Kohli more") == "x" * 294 + " Kohli"  # a word ending at the cut stays whole
+
+
 def test_names_match_in_any_plain_spelling():
     names = candidates.phrases([MULLER])
     assert candidates.named(up("Thomas Mueller's last dance"), names[4]) == ("thomas mueller", "title")
@@ -347,6 +378,7 @@ def test_a_candidate_keeps_what_was_fetched_and_the_name_it_was_kept_for():
     kept = candidates.candidate(up("Kohli 100", "desc"), "kohli", "title", "cricket", f)
     assert kept["title"] == "Kohli 100" and kept["named"] == "kohli" and kept["where"] == "title" and kept["sport"] == "cricket"
     assert kept["details"] == {"status": {"embeddable": True}}  # the numbers live in features
+    assert kept["paid"] is False and candidates.candidate(up("Kohli 100"), "kohli", "title", "cricket", facts(paid=True))["paid"] is True
     json.dumps(kept)
 
 

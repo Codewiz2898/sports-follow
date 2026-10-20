@@ -55,7 +55,8 @@ def test_the_like_ratio_needs_enough_views_to_mean_anything():
 
 
 def test_what_the_judge_lets_through():
-    assert rank.passes(verdict()) and rank.passes(verdict(about_player="mention"))
+    assert rank.passes(verdict())
+    assert not rank.passes(verdict(about_player="mention"))  # a passing mention is kept, never served
     assert not rank.passes(verdict(about_player="no"))
     assert not rank.passes(verdict(sponsored=True))
     assert not rank.passes(verdict(risks=["deepfake"]))
@@ -144,5 +145,7 @@ def test_a_stored_row_reads_as_the_judges_candidate():
     assert c.published_at == datetime(2026, 10, 19, 10, tzinfo=timezone.utc) and c.duration_seconds == 480
     assert (c.engagement.views, c.engagement.likes, c.platform_flags.embeddable) == (5_000, 300, True)
     assert c.player == who and c.author_kind is None  # the model tells who made it
+    assert not c.platform_flags.paid_partnership
+    assert rank.as_candidate("youtube", "https://www.youtube.com/watch?v=abcdefghijk", {**kept, "paid": True}, {}, who).platform_flags.paid_partnership
     gone = rank.as_candidate("other", "https://example.com/v", {"details": {"status": {"embeddable": False}}}, {}, who)
     assert gone.source == "other" and not gone.platform_flags.embeddable and gone.published_at is None

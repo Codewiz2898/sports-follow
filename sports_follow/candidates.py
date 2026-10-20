@@ -3,8 +3,9 @@ candidates for the later stages to judge and rank (feed_candidates). Run by the 
 a request: the feed reads what's here and never waits on it.
 
 Every half hour (poll), for each running video source (adapters.videos): the latest uploads of each channel a
-running sport lists (Sport.video_channels), and of those, each one whose title or description names a followed
-player of that sport (named) is a candidate for that player. What the source says of the new ones (one request
+running sport lists (Sport.video_channels), and of those, each one whose title or the opening of its description
+names a followed player of that sport (named) is a candidate for that player: not a name in the link lists further
+down (related videos, podcasts, a channel's other series), which are about someone else. What the source says of the new ones (one request
 for every 50) then decides, with the hard filters alone, which are kept (refused): a video that may be embedded,
 is public, plays in FEED_COUNTRY, isn't a live stream and runs 1 to 20 minutes. Whether it's any good is the
 judge's to say, later. A video refused is remembered for a week, so it isn't asked about again while it's still
@@ -138,9 +139,9 @@ Texts = list[tuple[str, list[str], set[str]]]
 
 
 def texts(upload: Upload) -> Texts:
-    """A video's title and description as words, each once: (where, its words, the set of them)."""
+    """A video's title and its description's opening (naming.lead) as words, each once: (where, its words, the set of them)."""
     out = []
-    for where, text in (("title", upload.title), ("description", upload.description)):
+    for where, text in (("title", upload.title), ("description", naming.lead(upload.description))):
         words = naming.words(_POSSESSIVE.sub("", text))
         out.append((where, words, set(words)))
     return out
@@ -151,7 +152,7 @@ def _longest_first(names: Iterable[tuple[str, ...]]) -> list[tuple[str, ...]]:
 
 
 def named(upload: Upload, names: Iterable[tuple[str, ...]], read: Texts | None = None) -> tuple[str, str] | None:
-    """The name (its words) a video's title, else its description, names a player by, and where: ("virat
+    """The name (its words) a video's title, else its description's opening, names a player by, and where: ("virat
     kohli", "title"); None if neither does. The longest name found wins. read: the upload's texts(), when the
     caller already has them."""
     ordered = _longest_first(names)
@@ -231,6 +232,7 @@ def candidate(upload: Upload, name: str, where: str, sport: str, facts: VideoFac
         "where": where,
         "sport": sport,
         "details": {k: v for k, v in (facts.raw if facts else {}).items() if k != "statistics"},
+        "paid": facts.paid if facts else False,
     }
 
 
@@ -324,7 +326,8 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
             if vid in stored:
                 same = stored[vid]
                 values = {"url": same["url"], "features": same["features"],
-                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {}}}
+                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {},
+                                        "paid": same["candidate"].get("paid") is True}}
             else:
                 values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
             if f.moment_id is not None:
@@ -413,6 +416,11 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 log.info("feed: %s dropped %d stored video(s): %s", source.system, len(dead), ", ".join(f"{v} ({w})" for v, w in sorted(dead.items())))
             for row in session.scalars(select(FeedCandidate).where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_([v for v in part if v not in dead]))):
                 row.features = read_again(row.features or {}, facts[row.external_id], now)
+                paid = facts[row.external_id].paid
+                if (row.candidate or {}).get("paid") is not paid:
+                    row.candidate = {**(row.candidate or {}), "paid": paid}
+                    if paid:  # declared after it was judged: unserved until the judge says again (the rules: a promo)
+                        row.verdict, row.judged_at, row.score = None, None, None
                 row.checked_at = now
         counts["read"] += len(part) - len(dead)
         counts["dropped"] += len(dead)

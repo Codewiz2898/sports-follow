@@ -30,3 +30,12 @@
 {"url": "https://example.test/ig/kairo.val/30", "about_player": "subject", "by": "player", "kind": "promo", "interest": 0.2, "sponsored": true, "risks": []}
 {"url": "https://example.test/yt/31", "about_player": "subject", "by": "outlet", "kind": "interview_or_analysis", "interest": 0.75, "sponsored": false, "risks": []}
 {"url": "https://example.test/ig/valoguides/32", "about_player": "subject", "by": "fan_or_creator", "kind": "interview_or_analysis", "interest": 0.5, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/33", "about_player": "subject", "by": "outlet", "kind": "interview_or_analysis", "interest": 0.7, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/34", "about_player": "subject", "by": "fan_or_creator", "kind": "interview_or_analysis", "interest": 0.6, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/35", "about_player": "subject", "by": "fan_or_creator", "kind": "interview_or_analysis", "interest": 0.6, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/36", "about_player": "subject", "by": "outlet", "kind": "match_moment", "interest": 0.8, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/37", "about_player": "subject", "by": "fan_or_creator", "kind": "promo", "interest": 0.2, "sponsored": true, "risks": []}
+{"url": "https://example.test/yt/38", "about_player": "subject", "by": "outlet", "kind": "promo", "interest": 0.2, "sponsored": true, "risks": []}
+{"url": "https://example.test/yt/39", "about_player": "subject", "by": "fan_or_creator", "kind": "promo", "interest": 0.15, "sponsored": true, "risks": []}
+{"url": "https://example.test/yt/40", "about_player": "subject", "by": "fan_or_creator", "kind": "match_moment", "interest": 0.6, "sponsored": false, "risks": []}
+{"url": "https://example.test/yt/41", "about_player": "mention", "by": "fan_or_creator", "kind": "other", "interest": 0.2, "sponsored": false, "risks": []}

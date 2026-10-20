@@ -8,8 +8,9 @@ A candidate row keeps three things apart, so any of them can be worked out again
     verdict    what the judge said (curate.py): who it's about, what it is, how interesting, what's wrong
     score      this module's number, from the two and the channel's trust; NULL for a row never served
 
-A verdict that says it isn't about the player, that it's paid for, or that names any risk is kept (for the
-admin panel, and for the judge's tuning) but never served: its score stays NULL. An admin's word on a row
+Only a share about the player is served. A verdict that says it only mentions them, that it isn't about them,
+that it's paid for, or that names any risk is kept (for the admin panel, for channel trust and for the judge's
+tuning) but never served: its score stays NULL. An admin's word on a row
 (review) stands over the judge's: approved or pinned serves it, hidden never does.
 
 The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
@@ -56,7 +57,7 @@ PACE_TOP = 10_000  # views an hour that count as the most a video can be watched
 LIKES_TOP = 0.06  # a like ratio that counts as the most liked; 4-6% is a lot on YouTube
 LIKES_UNKNOWN = 0.5  # its part while there are too few views to tell (or likes are hidden)
 LIKES_FROM = 100  # views before the like ratio means anything
-MENTION = 0.6  # a share that only mentions the player is worth this much of one about them
+MENTION = 0.6  # a share that only mentions the player, served only when an admin approves it, is worth this much of one about them
 LISTED, UNLISTED = 1.0, 0.5  # a channel's trust: a running sport lists it, or none does now
 PIN = 10.0  # added to a pinned row's score: ahead of everything the numbers rank
 # Signed-in fans' feedback on a channel's items lowers its default trust: each report counts this much, each "not
@@ -137,8 +138,8 @@ def pace_part(per_hour: float) -> float:
 
 
 def passes(verdict: dict[str, Any] | None) -> bool:
-    """Whether the judge lets a share be served: about the player (or mentioning them), not paid for, no risk."""
-    return bool(verdict) and verdict.get("about_player") in ("subject", "mention") and not verdict.get("sponsored") and not verdict.get("risks")
+    """Whether the judge lets a share be served: about the player (a passing mention never is), not paid for, no risk."""
+    return bool(verdict) and verdict.get("about_player") == "subject" and not verdict.get("sponsored") and not verdict.get("risks")
 
 
 def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, published: datetime | None, now: datetime) -> float:
@@ -261,7 +262,7 @@ def as_candidate(source: str, url: str, kept: dict[str, Any], features: dict[str
         author_name=str(kept.get("channel") or ""), author_handle=str(kept.get("channel_id") or ""),
         title=str(kept.get("title") or ""), text=str(kept.get("description") or ""), published_at=kept.get("published") or None,
         engagement=curate.Engagement(views=whole(features.get("views")), likes=whole(features.get("likes"))),
-        platform_flags=curate.PlatformFlags(embeddable=status.get("embeddable") is not False),
+        platform_flags=curate.PlatformFlags(paid_partnership=kept.get("paid") is True, embeddable=status.get("embeddable") is not False),
         duration_seconds=whole(features.get("seconds")), player=player,
     )  # fmt: skip
 
