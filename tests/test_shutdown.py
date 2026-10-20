@@ -125,7 +125,7 @@ def test_a_build_stops_without_writing_once_the_worker_stops(monkeypatch, redis,
     card = PlayerCard(player_id=1, status="ready", card={"status": "ready"}, version=3, built_at=NOW - timedelta(hours=7))
     applied, failed = [], []
 
-    def agent(llm, name, known):
+    def agent(llm, name, known, **_):
         yield {"type": "progress", "message": "Searching the web…"}
         stopping.set()  # a deploy, while the model works
         yield {"type": "result", "data": {"name": "Player One"}}

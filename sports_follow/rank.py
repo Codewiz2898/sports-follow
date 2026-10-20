@@ -50,7 +50,7 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from . import controls, curate, db, naming, news, shutdown, sports
+from . import controls, curate, db, metrics, naming, news, shutdown, sports
 from .accounts import FAN_PREFIX
 from .adapters import NEWS, feed_source
 from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard
@@ -145,6 +145,14 @@ def like_part(features: dict[str, Any]) -> float:
 
 def pace_part(per_hour: float) -> float:
     return min(1.0, math.log10(1 + max(0.0, per_hour)) / math.log10(1 + PACE_TOP))
+
+
+def stream(source: str, kept: dict[str, Any] | None) -> str:
+    """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, or
+    a channel."""
+    if is_story(source):
+        return "news"
+    return "search" if (kept or {}).get("searched_for") is not None else "channels"
 
 
 def passes(verdict: dict[str, Any] | None) -> bool:
@@ -353,6 +361,10 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
         if done:
             with db.session() as session:
                 session.execute(update(FeedCandidate), done)
+        for r, v in zip(part, verdicts):
+            if v is not None:
+                for step in ("judged", "passed") if passes(v.model_dump()) else ("judged",):
+                    metrics.feed_step(step, stream(r.source, r.candidate), [who[r.player_id].sport])
         judged += len(done)
     return {"judged": judged, "unjudged": len(rows) - judged}
 
@@ -420,6 +432,8 @@ def rescore(now: datetime | None = None, channel: str | None = None, row: int | 
             value = values[r.id]
             if value is not None:
                 served += 1
+                if r.score is None:
+                    metrics.feed_step("served", stream(r.source, r.candidate), [(r.candidate or {}).get("sport")])
             if value != r.score or moment != r.moment_id:
                 changes.append({"id": r.id, "score": value, "moment_id": moment})
             if r.id in outlets and (r.features or {}).get("outlets") != outlets[r.id][0]:

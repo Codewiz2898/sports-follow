@@ -286,7 +286,7 @@ def test_a_page_no_source_has_shows_its_profile_at_once_and_keeps_it_when_the_ag
     page = _page(monkeypatch, bound=False, qid="Q1", card=placeholder, status="building", profile=PROFILE)
     seen = []
 
-    def out_of_credit(llm, name, known):
+    def out_of_credit(llm, name, known, **_):
         seen.append(dict(page.row.card))
         raise pipeline.AgentError("Model call failed (server): openrouter: HTTP 402 Payment Required")
         yield
@@ -309,12 +309,38 @@ def test_a_picked_players_page_without_an_article_gets_its_facts_and_the_agent_w
     page = _page(monkeypatch, bound=True, qid="Q1", card=source, status="ready", profile=wiki.Profile(qid="Q1", born="1994-03-09", teams=["India"]))
     ran = []
     monkeypatch.setattr(pipeline, "llm", lambda: None)
-    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: ran.append(name) or iter(()))
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **kw: ran.append((name, kw)) or iter(()))
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
     pipeline.build_card(7)
     card = page.published[7]
     assert card["player"]["born"] == "1994-03-09" and card["player"]["teams"] == ["Mumbai Indians"]  # the source's teams
-    assert ran == ["Asha Rao"]  # no article: the background is the agent's
+    assert ran == [("Asha Rao", {"background_only": True})]  # no article: the background, and only that, is the agent's
+
+
+def test_the_agents_run_for_a_bound_player_writes_no_news_and_sends_no_news_alert(monkeypatch, redis):
+    # BHA-334: a player with a live source gets only their background from the agent. A breaking story in its
+    # report is neither stored nor told; the page keeps the news it had, and the publishers' stories.
+    from sports_follow import notify
+
+    kept = {"status": "ready", "version": 3, "news": [{"headline": "An older story"}], "stories": [{"headline": "A publisher's story"}],
+            "player": {"name": "Asha Rao"}, "provenance": {}, "live": {"is_live": False, "player_stats": []}}
+    page = _page(monkeypatch, bound=True, qid=None, card=kept, status="ready", profile=None)
+    page.row.built_at = NOW - timedelta(days=40)
+    told = []
+    monkeypatch.setattr(pipeline, "_write_news", lambda db, player, items: pytest.fail("the agent's news was stored"))
+    monkeypatch.setattr(notify, "record", lambda db, player_id, event_id, found: told.extend(found) or [])
+    monkeypatch.setattr(notify, "dispatch", lambda ids: None)
+    report = {
+        "player": {"name": "Asha Rao", "sport": "Cricket", "status": "active", "summary": "The agent's background.", "teams": []},
+        "live": {"is_live": False, "player_stats": []},
+        "news": [{"headline": "Asha Rao ruled out with a hamstring tear", "kind": "injury", "breaking": True, "published": NOW.isoformat(), "url": "https://example.org/a"}],
+        "upcoming": [], "recent_results": [], "season_stats": [], "sources": [],
+    }
+    pipeline.apply_report(7, report)
+    card = page.published[7]
+    assert told == [] and card["news"] == [] and card["stories"] == [{"headline": "A publisher's story"}]  # the old agent story goes too
+    assert "news" not in card["freshness"]
+    assert card["player"]["summary"] == "The agent's background."
 
 
 def test_wikimedia_not_answering_leaves_the_page_as_it_is_and_tries_again_later(monkeypatch, redis, no_model):
@@ -338,15 +364,16 @@ def test_a_page_with_no_article_and_no_source_is_researched_when_a_fan_opens_it(
     assert not pipeline.agent_due(7, {**page.row.card, "built_at": (NOW - timedelta(hours=1)).isoformat()}, NOW)  # researched an hour ago
     ran = []
     monkeypatch.setattr(pipeline, "llm", lambda: None)
-    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known: ran.append(name) or iter(()))
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, **kw: ran.append((name, kw)) or iter(()))
     monkeypatch.setattr(structured, "describe", lambda player_id: None)
     pipeline.build_card(7)
-    assert ran == ["Asha Rao"] and page.published[7]["player"]["born"] == "1994-03-09"
+    # No live source: the whole page is the agent's, games and news too.
+    assert ran == [("Asha Rao", {"background_only": False})] and page.published[7]["player"]["born"] == "1994-03-09"
     # Research off (the default): a page no live source has is never researched.
     monkeypatch.setattr(config, "RESEARCH", False)
     assert not pipeline.agent_due(7, page.row.card, NOW)
     pipeline.build_card(7)
-    assert ran == ["Asha Rao"]
+    assert len(ran) == 1
 
 
 def test_a_background_the_agent_wrote_is_written_again_monthly(monkeypatch, redis):

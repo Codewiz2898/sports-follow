@@ -36,7 +36,7 @@ from arq import cron  # noqa: E402
 from arq.connections import RedisSettings  # noqa: E402
 from arq.worker import run_worker  # noqa: E402
 
-from . import bus, candidates, db, news, rank, searches  # noqa: E402
+from . import bus, candidates, db, feedstats, metrics, news, rank, searches  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
 from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
 
@@ -89,7 +89,7 @@ def rank_new(videos: bool = True) -> dict[str, int]:
         log.info("feed: the judge and ranking are running elsewhere; this poll's rows wait for the next run")
         return done
     try:
-        for step, fn in (("judge", rank.judge), ("rank", rank.rescore), ("cards", rank.cards)):
+        for step, fn in (("judge", rank.judge), ("rank", rank.rescore), ("cards", rank.cards), ("coverage", feedstats.report_coverage)):
             done |= _step(step, fn)
     finally:
         bus.release("feed-rank", token)
@@ -155,6 +155,7 @@ async def startup(ctx) -> None:
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 2, thread_name_prefix="curator"))
     db.size_pool(MAX_JOBS + 7)  # the pool's least is five
+    metrics.feed_seed()
 
 
 class CuratorSettings:

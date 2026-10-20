@@ -120,8 +120,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on a clock. A player with an article and a live source never sends it. A player no live source has gets no page at all
   unless `SPORTS_FOLLOW_RESEARCH=1`, when the agent writes their whole page as before (games and news too,
   again after `SPORTS_FOLLOW_CARD_MAX_AGE`); so pages build and rebuild without the gateway for everything
-  this covers. News for players with a live source is no longer the agent's (publisher feeds are a
-  separate piece). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
+  this covers. For a player with a live source the agent is asked for the background alone
+  (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
+  alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
   players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
@@ -146,7 +147,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Structured sources where they exist, the agent everywhere else.** After the agent says who a
   player is, `structured.bind` looks them up in their sport's adapter (`sports_follow/adapters/`) and
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
-  score; the agent keeps the profile and news. A player followed before their sport had an adapter is
+  score, the publishers their news (`news.py`), and the agent only writes a background Wikipedia has no
+  article for. A player followed before their sport had an adapter is
   bound by the next scheduled refresh.
 
   | Sport | Source | Fixtures | Live | Stats |
@@ -253,7 +255,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   page (its players' games); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
   to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
   The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
-  picked on two game days.
+  picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
+  hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
+  schedule, not their other events) to the fans who follow someone in it, its team or the game
+  and haven't picked, and how each pick went once its question settles, with the fan's best league place. They go as
+  moments' pushes do (Web Push, FCM), logged as notification rows (kinds "pick" and "called"), and as each fan set
+  their alerts: none from a muted game or about players all set to "off", no reminder at "results" only, silent in
+  quiet hours. A game's pushes share a tag, so a series' maps replace each other, only the first in 20 minutes loud;
+  moments' noise rules don't count them (`notify.CALLS`), so a game's own alerts sound as they did.
 - **Following a team** (`sports_follow/teams.py`, BHA-77): Arsenal, the Lakers, India's cricket side or T1,
   not only its players, in the sports whose teams can be followed (`Sport.follow_teams`: football, cricket,
   basketball, the esports team titles; not tennis or chess). The team registry (`team`) is one row per
@@ -344,8 +353,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
       python -m sports_follow.campaigns show gukesh                           # also list, remove, refresh; player/team/game remove
 - **Push notifications for moments, without the noise.** Each poll compares the player's line with the
   last one (`sports_follow/moments.py`): the line-up (starts, or on the bench), a goal, a fifty, 30
-  points, a set, the start and the result; news from a rebuild adds injuries, transfers and
-  retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
+  points, a set, the start and the result; for a player no live source has (`SPORTS_FOLLOW_RESEARCH=1`), news
+  from a rebuild adds injuries, transfers and retirements, from stories the agent marks as breaking that news. Each moment is stored once (a
   stable key) with a priority: a hundred over a fifty, a late equaliser over a fourth goal. The noise
   rules (`sports_follow/alerts.py`) then plan each fan's
   pushes: their level for the player (key moments, the default; everything; results only; off) says
@@ -522,6 +531,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wire shows each followed player's best story of the last three days beside the agent's injury lines. A weekly prune (Mondays) drops stories over 30 days old but those an admin approved or pinned; removing a
   player removes their rows. `python -m sports_follow.curator news` reads every feed once, judges and ranks, and
   prints each sport's counts. The admin panel's Sources tab turns the source off like any other.
+- **Whether the feed gets enough** (`sports_follow/feedstats.py`, BHA-326) is measured by the curator, by sport and
+  stream (`channels` or `search`), never by channel or player: each step of the funnel (uploads read, matched to a
+  followed player, kept, judged, passed, served; each player and video counted once, so a channel's latest uploads
+  read again every poll don't count again), why what was matched wasn't kept (not embeddable, blocked in India, too
+  long, too short, live, private, gone; and for a search, already stored or refused lately: units spent for
+  nothing), the judge's verdicts by about_player, sponsored, risk and stage, its errors by kind (out of credit,
+  timeout, invalid output, declined, unavailable, off) and its time, moment searches and the units they spend, and
+  after each poll each sport's coverage: its followed players, and those with a video the Feed would serve
+  published in the last 7 days. The **Feed** dashboard shows them; three alert rules mail when nothing was kept for a
+  day, when the judge fails over 5 times of a kind in an hour (the OpenRouter credit spent, on 21 Oct, went unseen),
+  and when a sport's followed players have had no servable video for a day. The admin panel's Feed tab gives each
+  channel's yield over 30 days (uploads published, those naming someone followed, kept, served, and its latest
+  upload), from sets in Redis by the day each upload was published: a channel that posts nothing, or nothing about
+  anyone followed, is one to drop, and a sport whose players nobody covers needs a channel.
 - **Adding or removing a sport** is one module and one line, too. Everything about a sport lives in
   `sports_follow/sports/<sport>.py`, a `Sport` subclass (`sports/base.py`): its names, scoreboard
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
@@ -744,7 +767,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_EXPORTER_OTLP_HEADERS` | none | the backend's key, e.g. `Authorization=Basic%20…`: a secret, so in the server's `otlp.env`, never `settings.env` |
 | `OTEL_TRACES_EXPORTER` | `otlp` | `console` prints spans instead, for development; `none` turns traces off |
 | `OTEL_LOGS_EXPORTER` | `otlp` | `none` keeps log lines on stdout only, while traces still go |
-| `OTEL_METRICS_EXPORTER` | `otlp` | `none` sends no metrics, while traces and logs still go. Metrics: API requests by route, worker jobs, pushes, moments, card builds and refreshes, source requests by host; and from the worker, every minute, live games and how long since each was polled, the job queue, cards by status, each source's allowance (`metrics.py`) |
+| `OTEL_METRICS_EXPORTER` | `otlp` | `none` sends no metrics, while traces and logs still go. Metrics: API requests by route, worker jobs, pushes, moments, card builds and refreshes, source requests by host; and from the worker, every minute, live games and how long since each was polled, the job queue, cards by status, each source's allowance (`metrics.py`); and from the curator, the feed's funnel, judge and coverage (`feedstats.py`) |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | milliseconds between metric exports |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |

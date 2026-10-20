@@ -21,7 +21,7 @@ from typing import Any
 from arq import cron, func
 from arq.connections import RedisSettings
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, predictions_push, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -239,6 +239,14 @@ async def prepare_questions(ctx) -> None:
         await ctx["redis"].enqueue_job("read_match", system, game, _job_id=f"read_match:{system}:{game}")
 
 
+async def prediction_pushes(ctx) -> None:
+    """"Make your pick" before a campaign's games, and how each pick went once settled (predictions_push.py): every
+    minute."""
+    if await _missed(ctx, "prediction_pushes"):
+        return
+    await asyncio.to_thread(predictions_push.run)
+
+
 async def read_league(ctx, system: str) -> None:
     """A source's competitions' games, three days back and a fortnight on, for Today's big results and big games
     coming up (league.read): queued by the API when a fan looks and the last read is a few hours old. In the
@@ -402,6 +410,7 @@ class WorkerSettings:
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
         cron(_logged(prepare_questions, quiet=True), minute=set(range(4, 60, 10)), second=20, run_at_startup=True, timeout=300),
+        cron(_logged(prediction_pushes, quiet=True), second=50, timeout=120),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.
