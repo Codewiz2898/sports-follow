@@ -117,6 +117,14 @@ export interface FeedCandidateRow {
   moment_id: number | null
   served: boolean
 }
+/** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */
+export interface ChannelYield {
+  read: number
+  matched: number
+  kept: number
+  served: number
+  last_upload: string | null
+}
 /** A video channel: listed by a running sport or not, its trust as the panel set it (null: its default), and what fans said of its videos. */
 export interface FeedChannel {
   channel_id: string
@@ -128,6 +136,7 @@ export interface FeedChannel {
   candidates: number
   served: number
   feedback: number
+  yield: ChannelYield
 }
 export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed'
 export interface FeedPage {

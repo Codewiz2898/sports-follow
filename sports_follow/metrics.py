@@ -10,9 +10,11 @@ Two kinds:
 * Read every minute by the worker alone (watch()): live games and how long since each was last polled,
   the job queue, cards by status and how old the live cards' data is, and each source's allowance:
   used, what it says is left, whether it's pausing us.
+* The feed's, in the curator (BHA-326, feedstats.py): its funnel by sport and stream, why what was matched wasn't
+  kept, the judge's verdicts, errors and time, moment searches; and each sport's coverage, worked out once a poll.
 
-Labels are route, job_name, source, bucket, lane, sport, kind, status and result: never a fan's or a player's
-id. Not plain job, which Prometheus keeps for the process (sports-follow-api, -worker), dropping ours.
+Labels are route, job_name, source, bucket, lane, sport, kind, status, result, and the feed's stream, reason,
+about_player, sponsored, risk and stage: never a fan's, a player's or a channel's id. Not plain job, which Prometheus keeps for the process (sports-follow-api, -worker), dropping ours.
 """
 
 from __future__ import annotations
@@ -96,6 +98,11 @@ def seed() -> None:
     for service in PUSH_SERVICES:
         for result in ("delivered", "gone", "failed"):
             counter.add(0, {"push_service": service, "result": result})
+    _flush()
+
+
+def _flush() -> None:
+    """Send what's recorded now, not at the next export."""
     flush = getattr(otel.get_meter_provider(), "force_flush", None)
     if flush is not None:
         try:
@@ -143,6 +150,115 @@ def feed(result: str, by: int = 1) -> None:
     """Things the feed's fetch looked at (candidates.py): kept, refused by a hard filter, or dropped once gone."""
     if by:
         _instrument("counter", "sports_follow.feed.candidates", "{item}", "Feed candidates fetched, by result").add(by, {"result": result})
+
+
+# ---------------------------------------------------------------- the feed's funnel, judge and coverage (BHA-326)
+
+# Where a video came from: a trusted channel's uploads (candidates.poll), or a moment's search (searches.run). A
+# publisher's story (news.py) is judged, passed and served as "news" too.
+STREAMS = ("channels", "search")
+# Each step of the funnel, as sports_follow.feed.<step>: uploads read, those naming a followed player (one for each
+# player named), kept (a row stored), judged, passed by the judge, and served (a row's score set, newly).
+FEED_STEPS = {
+    "uploads": "Uploads a feed source returned: a trusted channel's latest, or a moment search's results",
+    "matched": "Uploads naming a followed player, one for each player named",
+    "kept": "Candidates kept: a row stored for a player and video",
+    "judged": "Candidates the judge gave a verdict on",
+    "passed": "Candidates the judge lets be served: about the player, not paid for, no risk",
+    "served": "Candidates newly served: their score set where it wasn't (again, after a hide or a channel's trust at 0 is taken back)",
+}
+# Why a matched upload isn't kept (feedstats.reason): the hard filters' words, and the two ways it was seen already.
+REFUSALS = ("not_embeddable", "blocked", "too_long", "too_short", "live", "private", "gone", "refused_before", "already_stored")
+# Why the judge couldn't answer (curate.CurateError.kind). "off" is the model turned off on purpose: no alert.
+JUDGE_ERRORS = ("out_of_credit", "timeout", "invalid_output", "declined", "unavailable", "off")
+_coverage: dict[str, tuple[int, int]] = {}  # sport: (followed players, those with a servable video this week)
+
+
+def sport_label(name: str | None) -> str:
+    """A sport as the feed's metrics label it: its key ("football" for "Soccer"), or "other" for one no module
+    knows, so a stray name can't make a series of its own."""
+    from . import sports
+
+    sport = sports.get(name)
+    return sport.key if sport else "other"
+
+
+def feed_step(step: str, stream: str, sports_of: Iterable[str | None]) -> None:
+    """One step of the feed's funnel (FEED_STEPS), counted by sport: one sport for each thing that took it."""
+    counter = _instrument("counter", f"sports_follow.feed.{step}", "{item}", FEED_STEPS[step])
+    for sport, n in Counter(sport_label(s) for s in sports_of).items():
+        counter.add(n, {"sport": sport, "stream": stream})
+
+
+def feed_refused(stream: str, lost: Iterable[tuple[str | None, str]]) -> None:
+    """Matched uploads not kept, by sport and reason (REFUSALS): (sport, reason) for each player and video."""
+    counter = _instrument("counter", "sports_follow.feed.refused", "{item}", "Matched uploads not kept, by sport and reason")
+    for (sport, reason), n in Counter((sport_label(s), r) for s, r in lost).items():
+        counter.add(n, {"sport": sport, "stream": stream, "reason": reason})
+
+
+def feed_verdict(about: str, sponsored: bool, risky: bool, stage: str, seconds: float) -> None:
+    """One verdict from the judge (curate.judge_many): who it says it's about, whether it's paid for or names a risk,
+    which stage gave it; and how long it took."""
+    _instrument("counter", "sports_follow.feed.verdicts", "{verdict}", "The judge's verdicts, by about_player, sponsored, risk and stage").add(
+        1, {"about_player": about, "sponsored": str(sponsored).lower(), "risk": str(risky).lower(), "stage": stage})
+    _judge_seconds().record(seconds, {"stage": stage})
+
+
+def feed_judge_error(kind: str, seconds: float) -> None:
+    """A candidate the judge couldn't answer for now (curate.CurateError), by kind (JUDGE_ERRORS)."""
+    _judge_errors().add(1, {"kind": kind})
+    _judge_seconds().record(seconds, {"stage": "failed"})
+
+
+def _judge_errors() -> Any:
+    return _instrument("counter", "sports_follow.feed.judge_errors", "{candidate}", "Candidates the judge couldn't answer for, by kind")
+
+
+def _judge_seconds() -> Any:
+    return _instrument("histogram", "sports_follow.feed.judge.duration", "s", "How long the judge took over a candidate, by stage (or failed)",
+                       explicit_bucket_boundaries_advisory=SECONDS)
+
+
+def feed_search(sport: str | None, units: int) -> None:
+    """A moment's search one source answered (searches.run), and what it spent of the source's allowance."""
+    labels = {"sport": sport_label(sport)}
+    _instrument("counter", "sports_follow.feed.searches", "{search}", "Moment searches a source answered, by sport").add(1, labels)
+    _instrument("counter", "sports_follow.feed.search_units", "{unit}", "What moment searches spent of their sources' allowances, by sport").add(units, labels)
+
+
+def feed_coverage(by_sport: dict[str, tuple[int, int]]) -> None:
+    """Each sport's followed players and those with a servable video this week (feedstats.coverage), worked out
+    once a poll and reported at every export until the next: a sport no longer in it isn't reported at all."""
+    global _coverage
+    _coverage = dict(by_sport)
+    for name, part, unit, description in (
+        ("sports_follow.feed.followed", 0, "{player}", "Followed players, by sport"),
+        ("sports_follow.feed.covered", 1, "{player}", "Followed players with a servable video published in the last 7 days, by sport"),
+        ("sports_follow.feed.coverage", 2, "", "The share of a sport's followed players with a servable video published in the last 7 days"),
+    ):
+        def read(options: Any, part: int = part) -> Iterable[Any]:
+            from opentelemetry.metrics import Observation
+
+            return [Observation((followed, covered, covered / followed if followed else 0.0)[part], {"sport": sport})
+                    for sport, (followed, covered) in _coverage.items()]
+
+        _instrument("observable_gauge", name, unit, description, callbacks=[read])
+
+
+def feed_seed() -> None:
+    """Zero, at the curator's start, for each count app-rules.json takes increase() of (see seed()): candidates kept
+    by each running sport and stream, while a video source runs, and the judge's errors by kind."""
+    from . import sports
+    from .adapters import videos
+
+    if videos():
+        for sport in sports.ENABLED:
+            for stream in STREAMS:
+                _instrument("counter", "sports_follow.feed.kept", "{item}", FEED_STEPS["kept"]).add(0, {"sport": sport.key, "stream": stream})
+    for kind in JUDGE_ERRORS:
+        _judge_errors().add(0, {"kind": kind})
+    _flush()
 
 
 # ---------------------------------------------------------------- read every minute, by the worker

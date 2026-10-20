@@ -552,6 +552,9 @@ first failures after a deploy count:
 | Player pages keep failing to build, or refreshes do | 3 builds failed in an hour, or over half the refreshes (at least 5) |
 | Someone signed in to the admin panel | a sign-in to `/admin` worked in the last 5 minutes (it says how many): if it wasn't you, see "The admin panel" |
 | Someone is guessing at the admin sign-in | 10 wrong admin passwords or codes in an hour (at 30 the sign-in waits out the hour) |
+| The feed has kept nothing for a day | for 30 minutes, no video has been kept from any channel or moment search in the last 24 hours, given a day of the curator's readings (its counts start at 0 while a video source runs) |
+| The feed's judge is failing | over 5 candidates of one kind the judge couldn't answer for in an hour (out of credit, timeout, invalid output, declined, unavailable; not the model turned off) |
+| A sport's followed players have no videos | for a day (of the curator's readings), none of a sport's followed players had a servable video published in the last 7 days |
 
 **Setting it up** (you, once):
 1. **Sign up** at grafana.com (free) and create a stack.
@@ -679,7 +682,7 @@ whole traces (Alloy's tail sampling) in between.
 
 ## Dashboards
 
-Five dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+Six dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
 from the traces, log lines and metrics (above), so they need nothing more on the server:
 
 | Dashboard | Shows | From |
@@ -688,6 +691,7 @@ from the traces, log lines and metrics (above), so they need nothing more on the
 | **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
 | **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
 | **Notifications** | moments found by kind; pushes delivered and failed (by push service and status), opened, and how long a moment waited for its push | `notify.py`'s log lines and metrics, the "opened" requests |
+| **Feed** | the feed's funnel by sport (uploads read, matched, kept, judged, passed, served) and kept by stream; what wasn't kept, by reason; each sport's coverage (followed players with a servable video this week); the judge's verdicts, errors by kind and time; moment searches, what they kept and served, and units per served video; YouTube's units and requests; the curator's warnings | the curator's metrics (`feedstats.py`), the worker's source readings, the curator's log lines |
 | **Errors** | errors from the API, the worker and the web app, grouped by what failed and where, with how many lines and when each was first and last seen; the error lines with their stacks | lines with an exception, and the web app's error lines |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this

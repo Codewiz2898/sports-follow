@@ -32,7 +32,7 @@ from sqlalchemy import delete, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, db, metrics, naming, shutdown, sports
+from . import bus, db, feedstats, metrics, naming, shutdown, sports
 from .adapters import NEWS, AdapterError, Upload, VideoFacts, VideoSource, budget, videos
 from .config import FEED_COUNTRY
 from .models import Athlete, FeedCandidate, Follow, Player, PlayerAlias, PlayerIdentity
@@ -302,10 +302,10 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
     return out
 
 
-def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, int]:
+def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
     """Store what's new of what was found: a video already kept for someone else is kept for this player too,
     as it is; the rest are asked about (a request per 50, with no transaction open meanwhile) and kept if no
-    hard filter refuses them."""
+    hard filter refuses them. stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
     counts = {"kept": 0, "refused": 0}
     ids = sorted({f.upload.video_id for f in found})
     if not ids:
@@ -320,6 +320,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
+        feedstats.keep_counted(stream, found, have)
         return counts
     skip = _was_refused(source, sorted({f.upload.video_id for f in new} - stored.keys()))
     ask = sorted({f.upload.video_id for f in new} - stored.keys() - skip)
@@ -327,6 +328,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
     why = {v: r for v in ask if (r := refused(facts.get(v)))}
     _remember_refused(source, why)
     counts["refused"] = len(why)
+    stored_for: list[str] = []  # a sport for each row stored
     with db.session() as session:
         for f in new:
             vid = f.upload.video_id
@@ -348,8 +350,10 @@ def keep(source: VideoSource, found: list[Found], now: datetime) -> dict[str, in
                                                                         moment_id=f.moment_id, **values)
                                            .on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))
                     counts["kept"] += added is not None
+                    stored_for += [f.sport] if added is not None else []
             except Exception as exc:  # noqa: BLE001
                 log.info("feed: %s %s for player %s not kept: %s", source.system, vid, f.player_id, type(exc).__name__)
+    feedstats.keep_counted(stream, found, have, skip, why, facts, stored_for)
     return counts
 
 
@@ -384,7 +388,9 @@ def poll(now: datetime | None = None) -> dict[str, int]:
             if keys not in by_sports:
                 group = [p for p in players if p.sport in keys]
                 by_sports[keys] = (group, phrases(group))
-            found += match(theirs, *by_sports[keys])
+            matched = match(theirs, *by_sports[keys])
+            feedstats.read_channel(channel, keys, theirs, matched, now)
+            found += matched
         totals["found"] += len(found)
         try:
             counts = keep(source, found, now)
