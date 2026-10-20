@@ -142,7 +142,7 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
             q.starts_at = start
         ask = asks.get(q.ask)
         if ask is not None and ask.first and start is not None and start > now and q.status == OPEN and q.locks_at != start:
-            q.locks_at = start
+            q.locks_at, q.reminded_at = start, None  # moved: reminded again before its new start
     return game, rows
 
 
@@ -240,6 +240,7 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
 def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     """Settle a question with its answer: each pick scored by how many made it (points), or, voided, none."""
     q.answer, q.settled_at, q.closed_at = answer, now, q.closed_at or now
+    q.told_at = None  # settled again (a void a winner came for, a corrected result): its fans are told again
     if answer == sports.VOID:
         q.status = VOIDED
         db.execute(update(Pick).where(Pick.question_id == q.id).values(points=None))

@@ -251,7 +251,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   page (its players' games); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
   to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
   The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
-  picked on two game days.
+  picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
+  hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
+  schedule, not their other events) to the fans who follow someone in it, its team or the game
+  and haven't picked, and how each pick went once its question settles, with the fan's best league place. They go as
+  moments' pushes do (Web Push, FCM), logged as notification rows (kinds "pick" and "called"), and as each fan set
+  their alerts: none from a muted game or about players all set to "off", no reminder at "results" only, silent in
+  quiet hours. A game's pushes share a tag, so a series' maps replace each other, only the first in 20 minutes loud;
+  moments' noise rules don't count them (`notify.CALLS`), so a game's own alerts sound as they did.
 - **Following a team** (`sports_follow/teams.py`, BHA-77): Arsenal, the Lakers, India's cricket side or T1,
   not only its players, in the sports whose teams can be followed (`Sport.follow_teams`: football, cricket,
   basketball, the esports team titles; not tennis or chess). The team registry (`team`) is one row per
