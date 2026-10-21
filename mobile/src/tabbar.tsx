@@ -1,9 +1,11 @@
 // The phone's tab bar, the web's (.tabbar): a floating ink pill with four places, over every page. The
 // Following and Live pages are part of Today (Today opens them): Today stays lit there. The Feed has a dot
 // while something came into it since the fan last opened it (feedSeen.ts); a small phone shows the words alone.
+// A place is one screen: tapping it goes back to that screen when it's already open under this one (what's over
+// it closes) rather than opening another on top, so the stack and Back don't grow with every tap.
 
-import { router, usePathname } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { router, useNavigationContainerRef, usePathname } from 'expo-router'
+import { useCallback, useEffect, useState } from 'react'
 import { Keyboard, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useActivity } from './activity'
@@ -13,11 +15,34 @@ import { BellIcon, FeedIcon, HomeIcon, SearchIcon } from './icons'
 import { colour, font } from './theme'
 
 const PLACES = [
-  { path: '/', label: 'Today', Icon: HomeIcon, lit: (p: string) => p === '/' || p === '/following' || p === '/live' },
-  { path: '/feed', label: 'Feed', Icon: FeedIcon, lit: (p: string) => p === '/feed' },
-  { path: '/search', label: 'Search', Icon: SearchIcon, lit: (p: string) => p === '/search' },
-  { path: '/notifications', label: 'Alerts', Icon: BellIcon, lit: (p: string) => p === '/notifications' },
+  { path: '/', screen: 'index', label: 'Today', Icon: HomeIcon, lit: (p: string) => p === '/' || p === '/following' || p === '/live' },
+  { path: '/feed', screen: 'feed', label: 'Feed', Icon: FeedIcon, lit: (p: string) => p === '/feed' },
+  { path: '/search', screen: 'search', label: 'Search', Icon: SearchIcon, lit: (p: string) => p === '/search' },
+  { path: '/notifications', screen: 'notifications', label: 'Alerts', Icon: BellIcon, lit: (p: string) => p === '/notifications' },
 ] as const
+
+type Place = (typeof PLACES)[number]['path']
+type Nav = { type?: string; index?: number; routes: readonly { name: string; state?: Nav }[] }
+
+/** Whether a stack on the way to the screen in front has `screen` under it. */
+function under(state: Nav | undefined, screen: string): boolean {
+  for (let at = state; at; at = at.routes[at.index ?? at.routes.length - 1]?.state) {
+    if (at.type === 'stack' && at.routes.slice(0, at.index).some((r) => r.name === screen)) return true
+  }
+  return false
+}
+
+/** Goes to one of the bar's places: back to its screen when one is open under this one (what's over it closes),
+ * else a new one on top. expo-router's navigate only reuses the screen in front, and its dismissTo puts the
+ * place in the front screen's stead when it isn't open, so the stack decides which. */
+export function useGoToPlace() {
+  const nav = useNavigationContainerRef()
+  return useCallback((to: Place) => {
+    const { screen } = PLACES.find((p) => p.path === to)!
+    if (nav.isReady() && under(nav.getRootState(), screen)) router.dismissTo(to)
+    else router.navigate(to)
+  }, [nav])
+}
 
 export function TabBar() {
   const insets = useSafeAreaInsets()
@@ -26,6 +51,7 @@ export function TabBar() {
   const { cards, loaded } = useFollowing()
   const dot = useFeedDot(loaded ? cards.map((c) => c.player_id).sort((a, b) => a - b).join(',') : null)
   const icons = useWindowDimensions().width >= 380
+  const go = useGoToPlace()
   const [typing, setTyping] = useState(false)
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () => setTyping(true))
@@ -38,7 +64,7 @@ export function TabBar() {
       {PLACES.map(({ path: to, label, Icon, lit }) => {
         const on = lit(path)
         return (
-          <Pressable key={to} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={to === '/feed' && dot ? `${label}, something new` : label} onPress={() => router.navigate(to as never)} style={[s.place, on && s.on]}>
+          <Pressable key={to} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={to === '/feed' && dot ? `${label}, something new` : label} onPress={() => go(to)} style={[s.place, on && s.on]}>
             {icons ? <Icon size={20} color={on ? colour.text : colour.bg} /> : null}
             <Text style={[s.label, on && s.labelOn]} numberOfLines={1}>{label}</Text>
             {to === '/feed' && dot ? <View style={[s.dot, on && { backgroundColor: colour.text }]} accessibilityLabel="new in your Feed" /> : null}

@@ -22,6 +22,7 @@ import type { Hide } from './feed'
 import { useFollowing } from './following'
 import { useMyFeed } from './myFeed'
 import { ShareButton } from './share'
+import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
 import { Btn, ErrorBox, Eyebrow, SectionHead } from './ui'
 
@@ -255,8 +256,9 @@ export function FromYourPlayers({ now, again = 0 }: { now: number; again?: numbe
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
+  const go = useGoToPlace()
   if (!loaded || !page?.items.length) return null
-  const all = () => router.navigate('/feed')
+  const all = () => go('/feed')
   return (
     <View style={{ gap: 10 }} accessibilityLabel="From your players">
       <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>All {page.count}</Text>} />
