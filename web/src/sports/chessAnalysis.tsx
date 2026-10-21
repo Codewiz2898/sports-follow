@@ -9,7 +9,7 @@ import type { LiveStatus } from '../api'
 import { BackIcon, ChevronIcon, CloseIcon, FirstIcon, LastIcon, RefreshIcon, SwapIcon } from '../components/Icons'
 import { EvalBar } from './chess'
 import { ENGINE_LICENCE, ENGINE_SOURCE, startEngine, type Engine } from './chessEngine'
-import { evalScore, PIECES, position, standardCastling, whiteShare, type ChessEval, type ChessState } from './facts/chess'
+import { chess as facts, evalScore, PIECES, position, standardCastling, whiteShare, type ChessEval, type ChessState } from './facts/chess'
 import { checked, ended, fenAt, lineFrom, lineWhere, lookFromWhite, movedOn, numberedMoves, openingLine, PIECE_NAMES, played, playable, playedOn, samePosition, sanLine, squareWords, stepped, targets, type EngineLook, type Opening } from './facts/chessLine'
 
 const PROMOTIONS = ['q', 'r', 'b', 'n']
@@ -143,7 +143,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
 
   if (!line || !fen) {
     return createPortal(
-      <dialog ref={dialog} className="chess-study narrow" data-sport="chess" aria-label="Analysis board" onCancel={(e) => { e.preventDefault(); leave() }}>
+      <dialog ref={dialog} className="chess-study narrow" data-sport={facts.key} aria-label="Analysis board" onCancel={(e) => { e.preventDefault(); leave() }}>
         <div className="chess-study-box stack" role="status">
           <span className="title">This position can't be played from here</span>
           <button type="button" className="btn small primary" style={{ alignSelf: 'flex-start' }} onClick={leave}>Back to the game</button>
@@ -276,7 +276,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
     <dialog
       ref={dialog}
       className="chess-study"
-      data-sport="chess"
+      data-sport={facts.key}
       aria-label="Analysis board"
       onCancel={(e) => {
         e.preventDefault()
