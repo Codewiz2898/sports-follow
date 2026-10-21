@@ -234,7 +234,8 @@ def settled(game: str, ev: dict[str, Any], settle: Callable[[dict[str, Any] | No
     settled from is still the one there, and otherwise made again from that one, so the board's settles
     are one chain. A reading with no score (stopped before it had one) settles nothing. The chain has an
     id ("chain"): a fixture's first evaluation from a chain it didn't start (after a deploy, or a lost
-    key) says so ("joined"), as its band may jump once to the board's, which isn't a swing."""
+    key) says so ("joined"): its own last one may be stale, so the sport holds it against the board's from
+    before this settle instead (Chess.during, settle's "prev")."""
     r = r or bus.sync_redis()
     key = f"engine:settled:{game}"
     raw = r.get(key) or ""
@@ -472,6 +473,7 @@ class Deepening:
     first: float  # when the position was first looked at
     shown: int  # the depth the game's latest evaluation shows
     look: dict[str, Any] | None  # the position's first look, which stays what the alerts go by
+    asked: float | None = None  # when the polls first asked for the position, which the game's next look counts from
     searching: bool = False  # a search of it is under way (paused between slices)
     counted: int = 0  # that search's nodes already added to the position's
     turn: int = 0  # nodes searched in this turn
@@ -539,7 +541,7 @@ def run_lane() -> None:
                         deep = None
                     if deep is None and (waiting := take_deeper(r, now)):
                         game, shown = waiting
-                        deep = Deepening(game, shown["fen"], shown.get("first", shown["at"]), shown.get("depth") or 0, shown.get("look"))
+                        deep = Deepening(game, shown["fen"], shown.get("first", shown["at"]), shown.get("depth") or 0, shown.get("look"), shown.get("asked"))
                     if deep is None:
                         if searches is not None and time.monotonic() - deep_since > DEEP_IDLE:
                             searches.close()  # nothing to deepen for a while: its memory back
@@ -602,7 +604,7 @@ def _note(r: Any, deep: Deepening, reading: dict[str, Any]) -> None:
     deep.turn += nodes - deep.counted
     deep.counted = nodes
     if (done.get("depth") or 0) > deep.shown and on_it(r, deep.game, deep.fen):
-        r.set(f"engine:latest:{deep.game}", json.dumps({"look": deep.look, **done, "fen": deep.fen, "at": time.time(), "first": deep.first}), ex=LATEST_TTL)
+        r.set(f"engine:latest:{deep.game}", json.dumps({"look": deep.look, **done, "fen": deep.fen, "at": time.time(), "first": deep.first, "asked": deep.asked}), ex=LATEST_TTL)
         deep.shown = done["depth"]
 
 

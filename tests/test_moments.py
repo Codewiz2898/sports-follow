@@ -234,8 +234,8 @@ def test_both_sides_word_a_swing_by_the_move_the_band_moved_at():
     # board's (engine.settled), the band still the one that moved at 42. Both word the swing as the play at 42.
     on = {fide: board(status="*", ongoing=True, fide=fide) for fide in (CARLSEN, LAZAVIK)}
     level = {"cp": 20, "band": 0, "raw": 0, "told": 0, "move": 41, "since": 30, "at": 1}
-    at_42 = {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 42, "since": 42, "at": 2}
-    at_43 = {**at_42, "cp": 345, "move": 43, "at": 3}
+    at_42 = {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 42, "look": {"cp": 340}, "since": 42, "since_look": {"cp": 340}, "at": 2}
+    at_43 = {**at_42, "cp": 345, "look": {"cp": 345}, "move": 43, "at": 3}
 
     def swing(fide: str, name: str, ev: dict):
         line = {"headline": on[fide].lines[fide].headline, "stats": on[fide].lines[fide].stats}
@@ -244,7 +244,8 @@ def test_both_sides_word_a_swing_by_the_move_the_band_moved_at():
 
     carlsen, lazavik = swing(CARLSEN, "Magnus Carlsen", at_42), swing(LAZAVIK, "Denis Lazavik", at_43)
     assert carlsen.detail == lazavik.detail == "mJnv1YBUw2m42" and carlsen.voice == lazavik.voice == CARLSEN
-    assert "move 42" in carlsen.body and "move 42" in lazavik.body
+    # And by the same score, each from its own side: move 42's first look (+3.4), not the later position's (+3.45).
+    assert (carlsen.body.split(" · ")[:2], lazavik.body.split(" · ")[:2]) == (["Engine +3.4", "move 42"], ["Engine -3.4", "move 42"])
 
 
 def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():

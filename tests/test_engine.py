@@ -304,6 +304,19 @@ def test_a_look_elsewhere_neither_restarts_the_deep_search_nor_gives_it_a_new_tu
     assert (looked, started) == ([E4, E4, START, E4, START, START, E4], [E4, START, E4])
 
 
+def test_a_deeper_reading_keeps_when_the_polls_asked(monkeypatch, stopping):
+    # Asked for ten seconds before the lane got to it; a deeper reading then lands before the game's next move: that
+    # move is still due GAME_INTERVAL after the ask, as an unwatched game's is, not after the lane's look.
+    r = FakeRedis()
+    asked = time.time() - 10
+    engine.request("A", E4, r, now=asked)
+    assert run_lane(monkeypatch, stopping, r, [18, 24]) == ([E4] * 2, [E4])
+    shown = engine.latest("A", r) or {}
+    assert (shown["depth"], shown["asked"]) == (24, asked)
+    engine.request("A", E4E5, r, now=asked + 11)
+    assert r.zsets[engine.QUEUE]["A"] == asked + engine.GAME_INTERVAL
+
+
 def test_an_unwatched_game_gets_its_first_look_and_no_more(monkeypatch, stopping):
     r = FakeRedis()
     engine.request("A", E4, r, deepen=False)
@@ -514,18 +527,33 @@ def test_two_polls_settling_at_once_make_one_chain():
     assert engine.settled("g1", {**look(F32, 0, 4), "cp": None}, chess.settle, r=r) == late
 
 
-def test_an_events_first_settle_from_the_boards_chain_tells_no_swing(board):
+def test_an_events_first_settle_from_the_boards_chain_tells_only_a_real_turn(board):
     # A deploy mid-game: each event's last evaluation was its own. The first to poll starts the board's chain from
-    # its own; the other's band may jump once to the board's, which isn't a swing.
+    # its own; the other, joining it, is held against the board's band before this settle, not its own stale one.
+    line = {"headline": "", "stats": [{"label": "Colour", "value": "White"}, {"label": "Opponent", "value": "Gukesh D"}]}
+
+    def told(event: int, was: dict) -> list[str]:
+        return [f.title for f in sports.get("chess").during("Magnus Carlsen", "1503014", Seen("live", was, line), Seen("live", board.last[event], line))]
+
     board.last[1] = {"kind": "chess", "game_id": "g1", "eval": {"cp": 30, "band": 0, "raw": 0, "told": 0, "move": 31, "fen": F31, "at": 1}}
     board.last[2] = {"kind": "chess", "game_id": "g1", "eval": {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 31, "fen": F31, "at": 1}}
     was = dict(board.last[2])
     board.reading(F32, 30, 2)
     one, two = board.poll(1, F32)["eval"], board.poll(2, F32)["eval"]
     assert (one["band"], two["band"], one.get("joined"), two.get("joined")) == (0, 0, None, True)
-    line = {"headline": "", "stats": [{"label": "Colour", "value": "White"}, {"label": "Opponent", "value": "Gukesh D"}]}
-    assert sports.get("chess").during("Magnus Carlsen", "1503014", Seen("live", was, line), Seen("live", board.last[2], line)) == []
+    assert told(2, was) == []  # its own 2 was stale: the board didn't turn
     assert "joined" not in board.poll(2, F32)["eval"]  # from then on, one of the chain
+
+    # The same deploy, but this settle turns the board (two first looks agreeing on Carlsen winning): told to the
+    # joining event's fans as the board's turn, not against its own stale band (Black winning: a "Turnaround").
+    board.r.delete("engine:settled:g1")
+    board.last[1] = {"kind": "chess", "game_id": "g1", "eval": {"cp": 340, "band": 0, "raw": 2, "told": 0, "move": 32, "fen": F32, "at": 2}}
+    board.last[2] = {"kind": "chess", "game_id": "g1", "eval": {"cp": -340, "band": -2, "raw": -2, "told": -2, "move": 32, "fen": F32, "at": 2}}
+    was = dict(board.last[2])
+    board.reading(F33, 345, 3)
+    one, two = board.poll(1, F33)["eval"], board.poll(2, F33)["eval"]
+    assert (one["band"], two["band"], two.get("joined")) == (2, 2, True)
+    assert told(2, was) == ["Magnus Carlsen is winning"]
 
 
 def test_the_interval_counts_from_when_the_polls_asked():

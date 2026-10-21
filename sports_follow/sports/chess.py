@@ -44,7 +44,10 @@ def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
     """An evaluation with its settled band. The band goes by each position's first look ("look", the quick
     one every position gets; engine.py) and moves only when the first looks of two positions in a row
     agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing. "since" is
-    the move it last moved at, so a swing is the same swing whichever poll of the board first sees it.
+    the move it last moved at and "since_look" that move's first look, so a swing is the same swing, in
+    the same words, whichever poll of the board first sees it; "prev" is the band and "told" it was
+    settled from, the board's own before this one, which a poll joining the board's settles holds it
+    against (engine.settled).
 
     While someone has the game open, the engine goes on deepening the position it's on. A deeper reading of
     the same position is shown (cp, mate and depth, for the board's bar) but never moves the band, nor what
@@ -58,21 +61,24 @@ def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
     if before and before.get("at") == ev.get("at"):
         return before
     move = _fullmove(ev.get("fen"))
+    held = before or {}
+    prev = {"band": held.get("band", 0), "told": held.get("told", 0)}
     if not ev.get("look") or (before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen")):
         # Shown, and the band as the last first look settled it.
-        held = before or {}
-        return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0), "since": held.get("since")}
-    settled = before.get("band", 0) if before else 0
+        return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0),
+                "since": held.get("since"), "since_look": held.get("since_look"), "prev": prev}
+    settled = prev["band"]
     raw = band(ev["look"], settled)
     moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
-    told = before.get("told", 0) if before else 0
+    told = prev["told"]
     if before is not None and abs(new) == 2 and new != settled:
         told = new
     elif new * told <= 0:
         told = 0
-    since = move if before is None or new != settled else before.get("since")
-    return {**ev, "move": move, "raw": raw, "band": new, "told": told, "since": since}
+    turned = before is None or new != settled
+    return {**ev, "move": move, "raw": raw, "band": new, "told": told, "since": move if turned else held.get("since"),
+            "since_look": ev["look"] if turned else held.get("since_look"), "prev": prev}
 
 
 def _fullmove(fen: str | None) -> int | None:
@@ -185,7 +191,9 @@ class Chess(Sport):
         if now.status != "live" or now.state.get("result") or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
             return []  # a decided game (a mini-match is live after it) turns no more
         if got.get("joined"):
-            return []  # its first evaluation from the board's settles (engine.settled): its band may jump once to the board's
+            # Its first evaluation from the board's settles (engine.settled): held against the board's band before it,
+            # not its own last one, which may be stale (a deploy, a lost key), so only a real turn is told.
+            was = {**was, **(got.get("prev") or {"band": got["band"], "told": got.get("told", 0)})}
         colour = stat(now.line, "Colour")
         side = 1 if colour == "White" else -1 if colour == "Black" else 0
         old, new = was["band"] * side, got["band"] * side
@@ -212,7 +220,8 @@ class Chess(Sport):
         # The move the band moved at (settle's "since"), not the one the poll came at: a look can land between the
         # two sides' polls, and each side's word for the swing is still the same play.
         move = got.get("since") or got.get("move")
-        body = " · ".join(x for x in (f"Engine {_score(got.get('look') or got, side)}", f"move {move}" if move else None, f"vs {opponent}" if opponent else None) if x)
+        score = got.get("since_look") or got.get("look") or got  # that move's first look
+        body = " · ".join(x for x in (f"Engine {_score(score, side)}", f"move {move}" if move else None, f"vs {opponent}" if opponent else None) if x)
         mine, theirs, _ = _sides(now)
         # Its game, its band from White's side and its move: the same from either side of the board, so each side's
         # word for a swing is told as one play (alerts.voiced_by), and one game of a mini-match isn't taken for another.
