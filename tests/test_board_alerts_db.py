@@ -463,13 +463,56 @@ def test_a_moment_left_to_a_side_that_crashes_is_sent_late_and_once(db, polls, m
     assert notify.held_due() == []  # Carlsen's side still has time to say it
     later = datetime.now(timezone.utc) + timedelta(seconds=structured.TELLS_WITHIN + 30)
     held = notify.held_due(later)  # Lazavik's start too, left to Carlsen's side, which said it
+    forget = polls.redis.hdel
+
+    def down(*args):
+        raise ConnectionError("Redis went away")
+
+    monkeypatch.setattr(polls.redis, "hdel", down)  # sent, but not forgotten: the next tick finds it again
     assert len(held) == 2 and notify.send_held(held, later) == 1
     assert [(fan, title, tag) for fan, title, tag, _ in polls.pushed] == [("both", "Denis Lazavik is in trouble", "e1")]
-    assert notify.held_due(later) == []
+    monkeypatch.setattr(polls.redis, "hdel", forget)
+    assert notify.held_due(later) == held and notify.send_held(held, later) == 0  # it reached them already: not again
+    assert len(polls.pushed) == 1 and notify.held_due(later) == []
     polls.pushed.clear()
     monkeypatch.setattr(notify, "record", record)
     poll(1, side(1, status="*", ongoing=True), band=2, move=41)
     assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen is winning"]}
+
+
+def test_a_moment_that_cant_be_kept_for_late_is_sent_now(db, polls, monkeypatch):
+    # Left to Carlsen's side, but Redis won't keep it to send late should that side never say it: Lazavik's word goes
+    # to the fan of both now, and Carlsen's, coming after, isn't said too.
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, side(event_id, status="*"))
+        poll(event_id, side(event_id, status="*", ongoing=True), band=0)
+    polls.pushed.clear()
+
+    def down(*args):
+        raise ConnectionError("Redis went away")
+
+    monkeypatch.setattr(polls.redis, "hset", down)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=41)
+    assert heard(polls.pushed) == {"lazavik": ["Denis Lazavik is in trouble"], "both": ["Denis Lazavik is in trouble"]}
+    poll(1, side(1, status="*", ongoing=True), band=2, move=41)
+    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen is winning"]}
+
+
+def test_a_board_that_cant_say_which_meeting_it_is_is_told_from_each_side(db, polls):
+    # A broadcast whose tournament has no name: its two fixtures can't be told from another meeting of the same two,
+    # so they aren't taken for one game, and the fan of both hears each side's word.
+    def unnamed(event_id: int, **kwargs) -> Snapshot:
+        snap = side(event_id, **kwargs)
+        snap.state["tournament"] = None
+        return snap
+
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, unnamed(event_id, status="*"))
+        poll(event_id, unnamed(event_id, status="*", ongoing=True), band=0)
+    assert heard(polls.pushed)["both"] == ["Magnus Carlsen is playing", "Denis Lazavik is playing"]
+    assert structured.boards(db, [1, 2]) == {}
 
 
 def test_a_moment_its_other_side_says_in_time_isnt_sent_late(db, polls):

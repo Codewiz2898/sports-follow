@@ -215,6 +215,9 @@ def test_both_sides_of_a_chess_board_name_the_side_that_tells_its_moments():
     on = {fide: board(status="*", ongoing=True, fide=fide) for fide in names}
     [a], [b] = (detect("Chess", names[fide], fide, seen(fide, on[fide], 0), seen(fide, on[fide], 2)) for fide in names)
     assert a.detail == b.detail == "mJnv1YBUw2m40"
+    # And both name the same meeting of theirs; where the board can't say which (no round), none.
+    assert chess.SPORT.pairing(on[CARLSEN].state) == chess.SPORT.pairing(on[LAZAVIK].state) != ""
+    assert chess.SPORT.pairing({**on[CARLSEN].state, "round": None}) == ""
     # Before the pairing's out there's no board: only its player says it.
     assert detect("Chess", "Magnus Carlsen", CARLSEN, Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Round 5")))[0].voice == ""
 

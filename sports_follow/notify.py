@@ -304,8 +304,8 @@ def _deliver(jobs: list[tuple[int, tuple, dict[str, Any], int, str]], items: lis
 
 def held_due(now: datetime | None = None) -> list[int]:
     """The moments left to their board's other side to tell (alerts.voiced) for longer than structured.TELLS_WITHIN,
-    for the tick to send late where that side never said them (send_held); those past their TTL are forgotten. None
-    where Redis can't say."""
+    for the tick to send late where that side never said them (send_held); those past their TTL are forgotten.
+    Nothing where Redis can't say."""
     from . import structured  # how long a side has to tell its moments (structured sends through here)
 
     at = (now or datetime.now(timezone.utc)).timestamp()
@@ -331,8 +331,9 @@ def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
     """Send late, to the fans it was left for alone, a moment its board's other side was to tell them (held_due) where
     that side never said it: no moment of that player's of the same play is stored on the board's fixtures (the side
     crashed, stalled past a poll gap, or settled the game another way). In its own side's words, on the game's
-    notification, as a push of it is. Each is forgotten once sent, or once its other side's is found. Returns how many
-    devices took one."""
+    notification, as a push of it is. Each is forgotten once sent, or once its other side's is found; a fan it reached
+    already isn't sent it again (this ran before, and went down before forgetting it). Returns how many devices took
+    one."""
     now = now or datetime.now(timezone.utc)
     try:
         redis = bus.sync_redis()
@@ -347,20 +348,24 @@ def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
             if twins and db.scalar(select(Moment.id).where(Moment.key.in_(twins)).limit(1)) is not None:
                 continue  # its other side said it
             told = replace(item, voice=None)  # told by its own side now
-            jobs += _plan(db, [told], now, _taken_back(db, [told]), fans=set(entries[item.id]["fans"]))
+            fans = set(entries[item.id]["fans"])
+            fans -= set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.moment_ids.contains([item.id]), Notification.delivered > 0)))
+            jobs += _plan(db, [told], now, _taken_back(db, [told]), fans=fans) if fans else []
             late.append(told)
-    try:
-        redis.hdel(HELD, *[str(m) for m in entries])
-    except Exception:
-        log.warning("moments %s held for a board's other side: couldn't forget them", list(entries), exc_info=True)
-    return _deliver(jobs, late, now)
+    sent = _deliver(jobs, late, now)
+    if entries:  # only now: one that went down before this is sent again, never not at all
+        try:
+            redis.hdel(HELD, *[str(m) for m in entries])
+        except Exception:
+            log.warning("moments %s held for a board's other side: couldn't forget them", list(entries), exc_info=True)
+    return sent
 
 
-def _hold(held: dict[int, tuple[alerts.Item, set[str]]]) -> None:
+def _hold(held: dict[int, tuple[alerts.Item, set[str]]]) -> bool:
     """Keep the moments a batch left to their board's other side to tell (alerts.plan's held), with the fans each was
-    left for, so they're sent late should that side never say them (held_due)."""
+    left for, so they're sent late should that side never say them (held_due). Whether they were kept."""
     if not held:
-        return
+        return True
     try:
         redis = bus.sync_redis()
         for item, fans in held.values():
@@ -368,7 +373,9 @@ def _hold(held: dict[int, tuple[alerts.Item, set[str]]]) -> None:
             redis.hset(HELD, str(item.id), json.dumps({"fans": sorted({*had.get("fans", []), *fans}), "at": item.created_at.timestamp(), "kind": item.kind}))
         redis.expire(HELD, alerts.LATE_TTL)
     except Exception:
-        log.warning("moments %s left to their board's other side: couldn't keep them", list(held), exc_info=True)
+        log.warning("moments %s left to their board's other side: couldn't keep them, so they're sent now", list(held), exc_info=True)
+        return False
+    return True
 
 
 def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
@@ -513,7 +520,10 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
                 jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
         for item in left:
             held.setdefault(item.id, (item, set()))[1].add(fan)
-    _hold(held)
+    if not _hold(held):
+        # Not kept to send late: sent now in this side's words, as if the other side's weren't coming (twice beats never).
+        for item, whom in held.values():
+            jobs += _plan(db, [replace(item, voice=None)], now, taken_back, fans=whom)
     return jobs
 
 

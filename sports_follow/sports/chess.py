@@ -281,8 +281,8 @@ class Chess(Sport):
     def pairing(self, state: dict[str, Any]) -> str:
         """Its tournament's and round's names and its two players: a round is one meeting, its mini-match's games
         and all."""
-        players = sorted(self.board_players(state))
-        return "|".join([str(state.get("tournament") or ""), str(state.get("round") or ""), *players]) if len(players) == 2 else ""
+        players, tournament, rnd = sorted(self.board_players(state)), state.get("tournament"), state.get("round")
+        return "|".join([str(tournament), str(rnd), *players]) if len(players) == 2 and tournament and rnd else ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A

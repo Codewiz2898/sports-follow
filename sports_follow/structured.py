@@ -113,8 +113,9 @@ def _boards_shown(db: Session, ids: Iterable[int]) -> dict[int, tuple[str, datet
         rules = sports.of_state(state or {})
         board = rules.board(state or {})
         players = tuple(sorted(rules.board_players(state or {}))) if board else ()
-        if players:
-            out[event_id] = ((key or "").partition(":")[0], start, board, players, rules.pairing(state or {}))
+        pairing = rules.pairing(state or {}) if players else ""
+        if pairing:  # one whose board can't say which meeting it is isn't taken for another's fixture: each tells its own
+            out[event_id] = ((key or "").partition(":")[0], start, board, players, pairing)
     return out
 
 
