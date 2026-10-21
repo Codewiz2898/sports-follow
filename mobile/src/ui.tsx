@@ -5,7 +5,7 @@ import { router } from 'expo-router'
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
 import { BackIcon } from './icons'
-import { colour, dsp, font, RADIUS_CARD, t } from './theme'
+import { colour, dsp, dspInk, font, RADIUS_CARD, t } from './theme'
 
 /** A big word that may break onto two lines after its hyphen ("TRIPLE- / DOUBLE"), as a browser breaks it:
  * Android's line breaker doesn't take a hyphen as a place to break, so it gets an explicit one. */
@@ -56,7 +56,7 @@ export function LiveDot({ ring }: { ring?: string }) {
 // ---------------------------------------------------------------- type
 
 export function Dsp({ size, color, style, lines, children }: { size: number; color?: string; style?: StyleProp<TextStyle>; lines?: number; children: ReactNode }) {
-  return <Text style={[dsp(size), color ? { color } : null, style]} numberOfLines={lines}>{children}</Text>
+  return <Text style={[dsp(size), color ? { color } : null, style, dspInk(size, style)]} numberOfLines={lines}>{children}</Text>
 }
 
 export function Eyebrow({ children, color, style, lines }: { children: ReactNode; color?: string; style?: StyleProp<TextStyle>; lines?: number }) {

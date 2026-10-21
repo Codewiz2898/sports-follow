@@ -2,7 +2,7 @@
 // sport's colour as a solid block. Red means "happening now" and nothing else. The values here are that
 // stylesheet's; each sport's colours come from the server (sports.tsx), never from here.
 
-import { StyleSheet, type TextStyle } from 'react-native'
+import { PixelRatio, StyleSheet, type StyleProp, type TextStyle } from 'react-native'
 
 export const colour = {
   bg: '#F3F3EF',
@@ -37,9 +37,31 @@ export const RADIUS_CARD = 22
 export const RADIUS_TILE = 20
 
 /** Anton, upper case and leaning forward (.dsp): names, scores, headings. Its line is 0.92 of its size. The
- * lean is in the letters (font.slanted), not a skew, which Android doesn't draw on text. */
+ * lean is in the letters (font.slanted), not a skew, which Android doesn't draw on text. Bottom padding or
+ * margin of its own goes through dspInk (Dsp's `style` does), or it takes the ink's room away. */
 export function dsp(size: number): TextStyle {
-  return { fontFamily: font.slanted, fontSize: size, lineHeight: Math.round(size * 0.95), textTransform: 'uppercase', letterSpacing: size * 0.005, color: colour.text }
+  return { fontFamily: font.slanted, fontSize: size, lineHeight: Math.round(size * 0.95), textTransform: 'uppercase', letterSpacing: size * 0.005, color: colour.text, ...dspInk(size) }
+}
+
+// How far Anton's ink sinks below a .dsp line, as a share of the size: the line (0.95 of the size, centred on
+// the face as CSS centres it) ends 0.05 below the baseline, and an underscore, a comma, Q's tail, a cedilla or
+// a comma below (Ç, Ș) reaches 0.31. The site lets ink overflow its line; Android cuts what a Text draws at
+// its box, so `not_me` read "NOT ME".
+const INK_BELOW = 0.27
+
+/** The room dsp() gives that ink: padding under the line that as much negative margin takes back, so the
+ * Text's box holds the ink and the page is laid out as before. Only below: a box grown upwards would take taps
+ * from what's above it (Android hits the later view first, and its Text has no pointerEvents), so an accent
+ * on a first line's capital stays cut. A style's own bottom padding and margin are added to the room (a
+ * percentage or `auto` keeps them, without it). The padding is whole pixels: Android's TextView draws into its
+ * bottom padding only when the box is exactly its text and padding, which a part pixel breaks. */
+export function dspInk(size: number, style?: StyleProp<TextStyle>): TextStyle {
+  const own = StyleSheet.flatten(style) ?? {}
+  const pad = own.paddingBottom ?? own.paddingVertical ?? own.padding ?? 0
+  const margin = own.marginBottom ?? own.marginVertical ?? own.margin ?? 0
+  if (typeof pad !== 'number' || typeof margin !== 'number') return { paddingBottom: pad, marginBottom: margin }
+  const padding = PixelRatio.roundToNearestPixel(pad + size * INK_BELOW)
+  return { paddingBottom: padding, marginBottom: margin - (padding - pad) }
 }
 
 /** Anton numbers, upright (.num). */
