@@ -33,20 +33,20 @@ const open = (url: string) => {
 export function Watch({ streams, tone, playing, onPlay }: {
   streams: MatchStream[]; tone: Tone; playing: string | null; onPlay: (url: string | null) => void
 }) {
-  // Over the whole screen (Expand) while it plays; a stream started again starts in the page.
+  // Over the whole screen (Expand) while it plays; a player stopped, however, starts in the page the next time.
   const [expanded, setExpanded] = useState(false)
   // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile; one no
   // longer listed stops.
   const first = streams.find((x) => x.url === playing) ?? streams[0]
   const gone = playing != null && first?.url !== playing
-  useEffect(() => { if (gone) onPlay(null) }, [gone, onPlay])
+  useEffect(() => { if (gone) { setExpanded(false); onPlay(null) } }, [gone, onPlay])
   if (!first) return null
   const more = streams.filter((x) => x !== first)
   const note = streamNote(first)
   const page = first.embed ? API_URL + watchPage(first.embed) : null
   const out = open(first.url)
   const on = playing === first.url
-  const stop = () => onPlay(null)
+  const stop = () => { setExpanded(false); onPlay(null) }
   return (
     <View style={s.section}>
       <SectionHead title="Watch live" />
