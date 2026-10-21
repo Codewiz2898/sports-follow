@@ -294,6 +294,14 @@ ssh deploy@<server-ip> 'cd /opt/sports-follow && docker compose -f deploy/compos
 `settings.env` already lists `youtube`; without the key the admin panel's Sources tab says "No token on the
 server" under Feed, and nothing else changes. Its free quota is 10,000 units a day; the panel shows what's spent.
 
+**Clips** (you, once): clips published from the Mac app live in the Cloudflare R2 bucket `slam-clips`
+(`settings.env` names it, its endpoint and its public address). Its key is an R2 API token (Cloudflare dashboard,
+R2, Manage API tokens, Create: Object Read & Write, `slam-clips` only), saved on the Mac as
+`~/.config/sports-follow/clips-key`: the Access Key ID, then the Secret Access Key, a line each (`chmod 600`).
+Send it and restart the API and the worker, as for the esports tokens above. Then make the Mac's publishing key
+on the server: `c exec api python -m sports_follow.clips key "Bharath's Mac"` (shown once; `keys` lists them,
+`revoke <id>` stops one). Without the bucket's key, publishing answers "not set up" and the clips feeds are empty.
+
 **Android notifications** (you, once): the Android app's pushes go through Firebase Cloud Messaging with
 a service-account key of the app's Firebase project (README.md, "Android app", says how to make it). Save
 it on the Mac as `~/.config/sports-follow/fcm-service-account.json` (`chmod 600`), then send it and
