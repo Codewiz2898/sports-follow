@@ -315,6 +315,37 @@ def test_a_follow_that_fails_gives_its_research_back_everywhere_it_was_counted(a
     assert len(counts) == 3 and set(counts.values()) == {0}  # the fan's day, the address's day, the hour
 
 
+def test_asking_again_for_a_name_no_one_followed_here_has_costs_no_research_that_day(api, monkeypatch):
+    # BHA-213: "Caitlyn Clark" is only a college player's name, so its page failed without research.
+    # "Try again", or another fan typing the name, would find the same that day: it says so at once,
+    # counted nowhere. After the day the sources are asked again: she may have turned pro.
+    failed = SimpleNamespace(player_id=2, status="failed", card={"status": "failed"}, error=pipeline.NOT_FOUND_TEXT, version=0)
+    plain_get, plain_scalar = Db.get, Db.scalar
+
+    def get(self, model, key):
+        if key == 2:
+            return failed if model is PlayerCard else SimpleNamespace(id=2, name="Caitlyn Clark") if model is Player else None
+        return plain_get(self, model, key)
+
+    def scalar(self, stmt):  # the card that holds a typed name's alias
+        return failed if stmt.column_descriptions[0]["entity"] is PlayerCard else plain_scalar(self, stmt)
+
+    monkeypatch.setattr(Db, "get", get)
+    monkeypatch.setattr(Db, "scalar", scalar)
+    monkeypatch.setattr(pipeline, "placeholder_card", lambda player: {"status": "building"})
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: None)
+    api.redis.data[pipeline.not_found_key(2)] = "1"
+    for body in ({"player_id": 2}, {"query": "Caitlyn Clark"}):
+        answer = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body=body)
+        assert (answer.status_code, answer.json()["detail"]) == (404, "No player here goes by this name. Check the spelling, or pick them from the search results.")
+    assert not any(k.startswith("research") for k in api.redis.data)
+    assert api.queue.jobs == []
+    del api.redis.data[pipeline.not_found_key(2)]  # the day is out
+    assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 2}).status_code == 200
+    assert api.redis.data[server.player_search.research_key("fan")] == 1
+    assert api.queue.jobs == [("build_card", 2)]
+
+
 def test_a_research_that_fails_to_start_is_given_back(api, monkeypatch):
     """A registry athlete no source has: the agent builds them, and that counts, unless creating them fails."""
     person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})

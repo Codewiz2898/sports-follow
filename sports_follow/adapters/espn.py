@@ -18,7 +18,7 @@ import httpx
 from .. import naming, sports
 from ..config import USER_AGENT
 from . import budget, cache
-from .base import AdapterError, LiveSearch, PlayerRef, Provider, SearchResult
+from .base import NOT_FOUND, AdapterError, LiveSearch, NotFound, PlayerRef, Provider, SearchResult
 
 if TYPE_CHECKING:
     from .base import Adapter
@@ -75,16 +75,28 @@ def profile_link(athlete: dict[str, Any]) -> str | None:
     return next((link.get("href") for link in athlete.get("links") or [] if (link.get("href") or "").startswith("http")), None)
 
 
+COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
+NAME_HITS = 10  # athletes a lookup by name reads (ESPN's limit is per kind of hit: ten players, ten articles)
+
+
+def college(item: dict[str, Any]) -> bool:
+    """Whether an ESPN search hit is a US college athlete's record. Nobody here follows college athletes:
+    search leaves them out, a lookup by name passes over them, and a name only they have isn't found."""
+    league = next((part[2:] for part in (item.get("uid") or "").split("~") if part.startswith("l:")), None)
+    return league in COLLEGE_LEAGUES or (item.get("description") or "").upper().startswith("NCAA")
+
+
 def search_athletes(name: str, sport_uid: str) -> list[dict[str, Any]]:
-    """ESPN search hits of type player in one sport (uid prefix "s:600~" soccer, "s:200~" cricket)."""
-    data = get_json(f"{WEB}/search/v2?query={quote(name)}&limit=10", ttl=3600)
+    """ESPN search hits of type player in one sport (uid prefix "s:600~" soccer, "s:200~" cricket), college
+    athletes left out: ESPN may list a pro's own college record before the pro ("A'Ja Wilson, NCAAW")."""
+    data = get_json(f"{WEB}/search/v2?query={quote(name)}&limit={NAME_HITS}", ttl=3600)
     hits = []
     for group in data.get("results", []):
         if group.get("type") != "player":
             continue
         for item in group.get("contents", []):
             uid = item.get("uid") or ""
-            if uid.startswith(sport_uid) and "~a:" in uid:
+            if uid.startswith(sport_uid) and "~a:" in uid and not college(item):
                 league = next((part[2:] for part in uid.split("~") if part.startswith("l:")), None)  # "s:40~l:46~a:1966" -> "46"
                 hits.append({"athlete_id": uid.split("~a:")[1], "league_id": league, "name": item.get("displayName", ""), "subtitle": item.get("subtitle"), "url": (item.get("link") or {}).get("web")})
     return hits
@@ -108,7 +120,6 @@ def athletes(adapter: Adapter, name: str, league: str | None = None) -> list[Pla
 
 # ---------------------------------------------------------------- what the four ESPN adapters share
 
-COLLEGE_LEAGUES = {"23", "41", "54"}  # NCAAF, NCAAM, NCAAW
 # ESPN's names for sports no source here covers, as fans say them.
 OTHER_SPORTS = {"football": "American football", "racing": "Motor racing", "mma": "MMA", "hockey": "Ice hockey", "baseball": "Baseball", "golf": "Golf", "soccer": "Football", "boxing": "Boxing", "rugby": "Rugby"}
 
@@ -126,11 +137,11 @@ def parse_search(data: dict[str, Any], query: str, adapters: list[Adapter]) -> l
             uid = item.get("uid") or ""
             if "~a:" not in uid:
                 continue
+            if college(item):
+                continue
             parts = dict(p.split(":", 1) for p in uid.split("~") if ":" in p)
             league_id = parts.get("l")
             description = item.get("description") or ""
-            if league_id in COLLEGE_LEAGUES or description.upper().startswith("NCAA"):
-                continue
             name = (item.get("displayName") or "").strip()
             subtitle = (item.get("subtitle") or "").strip()
             adapter = by_uid.get(f"s:{parts.get('s')}~")
@@ -172,42 +183,52 @@ def search(query: str, sport: str | None, adapters: list[Adapter]) -> list[Searc
     return parse_search(data, query, adapters)
 
 
-def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] | bool | None:
+def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] | bool | NotFound | None:
     """The one ESPN athlete with exactly this name, if one of these adapters has them.
 
     ESPN knows athletes in every sport, so it can rule out namesakes: two with the typed name anywhere
     (any sport, covered or not) is a question for the agent, since "John Smith" is dozens of people and
     the first one found is rarely the one meant (False). So is an athlete in a sport we don't cover (Max
-    Verstappen). No athlete by that name leaves it to the next provider (None)."""
+    Verstappen). College athletes don't count: a name only they have, by which no lookup here reaches
+    anyone else, isn't found ("Caitlyn Clark", a Division III guard; NOT_FOUND), unless they fill the page.
+    No athlete by that name leaves it to the next provider (None)."""
     wanted = sorted(naming.words(query))
     try:
-        data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit=10", ttl=3600)
+        data = get_json(f"{WEB}/search/v2?query={quote(query)}&limit={NAME_HITS}", ttl=3600)
     except AdapterError:
         return False
-    namesakes = [item for group in data.get("results", []) if group.get("type") == "player" for item in group.get("contents", []) if sorted(naming.words(item.get("displayName", ""))) == wanted]
-    if len(namesakes) > 1:
-        # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces
-        # star). One professional among college namesakes is the one a fan means.
-        pros = [n for n in namesakes if not (n.get("description") or "").upper().startswith("NCAA")]
-        if len(pros) != 1:
-            log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(namesakes))
-            return False
-        namesakes = pros
+    hits = [item for group in data.get("results", []) if group.get("type") == "player" for item in group.get("contents", [])]
+    namesakes = [item for item in hits if sorted(naming.words(item.get("displayName", ""))) == wanted]
+    # ESPN keeps a separate college record ("A'Ja Wilson, South Carolina, NCAAW" beside the Aces star),
+    # and nobody here follows college athletes: the professionals among the namesakes are who a fan means.
+    pros = [n for n in namesakes if not college(n)]
+    if len(pros) > 1:
+        log.info("identify %r: %d athletes share the name; leaving it to the agent", query, len(pros))
+        return False
     found = []
+    reached = False  # someone a lookup reached by the name, or a lookup that couldn't say
     for adapter in adapters:
         try:
             ref = adapter.find_player(query)
         except AdapterError:
+            reached = True
             continue
+        reached = reached or ref is not None
         # It must be the one ESPN athlete with the typed name (their record may carry a longer legal
         # name: "Jasprit Bumrah" is "Jasprit Jasbirsingh Bumrah" on ESPNcricinfo), not another person
         # the adapter's own lookup happened to reach.
-        if ref and len(namesakes) == 1 and (namesakes[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
+        if ref and pros and (pros[0].get("uid") or "").endswith(f"~a:{ref.athlete_id}"):
             found.append((adapter, ref))
     if len(found) == 1:
         return found[0]
+    if namesakes and not pros and not reached and len(hits) < NAME_HITS:
+        # Only college athletes have the name: a misspelt star ("Caitlyn Clark") isn't researched either.
+        # A page full of them may hide a pro below it ("Taylor Smith"), so that one is the agent's.
+        log.info("identify %r: only college athletes have the name; not found", query)
+        return NOT_FOUND
     if found or namesakes:
-        # Claimed by two of our sources, or an ESPN athlete in a sport we don't cover (Max Verstappen).
+        # Claimed by two of our sources, an ESPN athlete in a sport we don't cover (Max Verstappen), or a
+        # college namesake of a pro with a longer name ("Brandon Boston", for Brandon Boston Jr.).
         log.info("identify %r: not a single covered athlete; leaving it to the agent", query)
         return False
     return None

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Final, Literal
 
 from .. import sports
 
@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 # What most sources' athlete ids look like. An id goes into the source's URL or query as it is, so one
 # of any other shape is refused before anything is sent.
 DIGITS = re.compile(r"[0-9]{1,12}")
+
+# A typed name only athletes nobody here follows have (Provider.recognise, structured.identify): there's
+# no one to follow by it, and the research agent isn't sent to look.
+NotFound = Literal["not found"]
+NOT_FOUND: Final[NotFound] = "not found"
 
 
 @dataclass
@@ -269,8 +274,10 @@ class Provider:
     licensed: bool = True  # False: unofficial endpoints, development builds only (credited last)
     search: LiveSearch | None = None
     # recognise(query, adapters): the (adapter, ref) a full typed name surely means; False when the name
-    # is ambiguous, which ends the lookup (the agent decides); None to leave it to the next provider.
-    recognise: Callable[[str, list["Adapter"]], "tuple[Adapter, PlayerRef] | bool | None"] | None = None
+    # is ambiguous, which ends the lookup (the agent decides); NOT_FOUND when only athletes nobody here
+    # follows have it, which no research follows unless a later provider has someone by it; None to leave
+    # it to the next provider.
+    recognise: Callable[[str, list["Adapter"]], "tuple[Adapter, PlayerRef] | bool | NotFound | None"] | None = None
     # research(adapters): its public API as the research agent's prompt points to it, given its running
     # adapters ("https://lichess.org/api/broadcast/top"), for an API the agent can read without a key of
     # ours (tools.fetch_url spends its budget). agent.py lists each running provider's.

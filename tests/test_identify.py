@@ -1,7 +1,7 @@
 """Recognising a typed name from the structured sources alone (structured.identify), end to end on what
 ESPN and Lichess answered on 2026-10-15 (tests/fixtures/espn, tests/fixtures/lichess), trimmed to what
 the code reads, and FIDE's searches to the rows these cases need; the Nikola Jokić and Max Verstappen
-searches are from 2026-09-29.
+searches are from 2026-09-29, and the Brandon Boston and FIDE Caitlyn Clark ones from 2026-10-20.
 
 identify asks ESPN's search first and reads the athlete from the adapter of their sport; when ESPN knows
 nobody by the name, Lichess looks in FIDE's list. Each request is answered from a recording, and one
@@ -31,11 +31,14 @@ FIDE = "https://lichess.org/api/fide/player"
 RECORDED = {
     SEARCH.format("Caitlin%20Clark"): "espn/search-caitlin-clark",
     ATHLETE.format("basketball/wnba/athletes/4433403"): "espn/basketball-athlete-caitlin-clark",
-    SEARCH.format("Caitlyn%20Clark"): "espn/search-caitlyn-clark",
-    ATHLETE.format("basketball/womens-college-basketball/athletes/5324154"): "espn/basketball-athlete-caitlyn-clark",
+    SEARCH.format("Caitlyn%20Clark"): "espn/search-caitlyn-clark",  # no college athlete's record is recorded: none is read
+    f"{FIDE}?q=Caitlyn%20Clark": "lichess/fide-search-caitlyn-clark",
+    f"{FIDE}?q=caitlyn": "lichess/fide-search-caitlyn",
+    f"{FIDE}?q=clark": "lichess/fide-search-clark",
     SEARCH.format("A%27ja%20Wilson"): "espn/search-aja-wilson",
     ATHLETE.format("basketball/wnba/athletes/3149391"): "espn/basketball-athlete-aja-wilson",
-    ATHLETE.format("basketball/womens-college-basketball/athletes/4412077"): "espn/basketball-athlete-aja-wilson-college",
+    SEARCH.format("Brandon%20Boston"): "espn/search-brandon-boston",
+    ATHLETE.format("basketball/nba/athletes/4432162"): "espn/basketball-athlete-brandon-boston-jr",
     SEARCH.format("Pau%20Sans"): "espn/search-pau-sans",
     ATHLETE.format("soccer/athletes/359149"): "espn/soccer-athlete-pau-sans",
     SEARCH.format("Spain"): "espn/search-spain",  # Pau Sans's national team, by his citizenship
@@ -152,11 +155,42 @@ def test_a_misspelt_name_goes_to_the_agent(web):
     assert web.asked == [SEARCH.format("Jos%20Butler"), f"{FIDE}?q=Jos%20Butler", f"{FIDE}?q=butler"]
 
 
-@pytest.mark.xfail(strict=True, reason="identify takes a name only a college record has: 'Caitlyn Clark' is Bridgewater State's NCAAW guard (espn_basketball 5324154, league womens-college-basketball), though search and the registry leave college athletes out")
-def test_a_misspelling_that_is_a_college_players_name_goes_to_the_agent(web):
-    # A common misspelling of Caitlin Clark. ESPN has one athlete by it, a Division III college player,
-    # and the basketball adapter reads college leagues too. The fan almost surely means the Fever star.
+def test_a_misspelling_only_a_college_player_has_isnt_found(web):
+    # BHA-213: a common misspelling of Caitlin Clark. ESPN has one athlete by it, Bridgewater State's
+    # Division III guard (NCAAW, 5324154), and nobody here follows college athletes, as search and the
+    # registry leave them out: the name isn't found, and the agent isn't sent to research it either (decided
+    # 20 Oct 2026: cheaper, though a misspelt star gets no result). Her record isn't read; FIDE's list,
+    # which could have a chess player by the name, has none.
+    assert structured.identify("Caitlyn Clark") == structured.NOT_FOUND
+    assert web.asked == [SEARCH.format("Caitlyn%20Clark"), f"{FIDE}?q=Caitlyn%20Clark", f"{FIDE}?q=caitlyn", f"{FIDE}?q=clark"]
+
+
+def test_a_name_a_college_player_and_a_chess_player_share_is_the_chess_players(web):
+    # ESPN's answer with an NCAAM player by Gukesh Dommaraju's name added by hand: ESPN has no one we
+    # follow by it, but FIDE's list does, so it's his.
+    web.answers[SEARCH.format("Gukesh%20Dommaraju")]["results"] = [{"type": "player", "contents": [
+        {"uid": "s:40~l:41~a:9999999", "displayName": "Gukesh Dommaraju", "subtitle": "Somewhere State", "description": "NCAAM", "sport": "basketball"}]}]
+    found = structured.identify("Gukesh Dommaraju")
+    assert isinstance(found, tuple) and (found[0].system, found[1].athlete_id) == ("lichess_chess", "46616543")
+    assert web.asked == [SEARCH.format("Gukesh%20Dommaraju"), f"{FIDE}?q=Gukesh%20Dommaraju"]
+
+
+def test_a_name_college_players_fill_espns_page_with_goes_to_the_agent(web):
+    # ESPN lists ten athletes by name at most. Ten college players called Caitlyn Clark (made by hand
+    # from the one) may hide a pro below them, as "Taylor Smith" fills the page with NCAAW players, so
+    # the agent decides.
+    [hit] = web.answers[SEARCH.format("Caitlyn%20Clark")]["results"][0]["contents"]
+    web.answers[SEARCH.format("Caitlyn%20Clark")]["results"][0]["contents"] = [{**hit, "uid": f"s:40~l:54~a:{5324154 + i}"} for i in range(10)]
     assert structured.identify("Caitlyn Clark") is None
+    assert web.asked == [SEARCH.format("Caitlyn%20Clark")]
+
+
+def test_a_pros_name_without_its_suffix_goes_to_the_agent_beside_a_college_namesake(web):
+    # "Brandon Boston" is exactly the name of a Mississippi College player (NCAAM) only; the Bulls' Brandon
+    # Boston Jr. has a longer one. The basketball adapter reads him by the name, so a pro may be meant: the
+    # name isn't "not found", and the agent decides, as for any athlete reached by a longer name.
+    assert structured.identify("Brandon Boston") is None
+    assert web.asked == [SEARCH.format("Brandon%20Boston"), ATHLETE.format("basketball/nba/athletes/4432162")]
 
 
 # ---------------------------------------------------------------- namesakes
@@ -188,17 +222,18 @@ def test_the_professional_is_meant_over_their_own_college_record(web):
     assert web.asked == [SEARCH.format("A%27ja%20Wilson"), ATHLETE.format("basketball/wnba/athletes/3149391")]
 
 
-def test_the_athlete_handed_over_is_the_one_espn_has_by_the_name(web):
-    # The same search with its two hits swapped by hand, the college record first. The one professional
-    # ESPN has by the name is the Aces star, but the basketball adapter reads the first A'Ja Wilson in a
-    # league it knows, the South Carolina one: an athlete the adapter reached by another route isn't the
-    # answer. Today identify then leaves the name to the agent; an adapter that passed over college
-    # records would read the star, which would do as well.
+def test_the_professional_is_found_when_espn_lists_their_college_record_first(web):
+    # BHA-213: the same search with its two hits swapped by hand, the college record first. A lookup by
+    # name passes over college records, so the basketball adapter reads the Aces star, the one professional
+    # ESPN has by the name, and never the South Carolina record.
     hits = web.answers[SEARCH.format("A%27ja%20Wilson")]["results"][0]["contents"]
     hits.reverse()
     assert [h["description"] for h in hits] == ["NCAAW", "WNBA"]
     found = structured.identify("A'ja Wilson")
-    assert found is None or found[1].athlete_id == "3149391"
+    assert isinstance(found, tuple)
+    adapter, ref = found
+    assert (adapter.system, ref.athlete_id, ref.league, ref.team_names) == ("espn_basketball", "3149391", "wnba", ["Las Vegas Aces"])
+    assert web.asked == [SEARCH.format("A%27ja%20Wilson"), ATHLETE.format("basketball/wnba/athletes/3149391")]
 
 
 # ---------------------------------------------------------------- amateurs

@@ -58,6 +58,12 @@ BUILD_RETRY = 30 * 60
 BUILD_LOCK = 20 * 60
 # Why a build failed without research (config.RESEARCH, or the agent off): a player no source has (fan_message says so).
 AGENT_OFF = "No live source has this player, and research is off."
+# Why a first build failed for a typed name only athletes nobody here follows have (structured.identify's
+# NOT_FOUND): no page, and no research. Its fan's text, which asking again answers at once for NOT_FOUND_FOR
+# (server.follow); after that the sources are asked again, as a college player may have turned pro.
+NOT_FOLLOWED = "Only athletes nobody here follows have this name."
+NOT_FOUND_TEXT = "No player here goes by this name. Check the spelling, or pick them from the search results."
+NOT_FOUND_FOR = 24 * 3600
 
 _llm = None
 
@@ -557,6 +563,8 @@ def fan_message(raw: str) -> str:
     """What a fan sees when a build fails. The raw provider text stays in the worker log."""
     if raw == AGENT_OFF:
         return "No live source has this player, so there's no page to show yet."
+    if raw == NOT_FOLLOWED:
+        return NOT_FOUND_TEXT
     text = raw.lower()
     if "budget_exceeded" in text:
         # The gateway's per-app daily budget (llm-providers 0.4); it resets at local midnight.
@@ -575,6 +583,11 @@ def fan_message(raw: str) -> str:
 
 def _retry_key(player_id: int) -> str:
     return f"buildretry:{player_id}"
+
+
+def not_found_key(player_id: int) -> str:
+    """Held for NOT_FOUND_FOR once a player's typed name was found to be nobody's here (NOT_FOLLOWED)."""
+    return f"notfound:{player_id}"
 
 
 def back_off(player_id: int, now: datetime) -> datetime:
@@ -598,8 +611,10 @@ def _backing_off(player_id: int, now: datetime) -> bool:
     return retry_at is not None and now < retry_at
 
 
-def mark_failed(player_id: int, message: str) -> None:
-    metrics.card("build", "failed")
+def mark_failed(player_id: int, message: str, result: str = "failed") -> None:
+    """Fail a build: a card with nothing to show says why. Counted as the build's result (a typed name that
+    isn't found isn't a failure the alerts hear of)."""
+    metrics.card("build", result)
     message = fan_message(message)
     with session() as db:
         card_row = db.get(PlayerCard, player_id)
@@ -836,6 +851,10 @@ def build_card(player_id: int) -> None:
             # else waits for the agent to say who it is.
             bus.publish(player_id, {"type": "progress", "player_id": player_id, "message": "Looking the name up in live sports sources…"})
             found = structured.identify(name)
+            if found == structured.NOT_FOUND:
+                bus.sync_redis().set(not_found_key(player_id), "1", ex=NOT_FOUND_FOR)
+                mark_failed(player_id, NOT_FOLLOWED, "not_found")
+                return
             if found:
                 landed = _start_from_source(player_id, *found)
                 if landed is None or landed != player_id:

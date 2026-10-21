@@ -1,4 +1,4 @@
-"""Basketball from ESPN: NBA, WNBA and US college. Team schedules, live box scores, season averages."""
+"""Basketball from ESPN: NBA and WNBA. Team schedules, live box scores, season averages."""
 
 from __future__ import annotations
 
@@ -11,8 +11,9 @@ from . import espn
 from .base import Adapter, AdapterError, Fixture, Line, PlayerRef, Snapshot, SourceTeam
 
 SPORT_UID = "s:40~"
-# ESPN's league ids (from search uids) -> the slug its URLs use.
-LEAGUES = {"46": "nba", "59": "wnba", "41": "mens-college-basketball", "54": "womens-college-basketball"}
+# ESPN's league ids (from search uids) -> the slug its URLs use: the pros. College players aren't followed here
+# (espn.college); one bound to a college league before keeps it in their binding, which every read takes it from.
+LEAGUES = {"46": "nba", "59": "wnba"}
 # The leagues whose teams fans can follow (teams): the pros. College basketball's are hundreds.
 TEAM_LEAGUES = ("nba", "wnba")
 # ESPN numbers each league's teams apart (the Cavaliers and the Fever are both 5), so a team's id here carries its
