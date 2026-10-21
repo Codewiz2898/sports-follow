@@ -38,11 +38,11 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default function RecorderPage() {
   const [state, setState] = useState<State>(() => Recorder?.status() ?? { running: false })
-  const [audio, setAudio] = useState<Audio>('game')
+  const [audio, setAudio] = useState<Audio>('both')
   const [quality, setQuality] = useState<Quality>('720p30')
   const [consent, setConsent] = useState<'choice' | 'display'>('choice')
   const [bubble, setBubble] = useState(true)
-  const [secure, setSecure] = useState(false)
+  const [secure, setSecure] = useState(true)
   const [cardNow, setCardNow] = useState(true)
   const [overlay, setOverlay] = useState(() => Recorder?.canOverlay() ?? false)
   const [clips, setClips] = useState<Clip[]>([])
