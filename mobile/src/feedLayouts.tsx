@@ -100,24 +100,30 @@ export function useFollows(): { follows: Follows; error: string | null } {
   return { follows, error }
 }
 
-/** The one Feed video playing: which item, and whether it started by itself (muted). */
-export interface Playing { id: string; muted: boolean }
+/** The one Feed video playing: which item, whether it started by itself (muted), and whether the fan has touched it
+ * since (`kept`: perhaps turned its sound on with YouTube's button, which nothing outside the player can see). */
+export interface Playing { id: string; muted: boolean; kept?: boolean }
 
 /** Which of a list's videos plays (one at a time). `play` starts one with its sound (a tap). While `on` (the screen in
  * front, the app too) and `auto` (a list that autoplays, and the fan's setting allows it now), the topmost video more
- * than half on screen starts by itself, muted, unless one the fan started is still playing; a video goes once none of
- * it is on screen. `pairs` is what the list watches its items with (FlatList's viewabilityConfigCallbackPairs), and
- * `playing` what it draws again on (extraData). */
-export function usePlaying(on: boolean, auto = true): { playing: Playing | null; play: (item: FeedItem) => void; pairs: ViewabilityConfigCallbackPairs } {
+ * than half on screen starts by itself, muted, unless one the fan started or touched (`keep`) is still playing; a
+ * video goes once none of it is on screen. `pairs` is what the list watches its items with (FlatList's
+ * viewabilityConfigCallbackPairs), and `playing` what it draws again on (extraData); a list that isn't watched
+ * (Today's cards, `auto` false) keeps what plays till the screen goes. */
+export function usePlaying(on: boolean, auto = true): { playing: Playing | null; play: (item: FeedItem) => void; keep: () => void; pairs: ViewabilityConfigCallbackPairs } {
   const [playing, setPlaying] = useState<Playing | null>(null)
-  const allowed = useAutoplay()
+  const allowed = useAutoplay(auto)
   const starts = useRef(false)
   starts.current = on && auto && allowed
   const top = useRef<string | null>(null) // the topmost video more than half on screen
   const seen = useRef<ReadonlySet<string>>(new Set()) // every item any of which is on screen
+  const watched = useRef(auto)
+  watched.current = auto
   const settle = useCallback(() => setPlaying((was) => {
-    const now = was && seen.current.has(was.id) ? was : null
-    if (starts.current && top.current && (!now || now.muted) && now?.id !== top.current) return { id: top.current, muted: true }
+    const now = was && (!watched.current || seen.current.has(was.id)) ? was : null
+    // The 60% watch waits 250ms to say, the 1% one doesn't: one just gone off screen isn't started again meanwhile.
+    const next = top.current && seen.current.has(top.current) ? top.current : null
+    if (starts.current && next && (!now || (now.muted && !now.kept)) && now?.id !== next) return { id: next, muted: true }
     return now
   }), [])
   useEffect(() => { if (on) settle(); else setPlaying(null) }, [on, allowed, settle])
@@ -125,6 +131,7 @@ export function usePlaying(on: boolean, auto = true): { playing: Playing | null;
     if (item.video?.youtube_id) setPlaying({ id: item.id, muted: false })
     else open(item.url)?.()
   }, [])
+  const keep = useCallback(() => setPlaying((was) => (was && was.muted && !was.kept ? { ...was, kept: true } : was)), [])
   const pairs = useRef<ViewabilityConfigCallbackPairs>([
     { viewabilityConfig: { itemVisiblePercentThreshold: 60, minimumViewTime: 250 }, onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<FeedEntry>[] }) => {
       top.current = viewableItems.find((v) => v.isViewable && v.item?.item.kind === 'video' && v.item.item.video?.youtube_id)?.item?.item.id ?? null
@@ -135,7 +142,7 @@ export function usePlaying(on: boolean, auto = true): { playing: Playing | null;
       settle()
     } },
   ]).current
-  return { playing, play, pairs }
+  return { playing, play, keep, pairs }
 }
 
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -144,7 +151,7 @@ const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;
  * on the site's address (YouTube's embeds want a site around them, as the web's are), muted when it started by
  * itself. YouTube's own buttons do the rest: the sound, pausing, its full screen (upright, as the phone is held). A
  * link out of it opens in the YouTube app or the browser. One that won't load says so, with the way to the video. */
-function InlineVideo({ item, muted }: { item: FeedItem; muted: boolean }) {
+function InlineVideo({ item, muted, onTouch }: { item: FeedItem; muted: boolean; onTouch?: () => void }) {
   const [failed, setFailed] = useState(false)
   const site = `${API_URL}/`
   const id = item.video?.youtube_id ?? ''
@@ -153,6 +160,7 @@ function InlineVideo({ item, muted }: { item: FeedItem; muted: boolean }) {
     + `<iframe src="${escape(youtubeEmbed(id, muted))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
     + '</body></html>', [id, muted, item.title])
   const leave = (url: string) => { open(url)?.() }
+  const down = useRef<number | null>(null) // where a touch began: one that ends where it began is a tap, not a scroll
   if (failed) {
     return (
       <View style={v.cover}>
@@ -162,8 +170,10 @@ function InlineVideo({ item, muted }: { item: FeedItem; muted: boolean }) {
     )
   }
   return (
-    // The whole of its frame, whatever that centres (the play button it replaces).
-    <View style={StyleSheet.absoluteFill}>
+    // The whole of its frame, whatever that centres (the play button it replaces). A tap on it is the fan's: it stays
+    // playing as they scroll on (they may have turned its sound on).
+    <View style={StyleSheet.absoluteFill} onTouchStart={(ev) => { down.current = ev.nativeEvent.pageY }}
+      onTouchEnd={(ev) => { if (down.current != null && Math.abs(ev.nativeEvent.pageY - down.current) < 12) onTouch?.(); down.current = null }}>
     <WebView
       source={{ html, baseUrl: site }}
       style={v.web}
@@ -215,8 +225,8 @@ export function FeedTabs({ tab, onTab, onInk }: { tab: FeedTabKey; onTab: (tab: 
  * channel, Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video
  * upright in the middle of a 4:5 one), the title, and "views · when". `boxed`: a rounded card inside the page's
  * margins (Today's), else the screen's full width. `playing`: its video plays in the picture's place. */
-export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onMore }: {
-  entry: FeedEntry; now: number; follows?: Follows; boxed?: boolean; playing?: Playing | null; onPlay: (item: FeedItem) => void; onMore: () => void
+export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, onMore }: {
+  entry: FeedEntry; now: number; follows?: Follows; boxed?: boolean; playing?: Playing | null; onPlay: (item: FeedItem) => void; onKeep?: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const tone = useTone(who.sport)
@@ -233,7 +243,7 @@ export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onMore }
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
     // An upright one (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly.
-    const still = playing ? <InlineVideo item={item} muted={playing.muted} /> : picture ? <Picture src={picture} onGone={gone} /> : null
+    const still = playing ? <InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
     media = playing ? (
       <View style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
         {upright(item) ? <View style={e.tall}>{still}</View> : still}
@@ -338,7 +348,7 @@ export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore,
           keyExtractor={(x) => x.item.id}
           renderItem={({ item: x }) => (
             <Reel entry={x} now={now} height={height} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
-              onPlay={videos.play} onMore={() => onMore(x)} />
+              onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} />
           )}
           extraData={videos.playing}
           viewabilityConfigCallbackPairs={videos.pairs}
@@ -367,8 +377,8 @@ export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore,
 
 /** One screen (.reel): the picture on a blurred, darkened copy of itself, a little above the middle; who and what
  * at the foot; Follow (for a player the fan doesn't follow), Share and More down the right. */
-function Reel({ entry, now, height, follows, playing, onPlay, onMore }: {
-  entry: FeedEntry; now: number; height: number; follows: Follows; playing: Playing | null; onPlay: (item: FeedItem) => void; onMore: () => void
+function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: {
+  entry: FeedEntry; now: number; height: number; follows: Follows; playing: Playing | null; onPlay: (item: FeedItem) => void; onKeep: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const tone = useTone(who.sport)
@@ -394,7 +404,7 @@ function Reel({ entry, now, height, follows, playing, onPlay, onMore }: {
 
   let frame: ReactNode
   if (item.kind === 'video' && id && playing) {
-    frame = <View style={[r.frame, place]}><InlineVideo item={item} muted={playing.muted} /></View>
+    frame = <View style={[r.frame, place]}><InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /></View>
   } else if (item.kind === 'video' && id) {
     frame = (
       <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, place]}>

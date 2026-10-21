@@ -49,9 +49,10 @@ function useOnWifi(watch: boolean): boolean {
   return wifi
 }
 
-/** Whether a video may start by itself now: the fan's choice, and for "On Wi-Fi" the connection this moment. */
-export function useAutoplay(): boolean {
+/** Whether a video may start by itself now: the fan's choice, and for "On Wi-Fi" the connection this moment.
+ * `wanted`: false where nothing autoplays (Today), which then watches no connection. */
+export function useAutoplay(wanted = true): boolean {
   const setting = useAutoplaySetting()
-  const wifi = useOnWifi(setting === 'wifi')
-  return setting === 'always' || (setting === 'wifi' && wifi)
+  const wifi = useOnWifi(wanted && setting === 'wifi')
+  return wanted && (setting === 'always' || (setting === 'wifi' && wifi))
 }

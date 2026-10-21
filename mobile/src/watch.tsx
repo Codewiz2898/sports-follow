@@ -119,9 +119,8 @@ export function useInFront() {
 
 /** How the player opens (BHA-358). `sideways`: turned, and kept so, for a player that won't play narrower than a
  * phone held upright is (Twitch's 400×300). `wide`: upright, the video across the screen in the middle, with Expand
- * to turn it sideways and Collapse (or Back) to turn it upright again. `upright`: a video taller than it's wide (a
- * Short), upright over the whole screen. */
-export type PlayerShape = 'sideways' | 'wide' | 'upright'
+ * to turn it sideways and Collapse (or Back) to turn it upright again. */
+export type PlayerShape = 'sideways' | 'wide'
 
 /**
  * The player over the whole screen, never under anything of the app's: × (and Expand or Collapse) sit in a bar
@@ -168,8 +167,8 @@ export function WholeScreen({ page, platform, shape = 'sideways', onOut, onClose
       <View style={turned ? [s.whole, { paddingTop: insets.top, paddingBottom: insets.bottom, paddingLeft: insets.left }]
         : [s.upright, { paddingTop: insets.top, paddingBottom: insets.bottom }]} accessibilityViewIsModal>
         {turned ? null : <View style={s.bar}>{closer}{turner}</View>}
-        <View style={turned || shape === 'upright' ? s.web : s.stage}>
-          <View style={turned || shape === 'upright' ? s.web : s.wide}>
+        <View style={turned ? s.web : s.stage}>
+          <View style={turned ? s.web : s.wide}>
             {refused ? <View style={s.web}>{failed()}</View> : front ? (
               <WebView
                 source={{ uri: page }}

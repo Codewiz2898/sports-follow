@@ -77,6 +77,9 @@ export default (): ExpoConfig => ({
     versionCode: 1,
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
+    // expo-network (the Feed's "On Wi-Fi" autoplay) reads the connection's type, which needs only ACCESS_NETWORK_STATE;
+    // its Wi-Fi permission is for an IP address the app never asks, so it stays out (store/data-safety.md unchanged).
+    blockedPermissions: ['android.permission.ACCESS_WIFI_STATE'],
     intentFilters: [{
       action: 'VIEW',
       autoVerify: true,

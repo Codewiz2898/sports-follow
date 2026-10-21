@@ -172,7 +172,7 @@ export default function FeedScreen() {
         data={items}
         keyExtractor={(x) => x.item.id}
         renderItem={({ item: x }) => (
-          <EdgePost entry={x} now={now} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onMore={() => setOpened(x)} />
+          <EdgePost entry={x} now={now} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onKeep={videos.keep} onMore={() => setOpened(x)} />
         )}
         extraData={videos.playing}
         viewabilityConfigCallbackPairs={videos.pairs}

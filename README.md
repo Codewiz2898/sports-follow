@@ -390,7 +390,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on the site's address (`feedLayouts.tsx` InlineVideo), the tab bar where it was; and by itself as it comes on
   screen (BHA-359): muted, one at a time, the reel on screen or the topmost post more than half in view, stopping
   once it's off the screen or the Feed's left. Always by default; the Account page has On Wi-Fi and Off
-  (`mobile/src/autoplay.ts`, kept on the phone). It's
+  (`mobile/src/autoplay.ts`, kept on the phone); a tap on one playing keeps it as the fan scrolls on. It's
   `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
   Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
   escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,
