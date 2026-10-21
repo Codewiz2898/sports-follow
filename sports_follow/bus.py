@@ -44,6 +44,19 @@ def publish_match(event_id: int, event: dict[str, Any]) -> None:
     sync_redis().publish(match_channel(event_id), json.dumps(event, default=str))
 
 
+WATCH_SECONDS = 45  # an open match page asks for its game again every 30 s, on the web and on Android
+
+
+def watching_key(event_id: int) -> str:
+    """Set while someone has the game's match page open (server.match_page): what the engine's deepening
+    of a game past its first looks waits for (engine.deepens)."""
+    return f"watching:{event_id}"
+
+
+def watched(event_id: int) -> bool:
+    return bool(sync_redis().exists(watching_key(event_id)))
+
+
 def store_card(player_id: int, card: dict[str, Any]) -> None:
     """Write the hot copy, then tell subscribers. Nothing durable lives only here."""
     r = sync_redis()

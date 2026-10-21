@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -47,6 +48,9 @@ class FakeRedis:
 
     def expire(self, name, seconds):
         pass
+
+    def exists(self, name):
+        return int(name in self.kv or name in self.hashes)
 
     def zadd(self, name, mapping, nx=False):
         z = self.zsets.setdefault(name, {})
@@ -152,10 +156,13 @@ def test_a_position_dropped_after_a_gap_in_polling_is_deepened_again():
 
 def test_the_cache_keeps_the_deepest_look_and_counts_all_the_work():
     r = FakeRedis()
-    assert engine.keep(r, E4, {"cp": 30, "depth": 20, "nodes": 500_000}) == {"cp": 30, "depth": 20, "nodes": 500_000}
-    assert engine.keep(r, E4, {"cp": 90, "depth": 18, "nodes": 500_000}) == {"cp": 30, "depth": 20, "nodes": 1_000_000}  # a cold hash table
-    assert engine.keep(r, E4, {"cp": 40, "depth": 24, "nodes": 500_000}) == {"cp": 40, "depth": 24, "nodes": 1_500_000}
-    assert engine.cached(r, E4.replace(" 0 1", " 2 5")) == {"cp": 40, "depth": 24, "nodes": 1_500_000}  # the same position
+    look = {"cp": 30, "mate": None, "depth": 20}
+    assert engine.keep(r, E4, {**look, "nodes": 500_000}, look=True) == {**look, "nodes": 500_000, "look": look}
+    assert engine.keep(r, E4, {"cp": 90, "mate": None, "depth": 18, "nodes": 500_000}) == {**look, "nodes": 1_000_000, "look": look}  # a cold hash table
+    deeper = {"cp": 40, "mate": None, "depth": 24}
+    assert engine.keep(r, E4, {**deeper, "nodes": 500_000}) == {**deeper, "nodes": 1_500_000, "look": look}
+    assert engine.cached(r, E4.replace(" 0 1", " 2 5")) == {**deeper, "nodes": 1_500_000, "look": look}  # the same position
+    assert engine.keep(r, E4, {"cp": 99, "mate": None, "depth": 22, "nodes": 1}, look=True)["look"] == look  # a position's first look stays its own
     assert not engine.deep_enough({"depth": 24, "nodes": 1_500_000})
     assert engine.deep_enough({"depth": engine.DEPTH, "nodes": 1}) and engine.deep_enough({"depth": 12, "nodes": engine.POSITION_NODES})
 
@@ -178,6 +185,9 @@ def run_lane(monkeypatch, stopping, r: FakeRedis, depths: list[int], during=None
     started: list[str] = []
 
     class Stockfish:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def next(self, fen: str) -> int:
             looked.append(fen)
             if during:
@@ -221,17 +231,18 @@ def test_the_lane_deepens_the_position_a_game_stays_on(monkeypatch, stopping):
     # A look, then one search of the position a slice at a time, till it's DEPTH deep: no sixth.
     assert run_lane(monkeypatch, stopping, r, [18, 21, 20, 24, engine.DEPTH, 99]) == ([E4] * 5, [E4])
     shown = engine.latest("A", r) or {}
-    # Each deeper reading shown, the shallower one (20 after 21) not.
-    assert (shown["fen"], shown["depth"], shown["nodes"]) == (E4, engine.DEPTH, 5 * engine.NODES)
+    # Each deeper reading shown, the shallower one (20 after 21) not; beside the first look, which alerts go by.
+    assert (shown["fen"], shown["depth"], shown["nodes"], shown["look"]["depth"]) == (E4, engine.DEPTH, 5 * engine.NODES, 18)
     assert shown["first"] < shown["at"] and r.zcard(engine.DEEPEN) == 0
 
 
 def test_a_cached_shallow_look_is_deepened_and_never_replaces_a_deeper_one(monkeypatch, stopping):
     r = FakeRedis()
-    engine.keep(r, E4, {"cp": 15, "mate": None, "depth": 18, "nodes": engine.NODES})  # another game's, or an earlier lane's
+    engine.keep(r, E4, {"cp": 15, "mate": None, "depth": 18, "nodes": engine.NODES}, look=True)  # another game's, or an earlier lane's
     engine.request("A", E4, r)
-    assert run_lane(monkeypatch, stopping, r, [16, 22]) == ([E4] * 2, [E4])  # the look from the cache: no search
-    assert ((engine.latest("A", r) or {})["depth"], (engine.cached(r, E4) or {})["nodes"]) == (22, 3 * engine.NODES)
+    assert run_lane(monkeypatch, stopping, r, [16, 22]) == ([E4] * 2, [E4])  # the look from the cache, then two slices
+    shown = engine.latest("A", r) or {}
+    assert (shown["depth"], shown["look"]["depth"], (engine.cached(r, E4) or {})["nodes"]) == (22, 18, 3 * engine.NODES)
     assert r.zcard(engine.DEEPEN) == 1  # the lane ended (the worker stopping) before it was deep enough: the next goes on
 
 
@@ -248,8 +259,9 @@ def test_a_new_move_outranks_deepening_and_drops_the_old_position(monkeypatch, s
 
     engine.request("A", E4, r)
     looked, started = run_lane(monkeypatch, stopping, r, [18, 22, 18, 25, 19, 20], poll)
-    # A's search stops for B's look, and starts again after it, before B's (A has waited longer).
-    assert (looked, started) == ([E4, E4, START, E4, E4E5, START], [E4, E4, START])
+    # B's look comes first, on the looks' engine, while A's search waits paused; then A's search goes on where it was,
+    # and B's starts once A has moved (B has waited longer than A's new position).
+    assert (looked, started) == ([E4, E4, START, E4, E4E5, START], [E4, START])
     # The slice of A's old position under way when it moved is kept, but not shown.
     assert shown == [None, 18, 22, 22, 22, 19] and (engine.cached(r, E4) or {})["depth"] == 25
     assert ((engine.latest("A", r) or {})["fen"], (engine.latest("A", r) or {})["depth"]) == (E4E5, 19)
@@ -266,14 +278,39 @@ def test_deep_searches_take_turns(monkeypatch, stopping):
     assert ((engine.latest("A", r) or {})["depth"], (engine.latest("B", r) or {})["depth"]) == (23, 22)
 
 
-def test_a_look_elsewhere_doesnt_give_the_deep_search_a_new_turn(monkeypatch, stopping):
+def test_a_look_elsewhere_neither_restarts_the_deep_search_nor_gives_it_a_new_turn(monkeypatch, stopping):
     monkeypatch.setattr(engine, "TURN", 2 * engine.NODES)
     r = FakeRedis()
     engine.request("A", E4, r)
-    # B's first position comes while A's search has had one slice: after B's look, A's search goes on for the rest
-    # of its turn (one more slice, searched again from the hash), then B's turn.
+    # B's first position comes while A's search has had one slice: after B's look, A's search goes on, the same
+    # search, for the rest of its turn (one more slice), then B's turn.
     looked, started = run_lane(monkeypatch, stopping, r, [18, 20, 18, 21, 20, 22, 22], lambda n: n == 2 and engine.request("B", START, r))
-    assert (looked, started) == ([E4, E4, START, E4, START, START, E4], [E4, E4, START, E4])
+    assert (looked, started) == ([E4, E4, START, E4, START, START, E4], [E4, START, E4])
+
+
+def test_an_unwatched_game_gets_its_first_look_and_no_more(monkeypatch, stopping):
+    r = FakeRedis()
+    engine.request("A", E4, r, deepen=False)
+    assert run_lane(monkeypatch, stopping, r, [18, 99]) == ([E4], [])
+    assert ((engine.latest("A", r) or {})["depth"], r.zcard(engine.DEEPEN)) == (18, 0)
+
+
+def test_deepening_stops_when_the_last_viewer_leaves(monkeypatch, stopping):
+    r = FakeRedis()
+    engine.request("A", E4, r, by=1)
+    engine.request("A", E4, r, by=2)  # open on both players' events of the board
+
+    def leave(n: int) -> None:
+        if n in (2, 3):
+            engine.request("A", E4, r, by=n - 1, deepen=False)  # one closes it, then the other
+
+    # The look and two slices: one viewer left during the first, the other during the second, the last; that
+    # slice's reading is kept, but not shown, and there's no third.
+    assert run_lane(monkeypatch, stopping, r, [18, 20, 22, 24, 99], leave) == ([E4] * 3, [E4])
+    assert ((engine.latest("A", r) or {})["depth"], (engine.cached(r, E4) or {})["depth"], engine.deepened(r, "A"), r.zcard(engine.DEEPEN)) == (20, 22, False, 0)
+    # Opened again on the same position: back in line.
+    engine.request("A", E4, r, by=1)
+    assert (engine.take_deeper(r, time.time()) or ("",))[0] == "A"
 
 
 def test_the_lane_stops_once_its_lock_has_gone(monkeypatch, stopping):
@@ -281,6 +318,9 @@ def test_the_lane_stops_once_its_lock_has_gone(monkeypatch, stopping):
     r, looked, freed = FakeRedis(), [], []
 
     class Stockfish:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def evaluate(self, fen):
             looked.append(fen)
             return {"cp": 20, "mate": None, "depth": 18, "nodes": engine.NODES}
@@ -299,10 +339,10 @@ def test_the_lane_stops_once_its_lock_has_gone(monkeypatch, stopping):
     assert looked == [] and r.zcard(engine.QUEUE) == 1 and freed == ["token"]  # left for the lane that has it
 
 
-def test_a_stuck_engine_is_killed_not_waited_on(tmp_path, monkeypatch):
-    stuck = tmp_path / "stuck-engine"
-    stuck.write_text("""#!/usr/bin/env python3
-# A UCI engine that starts a search and never ends it, "stop" or not.
+def script(tmp_path, name: str, body: str) -> str:
+    """A stand-in UCI engine: answers uci and isready, then does what `body` says with each other line (`word`)."""
+    path = tmp_path / name
+    path.write_text(f"""#!/usr/bin/env python3
 import sys
 for line in sys.stdin:
     word = (line.split() or [""])[0]
@@ -310,10 +350,15 @@ for line in sys.stdin:
         print("uciok" if word == "uci" else "readyok", flush=True)
     elif word == "quit":
         break
-""")
-    stuck.chmod(0o755)
+{body}""")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_a_stuck_engine_is_killed_not_waited_on(tmp_path, monkeypatch):
+    stuck = script(tmp_path, "stuck-engine", "")  # it starts a search and never ends it, "stop" or not
     monkeypatch.setattr(engine, "HALT_SECONDS", 0.3)
-    e = engine.Engine(str(stuck))
+    e = engine.Engine(stuck)
     e.search(MIDDLEGAME, depth=30, nodes=1_000_000)
     e.run(0.05)
     with pytest.raises(engine.EngineError):
@@ -323,7 +368,7 @@ for line in sys.stdin:
 
 # ---------------------------------------------------------------- the poller's side (structured._evaluate)
 
-F30, F31, F32 = (f"8/8/8/8/8/8/8/8 w - - 0 {n}" for n in (30, 31, 32))
+F30, F31, F32, F33 = (f"8/8/8/8/8/8/8/8 w - - 0 {n}" for n in (30, 31, 32, 33))
 
 
 @pytest.fixture
@@ -352,30 +397,52 @@ def board(monkeypatch):
         return snap.state
 
     def reading(fen: str, cp: int, at: float) -> None:
-        r.set("engine:latest:g1", json.dumps({"cp": cp, "mate": None, "depth": 20, "fen": fen, "at": at, "first": at}))
+        r.set("engine:latest:g1", json.dumps({"cp": cp, "mate": None, "depth": 20, "look": {"cp": cp, "mate": None, "depth": 20}, "fen": fen, "at": at, "first": at}))
 
     return type("Board", (), {"r": r, "poll": staticmethod(poll), "reading": staticmethod(reading)})
 
 
 def test_a_decided_game_is_let_go_and_its_last_evaluation_stays(board):
+    board.r.set(bus.watching_key(1), "1")
     board.reading(F31, 20, 1)
     on = board.poll(1, F31)
-    board.r.zadd(engine.DEEPEN, {"g1": 1})  # its position being deepened
-    assert engine.polled(board.r, "g1")
+    assert engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 1  # open: its position deepened
     # Decided, though a mini-match goes on live; a deeper reading lands after the result.
     board.reading(F31, 900, 2)
     over = board.poll(1, F31, result="1-0")
     assert over["eval"] == on["eval"]  # nothing new folded in, so nothing turns after the result
-    assert not engine.polled(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0 and not engine.on_it(board.r, "g1", F31)
+    assert not engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0 and not engine.on_it(board.r, "g1", F31)
 
 
 def test_one_event_with_nobody_wanting_swings_doesnt_stop_the_other(board):
+    for event in (1, 2):
+        board.r.set(bus.watching_key(event), "1")
     board.reading(F31, 20, 1)
     board.poll(1, F31)
     board.poll(2, F31, levels=("results",))  # the other player's fans hear results only
-    assert engine.polled(board.r, "g1")
+    assert engine.deepened(board.r, "g1")
     board.poll(1, F31, levels=("results",))
-    assert not engine.polled(board.r, "g1")
+    assert not engine.deepened(board.r, "g1")
+
+
+def test_a_game_is_deepened_only_while_someone_has_it_open(board, monkeypatch):
+    board.reading(F31, 20, 1)
+    board.poll(1, F31)
+    assert not engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0  # its first look, and no more
+    board.r.set(bus.watching_key(2), "1")  # the other player's event of the board, open on a match page
+    board.poll(1, F31)
+    board.poll(2, F31)
+    assert engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 1
+    board.r.delete(bus.watching_key(2))  # closed: the next poll lets it go
+    board.poll(2, F31)
+    assert not engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0
+    monkeypatch.setattr(engine, "DEEPENING", "all")
+    board.poll(1, F31)
+    assert engine.deepened(board.r, "g1")
+    monkeypatch.setattr(engine, "DEEPENING", "off")
+    board.r.set(bus.watching_key(1), "1")
+    board.poll(1, F31)
+    assert not engine.deepened(board.r, "g1")
 
 
 def test_both_events_of_a_board_settle_the_same(board):
@@ -389,10 +456,11 @@ def test_both_events_of_a_board_settle_the_same(board):
     assert both(F30) == [0, 0]
     board.reading(F31, 340, 2)
     assert both(F31) == [0, 0]
-    # Move 32 agrees with 31: winning. A deeper look at it lands between the two events' polls; the second takes
-    # the board's settled evaluation and holds it against that, as the first did, instead of its own last one.
+    # Move 32 agrees with 31: winning, for the first event. Move 33's first look (level) lands before the second
+    # event's poll: it takes the board's settled evaluation and holds 33 against 32, as the first will, instead of
+    # against its own last one (31), which would leave it level and its fans never told.
     board.reading(F32, 340, 3)
-    assert both(F32, meanwhile=lambda: board.reading(F32, 240, 4)) == [2, 2]
+    assert both(F32, meanwhile=lambda: board.reading(F33, 30, 4)) == [2, 2]
 
 
 def test_positions_from_games_nobody_polls_are_dropped():
@@ -456,12 +524,77 @@ def test_a_deep_search_is_paused_between_slices_and_goes_deeper_than_a_look():
     assert stopped["depth"] > 0 and not paused(e) and again["nodes"] >= 10_000
 
 
+OTHER = "r1bqr1k1/1p3pb1/2pp2p1/p1n1pPP1/1nP1P3/2NPB3/PP2N1B1/R2Q1RK1 w - - 3 16"  # another of fixtures/lichess, move 16
+
+
+@pytest.mark.skipif(not engine.enabled(), reason="Stockfish isn't installed")
+def test_a_first_look_is_the_same_whatever_was_searched_before():
+    # Stockfish versions score differently (CI has 16, the image 17.1): runs are compared here, never scores.
+    e = engine.Engine(hash_mb=engine.LOOK_HASH_MB)
+    fresh = engine.Engine(hash_mb=engine.LOOK_HASH_MB)
+    try:
+        first = e.evaluate(MIDDLEGAME, nodes=200_000)
+        e.evaluate(OTHER, nodes=300_000)
+        again = e.evaluate(MIDDLEGAME, nodes=200_000)
+        elsewhere = fresh.evaluate(MIDDLEGAME, nodes=200_000)
+    finally:
+        e.close()
+        fresh.close()
+    look = lambda x: (x["cp"], x["mate"], x["depth"], x["nodes"])  # noqa: E731
+    assert look(again) == look(first) == look(elsewhere) and "capped" not in first
+
+
+def test_a_look_past_its_time_is_stopped_and_says_so(tmp_path, monkeypatch):
+    # A machine stalled under a look: stopped at LOOK_SECONDS with what it had, which depends on the machine.
+    slow = script(tmp_path, "slow-engine", """    elif word == "go":
+        print("info depth 9 seldepth 12 score cp 31 nodes 4000", flush=True)
+    elif word == "stop":
+        print("bestmove e2e4", flush=True)
+""")
+    monkeypatch.setattr(engine, "LOOK_SECONDS", 0.2)
+    e = engine.Engine(slow)
+    try:
+        look = e.evaluate(MIDDLEGAME)
+    finally:
+        e.close()
+    assert (look["cp"], look["depth"], look["capped"]) == (31, 9, True)
+
+
+def test_a_look_stopped_by_the_clock_isnt_kept_as_the_positions(monkeypatch, stopping):
+    r = FakeRedis()
+
+    class Stockfish:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def evaluate(self, fen):
+            stopping.set()
+            return {"cp": 31, "mate": None, "depth": 9, "nodes": 4000, "capped": True}
+
+        def close(self):
+            pass
+
+    engine.request("A", E4, r, deepen=False)
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    monkeypatch.setattr(engine, "Engine", Stockfish)
+    monkeypatch.setattr(bus, "sync_redis", lambda: r)
+    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
+    monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: True)
+    monkeypatch.setattr(bus, "release", lambda name, token=None: None)
+    engine.run_lane()
+    # The game's alerts go by it this once; the next game at this position gets a look of its own.
+    assert ((engine.latest("A", r) or {})["look"]["cp"], "look" in (engine.cached(r, E4) or {})) == (31, False)
+
+
 def test_the_lane_stops_when_the_worker_does(monkeypatch, stopping):
     # BHA-51: a deploy while games are on. The lane ends after the position under way, instead of
     # evaluating on until the process is killed, and frees its lock.
     r, evaluated, freed = FakeRedis(), [], []
 
     class Stockfish:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def evaluate(self, fen):
             evaluated.append(fen)
             stopping.set()  # told to stop while this position is evaluated

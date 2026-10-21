@@ -11,20 +11,28 @@ worker job the scheduler tick starts), and the CPU it may use is bounded every w
 - Fair: the game that has waited longest goes first, so one fast blitz game can't starve the rest.
 - Each game at most once every GAME_INTERVAL seconds. Moves in between are skipped; a swing still
   shows between the evaluations either side of them.
-- One lane for the whole system (a Redis lock), one engine thread, a fixed node budget for a look
-  and as long a slice of a deep search (about a second on one core), at most POSITION_NODES in any
-  one position, low CPU priority, and a duty cycle: the engine works at most BUSY of the time.
+- One lane for the whole system (a Redis lock), one engine thread running at a time, a fixed node
+  budget for a look and as long a slice of a deep search (about a second on one core), at most
+  POSITION_NODES in any one position, low CPU priority, and a duty cycle: the engine works at most
+  BUSY of the time.
 
-A new position gets a quick look first (NODES, about depth 20), which alerts go by as soon as it's
-made. Then, while the game stays on it, the lane deepens it with the time the engine would otherwise
-idle: one search of the position, run a SLICE at a time and paused in between (the duty cycle's rest,
-or a look at any game's new position, which always goes first), until it reaches DEPTH or has
-searched POSITION_NODES. Each deeper reading becomes the game's latest; a new move drops the old
-position at once, and a decided game (drop()) or one nobody polls any more is let go before the next
-slice. A board two followed players share is a fixture of each: either keeps it evaluated, and both
-take the one settled evaluation (settled()). With several games deepening, a search has a TURN before
-the game that has waited longest gets the engine, so many boards each get less depth and one big game
-gets a lot.
+Every new position gets a first look (NODES, about depth 20), and alerts go by first looks alone. A
+look is deterministic: its own Stockfish process, its hash table and histories cleared before each
+(ucinewgame), one thread and a node budget with no clock, so a position gets the same score whatever
+the machine's speed or load and whatever was searched before. That holds for one Stockfish version:
+the image's 17.1 and CI's 16 score differently, so tests compare runs rather than scores.
+
+While someone has the game open (SPORTS_FOLLOW_ENGINE_DEEPEN: watched, the default, or all, or off),
+the lane deepens the position it's on with the time the engine would otherwise idle: one search of it,
+in a second process with its own tree (HASH_MB), run a SLICE at a time and stopped (SIGSTOP) in
+between, for the duty cycle's rest or a look at any game's new position, which always goes first; until
+it reaches DEPTH or has searched POSITION_NODES. Each deeper reading becomes what the game's latest
+shows (cp, mate, depth), beside its first look, which stays what the alerts go by: watched or not, a
+game's alerts are the same. A new move drops the old position at once; a decided game (drop()), or one
+nobody has open or polls any more, is let go before the next slice. A board two followed players share
+is a fixture of each: either keeps it evaluated, and both take the one settled evaluation (settled()).
+With several games deepening, a search has a TURN before the game that has waited longest gets the
+engine, so many boards each get less depth and one big game gets a lot.
 
 One search paused, not a new search a step: Stockfish starts every search from depth 1, and what its
 hash table keeps of the last one takes the next only a ply or two further. Measured on Stockfish 17.1
@@ -33,7 +41,8 @@ look reaches depth 18-21 in about a second; looks one after another, hash kept, 
 ones are at depth 24 typically after 64M nodes, 4M-node ones at 29 after 32M, whatever the hash's
 size); one search reaches depth 30 after 4-22M nodes, 9M typically (about 20 s of work), and the
 same depth at the same nodes when it's paused between 1 s slices. Searched again after a look
-elsewhere, it needs a third to four fifths of its nodes again to get back, hence long turns.
+elsewhere, it needs a third to four fifths of its nodes again to get back: hence a process of its own
+for looks, and long turns. Each process is about 250 MB besides its hash table.
 
 Stockfish (GPL) runs as its own process, spoken to over UCI. Without it installed, nothing is
 evaluated and chess notifications keep to starts and results.
@@ -60,14 +69,16 @@ from . import bus, shutdown
 log = logging.getLogger("sports_follow.engine")
 
 STOCKFISH = os.environ.get("SPORTS_FOLLOW_STOCKFISH") or shutil.which("stockfish") or ""
-NODES = int(os.environ.get("SPORTS_FOLLOW_ENGINE_NODES", 500_000))  # a look: about a second on one core
+NODES = int(os.environ.get("SPORTS_FOLLOW_ENGINE_NODES", 500_000))  # a first look: about a second on one core
 BUSY = min(1.0, max(0.05, float(os.environ.get("SPORTS_FOLLOW_ENGINE_BUSY", 0.5))))  # share of one core
 GAME_INTERVAL = int(os.environ.get("SPORTS_FOLLOW_ENGINE_GAME_INTERVAL", 20))
+DEEPENING = os.environ.get("SPORTS_FOLLOW_ENGINE_DEEPEN", "watched")  # watched | all | off
 DEPTH = int(os.environ.get("SPORTS_FOLLOW_ENGINE_DEPTH", 30))  # a position is deepened to this depth...
 POSITION_NODES = int(os.environ.get("SPORTS_FOLLOW_ENGINE_POSITION_NODES", 32_000_000))  # ...or this much work in it
 HASH_MB = int(os.environ.get("SPORTS_FOLLOW_ENGINE_HASH_MB", 128))  # the deep search's tree, kept as it goes
-MAX_SECONDS = 5  # a slow machine stops a look here, whatever the node budget
-HALT_SECONDS = 5  # an engine that hasn't ended a search this long after it should have is killed
+LOOK_HASH_MB = 16  # the looks' engine, cleared before each look
+LOOK_SECONDS = 30  # a look still going this long (a stalled machine) is stopped, its score then the machine's
+HALT_SECONDS = 5  # an engine that hasn't ended a search this long after it was told to is killed
 SLICE = 1.0  # seconds a deep search runs before the lane looks again: about a look
 TURN = 8_000_000  # nodes a deep search goes on for while another game waits to be deepened
 SESSION = 10 * 60  # the lane hands over like a poll job; the next tick starts a fresh one
@@ -80,36 +91,49 @@ WANT = "engine:want"  # game -> {"fen", "at"}: the newest position waiting
 QUEUE = "engine:queue"  # game -> the time it may be evaluated from; lowest first
 DEEPEN = "engine:deepen"  # game -> when it last had the engine (it stays in through its turn); lowest first
 LOCK = "engine-lane"
+READING = ("cp", "mate", "depth")
 
 
 def enabled() -> bool:
     return bool(STOCKFISH) and os.access(STOCKFISH, os.X_OK)
 
 
+def deepens(event_id: int) -> bool:
+    """Whether a fixture's game is deepened past its first look: while someone has the game's match page
+    open (watched, the default; on the web or Android, bus.watching_key), always (all) or never (off)."""
+    return DEEPENING == "all" or (DEEPENING == "watched" and bus.watched(event_id))
+
+
 # ---------------------------------------------------------------- the queue
 
 
 def latest(game: str, r: Any = None) -> dict[str, Any] | None:
-    """The game's latest evaluation, from White's side: {"cp" or "mate", "depth", "nodes", "fen", "at",
-    "first"}. "at" is when it was made, "first" when its position was first looked at, and nodes all the
-    work in the position so far."""
+    """The game's latest evaluation, from White's side: what it shows ("cp" or "mate", "depth": the
+    deepest reading of its position), its position's first look ("look": the same, what alerts go by),
+    "nodes" (all the work in the position so far), "fen", "at" (when it was made) and "first" (when its
+    position was first looked at)."""
     raw = (r or bus.sync_redis()).get(f"engine:latest:{game}")
     return json.loads(raw) if raw else None
 
 
-def request(game: str, fen: str, r: Any = None, now: float | None = None, by: object = "") -> None:
+def request(game: str, fen: str, r: Any = None, now: float | None = None, by: object = "", deepen: bool = True) -> None:
     """Ask for this position to be evaluated, for one fixture of the game (`by`: its event; a board two
     followed players share is a fixture of each). It replaces the game's waiting position, if any, and
-    keeps that one's place in the queue. Asked again for the position it's on, the game is still polled,
-    so that position goes on being deepened (back in line, if a gap in polling had let it drop out); a
-    new one stops that at once."""
+    keeps that one's place in the queue. Asked again for the position it's on, with `deepen` (deepens()),
+    it goes on being deepened (back in line, if a gap in polling or in watching had let it drop out); a
+    new position stops that at once, and so does the last fixture asking without `deepen`."""
     r = r or bus.sync_redis()
     now = now or time.time()
-    r.hset(f"engine:polls:{game}", str(by), now)
-    r.expire(f"engine:polls:{game}", STALE)
+    if deepen:
+        r.hset(f"engine:deepen:{game}", str(by), now)
+        r.expire(f"engine:deepen:{game}", STALE)
+    else:
+        r.hdel(f"engine:deepen:{game}", str(by))
     done = latest(game, r)
     if done and done["fen"] == fen:
-        if not deep_enough(cached(r, fen) or done):
+        if not deepened(r, game, now):
+            r.zrem(DEEPEN, game)
+        elif not deep_enough(cached(r, fen) or done):
             r.zadd(DEEPEN, {game: now}, nx=True)
         return
     r.zrem(DEEPEN, game)
@@ -120,22 +144,22 @@ def request(game: str, fen: str, r: Any = None, now: float | None = None, by: ob
 
 def drop(game: str, r: Any = None, by: object | None = None) -> None:
     """Stop evaluating a game for one of its fixtures (`by`: nobody there wants its swings any more), or
-    for all of them (it's over, or not on). Once no fixture asks for it, its position isn't deepened and
-    nothing of it waits; the lane lets go of it before its next slice."""
+    for all of them (it's over, or not on: nothing of it waits either). Once no fixture wants it
+    deepened, its position isn't; the lane lets go of it before its next slice."""
     r = r or bus.sync_redis()
     if by is None:
-        r.delete(f"engine:polls:{game}")
-    else:
-        r.hdel(f"engine:polls:{game}", str(by))
-    if not polled(r, game):
-        r.zrem(DEEPEN, game)
+        r.delete(f"engine:deepen:{game}")
         r.hdel(WANT, game)
+    else:
+        r.hdel(f"engine:deepen:{game}", str(by))
+    if not deepened(r, game):
+        r.zrem(DEEPEN, game)
 
 
-def polled(r: Any, game: str, now: float | None = None) -> bool:
-    """Whether a fixture of the game has asked for it in the last STALE seconds."""
+def deepened(r: Any, game: str, now: float | None = None) -> bool:
+    """Whether a fixture of the game has asked for it deepened in the last STALE seconds."""
     now = now or time.time()
-    return any(now - float(at) <= STALE for at in (r.hgetall(f"engine:polls:{game}") or {}).values())
+    return any(now - float(at) <= STALE for at in (r.hgetall(f"engine:deepen:{game}") or {}).values())
 
 
 def take(r: Any, now: float) -> tuple[str, str] | None:
@@ -157,7 +181,7 @@ def take(r: Any, now: float) -> tuple[str, str] | None:
 def take_deeper(r: Any, now: float, besides: str | None = None) -> tuple[str, dict[str, Any]] | None:
     """The game that has waited longest to have the position it's on deepened (besides the one whose turn
     it is), with its latest evaluation. A game stays in this queue through its turn, and leaves it once
-    it's off the position (a newer one is waiting, or nobody polls it) or the position is deep enough."""
+    it's off the position (a newer one is waiting, or nobody wants it deepened) or it's deep enough."""
     for game in r.zrangebyscore(DEEPEN, "-inf", now):
         if game == besides:
             continue
@@ -169,9 +193,9 @@ def take_deeper(r: Any, now: float, besides: str | None = None) -> tuple[str, di
 
 
 def on_it(r: Any, game: str, fen: str, now: float | None = None) -> bool:
-    """Whether a game is still on this position: polled, nothing newer waiting, and its latest
-    evaluation of it."""
-    return polled(r, game, now) and not r.hget(WANT, game) and (latest(game, r) or {}).get("fen") == fen
+    """Whether a game is still on this position and wanted deepened: nothing newer waiting, a fixture
+    asking for it deepened, and its latest evaluation of it."""
+    return deepened(r, game, now) and not r.hget(WANT, game) and (latest(game, r) or {}).get("fen") == fen
 
 
 def settled(game: str, ev: dict[str, Any], settle: Callable[[dict[str, Any] | None, dict[str, Any]], dict[str, Any]],
@@ -201,24 +225,29 @@ def position_key(fen: str) -> str:
 
 
 def cached(r: Any, fen: str) -> dict[str, Any] | None:
-    """The deepest evaluation of this position so far, with all the nodes searched in it."""
+    """This position as far as it's been searched: its deepest reading (cp, mate, depth), its first look
+    ("look") and all the nodes searched in it."""
     raw = r.get(f"engine:pos:{position_key(fen)}")
     return json.loads(raw) if raw else None
 
 
-def keep(r: Any, fen: str, result: dict[str, Any]) -> dict[str, Any]:
-    """Add a search of this position to the cache: the deeper of it and what's there stays (a shallower
-    reading never replaces a deeper one), and its nodes add to the position's. Returns what's kept."""
-    held = cached(r, fen)
-    best = result if held is None or result.get("depth", 0) > held.get("depth", 0) else held
-    kept = {**best, "nodes": (held or {}).get("nodes", 0) + result.get("nodes", 0)}
+def keep(r: Any, fen: str, result: dict[str, Any], look: bool = False) -> dict[str, Any]:
+    """Add a search of this position to the cache: the deepest reading stays (a shallower one never
+    replaces it) and its nodes add up; a first look is the position's look too, the one its alerts go by
+    wherever it comes up. Returns what's kept."""
+    held = cached(r, fen) or {}
+    reading = {k: result.get(k) for k in READING}
+    best = reading if not held or (reading["depth"] or 0) > (held.get("depth") or 0) else {k: held.get(k) for k in READING}
+    kept = {**best, "nodes": held.get("nodes", 0) + (result.get("nodes") or 0)}
+    if first := held.get("look") or (reading if look else None):
+        kept["look"] = first
     r.set(f"engine:pos:{position_key(fen)}", json.dumps(kept), ex=CACHE_TTL)
     return kept
 
 
 def deep_enough(ev: dict[str, Any]) -> bool:
     """Whether a position has had all the work it gets: DEPTH reached, or POSITION_NODES searched."""
-    return ev.get("depth", 0) >= DEPTH or ev.get("nodes", 0) >= POSITION_NODES
+    return (ev.get("depth") or 0) >= DEPTH or (ev.get("nodes") or 0) >= POSITION_NODES
 
 
 def rest(spent: float, busy: float = BUSY) -> float:
@@ -250,11 +279,12 @@ class EngineError(RuntimeError):
 
 
 class Engine:
-    """One Stockfish process: one thread, low CPU priority, one search at a time. A look (evaluate)
-    runs start to finish; a deep search (search) runs only while run() lets it, and is stopped (SIGSTOP)
-    in between, holding its place in the tree."""
+    """One Stockfish process: one thread, low CPU priority, one search at a time. The lane has two, never
+    running at once: one for looks (evaluate), cleared before each, and one for deep searches (search),
+    which run only while run() lets them and are stopped (SIGSTOP) in between, holding their place in the
+    tree."""
 
-    def __init__(self, path: str = STOCKFISH) -> None:
+    def __init__(self, path: str = STOCKFISH, hash_mb: int = HASH_MB) -> None:
         self.proc = subprocess.Popen(["nice", "-n", "10", path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
         self.lines: queue.Queue[str | None] = queue.Queue()  # read as they come, so a paused search never blocks the lane
         threading.Thread(target=self._reader, name="stockfish", daemon=True).start()
@@ -263,15 +293,25 @@ class Engine:
         self._send("uci")
         self._until("uciok")
         self._send("setoption name Threads value 1")
-        self._send(f"setoption name Hash value {HASH_MB}")
+        self._send(f"setoption name Hash value {hash_mb}")
         self._send("isready")
         self._until("readyok")
 
     def evaluate(self, fen: str, nodes: int = NODES) -> dict[str, Any]:
-        """A look: one search, start to finish. Its score, and the depth it reached and the nodes it
-        searched, as Stockfish reports them."""
-        self._go(fen, f"nodes {nodes} movetime {MAX_SECONDS * 1000}")
-        self._finish(MAX_SECONDS + HALT_SECONDS)
+        """A look: from a cleared engine (its hash table and histories: ucinewgame), one search to `nodes`
+        with no clock, so a position gets the same score however fast the machine is and whatever it
+        searched before. Its score, and the depth it reached and the nodes it searched, as Stockfish reports
+        them. One still going after LOOK_SECONDS is stopped and says so ("capped"): its score is the
+        machine's."""
+        self.halt()
+        self._send("ucinewgame")
+        self._send("isready")
+        self._until("readyok")
+        self._go(fen, f"nodes {nodes}")
+        if not self._ended(LOOK_SECONDS):
+            self._stop()
+            log.warning("engine: a look at %s ran past %ds and was stopped; its score depends on the machine", fen, LOOK_SECONDS)
+            return {**self.reading, "capped": True}
         return dict(self.reading)
 
     def search(self, fen: str, depth: int, nodes: int) -> None:
@@ -298,9 +338,7 @@ class Engine:
     def halt(self) -> dict[str, Any]:
         """End the deep search, if one is under way. Its last reading."""
         if self.searching:
-            self._signal(signal.SIGCONT)
-            self._send("stop")
-            self._finish(HALT_SECONDS)
+            self._stop()
         return dict(self.reading)
 
     def close(self) -> None:
@@ -317,16 +355,23 @@ class Engine:
         self._send(f"position fen {fen}")
         self._send(f"go {limits}")
 
-    def _finish(self, seconds: float) -> None:
-        """Read the search out to its end. One still going after `seconds` is a stuck engine: killed, so
-        the lane never waits on it (the next lane starts another)."""
+    def _ended(self, seconds: float) -> bool:
+        """Read the search out, for up to `seconds`; whether it ended."""
         deadline = time.monotonic() + seconds
         while (left := deadline - time.monotonic()) > 0:
             if (line := self._read(left)) and self._note(line):
-                return
-        self.searching = False
-        self.proc.kill()
-        raise EngineError("the engine didn't end its search")
+                return True
+        return False
+
+    def _stop(self) -> None:
+        """Tell the search to end now, and read it out. An engine that doesn't end it within HALT_SECONDS
+        is stuck: killed, so the lane never waits on it (the next lane starts another)."""
+        self._signal(signal.SIGCONT)
+        self._send("stop")
+        if not self._ended(HALT_SECONDS):
+            self.searching = False
+            self.proc.kill()
+            raise EngineError("the engine didn't end its search")
 
     def _note(self, line: str) -> bool:
         """Note a line about the search under way; True once it's over."""
@@ -378,13 +423,14 @@ class Engine:
 
 @dataclass
 class Deepening:
-    """A game's turn at the deep search: its position, searched a slice at a time. A look at another
-    game's new position stops the search; it's searched again after, in the same turn."""
+    """A game's turn at the deep search: its position, searched a slice at a time. Ending the turn early
+    (the game moves, or nobody wants it deepened) stops the search; it's searched again at its next turn."""
 
     game: str
     fen: str
     first: float  # when the position was first looked at
-    shown: int  # the depth of the game's latest evaluation
+    shown: int  # the depth the game's latest evaluation shows
+    look: dict[str, Any] | None  # the position's first look, which stays what the alerts go by
     searching: bool = False  # a search of it is under way (paused between slices)
     counted: int = 0  # that search's nodes already added to the position's
     turn: int = 0  # nodes searched in this turn
@@ -399,7 +445,8 @@ def run_lane() -> None:
     if not token:
         return
     r = bus.sync_redis()
-    engine: Engine | None = None
+    looks: Engine | None = None  # first looks
+    searches: Engine | None = None  # deep searches
     deep: Deepening | None = None
     evaluated = hits = slices = 0
     busy = 0.0
@@ -410,46 +457,46 @@ def run_lane() -> None:
                 break  # the lock has gone (it lapsed while the lane was held up): another lane may have it
             now = time.time()
             if deep is not None and not on_it(r, deep.game, deep.fen):
-                _end(r, engine, deep)  # the game moved, or nobody polls it: dropped at once
+                _end(r, searches, deep)  # the game moved, or nobody wants it deepened: dropped at once
                 deep = None
             spent = 0.0
             if job := take(r, now):
-                # A new position goes first, from the cache or a look.
+                # A new position goes first, from the cache or a look; a deep search under way stays paused.
                 game, fen = job
                 done = cached(r, fen)
-                if done:
+                if done and done.get("look"):
                     hits += 1
                 else:
-                    engine = engine or Engine()
-                    if deep is not None and deep.searching:
-                        _note(r, deep, engine.halt())
-                        deep.searching = False
+                    looks = looks or Engine(hash_mb=LOOK_HASH_MB)
                     t = time.monotonic()
-                    done = keep(r, fen, engine.evaluate(fen))
+                    result = looks.evaluate(fen)
                     spent = time.monotonic() - t
                     evaluated += 1
+                    # A look stopped by the clock goes for this game once, but isn't the position's look.
+                    done = keep(r, fen, result, look=not result.get("capped"))
+                    done = {**done, "look": done.get("look") or {k: result.get(k) for k in READING}}
                 first = time.time()
                 r.set(f"engine:latest:{game}", json.dumps({**done, "fen": fen, "at": first, "first": first}), ex=LATEST_TTL)
-                if not deep_enough(done) and not r.hget(WANT, game):
+                if deepened(r, game) and not deep_enough(done) and not r.hget(WANT, game):
                     r.zadd(DEEPEN, {game: first})
             else:
                 if deep is not None and deep.turn >= TURN and take_deeper(r, now, besides=deep.game):
-                    _end(r, engine, deep, again=True)  # its turn is over: the game that has waited longest goes next
+                    _end(r, searches, deep, again=True)  # its turn is over: the game that has waited longest goes next
                     deep = None
                 if deep is None and (waiting := take_deeper(r, now)):
                     game, shown = waiting
-                    deep = Deepening(game, shown["fen"], shown.get("first", shown["at"]), shown.get("depth", 0))
+                    deep = Deepening(game, shown["fen"], shown.get("first", shown["at"]), shown.get("depth") or 0, shown.get("look"))
                 if deep is None:
                     if time.monotonic() - idle_since > IDLE_EXIT:
                         break
                     shutdown.sleep(1)
                     continue
-                engine = engine or Engine()
+                searches = searches or Engine()
                 if not deep.searching:
-                    engine.search(deep.fen, DEPTH, max(NODES, POSITION_NODES - (cached(r, deep.fen) or {}).get("nodes", 0)))
+                    searches.search(deep.fen, DEPTH, max(NODES, POSITION_NODES - (cached(r, deep.fen) or {}).get("nodes", 0)))
                     deep.searching, deep.counted = True, 0
                 t = time.monotonic()
-                reading, over = engine.run(SLICE)
+                reading, over = searches.run(SLICE)
                 spent = time.monotonic() - t
                 slices += 1
                 _note(r, deep, reading)
@@ -462,13 +509,14 @@ def run_lane() -> None:
     except Exception:
         log.exception("engine lane crashed")
     finally:
-        if engine is not None:
-            if deep is not None:
-                try:
-                    _end(r, engine, deep, again=True)  # the next lane goes on with it
-                except Exception:
-                    log.exception("engine lane: ending the deep search")
-            engine.close()
+        if deep is not None:
+            try:
+                _end(r, searches, deep, again=True)  # the next lane goes on with it
+            except Exception:
+                log.exception("engine lane: ending the deep search")
+        for engine in (looks, searches):
+            if engine is not None:
+                engine.close()
         bus.release(LOCK, token)
         wall = time.monotonic() - started
         if evaluated or hits or slices:
@@ -478,14 +526,13 @@ def run_lane() -> None:
 
 def _note(r: Any, deep: Deepening, reading: dict[str, Any]) -> None:
     """A deep search's reading: its new nodes into the position's cache and the turn, and the game's
-    latest evaluation once it's deeper, while the game is still on the position (it hasn't moved, or been
-    dropped: over, or nobody wants it)."""
-    nodes = reading.get("nodes", 0)
+    latest evaluation once it's deeper, while the game is still on the position and wanted deepened."""
+    nodes = reading.get("nodes") or 0
     done = keep(r, deep.fen, {**reading, "nodes": nodes - deep.counted})
     deep.turn += nodes - deep.counted
     deep.counted = nodes
-    if done.get("depth", 0) > deep.shown and on_it(r, deep.game, deep.fen):
-        r.set(f"engine:latest:{deep.game}", json.dumps({**done, "fen": deep.fen, "at": time.time(), "first": deep.first}), ex=LATEST_TTL)
+    if (done.get("depth") or 0) > deep.shown and on_it(r, deep.game, deep.fen):
+        r.set(f"engine:latest:{deep.game}", json.dumps({"look": deep.look, **done, "fen": deep.fen, "at": time.time(), "first": deep.first}), ex=LATEST_TTL)
         deep.shown = done["depth"]
 
 

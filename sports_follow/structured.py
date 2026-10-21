@@ -823,7 +823,7 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
     # Its followed players' fans, and the game's own (a game followed by itself).
     wanted = [*db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all(), *matches.rules(db, event_id)]
     if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in wanted):
-        engine.request(game, fen, by=event_id)
+        engine.request(game, fen, by=event_id, deepen=engine.deepens(event_id))  # past its first look while someone has it open
     else:
         engine.drop(game, by=event_id)  # nobody here wants its swings; the other player's event may
     ev = engine.latest(game)
