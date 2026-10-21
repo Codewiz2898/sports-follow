@@ -3,9 +3,10 @@ make a sound."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan
+from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan, voiced_by
 
 NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
 KOHLI, ROHIT = 1, 2
@@ -137,3 +138,64 @@ def test_a_goal_taken_back_before_it_went_isnt_sent():
     assert plan([goal], {KOHLI: "key"}, set(), [], NOW, {5}) == []
     # The sweep found both in one batch: neither goes.
     assert plan([goal, correction], {KOHLI: "key"}, set(), [], NOW) == []
+
+
+# ---------------------------------------------------------------- a game under several fixtures (BHA-378)
+
+CARLSEN, LAZAVIK = 5, 6
+ON_CARLSENS, ON_LAZAVIKS = 21, 22  # the board under each player's fixture: an event each, polled apart (structured.boards)
+
+
+def side(id: int, player: int, title: str, voice: int, *, kind: str = "swing", priority: int = 70) -> Item:
+    """A chess board's moment as one side's fixture found it, naming whose side tells it (Found.voice)."""
+    event = ON_CARLSENS if player == CARLSEN else ON_LAZAVIKS
+    return replace(item(id, kind, title, player=player, event=event, priority=priority, body="Engine +4.0 · move 40"), fixtures=frozenset({ON_CARLSENS, ON_LAZAVIKS}), voice=voice)
+
+
+def test_a_fan_of_both_players_on_a_board_hears_each_moment_once_from_the_side_it_went_toward():
+    trouble, winning = side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN)
+    both = {CARLSEN: "key", LAZAVIK: "key"}
+    assert plan([trouble], both, set(), [], NOW) == []  # Lazavik's fixture found it first: nothing, and nothing waits for Carlsen's
+    [p] = plan([winning], both, set(), [], NOW)
+    assert (p.title, p.player_id, p.event_id) == ("Magnus Carlsen is winning", CARLSEN, ON_CARLSENS)
+    # A fan of one of them hears it from their player's side, as before.
+    assert [q.title for q in plan([trouble], {LAZAVIK: "key"}, set(), [], NOW)] == ["Denis Lazavik is in trouble"]
+    assert [q.title for q in plan([winning], {CARLSEN: "key"}, set(), [], NOW)] == ["Magnus Carlsen is winning"]
+    # And so does one who set the other side to results only: its words wouldn't reach them.
+    assert [q.title for q in plan([trouble], {CARLSEN: "results", LAZAVIK: "key"}, set(), [], NOW)] == ["Denis Lazavik is in trouble"]
+    # The start and the result: once each, White's start and the winner's result.
+    starts = [side(3, CARLSEN, "Magnus Carlsen is playing", CARLSEN, kind="start"), side(4, LAZAVIK, "Denis Lazavik is playing", CARLSEN, kind="start")]
+    finals = [side(5, LAZAVIK, "Denis Lazavik: Lost with Black vs Magnus Carlsen", CARLSEN, kind="final"), side(6, CARLSEN, "Magnus Carlsen: Won with White vs Denis Lazavik", CARLSEN, kind="final")]
+    assert [[q.title for q in plan([m], both, set(), [], NOW)] for m in [*starts, *finals]] == [["Magnus Carlsen is playing"], [], [], ["Magnus Carlsen: Won with White vs Denis Lazavik"]]
+
+
+def test_the_alerts_list_takes_a_boards_moment_for_the_other_sides_only_on_the_same_play():
+    trouble = replace(side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), detail="w2m41")
+    winning = replace(side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN), detail="w2m41")
+    assert voiced_by(trouble, winning) and not voiced_by(winning, trouble)  # the side it went toward keeps its own
+    assert not voiced_by(trouble, replace(winning, id=3, detail="w2m47"))  # another swing a few moves later: both stay
+
+
+def test_a_moment_left_to_the_other_side_is_kept_and_its_twin_after_it_went_late_isnt_said():
+    trouble = replace(side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), detail="gw2m41")
+    winning = replace(side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN), detail="gw2m41")
+    both = {CARLSEN: "key", LAZAVIK: "key"}
+    held: list[Item] = []
+    assert plan([trouble], both, set(), [], NOW, held=held) == [] and held == [trouble]  # for notify.send_held, should Carlsen's never come
+    # Sent late after all (notify.send_held), Carlsen's word for it, coming later still, isn't said too.
+    late = sent(ON_LAZAVIKS, "Denis Lazavik is in trouble", player=LAZAVIK, moments=[1], ago=60)
+    assert plan([winning], both, set(), [late], NOW, heard=[trouble]) == []
+    assert [p.title for p in plan([winning], {CARLSEN: "key"}, set(), [], NOW)] == ["Magnus Carlsen is winning"]
+
+
+def test_a_board_under_two_fixtures_is_one_notification_with_one_story():
+    # The turnaround is Lazavik's to tell, from his fixture; the game's notification is the one Carlsen's winning went on.
+    turned = side(3, LAZAVIK, "Turnaround: Denis Lazavik is winning", LAZAVIK, priority=85)
+    [winning] = plan([side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN)], {CARLSEN: "key"}, set(), [], NOW)
+    earlier = [sent(ON_CARLSENS, "Magnus Carlsen is winning", player=CARLSEN, moments=[2], ago=900)]
+    [p] = plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, set(), earlier, NOW)
+    assert p.tag == winning.tag == f"e{ON_CARLSENS}" and p.story == ["Magnus Carlsen is winning"]  # the board's first fixture's
+    # Muted under either fixture, it's muted.
+    assert plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, {ON_CARLSENS}, earlier, NOW) == []
+    # A game whose fixture is the game keeps its event's notification.
+    assert plan([item(1, "fifty", "Virat Kohli reaches 50")], {KOHLI: "key"}, set(), [], NOW)[0].tag == "e10"

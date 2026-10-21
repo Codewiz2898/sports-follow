@@ -48,24 +48,44 @@ def band(ev: dict[str, Any], current: int = 0) -> int:
 
 
 def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
-    """An evaluation with its settled band. The band moves only when two evaluations in a row agree,
-    so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing.
+    """An evaluation with its settled band. The band goes by each position's first look ("look", the quick
+    one every position gets; engine.py) and moves only when the first looks of two positions in a row
+    agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing. "since" is
+    the move it last moved at and "since_look" that move's first look, so a swing is the same swing, in
+    the same words, whichever poll of the board first sees it; "prev" is the band and "told" it was
+    settled from, the board's own before this one, which a poll joining the board's settles holds it
+    against (engine.settled).
+
+    While someone has the game open, the engine goes on deepening the position it's on. A deeper reading of
+    the same position is shown (cp, mate and depth, for the board's bar) but never moves the band, nor what
+    the next position is held against ("raw"), and neither does a reading with no first look (one the
+    engine had to stop: its score is the machine's). A position scores the same whether anyone watches the
+    game, and alerts don't hang on how far a search had got when a poll came.
 
     "told" is the winning band (2 or -2) the game last moved into, kept until it's level again or the
     other side is better: an evaluation hovering on the winning line (+2.6, +3.4, +2.7…) moves the band
     back and forth, and the player is winning once, not at every climb."""
     if before and before.get("at") == ev.get("at"):
         return before
-    settled = before.get("band", 0) if before else 0
-    raw = band(ev, settled)
+    move = _fullmove(ev.get("fen"))
+    held = before or {}
+    prev = {"band": held.get("band", 0), "told": held.get("told", 0)}
+    if not ev.get("look") or (before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen")):
+        # Shown, and the band as the last first look settled it.
+        return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0),
+                "since": held.get("since"), "since_look": held.get("since_look"), "prev": prev}
+    settled = prev["band"]
+    raw = band(ev["look"], settled)
     moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
-    told = before.get("told", 0) if before else 0
+    told = prev["told"]
     if before is not None and abs(new) == 2 and new != settled:
         told = new
     elif new * told <= 0:
         told = 0
-    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "band": new, "told": told}
+    turned = before is None or new != settled
+    return {**ev, "move": move, "raw": raw, "band": new, "told": told, "since": move if turned else held.get("since"),
+            "since_look": ev["look"] if turned else held.get("since_look"), "prev": prev}
 
 
 def _fullmove(fen: str | None) -> int | None:
@@ -96,6 +116,15 @@ def _points(result: str) -> tuple[float, float] | None:
         return None
     value = lambda s: (int(s.rstrip("½")) if s.rstrip("½") else 0) + (0.5 if s.endswith("½") else 0)  # noqa: E731
     return value(match.group(1)), value(match.group(2))
+
+
+def _sides(now: Seen) -> tuple[str, str, str]:
+    """The board's players by their FIDE ids, as the player's line puts them: theirs, their opponent's, and White's
+    ("" before the pairing's out)."""
+    white, black = (str((now.state.get(c) or {}).get("id") or "") for c in ("white", "black"))
+    colour = stat(now.line, "Colour")
+    mine, theirs = (white, black) if colour == "White" else (black, white) if colour == "Black" else ("", "")
+    return mine, theirs, white
 
 
 def _won(text: str, priority: int = 0) -> Poster | None:
@@ -154,14 +183,20 @@ class Chess(Sport):
     def starts_unlisted(self, now: Seen) -> bool:
         return True
 
+    # A board is a fixture of each of its players, so each of its moments is found twice, once from each side; a fan
+    # who follows both hears it from one (Found.voice): a swing from the side it went toward, the result from the
+    # winner's, the start and a draw from White's.
+
     def start(self, who: str, now: Seen) -> Found:
         rnd = now.state.get("round") or "Their game"
         opp = stat(now.line, "Opponent")
-        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}")
+        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}", voice=_sides(now)[2])
 
     def final(self, who: str, now: Seen) -> Found:
         head = (now.line or {}).get("headline") or ""
-        return Found("final", "key", f"{who}: {head or 'result'}", now.score)
+        mine, theirs, white = _sides(now)
+        voice = mine if head.startswith("Won") else theirs if head.startswith("Lost") else white
+        return Found("final", "key", f"{who}: {head or 'result'}", now.score, voice=voice)
 
     def settle(self, before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return settle(before, ev)
@@ -169,8 +204,12 @@ class Chess(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """A followed player's game turning, as the engine sees it (from their side)."""
         was, got = before.state.get("eval"), now.state.get("eval")
-        if now.status != "live" or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
-            return []
+        if now.status != "live" or now.state.get("result") or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
+            return []  # a decided game (a mini-match is live after it) turns no more
+        if got.get("joined"):
+            # Its first evaluation from the board's settles (engine.settled): held against the board's band before it,
+            # not its own last one, which may be stale (a deploy, a lost key), so only a real turn is told.
+            was = {**was, **(got.get("prev") or {"band": got["band"], "told": got.get("told", 0)})}
         colour = stat(now.line, "Colour")
         side = 1 if colour == "White" else -1 if colour == "Black" else 0
         old, new = was["band"] * side, got["band"] * side
@@ -194,8 +233,16 @@ class Chess(Sport):
         if turnaround:
             title, level = f"Turnaround: {title}", "key"
         opponent = stat(now.line, "Opponent")
-        body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
-        return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
+        # The move the band moved at (settle's "since"), not the one the poll came at: a look can land between the
+        # two sides' polls, and each side's word for the swing is still the same play.
+        move = got.get("since") or got.get("move")
+        score = got.get("since_look") or got.get("look") or got  # that move's first look
+        body = " · ".join(x for x in (f"Engine {_score(score, side)}", f"move {move}" if move else None, f"vs {opponent}" if opponent else None) if x)
+        mine, theirs, _ = _sides(now)
+        # Its game, its band from White's side and its move: the same from either side of the board, so each side's
+        # word for a swing is told as one play (alerts.voiced_by), and one game of a mini-match isn't taken for another.
+        return [Found("swing", level, title, body, f"{self.board(now.state)}w{got['band']}m{move or 0}", 85 if turnaround else 70 if level == "key" else 30,
+                      voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """The board turning, as the engine sees it, told once, in during's words from the side it moved
@@ -270,6 +317,16 @@ class Chess(Sport):
     def board(self, state: dict[str, Any]) -> str:
         """The game's id at its source: each player's fixture shows the same board, and asks one question."""
         return str(state.get("game_id") or "")
+
+    def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
+        """White and Black by their FIDE ids, the same all through a mini-match's games."""
+        return tuple(str(p["id"]) for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id"))
+
+    def pairing(self, state: dict[str, Any]) -> str:
+        """Its tournament's and round's names and its two players: a round is one meeting, its mini-match's games
+        and all."""
+        players, tournament, rnd = sorted(self.board_players(state)), state.get("tournament"), state.get("round")
+        return "|".join([str(tournament), str(rnd), *players]) if len(players) == 2 and tournament and rnd else ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A

@@ -589,6 +589,14 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
             log.warning("match: couldn't ask for %s:%s", system, game, exc_info=True)
     if page is None:
         raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
+    if page.get("status") == "live":
+        try:
+            # Someone has it open, on the web or Android: the engine deepens its position past its first look
+            # while they do (engine.deepens), whichever of its fixtures polls it.
+            for event_id in page.get("event_ids") or []:
+                await state["redis"].set(bus.watching_key(event_id), "1", ex=bus.WATCH_SECONDS)
+        except Exception:
+            log.warning("match: couldn't note %s:%s as watched", system, game, exc_info=True)
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
@@ -2034,7 +2042,8 @@ def stop_live_card(event_id: RowId, body: dict = Body(...), fan: str = Depends(f
     device = db.scalar(select(PushSubscription).where(PushSubscription.fan_id == fan, PushSubscription.endpoint == token, PushSubscription.transport == "fcm").with_for_update())
     if device is None:
         raise HTTPException(404, "That device isn't getting notifications.")
-    device.live_stopped = [*(e for e in device.live_stopped if e != event_id), event_id][-LIVE_STOPS_KEPT:]
+    games = structured.game_events(db, event_id)  # a game under several fixtures stops under each (a chess board's two)
+    device.live_stopped = [*(e for e in device.live_stopped if e not in games), *games][-LIVE_STOPS_KEPT:]
     db.commit()
     return {"event_id": event_id, "stopped": True}
 
@@ -2072,17 +2081,18 @@ def mutes(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str
 
 @app.put("/api/me/mutes/{event_id}")
 def mute(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Nothing more from this game ("Mute this game" on a notification). Its moments stay in the activity list."""
+    """Nothing more from this game ("Mute this game" on a notification). Its moments stay in the activity list. A
+    game under several fixtures (a chess board is one of each player's) is muted under every one of them."""
     if db.get(Event, event_id) is None:
         raise HTTPException(404, "No such game.")
-    db.execute(insert(NotificationMute).values(fan_id=fan, event_id=event_id).on_conflict_do_nothing())
+    db.execute(insert(NotificationMute).values([{"fan_id": fan, "event_id": e} for e in structured.game_events(db, event_id)]).on_conflict_do_nothing())
     db.commit()
     return {"event_id": event_id, "muted": True}
 
 
 @app.delete("/api/me/mutes/{event_id}")
 def unmute(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    db.execute(delete(NotificationMute).where(NotificationMute.fan_id == fan, NotificationMute.event_id == event_id))
+    db.execute(delete(NotificationMute).where(NotificationMute.fan_id == fan, NotificationMute.event_id.in_(structured.game_events(db, event_id))))
     db.commit()
     return {"event_id": event_id, "muted": False}
 
@@ -2134,8 +2144,9 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
     found = [(m, None, event, muted, sport) for m, event, muted, sport in [*db.execute(games), *db.execute(sided)]]
     rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)
     rows = teams.listed(rows)[:limit]  # a game's result from their team's side, in place of the game's own
-    # A game's moment that one of the fan's players' says too is listed once, as their player's.
-    planned = {i.id: i for i in notify.for_games(db, notify.as_items([r[0] for r in rows]))}
+    # A game's moment that one of the fan's players' says too is listed once, as their player's; and so is a chess
+    # board's that two of them say, once from each side, as the one's whose side tells it (alerts.voiced_by).
+    planned = {i.id: i for i in notify.for_games(db, notify.on_boards(db, [r[0] for r in rows]))}
     theirs = [i for i in planned.values() if i.player_id is not None]
     items = [
         {
@@ -2144,7 +2155,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
             **({"sport": sports.of(sport).key or "other"} if m.player_id is None else {}),  # a game's own: its sport, for its mark
         }
         for m, name, event, muted, sport in rows
-        if m.player_id is not None or not any(alerts.same(planned[m.id], p) for p in theirs)
+        if not any(alerts.voiced_by(planned[m.id], p) if m.player_id is not None else alerts.same(planned[m.id], p) for p in theirs)
     ]
     return {"items": items, "next": rows[-1][0].id if len(rows) == limit else None}
 

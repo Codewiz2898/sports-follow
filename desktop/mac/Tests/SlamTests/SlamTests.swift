@@ -122,3 +122,22 @@ import Testing
         #expect(audioEnd > total - 0.3)  // and it runs to the end
     }
 }
+
+@Suite struct SaveWaitTests {
+    @Test func anAnswerInTimeComesBack() async {
+        let quick = Task { () -> Int? in 7 }
+        #expect(await within(1, quick) == .some(7))
+        let none = Task { () -> Int? in nil }
+        #expect(await within(1, none) == .some(nil))  // answered, with nothing: not the same as late
+    }
+
+    @Test func aLateAnswerIsntWaitedFor() async {
+        let slow = Task { () -> Int? in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            return 7
+        }
+        let t0 = Date()
+        #expect(await within(0.2, slow) == nil)
+        #expect(Date().timeIntervalSince(t0) < 1.5)
+    }
+}

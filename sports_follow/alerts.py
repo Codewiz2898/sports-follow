@@ -22,7 +22,16 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   story so far underneath, so the tray holds "Kohli reaches 100" over "Rohit out for 45", not a
   stack. Moments found in one poll go as one push, led by the highest priority. News is one
   notification per player.
-- **Muted games** ("Mute this game" on the notification) send nothing more.
+- **A game under several fixtures is one game.** A chess board is a fixture of each of its players, so an
+  event of each, polled apart (BHA-378): its notification is the game's first fixture's (Item.fixtures),
+  whichever finds the moment, all through a mini-match, and each of its moments is found from both sides,
+  "Gukesh D is winning" and "Sindarov is in trouble". A fan who follows both hears it once, from the side
+  the sport says tells it (voiced: the side it went toward, the winner, White for the start), where that
+  side's fixture is being polled to say it; one who follows one of them hears it from their side. What's
+  left to the other side is kept (held), and sent late should that side never say it (notify.send_held);
+  the other side's word for a moment they were told already, late or not, isn't said again.
+- **Muted games** ("Mute this game" on the notification) send nothing more, a game under several
+  fixtures muted under any of them.
 - **Sound is rationed.** A game makes a sound at most once every GAME_COOLDOWN and a fan's phone at
   most LOUD_PER_HOUR times an hour; past either, the push still arrives, silently. A moment of
   BREAKTHROUGH priority (a hundred, a five-for, a late equaliser, an upset) always makes a sound. A
@@ -85,6 +94,13 @@ class Item:
     # Its place among its game's moments of its kind about the same player (their 2nd goal; the game's 2nd goal
     # by them): the same play where one side names it by the source's id ("goal@501") and the other by count.
     nth: int = 0
+    # The events of its game where one game is under several fixtures (a chess board is one of each player's:
+    # structured.boards), its own among them, so it lands on one notification whichever of them found it. Empty
+    # where its event is the game.
+    fixtures: frozenset[int] = frozenset()
+    # A player's moment of such a game: the player here whose side tells it to a fan who follows both (Found.voice),
+    # its own player or the other side's, whose fixture is being polled to say it. None where only its player says it.
+    voice: int | None = None
 
 
 @dataclass
@@ -171,12 +187,38 @@ def same(game: Item, player: Item, exact: bool = False) -> bool:
     return by_id[0] != by_id[1] and "*" not in game.about and game.nth > 0 and game.nth == player.nth and near
 
 
+def voiced(item: Item, levels: dict[int, str]) -> bool:
+    """Whether a player's moment of a game under several fixtures reaches this fan in another of their players'
+    words: the player whose side tells it (Item.voice), whom they follow too at a level that hears it. Each side of a
+    chess board finds its moments from its own fixture, a poll apart ("Gukesh D is winning", "Sindarov is in
+    trouble"): a fan who follows both hears the side it went toward, never waiting for it, and one who follows only
+    Sindarov still hears his."""
+    voice = item.voice
+    return voice is not None and voice != item.player_id and voice in levels and tier(levels[voice], item) is not None
+
+
+def voiced_by(item: Item, other: Item, within: timedelta | None = PLAY_WINDOW) -> bool:
+    """Whether a player's moment is `other` told from the other side of its board: `other` is the moment of the player
+    whose side tells it (voiced), of the same game, kind and play (its detail, which a sport words the same from either
+    side: a chess swing's game, band from White's and move), found within `within` of it (None: whenever)."""
+    return (item.voice is not None and item.voice != item.player_id and other.player_id == item.voice and other.kind == item.kind and other.detail == item.detail
+            and other.event_id in item.fixtures and (within is None or abs(item.created_at - other.created_at) <= within))
+
+
+def tag_of(item: Item) -> str:
+    """The notification a moment lands on: its game's ("e{event}"; a game under several fixtures goes by its first
+    here, whichever of them found it, all through a mini-match's games); a player's news, theirs."""
+    return f"e{min(item.fixtures or {item.event_id})}" if item.event_id else f"p{item.player_id}"
+
+
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
-         games: dict[int, Watch] | None = None, heard: list[Item] | None = None) -> list[Push]:
+         games: dict[int, Watch] | None = None, heard: list[Item] | None = None, held: list[Item] | None = None) -> list[Push]:
     """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
     moments corrections in these games have taken back, which leave the story (this batch's own
     corrections count without it). `games` is the games the fan follows by themselves, by event; `heard`,
-    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about."""
+    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about. A moment
+    left to the other side of its board to tell (voiced) goes in `held`, to send late should that side never say it
+    (notify.send_held); and one whose other side's word reached them already, late or not, isn't said again."""
     told = {m for s in sent for m in s.moment_ids}
     taken = (taken_back or set()) | {i.corrects for i in items if i.corrects is not None}
     kept: list[tuple[Item, str]] = []
@@ -185,7 +227,7 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
         if level is None:
             continue  # someone else's player, or game: a batch holds every player in the game, a sweep every game
         how = tier(level, item)
-        if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
+        if how is None or item.event_id in muted or item.fixtures & muted or (now - item.created_at).total_seconds() > ttl(item.kind):
             continue
         if item.id in taken or (item.corrects is not None and item.corrects not in told):
             # Taken back before it went (a batch the tick swept up late), or the correction of something
@@ -200,7 +242,8 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
             by_side.setdefault(item.event_id, item.id)
     kept = [(i, h) for i, h in kept if not (i.player_id is None and i.kind == "final" and i.event_id in by_side and by_side[i.event_id] != i.id)]
     # A game's own moment that one of the fan's players' says too goes once, as their player's; and one the
-    # other side said in an earlier push isn't said again.
+    # other side said in an earlier push isn't said again. A player's that another of theirs tells from the
+    # other side of a board goes in that one's words (voiced), and the game's own of it with it.
     theirs = [i for i, _ in kept if i.player_id is not None]
     heard_theirs = [h for h in heard or [] if h.player_id is not None]
     heard_games = [h for h in heard or [] if h.player_id is None]
@@ -208,10 +251,13 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     for item, how in kept:
         if item.player_id is None and (any(same(item, p) for p in theirs) or any(same(item, p, exact=True) for p in heard_theirs)):
             continue
-        if item.player_id is not None and any(same(g, item, exact=True) for g in heard_games):
+        if item.player_id is not None and voiced(item, levels):
+            if held is not None:
+                held.append(item)
             continue
-        tag = f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
-        groups.setdefault(tag, []).append((item, how == "loud"))
+        if item.player_id is not None and (any(same(g, item, exact=True) for g in heard_games) or any(voiced_by(h, item, None) for h in heard_theirs)):
+            continue
+        groups.setdefault(tag_of(item), []).append((item, how == "loud"))
 
     loud_this_hour = sum(1 for s in sent if s.loud and now - s.at <= timedelta(hours=1))
     pushes = []
@@ -219,7 +265,9 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     for tag, members in sorted(groups.items(), key=lambda g: -max(i.priority for i, _ in g[1])):
         members.sort(key=lambda m: (m[0].priority, m[0].id), reverse=True)
         lead = members[0][0]
-        earlier = sorted((s for s in sent if (s.event_id == lead.event_id if lead.event_id else s.event_id is None and s.player_id == lead.player_id)), key=lambda s: s.at, reverse=True)
+        # The game's earlier pushes, of any of its fixtures; a player's news, theirs.
+        of_it = [s for s in sent if s.event_id == lead.event_id or s.event_id in lead.fixtures] if lead.event_id else [s for s in sent if s.event_id is None and s.player_id == lead.player_id]
+        earlier = sorted(of_it, key=lambda s: s.at, reverse=True)
         noisy = [i for i, loud in members if loud]
         loud = bool(noisy)
         if loud and max(i.priority for i in noisy) < BREAKTHROUGH:

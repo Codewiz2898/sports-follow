@@ -19,6 +19,9 @@ from sports_follow import moments, notify
 from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
+from .test_new_adapters import CARLSEN, LAZAVIK
+from .test_predictions import board
+
 
 def line(headline: str, **stats: str) -> dict:
     return {"headline": headline, "stats": [{"label": k.replace("_", " "), "value": v} for k, v in stats.items()]}
@@ -148,14 +151,19 @@ def test_chess_bands_need_a_margin_to_change():
     assert chess.band({"cp": -20, "mate": 4}) == 2 and chess.band({"mate": -2}) == -2
 
 
+def look(cp: int, at: int, fen: str) -> dict:
+    """A position's first look, as the engine's latest has it (engine.py): shown, and what the band goes by."""
+    return {"cp": cp, "mate": None, "look": {"cp": cp, "mate": None, "depth": 20}, "at": at, "fen": fen}
+
+
 def test_a_chess_swing_counts_once_two_evaluations_agree():
-    first = chess.settle(None, {"cp": 20, "fen": "8/8/8/8/8/8/8/8 w - - 0 30", "at": 1})
-    glitch = chess.settle(first, {"cp": 520, "fen": "8/8/8/8/8/8/8/8 b - - 0 31", "at": 2})
+    first = chess.settle(None, look(20, 1, "8/8/8/8/8/8/8/8 w - - 0 30"))
+    glitch = chess.settle(first, look(520, 2, "8/8/8/8/8/8/8/8 b - - 0 31"))
     assert (first["band"], glitch["band"]) == (0, 0)  # one reading isn't enough
-    back = chess.settle(glitch, {"cp": 30, "fen": "8/8/8/8/8/8/8/8 w - - 0 32", "at": 3})
+    back = chess.settle(glitch, look(30, 3, "8/8/8/8/8/8/8/8 w - - 0 32"))
     assert back["band"] == 0
-    real = chess.settle(chess.settle(back, {"cp": 480, "at": 4, "fen": "8/8/8/8/8/8/8/8 w - - 0 33"}), {"cp": 510, "at": 5, "fen": "8/8/8/8/8/8/8/8 w - - 0 34"})
-    assert real["band"] == 2 and real["move"] == 34
+    real = chess.settle(chess.settle(back, look(480, 4, "8/8/8/8/8/8/8/8 w - - 0 33")), look(510, 5, "8/8/8/8/8/8/8/8 w - - 0 34"))
+    assert real["band"] == 2 and real["move"] == 34 and real["since"] == 34
     assert chess.settle(real, {"cp": 510, "at": 5}) is real  # the same evaluation again: unchanged
 
 
@@ -174,6 +182,8 @@ def test_chess_swings_from_the_players_side():
     assert detect("Chess", "Magnus Carlsen", "1503014", seen(2, 350, colour="White"), seen(1, 250, colour="White")) == []  # drifting back
     assert detect("Chess", "Magnus Carlsen", "1503014", seen(0, 0, game="g0"), white_winning) == []  # the next game of a match
     assert detect("Chess", "Magnus Carlsen", "1503014", Seen("live", state={"game_id": "g1"}), white_winning) == []  # first reading
+    decided = Seen("live", state={**white_winning.state, "result": "1-0"}, line=white_winning.line)  # a mini-match, live after its game
+    assert detect("Chess", "Magnus Carlsen", "1503014", level, decided) == []
 
 
 def test_a_swing_says_the_engine_score_as_the_board_does():
@@ -185,13 +195,66 @@ def test_a_swing_says_the_engine_score_as_the_board_does():
     assert (chess._score({"mate": -3}, -1), chess._score({"mate": -3}, 1)) == ("mate in 3", "facing mate in 3")
 
 
+def test_both_sides_of_a_chess_board_name_the_side_that_tells_its_moments():
+    # A board is a fixture of each player's, so each finds its moments from its own side (BHA-378); both name the one
+    # a fan who follows both hears it from: a swing's the side it went toward, the result's the winner, the start's
+    # and a draw's White. The recorded Esports World Cup grand final: Carlsen won game 1 with White, game 2 was drawn.
+    def seen(fide: str, snap, band: int | None = None) -> Seen:
+        state = {**snap.state, **({"eval": {"cp": band * 200, "band": band, "raw": band, "told": band if abs(band) == 2 else 0, "move": 40}} if band is not None else {})}
+        return Seen(snap.status, state, {"headline": snap.lines[fide].headline, "stats": snap.lines[fide].stats}, snap.score_label, snap.clock_label)
+
+    names = {CARLSEN: "Magnus Carlsen", LAZAVIK: "Denis Lazavik"}
+
+    def found(fide: str, before: Seen, now: Seen) -> tuple[str, str]:
+        [f] = detect("Chess", names[fide], fide, before, now)
+        return f.title, f.voice
+
+    for fide in names:
+        to_come, on, over = board(status="*", fide=fide), board(status="*", ongoing=True, fide=fide), board(0, fide=fide)
+        told = [found(fide, seen(fide, to_come), seen(fide, on)), found(fide, seen(fide, on), seen(fide, over)), found(fide, seen(fide, on, 0), seen(fide, on, 2)),
+                found(fide, seen(fide, on, 2), seen(fide, on, -2)), found(fide, seen(fide, on, -2), seen(fide, on, 0))]
+        drawn = found(fide, seen(fide, board(1, status="*", ongoing=True, fide=fide)), seen(fide, board(1, fide=fide)))
+        assert [voice for _, voice in [*told, drawn]] == [CARLSEN, CARLSEN, CARLSEN, LAZAVIK, CARLSEN, LAZAVIK]  # Lazavik had White in game 2
+        if fide == LAZAVIK:
+            assert [title for title, _ in told] == ["Denis Lazavik is playing", "Denis Lazavik: Lost with Black vs Magnus Carlsen", "Denis Lazavik is in trouble",
+                                                     "Turnaround: Denis Lazavik is winning", "Denis Lazavik's advantage is gone"]
+    # Each side words a swing's play the same (its band from White's side, its move), so the two are told as one.
+    on = {fide: board(status="*", ongoing=True, fide=fide) for fide in names}
+    [a], [b] = (detect("Chess", names[fide], fide, seen(fide, on[fide], 0), seen(fide, on[fide], 2)) for fide in names)
+    assert a.detail == b.detail == "mJnv1YBUw2m40"
+    # And both name the same meeting of theirs; where the board can't say which (no round), none.
+    assert chess.SPORT.pairing(on[CARLSEN].state) == chess.SPORT.pairing(on[LAZAVIK].state) != ""
+    assert chess.SPORT.pairing({**on[CARLSEN].state, "round": None}) == ""
+    # Before the pairing's out there's no board: only its player says it.
+    assert detect("Chess", "Magnus Carlsen", CARLSEN, Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Round 5")))[0].voice == ""
+
+
+def test_both_sides_word_a_swing_by_the_move_the_band_moved_at():
+    # Carlsen's side polled after move 42's look, which moved the band; Lazavik's after move 43's, settled from the
+    # board's (engine.settled), the band still the one that moved at 42. Both word the swing as the play at 42.
+    on = {fide: board(status="*", ongoing=True, fide=fide) for fide in (CARLSEN, LAZAVIK)}
+    level = {"cp": 20, "band": 0, "raw": 0, "told": 0, "move": 41, "since": 30, "at": 1}
+    at_42 = {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 42, "look": {"cp": 340}, "since": 42, "since_look": {"cp": 340}, "at": 2}
+    at_43 = {**at_42, "cp": 345, "look": {"cp": 345}, "move": 43, "at": 3}
+
+    def swing(fide: str, name: str, ev: dict):
+        line = {"headline": on[fide].lines[fide].headline, "stats": on[fide].lines[fide].stats}
+        [f] = detect("Chess", name, fide, Seen("live", {**on[fide].state, "eval": level}, line), Seen("live", {**on[fide].state, "eval": ev}, line))
+        return f
+
+    carlsen, lazavik = swing(CARLSEN, "Magnus Carlsen", at_42), swing(LAZAVIK, "Denis Lazavik", at_43)
+    assert carlsen.detail == lazavik.detail == "mJnv1YBUw2m42" and carlsen.voice == lazavik.voice == CARLSEN
+    # And by the same score, each from its own side: move 42's first look (+3.4), not the later position's (+3.45).
+    assert (carlsen.body.split(" · ")[:2], lazavik.body.split(" · ")[:2]) == (["Engine +3.4", "move 42"], ["Engine -3.4", "move 42"])
+
+
 def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     # H4: an evaluation hovering between +2.6 and +3.4 told "Magnus Carlsen is winning" at moves 33, 37
     # and 41, each a key push. Each reading comes twice here: a band moves once two agree.
     def titles(colour: str, cps: list[int]) -> list[str]:
         ev, found = None, []
         for at, cp in enumerate(cps, 1):
-            new = chess.settle(ev, {"cp": cp, "mate": None, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"})
+            new = chess.settle(ev, look(cp, at, f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"))
             if ev is not None:
                 before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
                 found += detect("Chess", "Magnus Carlsen", "1503014", before, now)
@@ -208,7 +271,60 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     assert titles("White", turned) == ["Magnus Carlsen is winning", "Turnaround: Magnus Carlsen is in trouble"]
     # An evaluation stored before "told" was kept counts as nothing told yet: told once more, then kept.
     old = {"cp": 340, "at": 0, "band": 2, "raw": 2, "move": 40}
-    assert chess.settle(old, {"cp": 260, "at": 1})["told"] == 0
+    assert chess.settle(old, look(260, 1, "8/8/8/8/8/8/8/8 w - - 0 41"))["told"] == 0
+
+
+def reading(move: int, cp: int, at: int, look: int | None = None, depth: int = 20) -> dict:
+    """The engine's latest evaluation of move `move`'s position as a poll reads it: what it shows (cp, depth) and
+    the position's first look (look, by default this one: a first look)."""
+    return {"cp": cp, "mate": None, "depth": depth, "look": {"cp": cp if look is None else look, "mate": None, "depth": 20}, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {move}"}
+
+
+def swings(looks: list[tuple[int, int]], colour: str = "White") -> list[tuple[int, str]]:
+    """The swings a fan hears from a stream of the engine's readings, each (move, centipawns), as polls read them:
+    a move's first look, then deeper readings while the game stays on it and someone has it open (engine.py)."""
+    ev, found, first = None, [], {}
+    for at, (move, cp) in enumerate(looks, 1):
+        first.setdefault(move, cp)
+        new = chess.settle(ev, reading(move, cp, at, look=first[move], depth=18 + at))
+        if ev is not None:
+            before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
+            found += [(move, f.title) for f in detect("Chess", "Magnus Carlsen", "1503014", before, now)]
+        ev = new
+    return found
+
+
+def test_deeper_readings_never_move_the_band():
+    # Move 32's first look agrees with 31's: winning, told at once. Deeper readings of it at +2.4, then level, are
+    # shown but don't take it back on the same move (two in a row agreeing would have).
+    assert swings([(30, 20), (31, 340), (32, 340), (32, 240), (32, 30), (32, 30)]) == [(32, "Magnus Carlsen is winning")]
+    # Nor do they tell a swing the first looks don't: a glitched board searched on, or deeper readings agreeing with
+    # the move before where the first look didn't.
+    assert swings([(30, 20), (31, 520), (31, 530), (31, 540), (32, 30)]) == []
+    assert swings([(30, 20), (31, 340), (32, 250), (32, 350), (32, 360)]) == []
+    # So a game's alerts are its first looks', whether anyone watched it (deeper readings) or not.
+    watched = [(30, 20), (30, 60), (31, 340), (31, 250), (32, 340), (32, 120), (33, 30), (33, 300)]
+    unwatched = [(m, cp) for i, (m, cp) in enumerate(watched) if i == 0 or watched[i - 1][0] != m]
+    assert swings(watched) == swings(unwatched) == [(32, "Magnus Carlsen is winning")]
+    # What's shown is the deepest reading, beside the band its first look settled.
+    told = chess.settle(None, reading(31, 20, 1))
+    first = chess.settle(told, reading(32, 360, 2))
+    deeper = chess.settle(first, reading(32, 900, 3, look=360, depth=30))
+    assert (deeper["cp"], deeper["depth"], deeper["band"], deeper["raw"]) == (900, 30, first["band"], first["raw"])
+
+
+def test_a_swing_on_a_new_move_is_told_as_fast_as_before():
+    # Told at the second position whose first look agrees, deeper readings or not.
+    assert swings([(30, 20), (31, 340), (32, 350)]) == [(32, "Magnus Carlsen is winning")]
+    assert swings([(30, 20), (31, -340), (32, -350)], colour="Black") == [(32, "Magnus Carlsen is winning")]
+    assert swings([(30, 20), (30, 25), (31, 340), (31, 345), (32, 350)]) == [(32, "Magnus Carlsen is winning")]
+    # The alert quotes the position's first look, not a deeper reading shown since.
+    level = chess.settle(chess.settle(None, reading(30, 20, 1)), reading(31, 360, 2))
+    ahead = chess.settle(level, reading(32, 360, 3))
+    shown = {**ahead, "cp": 900, "depth": 30}
+    seen = lambda ev: Seen("live", state={"game_id": "g1", "eval": ev}, line=line("White vs Gukesh D", Colour="White", Opponent="Gukesh D"))  # noqa: E731
+    [f] = detect("Chess", "Magnus Carlsen", "1503014", seen(level), seen(shown))
+    assert f.body == "Engine +3.6 · move 32 · vs Gukesh D"
 
 
 def test_levels_decide_who_hears():
@@ -243,7 +359,7 @@ def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypat
 
     @contextmanager
     def session():
-        yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)))
+        yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)), execute=lambda stmt: [])  # no boards (structured.games)
 
     devices = [(11, (1, "webpush", "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "webpush", "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
     monkeypatch.setattr(notify, "session", session)

@@ -261,7 +261,9 @@ export type AlertLevel = 'everything' | 'key' | 'results' | 'off'
  * its teams fans follow (`teams`, by tag: "team:7"), so a fan's level for it is their team's; one told from one
  * team's side (its result: "Arsenal won 2–1 v Chelsea") names whose (`sides`), for that team's fans; the game's own
  * result says whose sides tell it too (`told_by`), so their fans get theirs instead. */
-export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor'; teams?: string[]; sides?: string[]; told_by?: string[] }
+// `voice`: a chess board's moment is found from both sides, one under each player's fixture; this one's other side
+// (that player's id) tells it, so a fan who follows them too sees theirs (sports_follow/alerts.py, voiced).
+export interface PlayerMoment { id: number; title: string; body: string; url: string; player_id: number | null; event_id?: number | null; kind: string; level: 'key' | 'minor'; teams?: string[]; sides?: string[]; told_by?: string[]; voice?: number }
 
 /** A moment in the fan's activity list (GET /api/me/activity): every moment of their players, and of the games
  * they follow by themselves, pushed or not. A game's own has no player, and says its sport. */
