@@ -137,9 +137,10 @@ export function ResultCard({ game, hero, now, calls = null }: { game: GameResult
 
 /**
  * One of the fan's games still to come, on Today: a block of its sport's colour, as their results are (a big game
- * none of theirs are in is outlined), with the countdown big once it's less than a day away (else the day), then
- * the game and a chip naming the fan's teams and players in it, or saying they follow the game itself. It opens the game's match page (the line-ups as they come, both
- * sides' players), else the first player's page.
+ * none of theirs are in, LeagueComingCard, is outlined), with the countdown big once it's less than a day away
+ * (else the day), then the game and a chip naming the fan's teams and players in it, or saying they follow the
+ * game itself. It opens the game's match page (the line-ups as they come, both sides' players), else the first
+ * player's page.
  */
 export function ComingCard({ event, players, seed, sport, teams = [], calls = null }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[]; calls?: MyPredictions | null }) {
   const now = useNow()
