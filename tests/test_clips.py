@@ -3,7 +3,9 @@ is made, and how a clip's moment reads."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -126,3 +128,20 @@ def test_no_bucket_lists_nothing(api):
     r = api.get("/api/clips", params={"match": "pandascore_esports/1753729"})
     assert r.status_code == 200 and r.json() == {"clips": []}
     assert api.get("/api/clips", params={"before": "yesterday"}).status_code == 400
+
+
+def test_the_sites_policy_lets_its_pages_play_clips_from_the_bucket():
+    # Clips play from the bucket's public address, not the site's own: without media-src allowing it, the
+    # Caddyfile's Content-Security-Policy falls back to default-src 'self' and every clip's video is blocked.
+    root = Path(__file__).resolve().parents[1]
+    policy = re.search(r'header @app Content-Security-Policy "([^"]+)"', (root / "deploy" / "caddy" / "Caddyfile").read_text())
+    assert policy
+    directives = dict(d.strip().split(" ", 1) for d in policy[1].split(";"))
+    media = directives.get("media-src", directives["default-src"]).split()
+    base = re.search(r"^SPORTS_FOLLOW_CLIPS_PUBLIC_BASE=(\S+)$", (root / "deploy" / "settings.env").read_text(), re.M)
+    assert base
+    address = urlsplit(base[1])
+    assert address.scheme == "https"
+    assert "https:" in media or f"https://{address.netloc}" in media
+    # The rest of the line is other features': the chess engine runs WebAssembly (web/src/sports/engine/).
+    assert "'wasm-unsafe-eval'" in directives["script-src"].split()
