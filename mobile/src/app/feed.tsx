@@ -6,7 +6,7 @@
 // The web's address is /me/feed; here it's /feed, since the app's /me/ would claim the site's /me/leagues too
 // (app.config.ts).
 
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
+import { router, useFocusEffect, useIsFocused, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { byDay, ringed } from '../../../web/src/feed'
@@ -26,29 +26,33 @@ type Row = { day: string } | { entry: FeedEntry }
 
 export default function FeedScreen() {
   const now = useNow()
-  const { cards, loaded } = useFollowing()
+  const { cards, loaded, failed: noFollowList } = useFollowing()
   const params = useLocalSearchParams<{ player?: string }>()
   const wanted = Number(params.player)
   const player = Number.isInteger(wanted) && wanted > 0 ? wanted : null
+  const focused = useIsFocused()
   const [again, setAgain] = useState(0)
-  // Read again from the top when the fan follows someone or stops (the follow list in), on a pull, and when the dot lit.
+  // Read again from the top on a pull, when the tab's dot lit, and when the fan's players changed; the last two
+  // only once the screen is in front again, since it stays in the app's stack while the fan is elsewhere (where
+  // the web's page would be loaded anew). Not waiting on a follow list that can't be read.
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, error, loading, more, hide } = useMyFeed(player, undefined, loaded ? `${who}:${again}` : null)
+  const [read, setRead] = useState<string | null>(null)
+  useEffect(() => { if (focused && (loaded || noFollowList)) setRead(`${who}:${again}`) }, [focused, loaded, noFollowList, who, again])
+  const { page, error, failed, loading, more, hide } = useMyFeed(player, undefined, read)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   const [circles, setCircles] = useState<FeedCircle[]>([])
   const [refreshing, setRefreshing] = useState(false)
   useFeedSeen()
 
-  // In front: the tab's dot goes, and what came in since it lit is read from the top. The screen stays in the
-  // app's stack while the fan is elsewhere, where the web's page would be loaded anew.
+  // In front: the tab's dot goes, and what came in since it lit is read from the top (the first time, it's read anyway).
   const first = useRef(true)
   useFocusEffect(useCallback(() => {
     if (!first.current && feedHasNew()) setAgain((n) => n + 1)
     first.current = false
     markOpened()
   }, []))
-  // And again once a page says what's newest (it may be newer than the dot knew).
-  useEffect(() => { if (page?.newest) markOpened() }, [page?.newest])
+  // And again once a page says what's newest (it may be newer than the dot knew), while the fan's looking at it.
+  useEffect(() => { if (focused && page?.newest) markOpened() }, [focused, page?.newest])
   // The circles stay put while one player's is shown (each page lists them all).
   useEffect(() => { if (page) setCircles(page.players) }, [page])
   useEffect(() => { if (!loading) setRefreshing(false) }, [loading])
@@ -92,7 +96,7 @@ export default function FeedScreen() {
       {error && page ? (
         <View style={{ gap: 8 }}>
           <ErrorBox>{error}</ErrorBox>
-          <Btn kind="link" label="Try again" onPress={more} style={{ alignSelf: 'flex-start' }} />
+          <Btn kind="link" label="Try again" onPress={failed === 'first' ? () => setAgain((n) => n + 1) : more} style={{ alignSelf: 'flex-start' }} />
         </View>
       ) : null}
       {page && !page.cursor && page.items.length > 0 ? <Eyebrow style={{ textAlign: 'center' }}>You're up to date · newer ones arrive through the day</Eyebrow> : null}
@@ -114,7 +118,7 @@ export default function FeedScreen() {
         onEndReachedThreshold={1.5}
         initialNumToRender={4}
         windowSize={7}
-        onRefresh={() => { setRefreshing(true); setAgain((n) => n + 1) }}
+        onRefresh={read == null ? undefined : () => { setRefreshing(true); setAgain((n) => n + 1) }}
         refreshing={refreshing}
       />
       <ItemSheet item={opened?.item ?? null} name={opened?.player.name ?? ''} onClose={() => setOpened(null)} onHide={(_, verdict) => (opened ? hide(opened, verdict) : Promise.resolve())} />

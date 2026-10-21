@@ -8,41 +8,46 @@ import { noteNewest } from './feedSeen'
 
 /** The fan's Feed, a page at a time, one player's when `player` is set; and a way to hide an item now. `size`:
  * items a page; `again`: anything that, changed, reads it again from the start (who the fan follows, a pull),
- * and null waits. */
+ * and null waits. A page read again stays up until the new one's in. `failed`: which read the error is from,
+ * the first page's (try it again from the start) or a later one's (try `more` again). */
 export function useMyFeed(player: number | null, size?: number, again?: string | null) {
   const [page, setPage] = useState<Page | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState<'first' | 'more' | null>(null)
   const [loading, setLoading] = useState(false)
-  const current = useRef<{ player: number | null; page: Page | null; loading: boolean }>({ player, page, loading })
-  current.current = { player, page, loading }
+  const current = useRef<{ player: number | null; page: Page | null; busy: boolean; read: number }>({ player, page, busy: false, read: 0 })
+  current.current.player = player
+  current.current.page = page
 
   useEffect(() => {
     if (again === null) return
-    let stale = false
+    const read = ++current.current.read // a later page still on its way from an older read is dropped
+    current.current.busy = true
     setError(null)
+    setFailed(null)
     setLoading(true)
     api.myFeedPage({ player, limit: size })
-      .then((p) => { if (!stale) { setPage(p); noteNewest(p.newest) } })
-      .catch((e: Error) => { if (!stale) setError(e.message) })
-      .finally(() => { if (!stale) setLoading(false) })
-    return () => { stale = true }
+      .then((p) => { if (current.current.read === read) { setPage(p); noteNewest(p.newest) } })
+      .catch((e: Error) => { if (current.current.read === read) { setError(e.message); setFailed('first') } })
+      .finally(() => { if (current.current.read === read) { current.current.busy = false; setLoading(false) } })
   }, [player, size, again])
-  // Another player's (or everyone's) starts from nothing; the same one read again keeps its page until the new one's in.
+  // Another player's (or everyone's) starts from nothing.
   useEffect(() => { setPage(null) }, [player])
 
   const more = useCallback(() => {
-    const { page: was, player: who, loading: busy } = current.current
+    const { page: was, player: who, busy, read } = current.current
     if (!was?.cursor || busy) return
-    current.current.loading = true // a second call before the render sees `loading`
+    current.current.busy = true // a second call before the render sees `loading`
     setLoading(true)
     setError(null)
+    setFailed(null)
     api.myFeedPage({ player: who, cursor: was.cursor, limit: size })
       .then((p) => {
-        if (current.current.player !== who) return // the fan picked someone else meanwhile
+        if (current.current.read !== read) return // read again from the start meanwhile (another player, a pull)
         setPage((now) => now && { ...p, items: [...now.items, ...p.items.filter((e) => !now.items.some((n) => n.item.id === e.item.id))] })
       })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
+      .catch((e: Error) => { if (current.current.read === read) { setError(e.message); setFailed('more') } })
+      .finally(() => { if (current.current.read === read) { current.current.busy = false; setLoading(false) } })
   }, [size])
 
   // Gone from the page straight away; back, with why, if the server didn't take it.
@@ -57,5 +62,5 @@ export function useMyFeed(player: number | null, size?: number, again?: string |
     }
   }, [])
 
-  return { page, error, loading, more, hide }
+  return { page, error, failed, loading, more, hide }
 }

@@ -10,7 +10,7 @@
 import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
-import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle, Path } from 'react-native-svg'
 import { duration, fromLine, openLabel, views } from '../../web/src/feed'
@@ -242,12 +242,18 @@ function Player({ circle, picked, lit, onPress }: { circle: FeedCircle; picked: 
 }
 
 /** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed right now in its
- * cards, and the way to the rest (the Feed tab). Absent while their Feed is empty. `again`, changed, reads it
- * again (Today pulled). */
+ * cards, and the way to the rest (the Feed tab). Absent while their Feed is empty. Read once the follow list is
+ * in, and again when it comes back changed, when Today is pulled (`again`) and when the app comes back to the
+ * front, since Today stays open where the web's page would be loaded anew. */
 export function FromYourPlayers({ now, again = 0 }: { now: number; again?: number }) {
-  const { cards, loaded } = useFollowing()
+  const { cards, loaded, heard } = useFollowing()
+  const [back, setBack] = useState(0)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') setBack((n) => n + 1) })
+    return () => sub.remove()
+  }, [])
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${again}` : null) // once the follow list is in
+  const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   if (!loaded || !page?.items.length) return null
   const all = () => router.navigate('/feed')
