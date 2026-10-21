@@ -257,11 +257,14 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     assert (page["moves"][0], page["moves"][-1], len(page["moves"]), page["game"]) == ("1. d4 Nf6", "86. Ke6", 86, None)
     assert chess.verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Magnus Carlsen won"
 
-    # A game still being played: no moves asked for.
+    # A game still being played: its moves so far, from its PGN without clocks (never the finished game's copy), as
+    # the page's detail, not as a finished game's moves.
     asked.clear()
     playing = {**single, "games": [{**data["games"][0], "status": "*"}], "round": {**data["round"], "finished": False, "ongoing": True}}
-    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: asked.append(url) or playing)
-    assert "moves" not in lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state and len(asked) == 1
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: asked.append(url) or (pgn if ".pgn" in url else playing))
+    live = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state
+    assert "moves" not in live and len(live["page_detail"]["moves"]) == 86 and asked[1].endswith(f"{game_id}.pgn?clocks=false&comments=false&variations=false")
 
     # A decided game while its round is still on (a mini-match's next game may follow it): partial.
     on = {**single, "round": {**data["round"], "finished": False, "ongoing": True}}
@@ -287,6 +290,104 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     monkeypatch.setattr(lichess_chess, "get_json", refused)
     with pytest.raises(lichess_chess.RateLimited):
         lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+
+
+def test_a_positions_moves_count_from_its_fen_and_a_games_from_its_last_move():
+    assert lichess_chess.fen_ply("r4rk1/5q1p/p5p1/npN1Bn2/2pP3b/P3N3/1P3PQ1/3R1RK1 b - - 4 25") == 49  # White's 25th played, Black's 24th
+    assert lichess_chess.fen_ply("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1") == 0
+    assert lichess_chess.fen_ply("8/8/8/8/8/8/8/8 w") is None and lichess_chess.fen_ply(None) is None  # no move number: can't say
+    assert lichess_chess.moves_ply([[1, "d4", "Nf6"], [2, "c4", None]]) == 3
+    assert lichess_chess.moves_ply([[12, None, "e5"]]) == 24  # a game set up with Black to move counts as its FEN does
+    assert lichess_chess.moves_ply([]) == 0
+
+
+def test_a_live_boards_kept_moves_take_its_last_move_when_one_short():
+    kept = {"moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": [], "opening": "Indian"}
+    at = "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3"  # after 2... e6: 4 plies
+    assert lichess_chess.moves_to(kept, at, "e7e6") is kept
+    one_on = "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/5N2/PP2PPPP/RNBQKB1R b KQkq - 1 3"
+    assert lichess_chess.moves_to(kept, one_on, "g1f3") == {**kept, "more": ["g1f3"]}
+    assert lichess_chess.moves_to({**kept, "more": ["g1f3"]}, "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4", "d7d5")["more"] == ["g1f3", "d7d5"]
+    two_on = "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4"
+    assert lichess_chess.moves_to(kept, two_on, "d7d5") is None  # a move missed: its PGN is read again
+    assert lichess_chess.moves_to(kept, "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1", "d2d4") is None  # ahead of the board
+    assert lichess_chess.moves_to(None, at, "e7e6") is None  # none kept yet
+
+
+LIVE_PGN = """[Event "Made-up"]
+[White "Carlsen, Magnus"]
+[Black "Lazavik, Denis"]
+[Opening "Queen's Gambit Declined"]
+
+1. d4 {[%clk 1:59:58]} Nf6 2. c4 e6 3. Nf3 d5 *"""
+LIVE_PGN_LATER = LIVE_PGN.replace(" *", " 4. Nc3 Be7 5. Bg5 *")
+
+
+class Kept(dict):
+    """Redis as a dict, for what the worker and the API keep between looks."""
+
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+    def set(self, key, value, ex=None):
+        self[key] = value
+
+
+def test_a_live_boards_moves_are_read_once_then_kept_up_a_move_at_a_time(monkeypatch):
+    data = load("lichess/round-final")
+    rnd = data["round"]["id"]
+    board = {"fen": "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4", "lastMove": "d7d5", "pgn": LIVE_PGN}  # after 3... d5
+    asked = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url)
+        if ".pgn" in url:
+            return board["pgn"]
+        game = {**data["games"][0], "status": "*", "fen": board["fen"], "lastMove": board["lastMove"]}
+        return {**data, "round": {**data["round"], "finished": False, "ongoing": True}, "games": [game]}
+
+    kept = Kept()
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
+    chess = lichess_chess.LichessChess()
+    pgns = lambda: [u for u in asked if ".pgn" in u]  # noqa: E731
+
+    # A followed player's poll before anyone opened the page keeps nothing and reads no PGN.
+    assert chess.snapshot({"round": rnd, "fide": LAZAVIK}).status == "live"
+    assert not pgns() and not kept
+    # The page's first read reads the PGN once, without clocks (not the finished game's copy), and keeps it.
+    game = chess.match(f"{rnd}-{LAZAVIK}")
+    assert game is not None and game.snapshot.status == "live"
+    assert game.snapshot.state["page_detail"] == {"moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", "d5"]], "more": [], "opening": "Queen's Gambit Declined"}
+    game_id = data["games"][0]["id"]
+    assert pgns() == [f"{lichess_chess.API}study/{rnd}/{game_id}.pgn?clocks=false&comments=false&variations=false"]
+    # 4. Nc3: a poll adds it as the board gives it, and the next read takes it from there, neither asking Lichess.
+    board.update(fen="rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N2N2/PP2PPPP/R1BQKB1R b KQkq - 1 4", lastMove="b1c3")
+    asked.clear()
+    chess.snapshot({"round": rnd, "fide": LAZAVIK})
+    game = chess.match(f"{rnd}-{LAZAVIK}")
+    assert game is not None and game.snapshot.state["page_detail"]["more"] == ["b1c3"] and not pgns()
+    # 4... Be7 5. Bg5 between two looks: the read reads the PGN again, and its moves stand alone.
+    board.update(fen="rnbqk2r/ppp1bppp/4pn2/3p2B1/2PP4/2N2N2/PP2PPPP/R2QKB1R b KQkq - 3 5", lastMove="c1g5", pgn=LIVE_PGN_LATER)
+    game = chess.match(f"{rnd}-{LAZAVIK}")
+    assert game is not None and len(pgns()) == 1
+    assert game.snapshot.state["page_detail"]["moves"][-2:] == [[4, "Nc3", "Be7"], [5, "Bg5", None]] and game.snapshot.state["page_detail"]["more"] == []
+
+
+def test_a_live_boards_moves_lichess_wont_give_leave_the_board_alone(monkeypatch):
+    data = load("lichess/round-final")
+    rnd = data["round"]["id"]
+
+    def get_json(url, ttl, text=False):
+        if ".pgn" in url:
+            raise lichess_chess.RateLimited("the minute is spent")
+        game = {**data["games"][0], "status": "*", "fen": "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4", "lastMove": "d7d5"}
+        return {**data, "round": {**data["round"], "finished": False, "ongoing": True}, "games": [game]}
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    game = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert game is not None and game.snapshot.status == "live" and "page_detail" not in game.snapshot.state  # the board still shows
 
 
 def test_a_games_moves_are_placed_by_their_move_numbers():
