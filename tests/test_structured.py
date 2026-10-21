@@ -549,10 +549,14 @@ def test_recent_results_keep_their_order_and_a_failed_read_only_its_scorecard(mo
     # BHA-283: answers coming back in any order still make the card newest first; a read that failed leaves
     # that game's result without the player's line, and the others stand.
     source, card_row, polls = five_finals(monkeypatch)
+    card_row.card["recent_results"] = [{"event_id": 13, "game_key": "fake_source:board3"}, {"event_id": 12, "game_key": "fake_source:board2"}]
     structured.refresh(1)
     results = card_row.card["recent_results"]
     assert [r["result"] for r in results] == ["Won game 5", "Won game 4", "Won game 3", "Won game 2", "Won game 1"]
     assert [r["player_contribution"] for r in results] == ["Scored in game 5", "Scored in game 4", None, "Scored in game 2", "Scored in game 1"]
+    # And it's still the game an earlier read said (a chess board under each player's fixture: BHA-372), so it
+    # stays one card on Today; a read that worked says it afresh (this source's boards name no shared game).
+    assert [r["game_key"] for r in results] == [None, None, "fake_source:board3", None, None]
     assert source.stats_from == ["1", "2", "4", "5"]
     assert polls == [(15, "final", "A 5 – 0 B")]  # game 5, which the poller didn't see finish, gets its final poll
 

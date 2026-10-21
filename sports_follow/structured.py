@@ -416,7 +416,14 @@ def _refresh(player_id: int) -> None:
         card = copy.deepcopy(card_row.card)
         card["player"] = {**card.get("player", {}), "sport": player.sport}
         card["upcoming"] = [_upcoming_item(f, events[f.source_id], ref) for f in ahead]
-        card["recent_results"] = [result_item(adapter, f, snap, events[f.source_id], ref) for f, snap in reversed(recent)]
+        # A game whose scorecard couldn't be read this time is still the game an earlier read said it was.
+        games = {r.get("event_id"): r.get("game_key") for r in card.get("recent_results") or []}
+        card["recent_results"] = []
+        for f, snap in reversed(recent):
+            item = result_item(adapter, f, snap, events[f.source_id], ref)
+            if snap is None:
+                item["game_key"] = games.get(item["event_id"])
+            card["recent_results"].append(item)
         if stats:
             card["season_stats"] = stats
             card["season_stats_note"] = note

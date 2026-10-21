@@ -14,7 +14,7 @@ export const TAIL = 6  // league games in a rail after the fan's own, before its
 
 /** The game a live card or a result is of, by what the server says: the game its fixture is one of, where a game
  * has several (a chess board is one of each player's), else its event; null where it names neither. */
-function gameOf(x: { game_key?: string | null; event_id?: number | null }): string | null {
+export function gameOf(x: { game_key?: string | null; event_id?: number | null }): string | null {
   return x.game_key ? `game:${x.game_key}` : x.event_id != null ? `event:${x.event_id}` : null
 }
 
