@@ -279,16 +279,16 @@ function AlertsPrompt() {
   }
   return (
     <View style={s.alerts} accessibilityLabel="Alerts">
-      <Text style={[t.title, { color: colour.bg }]}>Now turn alerts on</Text>
+      <Text style={t.title}>Now turn alerts on</Text>
       {push.unavailable ? (
-        <Text style={[t.small, { color: colour.bg }]}>{push.unavailable}</Text>
+        <Text style={t.small}>{push.unavailable}</Text>
       ) : (
         <>
-          <Text style={[t.small, { color: colour.bg }]}>So key alerts reach you, with {APP} closed too.</Text>
-          <Btn kind="primary" label="Turn on alerts" busy={push.busy} colours={{ bg: colour.bg, fg: colour.text }} style={{ alignSelf: 'flex-start' }} onPress={() => void push.enable()} />
+          <Text style={t.small}>So key alerts reach you, with {APP} closed too.</Text>
+          <Btn kind="primary" label="Turn on alerts" busy={push.busy} style={{ alignSelf: 'flex-start' }} onPress={() => void push.enable()} />
         </>
       )}
-      {push.message ? <Text style={[t.small, { color: colour.bg }]}>{push.message}</Text> : null}
+      {push.message ? <Text style={t.small}>{push.message}</Text> : null}
     </View>
   )
 }
@@ -308,8 +308,8 @@ const s = StyleSheet.create({
   who: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 34, paddingHorizontal: 12, borderRadius: 999, borderWidth: 2 },
   pillText: { fontFamily: font[700], fontSize: 13 },
-  alerts: { gap: 8, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.text },
-  alertsOn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colour.surface },
+  alerts: { gap: 8, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.surface, borderWidth: 2, borderColor: colour.text },  // white, ringed in ink: it asks for a tap
+  alertsOn: { flexDirection: 'row', alignItems: 'center', borderColor: 'transparent' },
   games: { paddingVertical: 4, paddingHorizontal: 16 },
   game: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 56, paddingVertical: 12 },
   gameLine: { borderBottomWidth: 1, borderBottomColor: colour.line },
