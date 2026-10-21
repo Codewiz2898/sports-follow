@@ -16,6 +16,8 @@ enum ClipEditor {
     static let ink = NSColor(srgbRed: 0x0d / 255, green: 0x0d / 255, blue: 0x0d / 255, alpha: 0.88).cgColor
     static let red = NSColor(srgbRed: 0xdc / 255, green: 0x20 / 255, blue: 0x16 / 255, alpha: 1).cgColor
     static let blue = NSColor(srgbRed: 0x1f / 255, green: 0x5b / 255, blue: 0xef / 255, alpha: 1).cgColor
+    static let inkSolid = NSColor(srgbRed: 0x0d / 255, green: 0x0d / 255, blue: 0x0d / 255, alpha: 1).cgColor
+    static let paper = NSColor(srgbRed: 0xf3 / 255, green: 0xf3 / 255, blue: 0xef / 255, alpha: 1).cgColor
 
     static func make(from source: URL, to url: URL, strip: String?, replaySeconds: Double = 5,
                      slowdown: Double = 2) async throws -> Result {
@@ -79,13 +81,13 @@ enum ClipEditor {
             bar.frame = CGRect(x: 0, y: 0, width: size.width, height: h)
             bar.backgroundColor = ink
             parent.addSublayer(bar)
-            bar.addSublayer(text(strip, size: 30 * unit, color: .white,
+            bar.addSublayer(textLayer(strip, size: 30 * unit, color: .white,
                                  frame: CGRect(x: 24 * unit, y: 9 * unit, width: size.width - 200 * unit, height: 40 * unit)))
             let tag = CALayer()
             tag.frame = CGRect(x: size.width - 132 * unit, y: 10 * unit, width: 112 * unit, height: 34 * unit)
             tag.backgroundColor = blue
             tag.cornerRadius = 8 * unit
-            tag.addSublayer(text("SLAM", size: 24 * unit, color: .white, frame: tag.bounds.insetBy(dx: 0, dy: 2 * unit), center: true))
+            tag.addSublayer(textLayer("slam", size: 24 * unit, color: .white, frame: tag.bounds.insetBy(dx: 0, dy: 2 * unit), center: true, font: "Fredoka"))
             bar.addSublayer(tag)
         }
 
@@ -93,42 +95,53 @@ enum ClipEditor {
         replay.frame = CGRect(x: 24 * unit, y: size.height - 76 * unit, width: 230 * unit, height: 52 * unit)
         replay.backgroundColor = red
         replay.cornerRadius = 8 * unit
-        replay.addSublayer(text("REPLAY ½×", size: 32 * unit, color: .white, frame: replay.bounds.insetBy(dx: 0, dy: 4 * unit), center: true))
+        replay.addSublayer(textLayer("REPLAY ½×", size: 32 * unit, color: .white, frame: replay.bounds.insetBy(dx: 0, dy: 4 * unit), center: true))
         replay.opacity = 0
-        let show = CAKeyframeAnimation(keyPath: "opacity")
-        show.values = [0, 0, 1, 1]
-        show.keyTimes = [0, NSNumber(value: replayFrom / total), NSNumber(value: replayFrom / total), 1]
-        show.calculationMode = .discrete
-        show.beginTime = AVCoreAnimationBeginTimeAtZero
-        show.duration = total
-        show.isRemovedOnCompletion = false
-        show.fillMode = .forwards
-        replay.add(show, forKey: "show")
+        replay.add(visible(from: replayFrom, to: total, total: total), forKey: "show")
         parent.addSublayer(replay)
         return (parent, video)
     }
 
-    /// Text drawn into an image (a CATextLayer comes out blank in an export).
-    private static func text(_ s: String, size: CGFloat, color: NSColor, frame: CGRect, center: Bool = false) -> CALayer {
+    /// Opacity 1 from `from` to `to` (seconds into the video), 0 otherwise.
+    static func visible(from: Double, to: Double, total: Double) -> CAKeyframeAnimation {
+        let a = CAKeyframeAnimation(keyPath: "opacity")
+        a.calculationMode = .discrete
+        a.values = [0, 1, 0]  // discrete: one value fewer than key times
+        a.keyTimes = [0, NSNumber(value: max(0, from / total)), NSNumber(value: min(1, to / total)), 1]
+        a.beginTime = AVCoreAnimationBeginTimeAtZero
+        a.duration = total
+        a.isRemovedOnCompletion = false
+        a.fillMode = .forwards
+        return a
+    }
+
+    /// Text drawn into an image (a CATextLayer comes out blank in an export). A zero frame sizes the
+    /// layer to the text. Fonts: the app's own copies of Anton, Manrope and Fredoka when Fonts.register()
+    /// found them, else Impact and the system's bold.
+    static func textLayer(_ s: String, size: CGFloat, color: NSColor, frame: CGRect, center: Bool = false,
+                          font name: String = "Anton") -> CALayer {
+        let font = Fonts.named(name, size: size) ?? (name == "Anton" ? NSFont(name: "Impact", size: size) : nil)
+            ?? NSFont.boldSystemFont(ofSize: size)
+        let para = NSMutableParagraphStyle()
+        para.alignment = center ? .center : .left
+        para.lineBreakMode = .byTruncatingTail
+        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
+        let lineH = (font.ascender - font.descender).rounded(.up)
+        var frame = frame
+        if frame == .zero { frame.size = CGSize(width: str.size().width.rounded(.up) + 2, height: lineH + 4) }
         let layer = CALayer()
         layer.frame = frame
         let w = Int(frame.width.rounded(.up)), h = Int(frame.height.rounded(.up))
         guard w > 0, h > 0, let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return layer }
-        let font = NSFont(name: "Impact", size: size) ?? NSFont.boldSystemFont(ofSize: size)
-        let para = NSMutableParagraphStyle()
-        para.alignment = center ? .center : .left
-        para.lineBreakMode = .byTruncatingTail
-        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
-        let gc = NSGraphicsContext(cgContext: ctx, flipped: false)
         NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = gc
-        let lineH = font.ascender - font.descender
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
         str.draw(in: NSRect(x: 0, y: (CGFloat(h) - lineH) / 2, width: CGFloat(w), height: lineH))
         NSGraphicsContext.restoreGraphicsState()
         layer.contents = ctx.makeImage()
-        layer.contentsGravity = .resize
+        layer.contentsGravity = center ? .center : .left
+        layer.masksToBounds = true
         return layer
     }
 }

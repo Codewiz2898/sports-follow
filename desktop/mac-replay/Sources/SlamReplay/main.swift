@@ -20,6 +20,7 @@ func runAsync(_ body: @escaping () async throws -> Void) -> Never {
     dispatchMain()
 }
 
+Fonts.register()
 var args = Array(CommandLine.arguments.dropFirst())
 func value(_ flag: String) -> String? {
     guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
@@ -35,6 +36,20 @@ if let dir = value("--from-frames") {
     runAsync {
         try await FromFrames.run(dir: URL(fileURLWithPath: dir), prefix: value("--prefix") ?? "clip1_",
                                  fps: value("--fps").flatMap(Int.init) ?? 30, strip: value("--strip-text"))
+    }
+}
+if args.contains("--montage") {
+    // --montage [--vertical] [clip.mp4 …]: today's clips (or these) into one video
+    runAsync {
+        let files = args.filter { $0.hasSuffix(".mp4") }.map { URL(fileURLWithPath: $0) }
+        let clips = files.isEmpty ? Montage.todaysClips() : files
+        var o = Montage.Options()
+        o.vertical = args.contains("--vertical")
+        let url = ClipWriter.newURL(label: o.vertical ? "montage-9x16" : "montage")
+        let r = try await Montage.make(clips: clips, to: url, opts: o)
+        print(String(format: "montage %@: %d clips, %.1f s, %.1f MB, made in %.0f ms", url.lastPathComponent, r.clips,
+                     r.seconds, Double(r.bytes) / 1_048_576, r.ms))
+        try await Probe.run(url)
     }
 }
 if let file = value("--probe") {

@@ -1,5 +1,6 @@
 import AppKit
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 
 /// The menu-bar app: a status item, the ⌃⇧S hotkey, `kill -USR1` to save from a script,
 /// and a stats line in the log every few seconds.
@@ -23,6 +24,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private let feed: MatchFeed
     private var lastClip: URL?
     private var editItem: NSMenuItem?
+    private var vertical = true
+    private var verticalItem: NSMenuItem?
+    private var montageTask: Task<Void, Never>?
     private var matchItem: NSMenuItem?
 
     init(opts: Options, probeOnly: Bool) {
@@ -136,7 +140,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         saves += 1
         flash("Saving…")
         // The strip's numbers and the clock on screen, both as of the tap, while the clip is written.
-        let line = edit ? Task.detached { await feed.line() } : nil
+        let line = Task.detached { await feed.line() }
         let screen = Task.detached { frame.map(FPSProbe.clocks(in:)) ?? [] }
         saveChain = Task.detached {
             await previous?.value  // saves queue; each keeps the 30 s before its own tap
@@ -152,11 +156,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                     NSSound(named: "Tink")?.play()
                     self.flash(edit ? "Saved ✓ · cutting…" : "Saved ✓")
                 }
-                guard edit else { return }
-                let strip = await line?.value
+                let strip = await line.value
                 let clocks = await screen.value
-                Log.json("strip", ["text": strip?.text ?? "", "apiClock": strip?.clock ?? "", "screenClocks": clocks,
-                                   "apiMs": round1(strip?.ms ?? 0), "match": feed.path ?? ""])
+                let side: [String: Any] = ["strip": strip?.text ?? "", "apiClock": strip?.clock ?? "", "screenClocks": clocks,
+                                           "apiMs": round1(strip?.ms ?? 0), "match": feed.path ?? "",
+                                           "savedAt": ISO8601DateFormatter().string(from: tap)]
+                Log.json("strip", side)
+                // Beside the clip, for the montage's titles.
+                if let data = try? JSONSerialization.data(withJSONObject: side, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: url.deletingPathExtension().appendingPathExtension("json"))
+                }
+                guard edit else { return }
                 let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
                 let e = try await ClipEditor.make(from: r.url, to: cut, strip: strip?.text)
                 Log.json("cut", ["file": cut.lastPathComponent, "seconds": round2(e.seconds),
@@ -237,6 +247,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         menu.addItem(m)
         matchItem = m
         menu.addItem(.separator())
+        let mt = NSMenuItem(title: "Make montage of today's clips", action: #selector(montageToday), keyEquivalent: "")
+        mt.target = self
+        menu.addItem(mt)
+        let mp = NSMenuItem(title: "Make montage from clips…", action: #selector(montagePick), keyEquivalent: "")
+        mp.target = self
+        menu.addItem(mp)
+        let vt = NSMenuItem(title: "Also make a 9:16 version", action: #selector(toggleVertical), keyEquivalent: "")
+        vt.target = self
+        vt.state = vertical ? .on : .off
+        menu.addItem(vt)
+        verticalItem = vt
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -250,6 +272,51 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     }
     @objc private func pickAgain() {
         if opts.picker { SCContentSharingPicker.shared.present() } else { presentPicker() }
+    }
+    @objc private func montageToday() { makeMontage(Montage.todaysClips()) }
+    @objc private func montagePick() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = ClipWriter.folder
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.message = "Pick the clips for the montage (they go in name order, which is time order)"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK else { return }
+        makeMontage(panel.urls.sorted { $0.lastPathComponent < $1.lastPathComponent })
+    }
+    @objc private func toggleVertical() {
+        vertical.toggle()
+        verticalItem?.state = vertical ? .on : .off
+    }
+    private func makeMontage(_ clips: [URL]) {
+        guard !clips.isEmpty else { flash("No clips today"); return }
+        guard montageTask == nil else { flash("Montage already cooking"); return }
+        let vertical = self.vertical
+        flash("Montage…")
+        montageTask = Task.detached {
+            var made: [URL] = []
+            do {
+                for v in vertical ? [false, true] : [false] {
+                    var o = Montage.Options()
+                    o.vertical = v
+                    let url = ClipWriter.newURL(label: v ? "montage-9x16" : "montage")
+                    let r = try await Montage.make(clips: clips, to: url, opts: o)
+                    made.append(url)
+                    Log.json("montage", ["file": url.lastPathComponent, "clips": r.clips, "seconds": round1(r.seconds),
+                                         "MB": round2(Double(r.bytes) / 1_048_576), "ms": round1(r.ms)])
+                }
+            } catch {
+                Log.json("montage-failed", ["error": error.localizedDescription])
+            }
+            await MainActor.run {
+                self.montageTask = nil
+                if made.isEmpty { self.flash("Montage failed") } else {
+                    NSSound(named: "Glass")?.play()
+                    self.flash("Montage ✓")
+                    NSWorkspace.shared.activateFileViewerSelecting(made)
+                }
+            }
+        }
     }
     @objc private func openLast() {
         if let lastClip { NSWorkspace.shared.open(lastClip) } else { openFolder() }
