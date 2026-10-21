@@ -33,7 +33,9 @@ function LobbyBoard({ state, clock, teams, compact, pal }: BoardProps<BattleRoya
       <View>
         <LineRow pal={pal} head wide={1} right widths={LOBBY_COLUMNS} cells={['#', 'Team', 'Won', 'Fin.', 'Pts']} />
         {lobbyRows(state, teams, compact).map(({ team: x, ours }) => (
-          <LineRow key={x.id} pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total wide={1} right widths={LOBBY_COLUMNS} bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+          <View key={x.id} style={ours && pal.wash ? { backgroundColor: pal.wash, borderRadius: 6 } : undefined}>
+            <LineRow pal={ours ? { ...pal, muted: pal.ours, text: pal.ours } : pal} total wide={1} right widths={LOBBY_COLUMNS} bold={[false, true]} cells={[place(x.place), x.name, String(x.wins), String(x.kills), points(x.points)]} />
+          </View>
         ))}
       </View>
       {!compact && state.games.length > 0 ? (

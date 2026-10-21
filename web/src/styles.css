@@ -332,7 +332,7 @@ a.photo-credit:hover { text-decoration: underline; }
 .backdrop { position: absolute; left: var(--bd-x, 50%); top: var(--bd-y, 50%); width: calc(var(--bd-size, 1.4) * min(100%, 320px)); height: auto; aspect-ratio: 1; transform: translate(-50%, -50%) rotate(var(--bd-turn, 0deg)); opacity: 0.18; pointer-events: none; }
 .backdrop * { vector-effect: non-scaling-stroke; }
 .result-card > :not(.backdrop), .coming-card > :not(.backdrop), .board.drawn > :not(.backdrop) { position: relative; }
-.board .backdrop { color: var(--sport-on-ink); }
+.board .backdrop { color: var(--sport); opacity: 0.2; }
 .board.drawn { position: relative; overflow: hidden; }
 
 /* A finished game of the fan's: a block of its sport's colour, one big word, the player and their line. */
@@ -600,8 +600,9 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .line-stats .tiny { font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
 
 /* ---------------------------------------------------------------- live scoreboard */
-/* Live is an ink scorebug, whatever the sport; the player's own line sits on their sport colour. */
-.board { --text: #ffffff; --muted: #a9abb0; --line: rgba(255, 255, 255, 0.16); --raised: #26272a; display: flex; flex-direction: column; gap: 16px; padding: 18px; border-radius: var(--radius-card); background: #0d0d0d; color: var(--text); }
+/* Live is a white scorebug, whatever the sport, its red Live badge saying so; the player's own line sits on their
+   sport colour. Its sport's board (sports/) draws in the page's own tokens, as on Also live's outlined cards. */
+.board { display: flex; flex-direction: column; gap: 16px; padding: 18px; border-radius: var(--radius-card); background: var(--surface); color: var(--text); }
 .board.compact { gap: 12px; }
 /* A board that opens a page as a whole (BoardLink): the link under it and what's under it, the board's own
    controls (.over-link) over the link. */
@@ -610,11 +611,11 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .board-link .over-link { position: relative; z-index: 2; }
 .board .score { font-size: 52px; white-space: nowrap; }
 .board.compact .score { font-size: 40px; }
-.board .clock { font-size: 22px; color: #ff6b5f; }
-.board .live-note { color: #ff8a80; font-size: 13px; font-weight: 700; }
+.board .clock { font-size: 22px; color: var(--live-text); }
+.board .live-note { color: var(--live-text); font-size: 13px; font-weight: 700; }
 /* Today's board: the player's line in one row under the score, and the game's newest moment. */
 .live-line { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
-.live-line .who { font-size: 20px; color: var(--sport-on-ink); }
+.live-line .who { font-size: 20px; }
 .live-line .what { font-size: 13px; font-weight: 700; }
 .live-line .missed { font-size: 12px; font-weight: 600; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .live-line .missed b { color: var(--text); font-weight: 800; }
@@ -628,7 +629,7 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 /* Key moments under a structured live score (goals, cards). */
 .moments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .moments li { display: flex; align-items: baseline; gap: 10px; }
-.moment-kind { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: 6px; background: #26272a; color: #a9abb0; flex-shrink: 0; }
+.moment-kind { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: 6px; background: var(--raised); color: var(--muted); flex-shrink: 0; }
 .moment-kind.goal { background: var(--live); color: #fff; }
 .moment-kind.yellow { background: #f2c94c; color: #1a1400; }
 .moment-kind.red { background: #ef5a5a; color: #1a0000; }
