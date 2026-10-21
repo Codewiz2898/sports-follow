@@ -142,7 +142,8 @@ class LiveGame:
     fixtures: list[str] = field(default_factory=list)
     # How big the source rates the game's event, where it rates them (an esports tournament's tier): a bigger
     # tier's games come first in Live now, before the most followed and the best known (live.offer). Compared
-    # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated.
+    # across a sport's sources: 3 a world event, 2 a top league, 1 a smaller one; 0 unrated, or one standing in
+    # while nothing bigger is on (an esports game's tier C series).
     tier: int = 0
     # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
     sport: str = ""
@@ -388,7 +389,8 @@ class Adapter:
     # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
     # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
     # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
-    # out the small ones and set each game's tier, so the biggest come first.
+    # out the small ones and set each game's tier, so the biggest come first. A source may let the next ones
+    # down stand in, at tier 0, while nothing bigger is on (esports does, a game at a time).
     #
     # Optional, for a source that can read one game by its id in a request or two:
     #   def match(self, source_id: str) -> LiveGame | None

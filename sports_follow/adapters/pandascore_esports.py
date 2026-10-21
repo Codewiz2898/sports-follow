@@ -50,8 +50,12 @@ _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "
 # first. PandaScore rates a tournament S > A > B > C > D, or "unranked", by its organiser, teams and prize
 # pool: S is Worlds, The International, a Major; A a top regional league (LCK, VCT EMEA); B a smaller
 # region's league or the qualifier for an S event (CBLOL, The International's). Most closed qualifiers are
-# C or D, a second division (ESEA Advanced) D: left out, so on a quiet day esports shows nothing.
+# C or D, a second division (ESEA Advanced) D.
 LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
+# And the tier whose series stand in for them in a game none of whose series on now is of those (live_now): a
+# closed qualifier, a smaller league (EPL Masters), so a game with a series on isn't empty for days between
+# its big events. A LiveGame tier of 0, below every rated one. D and unranked never.
+STAND_IN_TIER = "c"
 # And whose series are among the big results and big games coming up (schedule): world events and top leagues.
 SCHEDULE_TIERS = ("s", "a")
 DOTA_WAIT = 6 * 3600  # how long after a Dota 2 series ends its match page waits for OpenDota to parse its maps
@@ -665,8 +669,9 @@ class PandascoreEsports(Adapter):
 
     def live_now(self) -> list[LiveGame]:
         """The big series on now in the plan's games (matches/running, one request): those of a tournament in
-        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order. Its teams, not its players: a
-        match names no players, and the registry knows the teams' pros."""
+        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order; in a game with none of those on,
+        its STAND_IN_TIER series. Its teams, not its players: a match names no players, and the registry knows
+        the teams' pros."""
         games = game_ids(self._on())
         if not games:
             return []
@@ -675,14 +680,17 @@ class PandascoreEsports(Adapter):
         rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
         rows = rows if isinstance(rows, list) else []
         by_id = {str(m.get("id")): m for m in rows}
-        out = []
+        out, stand_ins = [], []
         for f in parse_fixtures(rows):
             m = by_id[f.source_id]
-            tier = LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0)  # "unranked", or none yet: 0
+            rated = (m.get("tournament") or {}).get("tier") or ""  # "unranked", or none yet
             snap = parse_match(m)
-            if tier and snap.status == "live":
-                out.append(LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
-                                    teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=tier, sport=f.sport))
+            if snap.status == "live" and (rated in LIVE_TIERS or rated == STAND_IN_TIER):
+                game = LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap,
+                                teams=f.team_names, league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get(rated, 0), sport=f.sport)
+                (out if game.tier else stand_ins).append(game)
+        big = {g.sport for g in out}
+        out += [g for g in stand_ins if g.sport not in big]
         return sorted(out, key=lambda g: -g.tier)
 
     def match(self, source_id: str) -> LiveGame | None:

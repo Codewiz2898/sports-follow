@@ -553,7 +553,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `sports_follow/live.py`; where a game's id isn't the fixture id a player's card has it under, its
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
-  esports does by PandaScore's tournament tiers),
+  esports does by PandaScore's tournament tiers, letting a game's tier C series stand in while none bigger is on),
   `locator` for following a game by itself (the locator its live polls take, from a fixture's id alone, so
   a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),
