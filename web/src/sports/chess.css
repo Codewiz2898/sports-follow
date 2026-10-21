@@ -1,14 +1,31 @@
-/* Chess: a board drawn from the FEN. */
-.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); width: min(100%, 280px); aspect-ratio: 1; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
-.chessboard.sm { width: min(100%, 176px); }
+/* Chess: a board drawn from the FEN, --board wide, with the evaluation bar's room beside it when there is one. */
+.chess-play { --board: 280px; --bar: 0px; display: flex; flex-wrap: wrap; gap: 4px 6px; width: min(100%, calc(var(--board) + var(--bar))); flex-shrink: 0; }
+.chess-play.sm { --board: 176px; }
+.chess-play.eval { --bar: 28px; }
+.chess-play.sm.eval { --bar: 26px; }
+.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); flex: 1; min-width: 0; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
 .chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
-.chessboard.sm .sq { font-size: min(5vw, 19px); }
+.chess-play.sm .sq { font-size: min(5vw, 19px); }
 .chessboard .light { background: #ece6d6; }
 .chessboard .dark { background: #8b6fd6; }
 .chessboard .moved.light { background: #f3e38a; }
 .chessboard .moved.dark { background: #c9b34a; }
 .chessboard .piece.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
 .chessboard .piece.b { color: #141414; }
+/* The evaluation bar: White's share in white from White's end (the bottom, or the top on a turned board), the
+   rest Black's, a mark at level, and the score at the end of the side ahead. The share eases to each new one. */
+.chess-eval { position: relative; display: flex; flex-direction: column-reverse; width: 22px; border-radius: 6px; overflow: hidden; background: #141414; box-shadow: 0 0 0 1px var(--line); }
+.chess-eval.flip { flex-direction: column; }
+.chess-play.sm .chess-eval { width: 20px; }
+.chess-eval .fill { flex-shrink: 0; background: #f4f1e8; transition: height 0.9s ease-in-out; }
+.chess-eval::after { content: ''; position: absolute; left: 0; right: 0; top: calc(50% - 0.5px); height: 1px; background: rgba(128, 128, 128, 0.6); }
+.chess-eval .score { position: absolute; left: 0; right: 0; bottom: 5px; text-align: center; font-size: 11px; letter-spacing: 0; }
+.chess-play.sm .chess-eval .score { font-size: 10px; }
+.chess-eval .score.top { bottom: auto; top: 5px; }
+.chess-eval .score.white { color: #141414; }
+.chess-eval .score.black { color: #f4f1e8; }
+.chess-depth { flex-basis: 100%; order: 1; }  /* a line of its own, under the bar and the board */
+@media (prefers-reduced-motion: reduce) { .chess-eval .fill { transition: none; } }
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 /* Switch sides: an icon button on the clocks' raised colour, on the ink board (Today) and the sport's band (the
@@ -17,9 +34,9 @@
 .chess .btn.icon.chess-turn:hover { background: color-mix(in srgb, var(--raised), var(--text) 14%); }
 /* On Today's outlined card for a game the fan doesn't follow (Also live): a small board with the players beside
    it, by name and clock, so the card stays near its row's height. */
-.live-other .chessboard.sm { width: 100px; }
-.live-other .chessboard.sm .sq { font-size: 11px; }
-.live-other .chess .tiny, .live-other .chess-turn { display: none; }
+.live-other .chess-play.sm { --board: 100px; --bar: 0px; }
+.live-other .chessboard .sq { font-size: 11px; }
+.live-other .chess .tiny, .live-other .chess-turn, .live-other .chess-eval { display: none; }
 .live-other .chess-clock { font-size: 18px; padding: 2px 6px; }
 /* A finished game's moves on its match page, in pairs, as many columns as fit. */
 .chess-moves { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }

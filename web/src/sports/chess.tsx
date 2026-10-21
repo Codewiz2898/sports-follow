@@ -1,12 +1,34 @@
 import { useState, type MouseEvent } from 'react'
 import { SwapIcon } from '../components/Icons'
 import './chess.css'
-import { chess as facts, chessMiddle, followedSide, movesAbout, PIECES, position, type ChessColour, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, evalScore, followedSide, movesAbout, PIECES, position, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
-/** The board from the position's FEN, with the last move marked: from the followed player's side (from White's
- * with no one side of the fan's, followedSide), until the fan turns it, which holds while the page is open. */
+/** An evaluation bar: White's share (whiteShare) filling it from White's end, the bottom unless the board is
+ * turned (flip), and the score (evalScore) at the end of the side ahead. Live, it's the server's evaluation, the
+ * one the swing alerts go by; it draws any other the same. A big board says under it how deep the engine looked,
+ * a small one in its title. */
+function EvalBar({ ev, flip, compact }: { ev: ChessEval; flip: boolean; compact?: boolean }) {
+  const share = whiteShare(ev)
+  const score = evalScore(ev)
+  const white = share >= 50  // White ahead, or level
+  const depth = ev.depth ? `depth ${ev.depth}` : null
+  const words = `Engine evaluation ${score}, from White's side${depth ? `, ${depth}` : ''}`
+  return (
+    <>
+      <div className={`chess-eval${flip ? ' flip' : ''}`} role="img" aria-label={words} title={words}>
+        <span className="fill" style={{ height: `${share}%` }} />
+        <span className={`num score ${white ? 'white' : 'black'}${white === flip ? ' top' : ''}`}>{score}</span>
+      </div>
+      {!compact && depth && <span className="tiny muted chess-depth">Engine · {depth}</span>}
+    </>
+  )
+}
+
+/** The board from the position's FEN, with the last move marked and the engine's evaluation beside it when there
+ * is one: from the followed player's side (from White's with no one side of the fan's, followedSide), until the
+ * fan turns it, which holds while the page is open. */
 function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessState>) {
   const [side, setSide] = useState<ChessColour | null>(null)
   if (!state.white || !state.black) return null
@@ -29,12 +51,15 @@ function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessStat
   return (
     <div className="chess" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
       {ranks.length === 8 && (
-        <div className={`chessboard${compact ? ' sm' : ''}`} role="img" aria-label={`Position after move ${state.move ?? ''}`}>
-          {ranks.flat().map((sq) => (
-            <span key={sq.name} className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}`}>
-              {sq.piece && <span className={`piece ${sq.piece === sq.piece.toUpperCase() ? 'w' : 'b'}`}>{`${PIECES[sq.piece.toLowerCase()]}︎`}</span>}
-            </span>
-          ))}
+        <div className={`chess-play${compact ? ' sm' : ''}${state.eval ? ' eval' : ''}`}>
+          {state.eval && <EvalBar ev={state.eval} flip={flip} compact={compact} />}
+          <div className="chessboard" role="img" aria-label={`Position after move ${state.move ?? ''}`}>
+            {ranks.flat().map((sq) => (
+              <span key={sq.name} className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}`}>
+                {sq.piece && <span className={`piece ${sq.piece === sq.piece.toUpperCase() ? 'w' : 'b'}`}>{`${PIECES[sq.piece.toLowerCase()]}︎`}</span>}
+              </span>
+            ))}
+          </div>
         </div>
       )}
       {/* Compact (Today), the players can sit narrower beside a small board: Also live's card fits both in a row. */}

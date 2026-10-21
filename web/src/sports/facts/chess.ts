@@ -14,8 +14,13 @@ export interface ChessState {
   move?: number | null
   result?: string | null
   match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
+  eval?: ChessEval | null  // only while a follower wants to hear about swings: the engine looks at no other game
 }
 export type ChessColour = 'white' | 'black'
+// The engine's latest look at the position (sports_follow/engine.py, settled by the server's Chess.settle), from
+// White's side: in centipawns, or the moves to a forced mate (plus, White mates; minus, Black does), how deep it
+// looked, and the position it looked at; with the band the swing alerts go by (band, raw, told) and when.
+export interface ChessEval { cp?: number | null; mate?: number | null; depth?: number | null; fen?: string; at?: number; move?: number | null; band?: number; raw?: number; told?: number }
 // A finished game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"), its opening, how it
 // ended where that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
 export interface ChessPage { moves?: string[]; opening?: string | null; ending?: string | null; game?: number | null }
@@ -49,6 +54,25 @@ export function position(state: ChessState, live: LiveStatus, flip = followedSid
     return { name: `${'abcdefgh'[file]}${8 - r}`, piece, dark: (r + file) % 2 === 1 }
   }))
   return { ranks, flip, moved }
+}
+
+/** White's share of an evaluation bar, 0 to 100: their winning chances in Lichess's model (the one the server's
+ * bands are drawn on, sports/chess.py), from 2 / (1 + e^(-0.00368208 * cp)) - 1, with centipawns past ±1000
+ * counted as 1000 as Lichess does. A forced mate is the whole bar for the side that mates; mate on the board
+ * (mate 0), for the side not to move. */
+export function whiteShare(ev: ChessEval): number {
+  if (ev.mate != null) return (ev.mate === 0 ? ev.fen?.split(' ')[1] === 'b' : ev.mate > 0) ? 100 : 0
+  const cp = Math.max(-1000, Math.min(1000, ev.cp ?? 0))
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1)
+}
+
+/** An evaluation's score from White's side, in pawns as Lichess gives it: "+1.4", "−0.6", "0.0"; past ten, in
+ * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates. */
+export function evalScore(ev: ChessEval): string {
+  if (ev.mate != null) return `${whiteShare(ev) < 50 ? '−' : ''}M${Math.abs(ev.mate)}`
+  const pawns = Math.round((ev.cp ?? 0) / 10) / 10
+  if (pawns === 0) return '0.0'
+  return `${pawns > 0 ? '+' : '−'}${Math.abs(pawns) >= 10 ? Math.round(Math.abs(pawns)) : Math.abs(pawns).toFixed(1)}`
 }
 
 /** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */
