@@ -287,7 +287,7 @@ export function GameBoard({ live, compact, teams, lines, explore }: { live: Live
 }
 
 /**
- * The followed player's line on Today's board, in one row: their name in the sport's colour, then their
+ * The followed player's line on Today's board, in one row: their name in ink, then their
  * numbers (the headline first, "67* (71)", without the stats it already says). Under it, the newest thing
  * that happened to the fan's players in this game, which the fan missed if it came after they last looked
  * at their alerts.

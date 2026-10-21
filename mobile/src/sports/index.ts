@@ -30,4 +30,4 @@ export function matchPartFor(key: string): MatchPart | undefined {
   return VIEWS.find((v) => v.key === key)?.Match
 }
 
-export { INK, MomentKind, onInk, onPaper, onSport, type MatchProps, type Palette } from './board'
+export { INK, MomentKind, onBoard, onPaper, onSport, type MatchProps, type Palette } from './board'

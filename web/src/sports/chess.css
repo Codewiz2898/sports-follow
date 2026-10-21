@@ -61,7 +61,7 @@
 .chess-ghost.b { color: #141414; }
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
-/* Switch sides: an icon button on the clocks' raised colour, on the ink board (Today) and the sport's band (the
+/* Switch sides: an icon button on the clocks' raised colour, on the white board (Today) and the sport's band (the
    match page) alike. */
 .chess .btn.icon.chess-turn { width: 36px; height: 36px; background: var(--raised); color: var(--text); }
 .chess .btn.icon.chess-turn:hover { background: color-mix(in srgb, var(--raised), var(--text) 14%); }

@@ -1,5 +1,5 @@
 // What a sport's live board is drawn from and in (the web's BoardProps, web/src/sports/view.ts), and the bits
-// every board shares. A board is drawn on ink (the scoreboard on Today and a player's page, .board), on paper
+// every board shares. A board is drawn on white (the scoreboard on Today and a player's page, .board), on paper
 // (a game none of the fan's players are in, .live-other) or on its sport's colour (a match page's band,
 // .match-board): the palette says which.
 
@@ -11,28 +11,31 @@ import { colour, font, num, t } from '../theme'
 import { alpha } from '../ui'
 
 export interface Palette {
-  ground: string // what the board sits on: the scoreboard's ink, a card's paper, the sport's colour
+  ground: string // what the board sits on: the scoreboard's white, a card's paper, the sport's colour
   text: string
   muted: string
   raised: string
   line: string
   clock: string // the clock, in red
   note: string // a live note ("batting", the game's state), in red
-  ours: string // the followed player's team in a lobby: the sport's colour as text on ink
+  ours: string // the followed player's team in a lobby: its words
+  wash?: string // and its row's ground, where the sport's colour can't be the words (on white: a faint wash of it)
   score: number // the big score's size
   paper: boolean // on a paper card (a game none of the fan's players are in): boards draw smaller there
   title?: number // the sides' names' size, where it isn't a title's 15px
   clockSize?: number // the clock's, where it isn't 22px
 }
 
-/** On the ink scoreboard (.board): white type; 52px score, 40px compact. */
-export function onInk(tone: Tone, compact?: boolean): Palette {
-  return { ground: colour.text, text: '#FFFFFF', muted: colour.inkMuted, raised: colour.inkRaised, line: colour.inkLine, clock: '#FF6B5F', note: '#FF8A80', ours: tone.ink, score: compact ? 40 : 52, paper: false }
+/** On the white scoreboard (.board): ink type, the clock in the page's red, the followed team's row washed in its
+ * sport's colour; 52px score, 40px compact. */
+export function onBoard(tone: Tone, compact?: boolean): Palette {
+  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: colour.text, wash: alpha(tone.sport, 0.18), score: compact ? 40 : 52, paper: false }
 }
 
-/** On a paper card (.live-other): ink type, the clock in the page's red; a 40px score. */
+/** On a paper card (.live-other): ink type, the clock in the page's red, the followed team's row washed in its sport's
+ * colour (as on the white scoreboard); a 40px score. */
 export function onPaper(tone: Tone): Palette {
-  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: tone.ink, score: 40, paper: true }
+  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: colour.text, wash: alpha(tone.sport, 0.18), score: 40, paper: true }
 }
 
 /** On a match page's band (.match-band .match-board): everything in the ink that reads on the sport's colour,
@@ -157,7 +160,7 @@ const KIND: Record<string, { bg: string; fg: string }> = {
  * through, anything else quiet. */
 export function MomentKind({ kind, label }: { kind: string; label: string }) {
   const k = kind.toLowerCase()
-  const look = KIND[k] ?? { bg: colour.inkRaised, fg: colour.inkMuted }
+  const look = KIND[k] ?? { bg: colour.raised, fg: colour.muted }
   return (
     <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: look.bg, flexShrink: 0 }}>
       <Text style={[s.kind, { color: look.fg }, k === 'disallowed' && { textDecorationLine: 'line-through' }]}>{label}</Text>

@@ -8,7 +8,7 @@
 .linescore.lobby td, .linescore.lobby th { text-align: right; }
 .linescore.lobby td:first-child, .linescore.lobby th:first-child, .linescore.lobby td.who, .linescore.lobby th:nth-child(2) { text-align: left; }
 .linescore.lobby td.who { width: 100%; color: var(--text); overflow-wrap: anywhere; }
-.linescore.lobby tr.ours td { color: var(--sport-on-ink); font-weight: 800; }
+.linescore.lobby tr.ours td { color: var(--text); font-weight: 800; background: color-mix(in srgb, var(--sport) 18%, transparent); }  /* the fan's team: a wash of its sport's colour, ink words */
 
 /* A finished map in depth (a Dota 2 map from OpenDota): the first team's side is up and wears the sport's
    colour; the second's is down and ink. The fan's players are tinted with the sport's colour. */

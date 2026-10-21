@@ -16,7 +16,7 @@ import { Backdrop } from './art'
 import { toneOf, useSports, useTone, type Tone } from './catalog'
 import { useNow } from './clock'
 import type { RailCard } from './rail'
-import { boardFor, MomentKind, onInk, onPaper, type Palette } from './sports'
+import { boardFor, MomentKind, onBoard, onPaper, type Palette } from './sports'
 import { colour, font, GUTTER, num, RADIUS_CARD, RADIUS_TILE, t } from './theme'
 import { alpha, breakable, Card as Surface, Dsp, Eyebrow, LiveBadge, Pill, Spinner, WL } from './ui'
 
@@ -231,7 +231,7 @@ export function GameBoard({ live, compact, teams, lines, explore, pal }: { live:
 }
 
 /**
- * The live scoreboard (.board): an ink scorebug whatever the sport, drawn by the sport's board. Today's is
+ * The live scoreboard (.board): a white scorebug whatever the sport, drawn by the sport's board. Today's is
  * compact: with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is
  * one row with the game's `latest` moment under it; a player's page has their line on their sport's colour,
  * and the game's moments. With no `playerName` (a game on a campaign page), the board alone.
@@ -240,35 +240,35 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
   const now = useNow()
   const sports = useSports()
   const tone = toneOf(sports, sport ?? live.state?.kind)
-  const pal = onInk(tone, compact)
+  const pal = onBoard(tone, compact)
   const url = safeHref(live.source_url)
   return (
     <View style={[b.board, compact && { gap: 12 }]}>
-      {seed ? <Backdrop sport={tone.key} seed={seed} colour={tone.ink} /> : null}
+      {seed ? <Backdrop sport={tone.key} seed={seed} colour={tone.sport} opacity={0.2} /> : null}
       <View style={b.row}>
         <LiveBadge />
-        {live.event ? <Eyebrow color={colour.inkMuted} style={{ textAlign: 'right', flexShrink: 1 }}>{live.event}</Eyebrow> : null}
+        {live.event ? <Eyebrow color={colour.muted} style={{ textAlign: 'right', flexShrink: 1 }}>{live.event}</Eyebrow> : null}
       </View>
       <GameBoard live={live} compact={compact} teams={teams} lines={lines} pal={pal} />
-      {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
+      {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
       {!compact && live.moments?.length ? (
         <View style={{ gap: 8 }}>
           {live.moments.slice(0, 5).map((m, i) => (
             <View key={`${m.clock}-${i}`} style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
-              <Text style={[num(17), { minWidth: 44, color: '#FFFFFF' }]}>{m.clock}</Text>
+              <Text style={[num(17), { minWidth: 44, color: colour.text }]}>{m.clock}</Text>
               <MomentKind kind={m.kind} label={m.kind[0] + m.kind.slice(1).toLowerCase()} />
-              <Text style={[t.small, { color: '#FFFFFF', flex: 1 }]}>{m.text}</Text>
+              <Text style={[t.small, { color: colour.text, flex: 1 }]}>{m.text}</Text>
             </View>
           ))}
         </View>
       ) : null}
       <View style={b.row}>
-        <Text style={[t.tiny, { color: colour.inkMuted, flexShrink: 1 }]}>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</Text>
+        <Text style={[t.tiny, { color: colour.muted, flexShrink: 1 }]}>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</Text>
         {/* A compact board is a tap on its game already (Today's open its match page). */}
         {!compact && (live.match || url) ? (
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            {live.match ? <Text onPress={openMatch(live.match)} accessibilityRole="link" style={[t.tiny, t.link, { color: '#FFFFFF' }]}>The match</Text> : null}
-            {url ? <Text onPress={() => Linking.openURL(url)} style={[t.tiny, t.link, { color: '#FFFFFF' }]}>Open source</Text> : null}
+            {live.match ? <Text onPress={openMatch(live.match)} accessibilityRole="link" style={[t.tiny, t.link, { color: colour.text }]}>The match</Text> : null}
+            {url ? <Text onPress={() => Linking.openURL(url)} style={[t.tiny, t.link, { color: colour.text }]}>Open source</Text> : null}
           </View>
         ) : null}
       </View>
@@ -278,20 +278,20 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
 
 /** The followed player's line on Today's board, in one row (lines.liveLine), and under it the newest thing
  * that happened to the fan's players in this game, which the fan missed if it came after they last looked. */
-function LiveLine({ live, playerName, latest, tone }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null; tone: Tone }) {
+function LiveLine({ live, playerName, latest }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null }) {
   const { numbers, why } = liveLine(live)
   if (!numbers.length && !why && !latest) return null
   return (
     <View style={b.liveLine}>
       {numbers.length || why ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 8, rowGap: 2 }}>
-          <Dsp size={20} color={tone.ink}>{shortName(playerName)}</Dsp>
-          <Text style={{ fontFamily: font[700], fontSize: 13, lineHeight: 18, color: '#FFFFFF', flexShrink: 1 }}>{numbers.length ? numbers.join(' · ') : why}</Text>
+          <Dsp size={20} color={colour.text}>{shortName(playerName)}</Dsp>
+          <Text style={{ fontFamily: font[700], fontSize: 13, lineHeight: 18, color: colour.text, flexShrink: 1 }}>{numbers.length ? numbers.join(' · ') : why}</Text>
         </View>
       ) : null}
       {latest ? (
-        <Text style={{ fontFamily: font[600], fontSize: 12, lineHeight: 17, color: colour.inkMuted }} numberOfLines={2}>
-          <Text style={{ fontFamily: font[800], color: '#FFFFFF' }}>{latest.missed ? 'You missed' : 'Latest'}</Text> {latest.text}
+        <Text style={{ fontFamily: font[600], fontSize: 12, lineHeight: 17, color: colour.muted }} numberOfLines={2}>
+          <Text style={{ fontFamily: font[800], color: colour.text }}>{latest.missed ? 'You missed' : 'Latest'}</Text> {latest.text}
         </Text>
       ) : null}
     </View>
@@ -301,7 +301,7 @@ function LiveLine({ live, playerName, latest, tone }: { live: LiveStatus; player
 /** The followed player's own numbers in the game, on their sport's colour (lines.playerLine). */
 function PlayerLine({ live, playerName, tone }: { live: LiveStatus; playerName: string; tone: Tone }) {
   const line = playerLine(live)
-  if ('none' in line) return line.none ? <Text style={[t.small, { color: colour.inkMuted }]}>{playerName} {line.none}.</Text> : null
+  if ('none' in line) return line.none ? <Text style={[t.small, { color: colour.muted }]}>{playerName} {line.none}.</Text> : null
   return (
     <View style={[b.playerLine, { backgroundColor: tone.sport }]}>
       <View style={{ gap: 4 }}>
@@ -542,8 +542,8 @@ export const b = StyleSheet.create({
   tileSport: { fontFamily: font[800], fontSize: 10, letterSpacing: 0.9, textTransform: 'uppercase', paddingRight: 60 },
   tileStatus: { fontFamily: font[800], fontSize: 12, lineHeight: 15.6 },
   corner: { position: 'absolute', top: 12, right: 12 },
-  board: { overflow: 'hidden', gap: 16, padding: 18, borderRadius: RADIUS_CARD, backgroundColor: '#0D0D0D' },
-  liveLine: { gap: 4, paddingTop: 10, borderTopWidth: 1, borderTopColor: colour.inkLine },
+  board: { overflow: 'hidden', gap: 16, padding: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.surface },
+  liveLine: { gap: 4, paddingTop: 10, borderTopWidth: 1, borderTopColor: colour.line },
   playerLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 16, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 16 },
   other: { overflow: 'hidden', gap: 12, width: 318, flexGrow: 1, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.surface, borderWidth: 2, borderColor: colour.text },
   list: { paddingVertical: 4, paddingHorizontal: 16 },
