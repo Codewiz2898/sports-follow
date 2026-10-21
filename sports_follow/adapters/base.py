@@ -503,6 +503,11 @@ class VideoSource:
         None if it can't: a video the player can't play isn't served."""
         return None
 
+    def picture(self, video_id: str) -> str | None:
+        """The address of a still of one of its videos for the card to show before play is tapped (the Feed's
+        picture), one the source serves for every video; None: the card draws the title on the sport's colour."""
+        return None
+
     @classmethod
     def available(cls) -> bool:
         """Whether this build can run it: a source with a key needs its key."""
@@ -543,6 +548,7 @@ class Article:
     outlet: str  # the publisher, as the feed names itself ("BBC Sport")
     feed: str  # the feed it was listed in, as a sport lists it
     published: datetime | None = None
+    image: str | None = None  # the picture the feed attaches to the story (https), shown as the publisher serves it
 
 
 class NewsSource:

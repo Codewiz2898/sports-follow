@@ -15,18 +15,27 @@ PER_MOMENT around each moment; older ones still being watched are "the ones ever
 reading them fails, a feed is the card's news alone (never emptier than the News tab was), and Today's rail,
 which takes no news (the Wire has it), is empty.
 
-The web app draws it (web/src/components/Feed.tsx): the Feed tab, Overview's "From the fans" and Today's
-"From your players". A fan's "…" sheet sends feedback (`feedback`), kept per fan as follows and mutes are.
+The fan's own Feed (`page`, GET /api/me/feed/items) is every followed player's at once: newest day first (Today,
+Yesterday, This week, This month, Earlier, in the fan's own days), the ranking deciding within a day, and the
+players taking turns, so no two items in a row are about one player while another has one to show. It pages
+with a cursor that keeps the order it was read in, so a page loaded later carries on where the last one ended.
+
+The web app draws it (web/src/components/Feed.tsx): a player page's Feed tab and Overview's "From the fans", the
+Feed tab, and Today's "From your players" (the top two of the fan's Feed). A fan's "…" sheet sends feedback
+(`feedback`), kept per fan as follows and mutes are.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import json
 import logging
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -46,6 +55,8 @@ ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
 MONTH = timedelta(days=30)
+TODAY = "Today"
+YESTERDAY = "Yesterday"
 THIS_WEEK = "This week"
 THIS_MONTH = "This month"  # 8 to 30 days old
 EARLIER = "Earlier"
@@ -60,6 +71,10 @@ HALF_LIFE = timedelta(days=3)
 FADE_FLOOR = 0.45
 PER_MOMENT = 2  # videos on a page around one moment: the best two of the many edits of one goal
 NEWS_ON_CARD = 10  # stories a player page's news holds (news_for), newest first
+DAYS = (TODAY, YESTERDAY, THIS_WEEK, THIS_MONTH, EARLIER)  # the fan's Feed's groups, in order (page)
+PAGE = 20  # items on a page of the fan's Feed, unless the app asks for fewer (or up to MAX_PAGE)
+MAX_PAGE = 50
+CURSOR_AGE = timedelta(days=2)  # a cursor older than this carries on in today's order, from its last item
 
 
 class Video(BaseModel):
@@ -86,6 +101,10 @@ class Item(BaseModel):
     reason: str  # "Why this is here", one line, shown as it is
     summary: str | None = None  # a story's first lines: the feed's own short description, never the story
     outlets: int | None = None  # how many outlets ran the story, where the curator counted them (news.py)
+    # The card's picture, an https address loaded as it is: a video's still from its source (YouTube's thumbnail), a
+    # story's image from the publisher's feed. None (a story without one, every post): the card draws the headline
+    # on the sport's colour, and a post is words only.
+    picture: str | None = None
     video: Video | None = None
     post: Post | None = None
 
@@ -105,6 +124,43 @@ class Feed(BaseModel):
     count: int  # every item in groups and evergreen
 
 
+class Who(BaseModel):
+    """The player an item of the fan's Feed is about, as its card's head shows them."""
+
+    id: int
+    name: str
+    sport: str | None = None  # the sport's key, for its colour
+    photo: dict[str, Any] | None = None  # the card's photo (photos.py): url, credit, page, author, licence, crop
+
+
+class Circle(Who):
+    """A player across the top of the fan's Feed: a tap shows only theirs."""
+
+    count: int  # their items in the fan's Feed
+    newest: str | None = None  # when the newest of them came in (ISO): the app rings them while that's after they looked
+
+
+class Entry(BaseModel):
+    """An item of the fan's Feed, with who it's about and the day it's under."""
+
+    day: str  # one of DAYS: the group it's in
+    player: Who
+    item: Item
+    arrived: str | None = None  # when it came into the feed (ISO), else when it was published
+    moment: str | None = None  # the title of the player's moment it's about ("Kohli's hundred"), if it is
+    match: str | None = None  # that moment's game in the app ("/match/<source>/<id>"), when it had one
+
+
+class Page(BaseModel):
+    """A page of the fan's Feed (GET /api/me/feed/items)."""
+
+    items: list[Entry]
+    cursor: str | None  # the next page's (?cursor=…); None: this was the last
+    count: int  # every item in the feed, of the one player shown when one is
+    newest: str | None  # when the newest item of any player's came in: the app's Feed tab has a dot while it's newer than the fan's last look
+    players: list[Circle]  # every followed player with something in their feed, the latest to have something new first
+
+
 class Share(BaseModel):
     """Today's "From your players": a followed player's top video or post."""
 
@@ -122,6 +178,7 @@ class Candidate:
     score: float = 0.0  # the judge's: higher first within a group, then newer
     channel: str = ""  # a video's channel, by the source's id for it: a page holds one video from each
     pinned: bool = False  # an admin pinned it: at the top of This week (or of its moment), however old
+    arrived: datetime | None = None  # when it came into the feed: the judge's verdict on it (else its fetch)
 
 
 def item_id(url: str) -> str:
@@ -139,7 +196,7 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
         with db.begin_nested():
             rows = db.execute(
                 select(FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features, FeedCandidate.verdict,
-                       FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review)
+                       FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review, FeedCandidate.judged_at, FeedCandidate.fetched_at)
                 .where(FeedCandidate.player_id.in_(sorted(set(player_ids))), FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"))
             ).all()  # fmt: skip
         out: dict[int, list[Candidate]] = {}
@@ -151,7 +208,8 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                     c = _story(r, now)
                 else:
                     embed = source.embed(r.external_id) if source else None
-                    c = _video(embed, source.name if source else "", r, now)
+                    picture = source.picture(r.external_id) if source else None
+                    c = _video(embed, source.name if source else "", r, now, picture)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
@@ -170,7 +228,7 @@ def fade(published: datetime | None, now: datetime) -> float:
     return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
 
 
-def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> Candidate | None:
+def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
     fades only past its pin, so it leads however old, and is never put among the evergreen."""
     if not embed:
@@ -184,11 +242,12 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=str(kept.get("title") or "").strip() or "A video", url=r.url,
         source=str(kept.get("channel") or source), published_at=str(kept.get("published") or "") or None,
-        reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.",
+        reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.", picture=picture,
         video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views"))),
     )  # fmt: skip
     channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
-    return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned)
+    return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned,
+                     arrived=_arrived(r))  # fmt: skip
 
 
 def _faded(score: float, pinned: bool, published: datetime | None, now: datetime) -> float:
@@ -212,9 +271,21 @@ def _story(r: Any, now: datetime) -> Candidate | None:
         published_at=str(kept.get("published") or "") or None,
         reason=str(verdict.get("reason") or "").strip() or (f"A story from {outlet}." if outlet else "A story from a publisher this sport reads."),
         summary=str(kept.get("description") or "").strip() or None, outlets=outlets if outlets and outlets > 1 else None,
+        picture=_https(kept.get("image")),
     )  # fmt: skip
     faded = _faded((r.score or 0.0) - (rank.PIN if pinned else 0.0), pinned, published, now)
-    return Candidate(item=item, moment_id=r.moment_id, score=round(faded, 6), channel=str(kept.get("channel_id") or ""), pinned=pinned)
+    return Candidate(item=item, moment_id=r.moment_id, score=round(faded, 6), channel=str(kept.get("channel_id") or ""), pinned=pinned, arrived=_arrived(r))
+
+
+def _arrived(r: Any) -> datetime | None:
+    """When a row came into the feed: the judge's verdict on it, else its fetch."""
+    at = getattr(r, "judged_at", None) or getattr(r, "fetched_at", None)
+    return at if isinstance(at, datetime) else None
+
+
+def _https(url: Any) -> str | None:
+    """A picture's address the app may load: https, no spaces or quotes; else None."""
+    return url if isinstance(url, str) and len(url) <= 1000 and re.fullmatch(r"https://[^\s\"'<>]+", url) else None
 
 
 def news_for(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[dict[str, Any]]]:
@@ -294,6 +365,163 @@ def shares_for(db: Session, fan: str) -> list[Share]:
     return out
 
 
+def page(db: Session, fan: str, player: int | None = None, cursor: str | None = None, limit: int = PAGE, tz: int = 0, now: datetime | None = None) -> Page:
+    """A page of the fan's Feed: every followed player's (or the one player's, when the fan picked one), each as their
+    own Feed tab has them (the judge's kept items, else the card's news; what the fan hid left out; a channel's best
+    and PER_MOMENT around a moment), under the day each was published in the fan's days (tz: minutes east of UTC),
+    the newest day first. Within a day the ranking decides, but players take turns: the next item is the best of a
+    player other than the last one's, while there is one (a day carries on from the one before). A story two
+    players' feeds hold is there once, with the first of them (the picked player's, when one is), and hiding it from
+    either hides it. Read from rows only, never a model or a source.
+
+    cursor: where the last page ended (Page.cursor), which carries on after its last item in the order as it was at
+    the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
+    unserved), and only the rows that had come in by then (a newer one waits for the next first page). The judge's
+    scores aren't kept with it, so a rescore meanwhile (views growing) can still move an item across the page's end.
+    ValueError for a cursor this never made."""
+    real = now or datetime.now(timezone.utc)
+    at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, None)
+    limit = max(0, min(limit, MAX_PAGE))
+    everyone, circles = _everyone(db, fan, at, tz, player, cursor is not None)
+    ordered = [(e, m, gone) for e, m, gone in everyone if player is None or e.player.id == player]
+    if after is not None:
+        start = next((i + 1 for i, (e, _, _) in enumerate(ordered) if e.item.id == after), start)
+    chunk: list[tuple[Entry, int | None]] = []
+    end = start
+    while end < len(ordered) and len(chunk) < limit:
+        e, m, gone = ordered[end]
+        end += 1
+        if not gone:
+            chunk.append((e, m))
+    moments = _moments(db, {m for _, m in chunk if m is not None})
+    items = []
+    for e, m in chunk:
+        if m in moments:
+            e = e.model_copy(update={"moment": moments[m].title, "match": moments[m].url if moments[m].url.startswith("/match/") else None})
+        items.append(e)
+    more = any(not gone for _, _, gone in ordered[end:])
+    nxt = _write_cursor(at, end, items[-1].item.id) if items and more else None
+    newest = max((c.newest for c in circles if c.newest), default=None)
+    return Page(items=items, cursor=nxt, count=sum(not gone for _, _, gone in ordered), newest=newest, players=circles)
+
+
+def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None = None, then: bool = False) -> tuple[list[tuple[Entry, int | None, bool]], list[Circle]]:
+    """The fan's whole Feed in its order at now, each item with the moment it's about (by id) and whether the fan has
+    hidden it since (in its place, not served), and the players' circles. A story two players hold goes with the
+    picked player when there is one; then: the order as a page read at now had it, without what came in since."""
+    ids = list(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan).order_by(Follow.created_at)))
+    if not ids:
+        return [], []
+    cards = {pid: card for pid, card in db.execute(select(PlayerCard.player_id, PlayerCard.card).where(PlayerCard.player_id.in_(ids))).all()}
+    kept = judged(db, ids, now)
+    # By item, whichever player it was hidden from: a story two followed players hold is one card.
+    hidden: set[str] = set()  # by now: out of the order
+    since: set[str] = set()  # after now (a page read earlier): in their places, not served
+    for item, said in db.execute(select(FeedFeedback.item_id, FeedFeedback.created_at).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id.in_(ids))).all():
+        if said is None or said <= now:
+            hidden.add(item)
+        else:
+            since.add(item)
+    whose: dict[int, Who] = {}
+    days: dict[str, list[tuple[int, Candidate]]] = {d: [] for d in DAYS}
+    for pid in ids:
+        card = cards.get(pid)
+        if card is None:
+            continue
+        theirs = kept.get(pid, [])
+        candidates = [*theirs, *([] if any(c.item.kind == "news" for c in theirs) else _news(card))]
+        about = card.get("player") or {}
+        photo = about.get("photo")
+        whose[pid] = Who(id=pid, name=str(about.get("name") or ""), sport=about.get("sport") or None, photo=photo if isinstance(photo, dict) and photo.get("url") else None)
+        for c in _page(_unseen(candidates, hidden), now):
+            if then and c.arrived is not None and c.arrived > now:
+                continue
+            days[_day(c, now, tz)].append((pid, c))
+    entries: list[tuple[Entry, int | None, bool]] = []
+    counts: dict[int, int] = {}
+    newest: dict[int, datetime] = {}
+    seen: set[str] = set()
+    last = None
+    for day in DAYS:
+        ranked = []
+        for pid, c in sorted(days[day], key=lambda pc: (pc[0] != player, _newest(pc[1]))):  # a story two players hold: the first's
+            if c.item.id not in seen:
+                seen.add(c.item.id)
+                ranked.append((pid, c))
+        for pid, c in _turns(ranked, last):
+            last = pid
+            came = c.arrived or _when(c.item.published_at)
+            gone = c.item.id in since
+            if not gone:
+                # New for the dot and the ring only when it's of the last two days: a months-old video the sweep only
+                # now found (or a rejudge) comes in fresh, but under Earlier, where nothing new is.
+                if came and day in (TODAY, YESTERDAY) and (pid not in newest or came > newest[pid]):
+                    newest[pid] = came
+                counts[pid] = counts.get(pid, 0) + 1
+            entries.append((Entry(day=day, player=whose[pid], item=c.item, arrived=came.isoformat() if came else None), c.moment_id, gone))
+    order = {pid: i for i, pid in enumerate(ids)}
+    lead = sorted(counts, key=lambda pid: (-(newest[pid].timestamp() if pid in newest else 0), order[pid]))
+    circles = [Circle(**whose[pid].model_dump(), count=counts[pid], newest=newest[pid].isoformat() if pid in newest else None) for pid in lead]
+    return entries, circles
+
+
+def _turns(ranked: list[tuple[int, Candidate]], last: int | None) -> list[tuple[int, Candidate]]:
+    """Players taking turns down a ranked list: each next item is the best one left of a player other than the last
+    one's, and only when nobody else has one left, the same player's again."""
+    rest = list(ranked)
+    out = []
+    while rest:
+        i = next((k for k, (pid, _) in enumerate(rest) if pid != last), 0)
+        last, c = rest.pop(i)
+        out.append((last, c))
+    return out
+
+
+def _day(c: Candidate, now: datetime, tz: int) -> str:
+    """The day group of the fan's Feed an item is in, by the day it was published where the fan is (tz: minutes east
+    of UTC; a story known only by its day is under that day): Today (or later), Yesterday, This week (up to six days
+    ago, and a pinned one however old), This month (up to 30), else Earlier, and an undated one Earlier."""
+    published = c.item.published_at
+    at = _when(published)
+    if at is None or published is None:
+        return THIS_WEEK if c.pinned else EARLIER
+    local = timezone(timedelta(minutes=tz))
+    on = date.fromisoformat(published[:10]) if len(published) == 10 else at.astimezone(local).date()
+    back = (now.astimezone(local).date() - on).days
+    if back <= 0:
+        return TODAY
+    if back == 1:
+        return YESTERDAY
+    if back < 7 or c.pinned:
+        return THIS_WEEK
+    return THIS_MONTH if back <= 30 else EARLIER
+
+
+def _write_cursor(at: datetime, offset: int, last: str) -> str:
+    """A next page's cursor: the time the feed was put in order at, how many items came before, and the last one."""
+    raw = json.dumps([int(at.timestamp()), offset, last], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, str | None]:
+    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and last item; ValueError
+    for one this never made."""
+    try:
+        raw = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("That isn't a page of the feed.") from exc
+    if not (isinstance(raw, list) and len(raw) == 3 and all(isinstance(v, int) and not isinstance(v, bool) for v in raw[:2])
+            and isinstance(raw[2], str) and ITEM_ID.fullmatch(raw[2]) and 0 <= raw[1] <= 100_000):  # fmt: skip
+        raise ValueError("That isn't a page of the feed.")
+    try:
+        at = datetime.fromtimestamp(raw[0], timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("That isn't a page of the feed.") from exc
+    if not now - CURSOR_AGE <= at <= now + timedelta(minutes=1):
+        at = now
+    return at, raw[1], raw[2]
+
+
 def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> None:
     """Keep what a fan said about an item: it leaves their feed at once. A second word on it replaces the
     first. Only about an item the player's feed has now, so a fan's rows are never more than its items.
@@ -323,7 +551,11 @@ def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]
     """The candidates this fan hasn't hidden, each once, safe to link to."""
     if not candidates:
         return []
-    hidden = set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id == player_id)))
+    return _unseen(candidates, set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id == player_id))))
+
+
+def _unseen(candidates: list[Candidate], hidden: set[str]) -> list[Candidate]:
+    """The candidates not hidden, each once, safe to link to."""
     seen: set[str] = set()
     out = []
     for c in candidates:

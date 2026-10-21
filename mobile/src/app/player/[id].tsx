@@ -159,7 +159,7 @@ export default function PlayerScreen() {
           {tab === 'overview' ? <Overview card={card} feed={feed.feed} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
           {tab === 'matches' ? <Matches card={card} view={matches} setView={setMatches} /> : null}
           {tab === 'stats' ? <View style={{ gap: 10 }}><StatsWithForm card={card} /></View> : null}
-          {tab === 'feed' ? <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} now={now} onHide={feed.hide} /> : null}
+          {tab === 'feed' ? <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} photo={p.photo} now={now} onHide={feed.hide} /> : null}
 
           <Text style={[t.tiny, t.muted]}>
             {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}
