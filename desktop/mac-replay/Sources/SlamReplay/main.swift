@@ -32,10 +32,10 @@ if args.contains("--selftest") {
     runAsync { try await SelfTest.run(seconds: s, hevc: args.contains("--hevc")) }
 }
 if let dir = value("--from-frames") {
-    // --from-frames <dir> [--prefix clip1_] [--fps 30] [--strip-text "…"]: a Dota startmovie export through the pipeline
+    // --from-frames <dir> [--prefix clip1_] [--fps 30] [--sample]: a Dota startmovie export through the pipeline
     runAsync {
         try await FromFrames.run(dir: URL(fileURLWithPath: dir), prefix: value("--prefix") ?? "clip1_",
-                                 fps: value("--fps").flatMap(Int.init) ?? 30, strip: value("--strip-text"))
+                                 fps: value("--fps").flatMap(Int.init) ?? 30, sample: args.contains("--sample"))
     }
 }
 if args.contains("--montage") {

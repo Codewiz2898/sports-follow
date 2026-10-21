@@ -33,14 +33,18 @@ enum Montage {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    /// The title a clip carries: its stat line from the save, else "Clip n".
-    static func title(for clip: URL, n: Int) -> String {
+    /// What a clip's save knew (its sidecar), if anything.
+    static func moment(for clip: URL) -> Moment? {
         let side = clip.deletingPathExtension().appendingPathExtension("json")
-        if let data = try? Data(contentsOf: side),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let strip = obj["strip"] as? String, !strip.isEmpty {
-            return strip
-        }
+        guard let data = try? Data(contentsOf: side),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let m = obj["moment"], let md = try? JSONSerialization.data(withJSONObject: m) else { return nil }
+        return try? JSONDecoder().decode(Moment.self, from: md)
+    }
+
+    /// The title a clip carries: its moment ("TY 21–18 GL · 26:00"), else "Clip n".
+    static func title(for clip: URL, n: Int) -> String {
+        if let m = moment(for: clip), !m.line.isEmpty { return m.line }
         return "Clip \(n)"
     }
 
@@ -82,7 +86,7 @@ enum Montage {
                 try a.insertTimeRange(src, of: at, at: cursor)
             }
             segments.append(Segment(range: CMTimeRange(start: cursor, duration: take), size: size,
-                                    title: "\(i + 1)/\(clips.count) · \(title(for: clip, n: i + 1))"))
+                                    title: title(for: clip, n: i + 1)))
             cursor = cursor + take
         }
         guard let first = segments.first else {
@@ -141,36 +145,33 @@ enum Montage {
         let video = CALayer()
         video.frame = parent.frame
         parent.addSublayer(video)
-        let unit = (opts.vertical ? render.width / 1.6 : render.height) / 900
         let T = total.seconds
         let firstBand = band(first.size)
-        for seg in segments {
-            let title = ClipEditor.textLayer(seg.title, size: (opts.vertical ? 44 : 26) * unit, color: .white,
-                                             frame: .zero)
-            let w = min(render.width - 48 * unit, title.bounds.width + 28 * unit)
-            let h = (opts.vertical ? 64 : 40) * unit
-            let chip = CALayer()
+        var o = Overlays(W: render.width, H: render.height)
+        if opts.vertical { o.unit = render.width / 960 * 1.6 }
+        for (i, seg) in segments.enumerated() {
+            let chip = o.montageChip(n: i + 1, of: segments.count, title: seg.title)
             if opts.vertical {  // above the band, centred
-                chip.frame = CGRect(x: (render.width - w) / 2, y: render.height - firstBand.minY + 24 * unit, width: w, height: h)
-            } else {  // top left, under Dota's own menu icons and K/D/A box
-                chip.frame = CGRect(x: 22 * unit, y: render.height - 112 * unit - h, width: w, height: h)
+                chip.frame.origin = CGPoint(x: (render.width - chip.bounds.width) / 2,
+                                            y: render.height - firstBand.minY + 28 * o.u)
             }
-            chip.backgroundColor = ClipEditor.ink
-            chip.cornerRadius = 8 * unit
-            title.frame = CGRect(x: 14 * unit, y: (h - title.bounds.height) / 2, width: w - 28 * unit, height: title.bounds.height)
-            chip.addSublayer(title)
             chip.opacity = 0
             let s = seg.range.start.seconds
             chip.add(ClipEditor.visible(from: s, to: min(s + 2.5, seg.range.end.seconds), total: T), forKey: "show")
             parent.addSublayer(chip)
         }
         if opts.vertical {
-            let logo = ClipEditor.textLayer("slam", size: 64 * unit, color: NSColor(cgColor: ClipEditor.blue) ?? .systemBlue,
-                                            frame: CGRect(x: 0, y: render.height - firstBand.maxY - 140 * unit, width: render.width, height: 90 * unit),
-                                            center: true, font: "Fredoka")
+            let logo = ClipEditor.textLayer("slam", size: 64 * o.u, color: Overlays.blue, frame: .zero, font: "Fredoka")
+            logo.frame.origin = CGPoint(x: (render.width - logo.bounds.width) / 2,
+                                        y: render.height - firstBand.maxY - 60 * o.u - logo.bounds.height)
             parent.addSublayer(logo)
         }
-        parent.addSublayer(endCard(size: render, unit: unit, from: cardRange.start.seconds, total: T))
+        // One match across the clips: its name on the end card.
+        let kickers = Set(clips.compactMap { moment(for: $0) }.filter { $0.teams != nil }.map { "\($0.headline.uppercased()) · \($0.kicker)" })
+        let end = o.endCard(kicker: kickers.count == 1 ? kickers.first : nil)
+        end.opacity = 0
+        end.add(ClipEditor.visible(from: cardRange.start.seconds, to: T, total: T), forKey: "show")
+        parent.addSublayer(end)
 
         vc.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: video, in: parent)
         guard let export = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetHighestQuality) else {
@@ -182,21 +183,4 @@ enum Montage {
         return Result(url: url, seconds: T, bytes: bytes, ms: Date().timeIntervalSince(t0) * 1000, clips: segments.count)
     }
 
-    /// The last 2.5 s: paper, the Slam name in its blue, and one line.
-    private static func endCard(size: CGSize, unit: CGFloat, from: Double, total: Double) -> CALayer {
-        let card = CALayer()
-        card.frame = CGRect(origin: .zero, size: size)
-        card.backgroundColor = ClipEditor.paper
-        let logo = ClipEditor.textLayer("slam", size: 150 * unit, color: NSColor(cgColor: ClipEditor.blue) ?? .systemBlue,
-                                        frame: CGRect(x: 0, y: size.height / 2 - 40 * unit, width: size.width, height: 190 * unit),
-                                        center: true, font: "Fredoka")
-        let line = ClipEditor.textLayer("Clipped on Slam", size: 34 * unit, color: NSColor(white: 0.05, alpha: 1),
-                                        frame: CGRect(x: 0, y: size.height / 2 - 110 * unit, width: size.width, height: 56 * unit),
-                                        center: true, font: "Manrope")
-        card.addSublayer(logo)
-        card.addSublayer(line)
-        card.opacity = 0
-        card.add(ClipEditor.visible(from: from, to: total, total: total), forKey: "show")
-        return card
-    }
 }

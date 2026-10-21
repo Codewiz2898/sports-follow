@@ -23,13 +23,15 @@ final class MatchFeed {
     }
 
     struct Line {
-        let text: String
-        let clock: String?
+        let moment: Moment
         let fetchedAt: Date
         let ms: Double
+        var text: String { moment.line }
+        var clock: String? { moment.clock }
     }
 
-    /// The line for now, or nil (no match, no live map, or the API didn't answer within 3 s).
+    /// The moment for now, or nil (no match, or the API didn't answer within 3 s). A match with no map
+    /// being played gives its teams and series score only.
     func line() async -> Line? {
         let t0 = Date()
         if path == nil { path = await findLive() }
@@ -47,41 +49,34 @@ final class MatchFeed {
         }
         func short(_ id: String?) -> String? { teams.first { $0.id == id }?.short }
         title = teams.map(\.short).joined(separator: " v ")
-        let ms = { Date().timeIntervalSince(t0) * 1000 }
-        var series: String?
-        if teams.count == 2, let a = teams[0].score, let b = teams[1].score {
-            series = "\(teams[0].short) \(a)–\(b) \(teams[1].short) in maps"
+        var m = Moment(source: "api")
+        if teams.count == 2 {
+            m.teams = [teams[0].short, teams[1].short]
+            if let a = teams[0].score, let b = teams[1].score { m.series = "\(teams[0].short) \(a)–\(b) \(teams[1].short) in maps" }
         }
+        m.competition = (resp["competition"] as? String) ?? (live?["competition"] as? String)
+        let done = { Line(moment: m, fetchedAt: Date(), ms: Date().timeIntervalSince(t0) * 1000) }
         guard let board = (state?["dota"] as? [String: Any])?["live"] as? [String: Any] else {
-            // No map being played on the page: the series line, so the strip still says whose game it is.
             Log.json("strip", ["match": path, "note": "no live map on the page", "is_live": live?["is_live"] ?? false])
-            guard let series else { return nil }
-            return Line(text: series, clock: nil, fetchedAt: Date(), ms: ms())
+            return m.teams == nil ? nil : done()
         }
+        m.game = board["n"] as? Int
         let clock = board["clock"] as? String
-        let game = (board["n"] as? Int).map { "Game \($0)" }
-        if clock == "draft" {
-            return Line(text: [title ?? "", game, "draft"].compactMap { $0 }.joined(separator: " · "), clock: clock,
-                        fetchedAt: Date(), ms: ms())
-        }
+        guard clock != "draft" else { m.clock = "draft"; return done() }
+        m.clock = clock
         var sides = [board["radiant"], board["dire"]].compactMap { $0 as? [String: Any] }
         if sides.count == 2, let first = teams.first?.id, (sides[1]["id"] as? String) == first { sides.reverse() }
-        var parts: [String] = []
         if sides.count == 2 {
-            let a = short(sides[0]["id"] as? String) ?? (sides[0]["name"] as? String) ?? "?"
-            let b = short(sides[1]["id"] as? String) ?? (sides[1]["name"] as? String) ?? "?"
-            parts.append("\(a) \(sides[0]["kills"] as? Int ?? 0)–\(sides[1]["kills"] as? Int ?? 0) \(b)")
-        }
-        if let lead = board["gold_lead"] as? [String: Any], let amount = lead["amount"] as? Int {
-            if amount >= 1000, let who = short(lead["id"] as? String) {
-                parts.append(String(format: "%@ +%.1fk gold", who, Double(amount) / 1000))
-            } else {
-                parts.append("level on gold")
+            m.kills = [sides[0]["kills"] as? Int ?? 0, sides[1]["kills"] as? Int ?? 0]
+            if m.teams == nil {
+                m.teams = sides.map { short($0["id"] as? String) ?? ($0["name"] as? String) ?? "?" }
             }
         }
-        if let clock { parts.append(clock) }
-        if let game { parts.append(game) }
-        return Line(text: parts.joined(separator: " · "), clock: clock, fetchedAt: Date(), ms: ms())
+        if let lead = board["gold_lead"] as? [String: Any], let amount = lead["amount"] as? Int {
+            m.gold = amount >= 1000 ? short(lead["id"] as? String).map { String(format: "%@ +%.1fk gold", $0, Double(amount) / 1000) }
+                : "level on gold"
+        }
+        return done()
     }
 
     /// The live Dota 2 game in /api/live, if there's one (the first, if there are several).

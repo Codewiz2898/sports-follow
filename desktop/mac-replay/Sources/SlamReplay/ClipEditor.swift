@@ -19,7 +19,11 @@ enum ClipEditor {
     static let inkSolid = NSColor(srgbRed: 0x0d / 255, green: 0x0d / 255, blue: 0x0d / 255, alpha: 1).cgColor
     static let paper = NSColor(srgbRed: 0xf3 / 255, green: 0xf3 / 255, blue: 0xef / 255, alpha: 1).cgColor
 
-    static func make(from source: URL, to url: URL, strip: String?, replaySeconds: Double = 5,
+    static let endSeconds = 1.2
+
+    /// The cut: the clip with the title card over its first 2 s and the scorebug after, then the last
+    /// `replaySeconds` at half speed (the slate as it starts, cinema bars through it), then the end card.
+    static func make(from source: URL, to url: URL, moment: Moment, replaySeconds: Double = 5,
                      slowdown: Double = 2) async throws -> Result {
         let t0 = Date()
         let asset = AVURLAsset(url: source)
@@ -46,13 +50,17 @@ enum ClipEditor {
         }
         let slow = CMTime(seconds: tailLength.seconds * slowdown, preferredTimescale: 600)
         comp.scaleTimeRange(CMTimeRange(start: duration, duration: tailLength), toDuration: slow)
-        let total = duration + slow
+        // Under the end card, real video (an empty stretch would end the export early), hidden by the card.
+        let end = CMTime(seconds: min(endSeconds, duration.seconds), preferredTimescale: 600)
+        try v.insertTimeRange(CMTimeRange(start: duration - end, duration: end), of: vSrc, at: duration + slow)
+        let total = duration + slow + end
 
         let fps = rate > 0 ? Int32(rate.rounded()) : 30
         let vc = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: comp)
         vc.renderSize = size
         vc.frameDuration = CMTime(value: 1, timescale: fps)
-        let (parent, video) = overlay(size: size, strip: strip, replayFrom: duration.seconds, total: total.seconds)
+        let (parent, video) = overlay(size: size, moment: moment, clip: duration.seconds,
+                                      slowEnd: (duration + slow).seconds, total: total.seconds)
         vc.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: video, in: parent)
 
         guard let export = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetHighestQuality) else {
@@ -65,40 +73,26 @@ enum ClipEditor {
         return Result(url: url, seconds: total.seconds, bytes: bytes, ms: Date().timeIntervalSince(t0) * 1000)
     }
 
-    /// Core Animation layers over the video: the strip along the bottom the whole time, the REPLAY tag
-    /// top left only while the slow part plays. y goes up from the bottom here.
-    private static func overlay(size: CGSize, strip: String?, replayFrom: Double, total: Double) -> (CALayer, CALayer) {
+    /// Core Animation layers over the video, each shown for its stretch.
+    private static func overlay(size: CGSize, moment m: Moment, clip: Double, slowEnd: Double, total: Double) -> (CALayer, CALayer) {
         let parent = CALayer()
         parent.frame = CGRect(origin: .zero, size: size)
         let video = CALayer()
         video.frame = parent.frame
         parent.addSublayer(video)
-        let unit = size.height / 900  // sizes below are for a 900-high frame
-
-        if let strip, !strip.isEmpty {
-            let h = 54 * unit
-            let bar = CALayer()
-            bar.frame = CGRect(x: 0, y: 0, width: size.width, height: h)
-            bar.backgroundColor = ink
-            parent.addSublayer(bar)
-            bar.addSublayer(textLayer(strip, size: 30 * unit, color: .white,
-                                 frame: CGRect(x: 24 * unit, y: 9 * unit, width: size.width - 200 * unit, height: 40 * unit)))
-            let tag = CALayer()
-            tag.frame = CGRect(x: size.width - 132 * unit, y: 10 * unit, width: 112 * unit, height: 34 * unit)
-            tag.backgroundColor = blue
-            tag.cornerRadius = 8 * unit
-            tag.addSublayer(textLayer("slam", size: 24 * unit, color: .white, frame: tag.bounds.insetBy(dx: 0, dy: 2 * unit), center: true, font: "Fredoka"))
-            bar.addSublayer(tag)
+        let o = Overlays(W: size.width, H: size.height)
+        func add(_ l: CALayer?, _ from: Double, _ to: Double) {
+            guard let l, to > from else { return }
+            l.opacity = 0
+            l.add(visible(from: from, to: to, total: total), forKey: "show")
+            parent.addSublayer(l)
         }
-
-        let replay = CALayer()
-        replay.frame = CGRect(x: 24 * unit, y: size.height - 76 * unit, width: 230 * unit, height: 52 * unit)
-        replay.backgroundColor = red
-        replay.cornerRadius = 8 * unit
-        replay.addSublayer(textLayer("REPLAY ½×", size: 32 * unit, color: .white, frame: replay.bounds.insetBy(dx: 0, dy: 4 * unit), center: true))
-        replay.opacity = 0
-        replay.add(visible(from: replayFrom, to: total, total: total), forKey: "show")
-        parent.addSublayer(replay)
+        let card = clip > 6 ? 2.0 : 0
+        add(o.scorebug(m), card, clip)
+        add(o.cinemaBars(m), clip, slowEnd)
+        add(o.slate(), clip, min(clip + 0.8, slowEnd))
+        if card > 0 { add(o.titleCard(m), 0, card) }
+        add(o.endCard(kicker: nil), slowEnd, total)
         return (parent, video)
     }
 
@@ -119,13 +113,13 @@ enum ClipEditor {
     /// layer to the text. Fonts: the app's own copies of Anton, Manrope and Fredoka when Fonts.register()
     /// found them, else Impact and the system's bold.
     static func textLayer(_ s: String, size: CGFloat, color: NSColor, frame: CGRect, center: Bool = false,
-                          font name: String = "Anton") -> CALayer {
+                          font name: String = "Anton", kern: CGFloat = 0) -> CALayer {
         let font = Fonts.named(name, size: size) ?? (name == "Anton" ? NSFont(name: "Impact", size: size) : nil)
             ?? NSFont.boldSystemFont(ofSize: size)
         let para = NSMutableParagraphStyle()
         para.alignment = center ? .center : .left
         para.lineBreakMode = .byTruncatingTail
-        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
+        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para, .kern: kern])
         let lineH = (font.ascender - font.descender).rounded(.up)
         var frame = frame
         if frame == .zero { frame.size = CGSize(width: str.size().width.rounded(.up) + 2, height: lineH + 4) }

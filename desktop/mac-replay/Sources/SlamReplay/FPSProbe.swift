@@ -113,14 +113,15 @@ extension FPSProbe {
         }
     }
 
-    /// Dota's own top bar read off the screen: "10–5 · 15:22" (kills either side of the clock), the
-    /// strip's words when Slam's API has no live map for the game.
-    static func screenLine(in pb: CVPixelBuffer) -> (text: String, clock: String)? {
+    /// Dota's own top bar read off the screen: kills either side of the clock (Radiant left, Dire right),
+    /// the moment when Slam's API has no live map for the game.
+    static func screenMoment(in pb: CVPixelBuffer) -> Moment? {
         let t = texts(in: pb)
         guard let ci = t.firstIndex(where: { $0.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil }) else { return nil }
-        let clock = t[ci]
+        var m = Moment(source: "screen")
+        m.clock = t[ci]
         func num(_ i: Int) -> Int? { t.indices.contains(i) ? Int(t[i].trimmingCharacters(in: .whitespaces)) : nil }
-        if let a = num(ci - 1), let b = num(ci + 1) { return ("\(a)–\(b) · \(clock)", clock) }
-        return (clock, clock)
+        if let a = num(ci - 1), let b = num(ci + 1) { m.kills = [a, b] }
+        return m
     }
 }

@@ -148,7 +148,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         flash("Saving…")
         // The strip's numbers and the clock on screen, both as of the tap, while the clip is written.
         let line = Task.detached { await feed.line() }
-        let screen = Task.detached { frame.flatMap(FPSProbe.screenLine(in:)) }
+        let screen = Task.detached { frame.flatMap(FPSProbe.screenMoment(in:)) }
         saveChain = Task.detached {
             await previous?.value  // saves queue; each keeps the 30 s before its own tap
             do {
@@ -165,10 +165,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 }
                 let api = await line.value
                 let onScreen = await screen.value
-                // Slam's numbers when the API has the map; else what Dota's own top bar said.
-                let stripText = api?.text ?? onScreen?.text ?? ""
-                let side: [String: Any] = ["strip": stripText, "apiLine": api?.text ?? "", "apiClock": api?.clock ?? "",
-                                           "screenLine": onScreen?.text ?? "", "screenClock": onScreen?.clock ?? "",
+                // Slam's numbers when the API has the map; else what Dota's own top bar said (kills and
+                // clock, Radiant first), keeping the API's competition and series score.
+                var moment = api?.moment ?? onScreen ?? Moment()
+                if api?.moment.kills == nil, var s = onScreen {
+                    s.competition = api?.moment.competition
+                    s.series = api?.moment.series
+                    moment = s
+                }
+                let momentJSON = (try? JSONEncoder().encode(moment)).flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? [:]
+                let side: [String: Any] = ["strip": moment.line, "moment": momentJSON, "apiLine": api?.text ?? "",
+                                           "apiClock": api?.clock ?? "", "screenClock": onScreen?.clock ?? "",
                                            "apiMs": round1(api?.ms ?? 0), "match": feed.path ?? "",
                                            "savedAt": ISO8601DateFormatter().string(from: tap)]
                 Log.json("strip", side)
@@ -178,7 +185,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 }
                 guard edit else { return }
                 let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
-                let e = try await ClipEditor.make(from: r.url, to: cut, strip: stripText.isEmpty ? nil : stripText)
+                let e = try await ClipEditor.make(from: r.url, to: cut, moment: moment)
                 Log.json("cut", ["file": cut.lastPathComponent, "seconds": round2(e.seconds),
                                  "MB": round2(Double(e.bytes) / 1_048_576), "ms": round1(e.ms),
                                  "sinceTapMs": round2(Date().timeIntervalSince(tap) * 1000)])

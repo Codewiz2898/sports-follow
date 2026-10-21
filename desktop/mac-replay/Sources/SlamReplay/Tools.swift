@@ -59,7 +59,7 @@ enum SelfTest {
                      res.audioPackets, res.writeMs))
         try await Probe.run(url)
         let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
-        let e = try await ClipEditor.make(from: url, to: cut, strip: "YNDX 21–18 GL · YNDX +4.4k gold · 26:00")
+        let e = try await ClipEditor.make(from: url, to: cut, moment: .sample)
         print(String(format: "cut %@: %.2f s, %.1f MB, made in %.0f ms", cut.lastPathComponent, e.seconds,
                      Double(e.bytes) / 1_048_576, e.ms))
         try await Probe.run(cut)
@@ -167,7 +167,7 @@ enum Probe {
 /// `--from-frames <dir> [prefix]`: a Dota `startmovie` export (prefix_00000000.jpg… at 30 fps, prefix_.wav)
 /// through the same encoders, ring, writer and cut, so the numbers come from real game footage.
 enum FromFrames {
-    static func run(dir: URL, prefix: String, fps: Int, strip: String?) async throws {
+    static func run(dir: URL, prefix: String, fps: Int, sample: Bool) async throws {
         let fm = FileManager.default
         let jpgs = try fm.contentsOfDirectory(atPath: dir.path)
             .filter { $0.hasPrefix(prefix) && $0.lowercased().hasSuffix(".jpg") }.sorted()
@@ -189,6 +189,7 @@ enum FromFrames {
         ]
         var pool: CVPixelBufferPool?
         CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool)
+        var last: CVPixelBuffer?
         for (i, name) in jpgs.enumerated() {
             guard let img = load(dir.appendingPathComponent(name)) else { continue }
             var pb: CVPixelBuffer?
@@ -201,6 +202,7 @@ enum FromFrames {
             ctx?.interpolationQuality = .high
             ctx?.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
             CVPixelBufferUnlockBaseAddress(pb, [])
+            last = pb
             video.encode(pb, pts: t0 + CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)),
                          duration: CMTime(value: 1, timescale: CMTimeScale(fps)))
         }
@@ -238,7 +240,10 @@ enum FromFrames {
                      Double(res.bytes) / 1_048_576, res.writeMs))
         try await Probe.run(url)
         let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
-        let e = try await ClipEditor.make(from: url, to: cut, strip: strip)
+        // The moment as a save would read it off the last frame (Dota's top bar), or the sample match.
+        let moment = sample ? Moment.sample : (last.flatMap(FPSProbe.screenMoment(in:)) ?? Moment())
+        print("moment: \(moment.line) (\(moment.source))")
+        let e = try await ClipEditor.make(from: url, to: cut, moment: moment)
         print(String(format: "cut %@: %.2f s, %.1f MB, made in %.0f ms", cut.lastPathComponent, e.seconds,
                      Double(e.bytes) / 1_048_576, e.ms))
     }
