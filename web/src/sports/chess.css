@@ -19,7 +19,9 @@
 .chess-play.sm .chess-eval { width: 20px; }
 .chess-eval .fill { flex-shrink: 0; background: #f4f1e8; transition: height 0.9s ease-in-out; }
 .chess-eval::after { content: ''; position: absolute; left: 0; right: 0; top: calc(50% - 0.5px); height: 1px; background: rgba(128, 128, 128, 0.6); }
-.chess-eval .score { position: absolute; left: 0; right: 0; bottom: 5px; text-align: center; font-size: 11px; letter-spacing: 0; }
+/* A step more particular than a board's own big .score (styles.css's .board and .match-board, which come after);
+   a compact board's (.board.compact .score) weighs the same, so the .sm rule below is what holds it at 10px. */
+.chess-play .chess-eval .score { position: absolute; left: 0; right: 0; bottom: 5px; text-align: center; font-size: 11px; letter-spacing: 0; }
 .chess-play.sm .chess-eval .score { font-size: 10px; }
 .chess-eval .score.top { bottom: auto; top: 5px; }
 .chess-eval .score.white { color: #141414; }
