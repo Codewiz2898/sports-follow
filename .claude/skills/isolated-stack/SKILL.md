@@ -89,12 +89,14 @@ Why each part is separate:
        {"name": "<name>-web", "runtimeExecutable": "/bin/sh", "port": 15173, "url": "http://<name>.localhost:15173",
         "runtimeArgs": ["-c", "cd <worktree>/web && SPORTS_FOLLOW_API=http://127.0.0.1:18421 PATH=$HOME/.local/node/bin:$PATH npm run dev -- --port 15173 --strictPort"]}
 
-   **Which `launch.json`:** `preview_start` reads the one in your session's own folder, not the stack's
-   worktree. A session in the main checkout (where step 1 ran) gets the main checkout's file, which git
+   **Which `launch.json`:** `preview_start` reads the one in your session's own folder, whoever ran step 1,
+   not the stack's worktree. A session in the main checkout gets the main checkout's file, which git
    tracks and other sessions start their servers from. There, add the entries only to start the two
    servers and put the file back at once: copy it to your scratchpad first, `preview_start` both, copy it
-   back, and check `cmp` against your copy and a clean `git status` for it. A session in a worktree of its
-   own does the same with that worktree's file.
+   back, and check it with `cmp` against your copy. Its `git status` should then be what it was before
+   you started, which needn't be clean: never `git checkout` or `git restore` it, as another session's
+   edit may be in it. `preview_stop` goes by server id, so the entries needn't stay; put them back only
+   to restart a server. A session in a worktree of its own does the same with that worktree's file.
 
    **Both `url`s matter.** Without one, `preview_start` opens its tab at `http://localhost:<port>/`, and
    the API's tab there sets a fan cookie on `localhost`, replacing the main app's in the browser pane (a
@@ -140,17 +142,23 @@ Every page there is a fan with no cookie, so it's for the player, not for follow
 
 ## The Android app against the stack
 
-- **A busy emulator stays theirs.** If another session's Metro runs, or the app's `debug_http_host` on
-  the running emulator points at a port that isn't yours (`adb -s <serial> shell run-as io.slam.app cat
-  shared_prefs/io.slam.app_preferences.xml`), boot the other AVD (`emulator -list-avds`)
-  headless on a port of its own: `~/.local/android-sdk/emulator/emulator -avd <avd> -port 5560 -no-window`,
-  as a background task. With two emulators attached, `adb` without `-s` fails ("more than one device"),
-  so pass `-s emulator-5560` to every `adb`. Run your own Metro on a free port with its own
-  `adb -s emulator-5560 reverse`, and afterwards uninstall what you installed, remove the reverses and
-  stop it (`adb -s emulator-5560 emu kill`).
+- **A busy emulator stays theirs.** If the running emulator has another session's `adb reverse`s
+  (`adb -s <serial> reverse --list`), or the app's `debug_http_host` there points at a Metro that isn't
+  yours (`adb -s <serial> shell run-as io.slam.app cat shared_prefs/io.slam.app_preferences.xml`), boot
+  the other AVD (`emulator -list-avds`; with only one, a second copy of it with `-read-only`) headless
+  on a port of its own: `~/.local/android-sdk/emulator/emulator -avd <avd> -port 5560 -no-window`, as a
+  background task. With two emulators attached, `adb` without `-s` fails ("more than one device"), so
+  pass `-s emulator-5560` to every `adb`.
+- **Point the app at the stack**, or it talks to stann.in (`mobile/src/api.ts`). Run a Metro of your own
+  from `<worktree>/mobile` on a free port with `EXPO_PUBLIC_API_URL=http://localhost:18421`, reverse both
+  ports (`adb -s emulator-5560 reverse tcp:18421 tcp:18421`, and the same for Metro's), and write
+  `debug_http_host` = `localhost:<metro port>` into that prefs file. Through `localhost` the app's
+  `/watch` pages give Twitch `parent=localhost`; `10.0.2.2` would be a plain-http parent it refuses.
 - **The `/watch` page is cached for an hour** (`Cache-Control: public, max-age=3600`), so the app's
   WebView plays a stream it has loaded before even with the API stopped. To see "Couldn't load the
   player", use a stream id it hasn't loaded yet.
+- Afterwards uninstall what you installed, remove your reverses (`adb -s emulator-5560 reverse
+  --remove-all`), stop your Metro and the emulator (`adb -s emulator-5560 emu kill`).
 
 ## When the round ends
 
