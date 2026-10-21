@@ -235,6 +235,14 @@ export function outcome(result: string, teams: string[] = []): 'W' | 'D' | 'L' |
   return teams.length ? 'L' : null
 }
 
+/** How a stat tile sets its value: big as a number ("2712", "82*"), or, when it's words ("Black", an opponent's name),
+ * smaller so it breaks only between words, over two tiles when it's long. A word is three letters or more, so "3rd"
+ * and "W" stay numbers. */
+export function statFit(value: string): { words: boolean; wide: boolean } {
+  const words = /\p{L}{3,}/u.test(value)
+  return { words, wide: words && value.length > 8 }
+}
+
 /** "22 PTS · 11 REB · 10 AST" as numbers and labels, when the whole line reads that way. */
 export function lineStats(text?: string | null): { value: string; label: string }[] | null {
   if (!text) return null

@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, FollowedTeam, LiveStatus, MyPredictions, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
-import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName, statFit } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
@@ -48,12 +48,15 @@ export function StatGrid({ stats, empty = 'No stats yet.' }: { stats?: Stat[]; e
   if (!stats?.length) return <p className="muted small">{empty}</p>
   return (
     <div className="stat-grid">
-      {stats.map((s) => (
-        <div className="stat" key={s.label}>
-          <span className="num">{s.value}</span>
-          <span className="tiny">{s.label}</span>
-        </div>
-      ))}
+      {stats.map((s) => {
+        const { words, wide } = statFit(s.value)
+        return (
+          <div className={`stat${words ? ' words' : ''}${wide ? ' wide' : ''}`} key={s.label}>
+            <span className="num">{s.value}</span>
+            <span className="tiny">{s.label}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }

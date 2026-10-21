@@ -220,6 +220,10 @@ a.photo-credit:hover { text-decoration: underline; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .stat { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 16px; background: var(--surface); min-width: 0; }
 .stat .num { font-size: 34px; overflow-wrap: anywhere; }
+/* A value in words ("Black", an opponent's name: format.statFit): smaller, broken only between words, two tiles wide
+   when it's long, where a number's size would cut it a letter a line. */
+.stat.words .num { font-size: 22px; line-height: 1.1; overflow-wrap: break-word; }
+.stat.wide { grid-column: span 2; }
 .stat .tiny { font-weight: 700; color: var(--muted); }
 
 .tabs { display: flex; gap: 18px; border-bottom: 2px solid var(--line); overflow-x: auto; scrollbar-width: none; }

@@ -8,7 +8,7 @@ import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type L
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import { outlets } from '../../web/src/feed'
-import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../../web/src/format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName, statFit } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
@@ -55,12 +55,16 @@ export function StatGrid({ stats, empty = 'No stats yet.', paper }: { stats?: St
   if (!stats?.length) return <Text style={[t.small, t.muted]}>{empty}</Text>
   return (
     <View style={b.statGrid}>
-      {stats.map((x) => (
-        <View key={x.label} style={[b.stat, paper && { backgroundColor: colour.bg }]}>
-          <Text style={num(34)}>{x.value}</Text>
-          <Text style={[t.tiny, { fontFamily: font[700], color: colour.muted }]}>{x.label}</Text>
-        </View>
-      ))}
+      {stats.map((x) => {
+        // A value in words ("Black", an opponent's name) set smaller, two tiles wide when long (.stat.words, .stat.wide).
+        const { words, wide } = statFit(x.value)
+        return (
+          <View key={x.label} style={[b.stat, wide && b.statWide, paper && { backgroundColor: colour.bg }]}>
+            <Text style={words ? [num(22), { lineHeight: 25 }] : num(34)}>{x.value}</Text>
+            <Text style={[t.tiny, { fontFamily: font[700], color: colour.muted }]}>{x.label}</Text>
+          </View>
+        )
+      })}
     </View>
   )
 }
@@ -530,6 +534,7 @@ export const b = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   stat: { flexGrow: 1, flexBasis: 104, gap: 6, padding: 14, borderRadius: 16, backgroundColor: colour.surface, minWidth: 0 },
+  statWide: { flexBasis: 216 },  // two tiles and the gap between
   lineStats: { flexDirection: 'row', gap: 8 },
   lineStat: { flex: 1, gap: 4, padding: 12, borderRadius: 14 },
   result: { overflow: 'hidden', justifyContent: 'space-between', gap: 10, width: 236, minHeight: 268, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE },
