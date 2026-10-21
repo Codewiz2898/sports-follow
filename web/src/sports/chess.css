@@ -5,6 +5,11 @@
 .chess-play.sm.eval { --bar: 26px; }
 .chessboard { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); flex: 1; min-width: 0; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
 .chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
+/* A piece as big as its square lets it be: the board's width in container units, on a board of any size. */
+@supports (width: 1cqi) {
+  .chessboard { container-type: inline-size; }
+  .chessboard .sq { font-size: 10.5cqi; }
+}
 .chess-play.sm .sq { font-size: min(5vw, 19px); }
 .chessboard .light { background: #ece6d6; }
 .chessboard .dark { background: #8b6fd6; }
@@ -29,14 +34,11 @@
 .chess-eval.waiting { background: var(--raised); }  /* an analysis board's, while its engine loads */
 .chess-depth { flex-basis: 100%; order: 1; }  /* a line of its own, under the bar and the board */
 @media (prefers-reduced-motion: reduce) { .chess-eval .fill { transition: none; } }
-/* Under a match page's board: Play from here; on the analysis board, its steps, where it is, the engine's best
-   line and its credit. */
+/* Under a match page's board: Play from here, and how deep the engine looked. */
 .chess-under { flex-basis: 100%; order: 1; margin-top: 6px; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
-.chess-under.stack { gap: 6px; }
-.chess-steps { gap: 8px; justify-content: flex-start; }
-.chess .btn.icon.chess-step { width: 36px; height: 36px; background: var(--raised); color: var(--text); }
-.chess .btn.icon.chess-step:hover { background: color-mix(in srgb, var(--raised), var(--text) 14%); }
-.chess .btn[aria-disabled='true'] { opacity: 0.45; cursor: default; }
+.btn.icon.chess-step { width: 36px; height: 36px; background: var(--raised); color: var(--text); }
+.btn.icon.chess-step:hover { background: color-mix(in srgb, var(--raised), var(--text) 14%); }
+.btn.chess-step[aria-disabled='true'] { opacity: 0.45; cursor: default; }
 .chess-moved { font-weight: 800; }
 /* The analysis board's squares are buttons: the picked piece's square ringed in ink, a dot on each square it can
    go to (a ring round a piece it can take), a king in check glowing amber (red means live here). */
@@ -54,11 +56,86 @@
 .chess-promote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; display: flex; gap: 4px; padding: 6px; border-radius: 12px; background: rgba(20, 20, 20, 0.9); }
 .chess-promote button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; background: #ece6d6; font-size: 30px; line-height: 1; cursor: pointer; }
 .chess-promote button:last-child { width: 32px; background: transparent; color: #f4f1e8; }
-/* A piece being dragged, over the page: under a mouse, or bigger and above a finger, so it's seen. */
+/* A piece being dragged, over the board, its square's size: under a mouse, or bigger and above a finger, so
+   it's seen. */
 .chess-ghost { position: fixed; z-index: 100; transform: translate(-50%, -50%); pointer-events: none; font-size: 34px; line-height: 1; }
-.chess-ghost.touch { font-size: 48px; transform: translate(-50%, -115%); }
+.chess-ghost.touch { transform: translate(-50%, -115%); }
 .chess-ghost.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
 .chess-ghost.b { color: #141414; }
+/* The engine's best move, an arrow over the board. */
+.chess-arrow { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+.chess-arrow line { stroke: rgba(20, 20, 20, 0.62); stroke-width: 0.16; stroke-linecap: round; }
+.chess-arrow path { fill: rgba(20, 20, 20, 0.62); }
+
+/* Play from here: the analysis board over the page (a modal dialog), the page behind it held still. On a phone it
+   fills the screen, the board as wide as it is and the rest under it; on a wide screen, a box with the board as
+   big as the screen's height lets it be and the engine's lines and the fan's moves beside it. */
+html:has(.chess-study[open]) { overflow: hidden; }
+.chess-study { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; padding: 0; border: 0; background: var(--surface); color: var(--text); overflow: auto; overscroll-behavior: contain; }
+.chess-study::backdrop { background: rgba(13, 13, 13, 0.55); }
+.chess-study.narrow { height: auto; margin: auto; max-width: 420px; border-radius: var(--radius-card); }
+.chess-study-box { display: flex; flex-direction: column; gap: 14px; padding: calc(14px + env(safe-area-inset-top, 0px)) var(--gutter) calc(24px + env(safe-area-inset-bottom, 0px)); }
+.chess-study-head { align-items: flex-start; }
+.chess-study-head .title { font-size: 17px; }
+.chess-study-main { display: flex; flex-direction: column; gap: 18px; }
+.chess-study-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.chess-study .chess-play { width: 100%; }
+.chess-study .chess-steps { justify-content: space-between; gap: 6px; }
+.chess-study-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.chess-study-part { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.chess-moved-on { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+.chess-study .btn.toggle { min-width: 58px; }
+.chess-study .btn.toggle[aria-pressed='true'] { background: var(--text); color: var(--bg); }
+/* The engine's lines, best first: the score from White's side, white or black for the side it favours, then the
+   moves, each a button. */
+.chess-pvs { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.chess-pv { display: flex; gap: 10px; align-items: baseline; }
+.chess-pv-score { flex-shrink: 0; min-width: 54px; padding: 3px 6px; border-radius: 6px; font-size: 14px; text-align: center; }
+.chess-pv-score.white { background: #f4f1e8; color: #141414; box-shadow: inset 0 0 0 1px var(--line); }
+.chess-pv-score.black { background: #141414; color: #f4f1e8; }
+.chess-pv-moves { display: flex; flex-wrap: wrap; gap: 2px 6px; min-width: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+/* The fan's own moves, the one the board is at in ink, those after it (kept after a step back) soft. */
+.chess-line { display: flex; flex-wrap: wrap; gap: 4px 8px; max-height: 168px; margin: 0; padding: 2px; overflow: auto; list-style: none; font-size: 14px; font-variant-numeric: tabular-nums; }
+.chess-line li { display: inline-flex; align-items: baseline; gap: 4px; }
+.chess-line .chess-move.ahead { color: var(--muted); }
+.chess-line .chess-move[aria-current='true'] { background: var(--text); color: var(--bg); }
+@media (min-width: 900px) {
+  .chess-study { width: min(1240px, 100vw - 48px); height: auto; max-height: calc(100vh - 32px); margin: auto; border-radius: var(--radius-card); }
+  .chess-study-box { padding: 20px 24px 24px; }
+  .chess-study-main { flex-direction: row; align-items: flex-start; gap: 28px; }
+  /* The board and its bar: up to 720px, short enough for its box to fit the screen, and room left beside it. */
+  .chess-study-left { flex-shrink: 0; width: min(calc(min(720px, max(300px, 100vh - 210px)) + 34px), 100% - 328px); }
+  .chess-study-side { flex: 1; max-width: 400px; }
+  .chess-line { max-height: 240px; }
+}
+@supports (height: 1svh) {
+  @media (min-width: 900px) {
+    .chess-study { max-height: calc(100svh - 32px); }
+    .chess-study-left { width: min(calc(min(720px, max(300px, 100svh - 210px)) + 34px), 100% - 328px); }
+  }
+}
+/* The match page's board (.chess.big): as big as its band lets it be, up to --big (its bar's room in it), and
+   short enough that it and its players fit the screen. On a phone, one column: the move, then the players
+   above and under the board as in a chess app; on a band wide enough, the players beside it, the top one level
+   with its top edge, the bottom one with its bottom, the move between them, and Play from here under it. */
+.chess-frame { container: chess / inline-size; }
+.chess.big { --big: min(560px, max(320px, 100vh - 280px)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'mid' 'top' 'board' 'bottom' 'under'; gap: 10px; }
+@supports (height: 1svh) { .chess.big { --big: min(560px, max(320px, 100svh - 280px)); } }
+.chess.big .chess-play { grid-area: board; width: min(100%, var(--big)); }
+.chess.big .chess-top { grid-area: top; }
+.chess.big .chess-mid { grid-area: mid; }
+.chess.big .chess-bottom { grid-area: bottom; }
+.chess.big .chess-under { grid-area: under; margin-top: 4px; }
+.chess.big .chess-clock { font-size: 26px; }
+.chess .nowrap { white-space: nowrap; }
+@container chess (min-width: 600px) {
+  .chess.big { grid-template-columns: min(var(--big), 100% - 312px) minmax(240px, 360px); grid-template-rows: auto 1fr auto auto; grid-template-areas: 'board top' 'board mid' 'board bottom' 'under .'; gap: 0 32px; }
+  .chess.big .chess-play { width: 100%; }
+  .chess.big .chess-top { align-self: start; }
+  .chess.big .chess-mid { align-self: center; }
+  .chess.big .chess-bottom { align-self: end; }
+  .chess.big .chess-under { margin-top: 12px; }
+}
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 /* Switch sides: an icon button on the clocks' raised colour, on the white board (Today) and the sport's band (the

@@ -25,8 +25,8 @@ const QUIET = 15_000
 const OWED = 5_000
 
 export interface Engine {
-  /** Look at a position (a FEN), each look at it, deeper as it goes, to `seen`; a new position stops the last,
-   * whose looks stop coming. */
+  /** Look at a position (a FEN), each look at it, deeper as it goes, to `seen` (with several lines asked for,
+   * each line's, by its number); a new position stops the last, whose looks stop coming. */
   look: (fen: string, seen: (look: EngineLook) => void) => void
   /** Stop looking (a position that has ended): the search stops, and its looks with it. */
   stop: () => void
@@ -51,8 +51,9 @@ interface Search { fen: string; seen: (look: EngineLook) => void }
 
 /** The conversation over a transport: `tell` gives the engine a line, `end` closes the transport (on quitting,
  * or failing). `ready`: the engine answers; `failed`: it couldn't start, it stopped answering, or the transport
- * went. */
-export function talkToEngine(transport: { tell: (line: string) => void; end: () => void }, on: { ready: () => void; failed: () => void }): Talk {
+ * went. `lines`: how many of its best lines it looks for (MultiPV), its best alone by default; more take it
+ * longer to reach its depth. */
+export function talkToEngine(transport: { tell: (line: string) => void; end: () => void }, on: { ready: () => void; failed: () => void }, lines = 1): Talk {
   let ready = false
   let over = false
   let owed: ReturnType<typeof setTimeout> | undefined
@@ -109,7 +110,10 @@ export function talkToEngine(transport: { tell: (line: string) => void; end: () 
   const heard = (line: string) => {
     if (over) return
     stirred()
-    if (line === 'uciok') tell('isready')
+    if (line === 'uciok') {
+      if (lines > 1) tell(`setoption name MultiPV value ${lines}`)
+      tell('isready')
+    }
     else if (line === 'readyok' && !ready) {
       ready = true
       clearTimeout(quiet)

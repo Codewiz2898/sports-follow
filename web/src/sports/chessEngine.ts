@@ -17,9 +17,10 @@ export { ENGINE_LICENCE, ENGINE_SOURCE, type Engine } from './facts/chessEngineC
 // after the comma: ",worker" there would make it one of a threaded build's helpers, which starts no engine.
 const ENGINE = `${script}#${encodeURIComponent(wasm)}`
 
-/** An engine in a worker of the page. `loading`: how much of it has come, 0 to 1, while it downloads; `ready`:
- * it answers; `failed`: it couldn't start (a browser without WebAssembly, or a page that doesn't allow it). */
-export function startEngine(on: { loading: (share: number) => void; ready: () => void; failed: () => void }): Engine {
+/** An engine in a worker of the page, looking for its best `lines` (talkToEngine). `loading`: how much of it has
+ * come, 0 to 1, while it downloads; `ready`: it answers; `failed`: it couldn't start (a browser without
+ * WebAssembly, or a page that doesn't allow it). */
+export function startEngine(on: { loading: (share: number) => void; ready: () => void; failed: () => void }, lines = 1): Engine {
   const worker = new Worker(ENGINE)
   // The build reports its download on a port of ours, if it's given one.
   const progress = new MessageChannel()
@@ -29,7 +30,7 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
       worker.terminate()
       progress.port1.close()
     },
-  }, on)
+  }, on, lines)
   progress.port1.onmessage = (e: MessageEvent<{ percent?: number }>) => {
     if (typeof e.data?.percent !== 'number') return
     talk.stirred()

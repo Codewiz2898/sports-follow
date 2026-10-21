@@ -158,14 +158,15 @@ export function squareWords(name: string, piece: string | null, aim: boolean): s
   return [name, piece && `${colour} ${PIECE_NAMES[piece.toLowerCase()]}`, aim && 'move here'].filter(Boolean).join(', ')
 }
 
-/** A UCI engine's look at a position, from one of its info lines: how deep it looked, its score from the side
- * to move's view (centipawns, or moves to a forced mate: minus, the side to move is mated), and the line it
- * expects (moves in UCI, "e2e4"). */
-export interface EngineLook { depth: number; cp?: number; mate?: number; pv: string[] }
+/** A UCI engine's look at a position, from one of its info lines: which of its lines it is (`line`: 1, its best;
+ * 2 and on, the next best, when it's asked for several: MultiPV), how deep it looked, its score from the side to
+ * move's view (centipawns, or moves to a forced mate: minus, the side to move is mated), and the line it expects
+ * (moves in UCI, "e2e4"). */
+export interface EngineLook { line: number; depth: number; cp?: number; mate?: number; pv: string[] }
 
 /** An engine's info line read ("info depth 18 seldepth 24 multipv 1 score cp 34 nodes … pv e2e4 e7e5"), or null
- * for one with no score (the move it's on, a string), a bound mid-search (lowerbound, upperbound: not yet its
- * score), or a line other than its first (multipv). */
+ * for one with no score (the move it's on, a string) or a bound mid-search (lowerbound, upperbound: not yet its
+ * score). */
 export function engineLook(line: string): EngineLook | null {
   const words = line.trim().split(/\s+/)
   if (words[0] !== 'info' || words[1] === 'string' || words.includes('lowerbound') || words.includes('upperbound')) return null
@@ -173,9 +174,10 @@ export function engineLook(line: string): EngineLook | null {
   const score = words.indexOf('score')
   const kind = words[score + 1]
   const value = Number(words[score + 2])
-  if (score < 0 || (kind !== 'cp' && kind !== 'mate') || !Number.isInteger(value) || (after('multipv') ?? '1') !== '1') return null
+  const which = Number(after('multipv') ?? '1')
+  if (score < 0 || (kind !== 'cp' && kind !== 'mate') || !Number.isInteger(value) || !Number.isInteger(which) || which < 1) return null
   const pv = words.indexOf('pv')
-  return { depth: Number(after('depth')) || 0, [kind]: value, pv: pv < 0 ? [] : words.slice(pv + 1) }
+  return { line: which, depth: Number(after('depth')) || 0, [kind]: value, pv: pv < 0 ? [] : words.slice(pv + 1) }
 }
 
 /** An engine's look as the bar draws it (ChessEval: from White's side), at the position it looked at: the
@@ -185,16 +187,36 @@ export function lookFromWhite(look: EngineLook, fen: string): ChessEval {
   return look.mate != null ? { mate: sign * look.mate || 0, depth: look.depth, fen } : { cp: sign * (look.cp ?? 0) || 0, depth: look.depth, fen }
 }
 
-/** Moves in SAN from a position, numbered as a game's are: "12. Nf3 Nc6 13. Bb5", or "12... Nc6 13. Bb5" from
- * Black's turn. */
-export function numbered(sans: string[], fen: string): string {
+/** Moves in SAN from a position, each with the number a game's move list puts before it (`number`: "12." before
+ * White's, "12..." before the first when it's Black's, none before the rest of Black's), and as it's said alone
+ * (`said`: "12. Nf3", "12... Nc6"). */
+export function numberedMoves(sans: string[], fen: string): { san: string; number: string | null; said: string }[] {
   const [, turn, , , , full] = fen.split(' ')
   let n = Number(full) || 1
   let black = turn === 'b'
   return sans.map((san, i) => {
-    const said = black ? (i === 0 ? `${n}... ${san}` : san) : `${n}. ${san}`
+    const number = black ? (i === 0 ? `${n}...` : null) : `${n}.`
+    const said = `${n}${black ? '...' : '.'} ${san}`
     if (black) n++
     black = !black
-    return said
-  }).join(' ')
+    return { san, number, said }
+  })
+}
+
+/** Moves in SAN from a position, numbered as a game's are: "12. Nf3 Nc6 13. Bb5", or "12... Nc6 13. Bb5" from
+ * Black's turn. */
+export function numbered(sans: string[], fen: string): string {
+  return numberedMoves(sans, fen).map((m) => (m.number ? `${m.number} ${m.san}` : m.san)).join(' ')
+}
+
+/** A line with an engine's moves (UCI) played on from where the board is, as far as they're legal, the board
+ * after the last: the fan's line from there gives way to them, as a move of theirs would. */
+export function playedOn(line: ChessLine, uci: string[]): ChessLine {
+  let next = line
+  for (const u of uci) {
+    const after = played(next, u.slice(0, 2), u.slice(2, 4), u[4])
+    if (!after) break
+    next = after
+  }
+  return next
 }
