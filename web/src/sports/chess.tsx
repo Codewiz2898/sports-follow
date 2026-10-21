@@ -75,7 +75,9 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
     if (!playable || !state.fen) return
     const base = state.fen
     const asked = (ask: Ask) => {
-      back.current = document.activeElement instanceof HTMLElement ? document.activeElement : null  // the move tapped
+      // The move tapped (Safari doesn't focus a clicked button: then body, and Play from here takes the focus back).
+      const at = document.activeElement
+      back.current = at instanceof HTMLElement && at !== document.body ? at : null
       setOpening((o) => ({ base, last: state.last_move, moves: ask.moves, ply: ask.ply, asked: (o?.asked ?? 0) + 1 }))
     }
     listening.add(asked)

@@ -10,11 +10,11 @@ import { engineLook, type EngineLook } from './chessLine'
 const BUILT_FROM = '93c994592dcf3b4b21052ab925e9b534df9c0918'
 export const ENGINE_SOURCE = `https://github.com/nmrugg/stockfish.js/tree/${BUILT_FROM}`
 export const ENGINE_LICENCE = `https://github.com/nmrugg/stockfish.js/blob/${BUILT_FROM}/Copying.txt`
-// How deep it looks at a position: to depth 18 and no other limit, so every device ends on the same result (one
-// thread, the hash cleared before each position: ucinewgame, and the same number of lines: talkToEngine's
-// `lines`, which changes the search too), a slow phone later rather than shallower. The web's board looks for 3
-// lines; the Android app's for its best alone until its own board shows lines (BHA-403), so the two can differ
-// a little meanwhile. Its look at each depth reaches the bar as it comes, so the fan sees one at once. This is the lite build's smaller
+// How deep it looks at a position: to depth 18 and no other limit, so every device ends on the same result
+// (one thread, the hash cleared before each position: ucinewgame, and the same number of lines: talkToEngine's
+// `lines`, which changes the search too), a slow phone later rather than shallower. The web's board looks for
+// 3 lines; the Android app's for its best alone until its own board shows lines (BHA-403), so the two can
+// differ a little meanwhile. Its look at each depth reaches the bar as it comes, so the fan sees one at once. This is the lite build's smaller
 // network, not the server's full engine (sports_follow/engine.py): the two can differ on the same position.
 const LOOK = 'go depth 18'
 // A build that can't start says nothing (a page that doesn't allow WebAssembly rejects a promise inside the
