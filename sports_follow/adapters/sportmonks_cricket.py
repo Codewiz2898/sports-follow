@@ -48,7 +48,7 @@ SQUAD_BACK = 365  # days back a team's latest season is looked for (team): a fra
 
 _FINAL = {"Finished"}
 _OFF = {"Cancl.", "Postp.", "Aban."}
-# Called off for good, or washed out: the board says so (state's cancelled), and a prediction on it is voided
+# Called off, or washed out: the board says so (state's cancelled), and a prediction on it is voided
 # (sports.cricket), where a postponed one waits.
 _CALLED_OFF = {"Cancl.", "Aban."}
 _BREAKS = {"Innings Break", "Lunch", "Tea Break", "Dinner", "Int."}

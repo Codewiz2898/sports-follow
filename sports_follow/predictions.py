@@ -251,6 +251,20 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
 
 
+def moved(db: Session, event: Event, start: datetime | None, now: datetime | None = None) -> None:
+    """A schedule read moved a game's start (structured.upsert_game), with no poll or read to make its questions
+    again (ensure): those still to settle start then, so a game put back weeks isn't voided by the sweep three days
+    after its old date, and a first one still open closes then. One closed stays closed (friends' picks may have
+    shown)."""
+    if start is None:
+        return
+    now = now or _now()
+    theirs = or_(Question.event_id == event.id, Question.keys.contains(func.jsonb_build_array(event.key)))
+    db.execute(update(Question).where(theirs, Question.status.in_(UNSETTLED), Question.starts_at.is_distinct_from(start)).values(starts_at=start))
+    if start > now:
+        db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at.is_not(None), Question.locks_at != start).values(locks_at=start, reminded_at=None))
+
+
 def sweep(db: Session, now: datetime) -> None:
     """The tick (pipeline.due_work): first questions whose start time has come close, though no poll has seen the
     game start; and a question still unanswered STALE past its game's start (or its making, with none) is voided, but

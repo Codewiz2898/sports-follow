@@ -256,7 +256,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   law, 2025), no odds. What's asked is each sport's (`Sport.asks`, below): a chess game's result (either player, or
   a draw), who takes each map of a team esports series, who wins a football match (home, a draw or away, from its
   final score: extra time counts, a shootout doesn't) and who wins a limited-overs cricket match (a tie a Super Over
-  doesn't settle, no result or a washout is voided); a game called off for good is voided (the board's `cancelled`),
+  doesn't settle, no result or a washout is voided); a game called off is voided (the board's `cancelled`),
   one postponed waits for its new date. Other sports ask nothing yet. A question (`prediction_question`)
   belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed

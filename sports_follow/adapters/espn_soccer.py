@@ -49,7 +49,7 @@ def _status(status: dict[str, Any]) -> str:
 
 
 def _called_off(status: dict[str, Any]) -> bool:
-    """A match called off for good (cancelled, abandoned, forfeited), which ESPN may still call over ("post"): a
+    """A match called off (cancelled, abandoned, forfeited), which ESPN may still call over ("post"): a
     prediction on it is voided (sports.football), where a postponed one waits."""
     kind = status.get("type") or {}
     words = f"{kind.get('name') or ''} {kind.get('description') or ''}".upper()

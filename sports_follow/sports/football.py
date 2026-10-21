@@ -465,8 +465,8 @@ class Football(Sport):
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
         """From the final score, as the game's record has it: the side with more goals (extra time's count), level a
-        draw (a shootout isn't part of the score, so a game level after extra time is one). VOID for a game called off
-        for good: cancelled, abandoned, or given to a side without being played out (the board's cancelled)."""
+        draw (a shootout isn't part of the score, so a game level after extra time is one). VOID for a game called off:
+        cancelled, abandoned, or given to a side without being played out (the board's cancelled)."""
         if state.get("cancelled"):
             return VOID
         home, away = state.get("home") or {}, state.get("away") or {}

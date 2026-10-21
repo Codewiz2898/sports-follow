@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, engine, live, match, notify, pipeline, predictions, server, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, LiveGame, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
+from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, LiveGame, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
 from sports_follow.models import Account, Event, EventPlayer, Follow, League, LeagueMember, Pick, Player, Question
 
 from .test_match_follow import Store
@@ -288,6 +288,44 @@ def test_a_game_put_back_moves_its_question_while_its_open_and_one_closed_stays_
     db.commit()
     db.expire_all()
     assert db.get(Question, q.id).status == "void"
+
+
+def test_a_match_the_schedule_puts_back_keeps_its_question_till_its_new_date(db, redis):
+    """A postponed match's new date comes in a schedule read, not a poll (structured.upsert_game): its questions start
+    then, and the sweep waits from there, not from the old date."""
+    start = soon()
+    sportmonks = SimpleNamespace(system="sportmonks_football", live_cadence=10)
+
+    def schedule(fixture: str, at: datetime, status: str) -> None:
+        structured.upsert_game(db, sportmonks, "Football", Fixture(fixture, "Trabzonspor vs Galatasaray", "Super Lig", at, None, status, [str(HOME), str(AWAY)], {"fixture": fixture}))
+        db.commit()
+
+    for fixture in ("555", "556"):
+        schedule(fixture, start, "scheduled")
+        event_id = db.scalars(select(Event.id).where(Event.key == f"sportmonks_football:{fixture}")).one()
+        poll(event_id, sm.parse_match({**football_match("NS", 0, 0), "id": int(fixture)}), "sportmonks_football")
+    qs = {q.game: q for q in db.scalars(select(Question))}
+    gone, moved = qs["sportmonks_football:555"], qs["sportmonks_football:556"]
+    predictions.pick(db, "asha", gone.id, str(HOME))
+    db.commit()
+    later = start + timedelta(days=10)
+    # Put back before its start: its question stays open, closing at the new kick-off.
+    schedule("556", later, "scheduled")
+    db.expire_all()
+    assert (db.get(Question, moved.id).status, db.get(Question, moved.id).locks_at, db.get(Question, moved.id).starts_at) == ("open", later, later)
+    # The other's start came with no poll (closed); then it's postponed, and weeks on given a new date.
+    predictions.sweep(db, start + timedelta(minutes=1))
+    db.commit()
+    schedule("555", start, "postponed")
+    schedule("555", later, "scheduled")
+    predictions.sweep(db, start + predictions.STALE + timedelta(days=1))
+    db.commit()
+    db.expire_all()
+    assert (db.get(Question, gone.id).status, db.get(Question, gone.id).starts_at) == ("closed", later)  # not voided
+    assert db.get(Question, moved.id).status == "open"
+    poll(db.get(Question, gone.id).event_id, sm.parse_match(football_match("FT", 1, 0)), "sportmonks_football")
+    db.expire_all()
+    assert (db.get(Question, gone.id).status, db.get(Question, gone.id).answer, picks(db)) == ("settled", str(HOME), {"asha": (str(HOME), predictions.FLOOR)})
 
 
 def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):

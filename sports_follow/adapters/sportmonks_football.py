@@ -51,8 +51,9 @@ _FINAL = {"FT", "AET", "FT_PEN", "WO", "AWARDED"}
 _STOPPED = {"INTERRUPTED", "SUSPENDED"}
 STOPPED_FOR = timedelta(hours=6)
 _OFF = {"POSTPONED", "CANCELLED", "ABANDONED", "DELETED"}
-# Called off for good: never to be played out, or given to a side without being (a walkover, a result awarded). The
-# board says so (state's cancelled): a prediction on it is voided (sports.football), where a postponed one waits.
+# Called off: cancelled, abandoned, deleted, or given to a side without being played out (a walkover, a result
+# awarded). The board says so (state's cancelled): a prediction on it is voided (sports.football), where a postponed
+# one waits; should the source finish it after all, a poll still settles it (predictions.settle).
 _CALLED_OFF = {"CANCELLED", "ABANDONED", "DELETED", "WO", "AWARDED"}
 _CLOCK = {"HT": "Half-time", "BREAK": "Break", "EXTRA_TIME_BREAK": "Extra-time break", "PEN_BREAK": "Before penalties", "INPLAY_PENALTIES": "Penalties",
           "INTERRUPTED": "Interrupted", "SUSPENDED": "Suspended",
