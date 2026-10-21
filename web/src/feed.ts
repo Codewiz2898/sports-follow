@@ -168,10 +168,22 @@ export function statsLine(item: FeedItem, now: number, withLength = false): stri
 /** YouTube's no-cookie player for a Feed video, playing at once: the web's in the picture's place, the app's inline in
  * a WebView on the site's address. `muted` for one that starts by itself without the fan's sound on (autoplay; a
  * browser lets only a muted one start before the page is tapped). `origin`: the page's own, for one YouTube's IFrame
- * Player API drives (its errors: refusedHere; its sound turned on and off where it plays, BHA-381). (BHA-354: the server will say how to play each video.) */
-export function youtubeEmbed(id: string, muted = false, origin?: string): string {
+ * Player API drives (its errors: refusedHere; its sound turned on and off where it plays, BHA-381). `bare`: without
+ * YouTube's controls (controls=0), for a Short playing as Shorts do (BHA-384): a tap on it pauses, the app's sound
+ * button beside it is its sound. (BHA-354: the server will say how to play each video.) */
+export function youtubeEmbed(id: string, muted = false, origin?: string, bare = false): string {
   const api = origin ? `&enablejsapi=1&origin=${encodeURIComponent(origin)}` : ''
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}${api}`
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}${bare ? '&controls=0' : ''}${api}`
+}
+
+/** Where a Short goes on a phone-shaped screen `width` × `height` (BHA-384), as the web's .reel.short lays it out: its
+ * 9:16 frame from `top` down, as wide as the screen allows once `foot` (what's below it: who and what, and the tab bar
+ * when there is one) is left clear; full width on a phone taller than that needs, narrower and centred on a shorter one.
+ * Nothing of the app's goes over it while it plays (YouTube's rules): who and what sit in the strip under it. */
+export function shortFrame(width: number, height: number, top: number, foot: number): { left: number; top: number; width: number; height: number } {
+  const tall = Math.max(0, Math.min((width * 16) / 9, height - top - foot))
+  const wide = (tall * 9) / 16
+  return { left: (width - wide) / 2, top, width: wide, height: tall }
 }
 
 /** Whether an error of YouTube's IFrame Player API means the video won't play in any player of ours (BHA-380), so the

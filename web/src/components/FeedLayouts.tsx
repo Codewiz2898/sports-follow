@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { FeedEntry, FeedTabKey } from '../api'
+import type { FeedEntry, FeedItem, FeedTabKey } from '../api'
 import { useAutoplay } from '../autoplay'
 import { channelOf, duration, statsLine, upright } from '../feed'
 import { safeHref, shortName } from '../format'
@@ -9,7 +9,7 @@ import { setSound, useSound } from '../sound'
 import { sportKey } from '../sports'
 import { FeedPlayer } from './FeedPlayer'
 import { Face } from './FeedPost'
-import { MutedIcon, SoundIcon } from './Icons'
+import { BackIcon, MutedIcon, SoundIcon } from './Icons'
 import { ShareButton } from './Share'
 
 /**
@@ -20,7 +20,10 @@ import { ShareButton } from './Share'
  * upright frame (FeedPlayer). It starts when tapped, with its sound, or by itself (BHA-359, usePlaying), once more than
  * half of it is on screen, as the fan's autoplay setting allows (autoplay.ts): muted until the fan turns the sound on,
  * then with it until they turn it off (BHA-381, sound.ts; the sound button beside a playing video). One at a time,
- * and it stops once it's off the screen. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
+ * and it stops once it's off the screen. An upright video (a Short) plays as Shorts do (BHA-384): in the full-screen
+ * layout its frame as wide as the phone allows under the tabs, who and what in the strip below it (ShortReel); from
+ * edge to edge in a viewer of the Feed's Shorts over the page (ShortsViewer). Nothing of the page goes over its player
+ * (YouTube's rules). Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
  * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
  */
 
@@ -88,15 +91,19 @@ function useInFront(): boolean {
  * screen (YouTube's rule) starts by itself, with the sound as the fan last left it, once the list has been still for
  * 250ms, unless one the fan started or touched is still playing. A video goes once none of its frame is on screen,
  * and one that started by itself and nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
- * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. */
-export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[]): { playing: Playing | null; play: (id: string) => void } {
+ * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. While not
+ * `active` (the Shorts viewer over the list), nothing of it plays. */
+export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[], active = true): { playing: Playing | null; play: (id: string) => void } {
   const [playing, setPlaying] = useState<Playing | null>(null)
   const allowed = useAutoplay()
   const front = useInFront()
   const starts = useRef(false)
-  starts.current = allowed && front
+  starts.current = allowed && front && active
+  const live = useRef(active)
+  live.current = active
   const shown = useRef(new Map<HTMLElement, number>())  // each video's frame, in the list's order: how much is on screen
   const settle = useCallback((start: boolean) => setPlaying((was) => {
+    if (!live.current) return null
     const frames = [...shown.current]
     const on = (id: string) => frames.some(([el, ratio]) => ratio > 0 && el.dataset.video === id)
     const now = was && on(was.id) && (starts.current || !was.auto || was.kept) ? was : null
@@ -132,7 +139,7 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
     window.addEventListener('resize', build)
     return () => { window.removeEventListener('resize', build); watch?.disconnect(); window.clearTimeout(wait) }
   }, [box, root, ids, settle])
-  useEffect(() => { settle(true) }, [allowed, front, settle])
+  useEffect(() => { settle(true) }, [allowed, front, active, settle])
 
   // A click into the player that started by itself (YouTube's sound button, say) moves the focus into its frame: the
   // page's blurs.
@@ -259,6 +266,9 @@ export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, foote
   useEffect(() => {
     if (shown >= entries.length - 3) near.current()
   }, [shown, entries])
+  // A Short on screen: the tab bar over it turns dark and see-through, as Shorts' own (:root[data-reels='short']).
+  const short = isShort(entries[shown]?.item)
+  useEffect(() => { document.documentElement.dataset.reels = short ? 'short' : '' }, [short])
   // A new tab starts from its top.
   useEffect(() => { box?.scrollTo({ top: 0 }); setShown(0) }, [box, tab])
 
@@ -268,8 +278,13 @@ export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, foote
       {playing && <SoundButton className="reels-sound" />}
       <div ref={setBox} className="reels-snap">
         {entries.map((e, n) => (
-          <Reel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id ? playing : null}
-            onPlay={() => play(e.item.id)} onMore={() => onMore(e)} />
+          isShort(e.item) ? (
+            <ShortReel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id}
+              onPlay={() => play(e.item.id)} onMore={() => onMore(e)} />
+          ) : (
+            <Reel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id ? playing : null}
+              onPlay={() => play(e.item.id)} onMore={() => onMore(e)} />
+          )
         ))}
         {/* A new one with each page: Chrome keeps the screen it had snapped to (the spinner) on screen as the page's
             reels come in above it, which opened the Feed at its end, or left a fast scroller at the spinner. */}
@@ -341,6 +356,106 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
         <button type="button" className="reel-act" onClick={onMore}><span className="reel-ic">{dots}</span>More</button>
       </div>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------- Shorts
+
+/** Whether an item is a Short: a video YouTube can play here, taller than it's wide. */
+export const isShort = (item?: FeedItem | null): boolean => Boolean(item && item.kind === 'video' && item.video?.youtube_id && upright(item))
+
+/** A Short as Shorts play (BHA-384, the Android app's ShortReel): on black, its 9:16 frame under the tabs as wide as
+ * the screen allows once what's under it is clear (.reel.short: full width on a phone taller than that needs), its
+ * picture there till it plays (so nothing moves as it starts), YouTube's player without its controls once it does;
+ * who, the channel, Follow, Share and More in a row under it, then the title, and the numbers when there's room.
+ * `onLeave`: before the player's page opens (the viewer closes). */
+function ShortReel({ n, entry, now, follows, playing, onPlay, onMore, onLeave }: {
+  n?: number; entry: FeedEntry; now: number; follows: Follows; playing: boolean; onPlay: () => void; onMore: () => void; onLeave?: () => void
+}) {
+  const { player: who, item } = entry
+  const [noPicture, setNoPicture] = useState(false)
+  const picture = !noPicture && item.picture ? safeHref(item.picture) : null
+  const mine = follows.following(entry)
+  const channel = channelOf(item)
+  return (
+    <section className="reel short" data-n={n} data-sport={sportKey(who.sport)} aria-label={item.title}>
+      <div className="short-frame" data-video={item.id}>
+        {playing ? <FeedPlayer key={item.video?.youtube_id} item={item} playerId={who.id} bare /> : (
+          <button type="button" className="reel-play" aria-label={`Play: ${item.title}`} onClick={onPlay}>
+            {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
+            <span className="reel-bigplay" aria-hidden="true">{playIcon}</span>
+          </button>
+        )}
+      </div>
+      <div className="short-strip">
+        <div className="short-row">
+          <Link to={`/player/${who.id}`} className="short-who" onClick={onLeave}>
+            <Face name={who.name} sport={who.sport} photo={who.photo} size={28} />
+            <span className="ellipsis"><b>{who.name}</b>{channel && <span className="short-chan">{`  ·  ${channel}`}</span>}</span>
+          </Link>
+          {(!entry.following || !mine) && (
+            <button type="button" className="short-follow" aria-pressed={mine} disabled={follows.busy(entry)} onClick={() => follows.toggle(entry)}>
+              {mine ? 'Following' : 'Follow'}
+            </button>
+          )}
+          <ShareButton {...shareFeedItem(who.id, item)} className="short-icon" />
+          <button type="button" className="short-icon" aria-label="More about this item" onClick={onMore}>{dots}</button>
+        </div>
+        <span className="short-title">{item.title}</span>
+        <span className="short-src">{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
+      </div>
+    </section>
+  )
+}
+
+/** The Feed's Shorts over the page, from edge to edge (BHA-384, the Android app's ShortsViewer): opened at the one
+ * tapped, `start`, one a screen, snapping, the one on screen playing as the Feed's would (the fan's autoplay and
+ * sound), swiping (or scrolling) through the rest of what the Feed has loaded (`onNear` loads more). Back (the
+ * browser's: it was opened as a step of its own), the arrow, or Escape closes it, and the Feed is where it was. */
+export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onClose }: {
+  entries: FeedEntry[]; start: string; now: number; follows: Follows; onMore: (entry: FeedEntry) => void; onNear: () => void; onClose: () => void
+}) {
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  const list = entries.filter((e) => isShort(e.item))
+  const { playing, play } = usePlaying(box, box, list)
+  const near = useRef(onNear)
+  near.current = onNear
+  // Opened at the one tapped, playing it (a tap: with its sound); and the page under it stays still meanwhile.
+  useEffect(() => {
+    if (!box) return
+    const at = Math.max(0, list.findIndex((e) => e.item.id === start))
+    box.scrollTo({ top: at * box.clientHeight })
+    if (list[at]) play(list[at].item.id)
+  }, [box]) // once, as it opens
+  useEffect(() => {
+    document.documentElement.dataset.shorts = ''
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', escape)
+    return () => { delete document.documentElement.dataset.shorts; window.removeEventListener('keydown', escape) }
+  }, [onClose])
+  const ids = list.map((e) => e.item.id).join(' ')
+  useEffect(() => {
+    if (!box) return
+    const watch = new IntersectionObserver((rows) => {
+      for (const r of rows) if (r.isIntersecting && Number((r.target as HTMLElement).dataset.n) >= list.length - 3) near.current()
+    }, { root: box, threshold: 0.6 })
+    box.querySelectorAll('.reel[data-n]').forEach((el) => watch.observe(el))
+    return () => watch.disconnect()
+  }, [box, ids])
+
+  return (
+    <div className="shorts-viewer" role="dialog" aria-modal="true" aria-label="Shorts">
+      <div className="reels shorts-reels">
+        <button type="button" className="shorts-back" aria-label="Back to the Feed" onClick={onClose}><BackIcon width={22} height={22} /></button>
+        {playing && <SoundButton className="reels-sound" />}
+        <div ref={setBox} className="reels-snap">
+          {list.map((e, n) => (
+            <ShortReel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id}
+              onPlay={() => play(e.item.id)} onMore={() => onMore(e)} onLeave={onClose} />
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 

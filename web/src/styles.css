@@ -965,6 +965,41 @@ div.result-main { cursor: default; }
 .reel-end .btn { border-color: #fff; color: #fff; }
 .reels-error { position: fixed; left: 16px; right: 16px; top: 64px; z-index: 6; }
 @media (max-height: 700px) { .reel-frame { top: 34%; } .reel-side { gap: 12px; } }  /* a short phone: the frame clear of the buttons */
+/* A Short as Shorts play (BHA-384, ShortReel): on black, its 9:16 frame under the tabs as wide as the screen allows
+   once what's under it is clear (who and what: --short-strip; the tab bar: --short-foot), full width on a phone taller
+   than that needs; who and what in the strip below it, so nothing of the page sits over YouTube's player. */
+.reel.short { display: flex; flex-direction: column; align-items: center; background: #000; padding-top: calc(58px + env(safe-area-inset-top, 0px));
+  --short-foot: calc(88px + env(safe-area-inset-bottom, 0px)); --short-strip: 72px; }
+.shorts-reels .reel.short { --short-foot: calc(12px + env(safe-area-inset-bottom, 0px)); --short-strip: 104px; }  /* the viewer: no tab bar */
+.short-frame { position: relative; flex: none; aspect-ratio: 9 / 16; max-width: 100%; overflow: hidden; background: #000;
+  height: min(calc(100cqw * 16 / 9), calc(100cqh - var(--short-foot) - var(--short-strip))); }  /* cqh: the reel's height less its top band (padding) */
+.short-frame img, .short-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }  /* the 16:9 thumbnail's pillarbox off */
+.short-strip { align-self: stretch; flex: 1; min-height: 0; overflow: hidden; margin-bottom: var(--short-foot); padding: 8px 12px 0; display: flex; flex-direction: column; gap: 4px; color: #fff; container: short-strip / size; }
+.short-row { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.short-who { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 14px; }
+.short-who b { font-weight: 800; }
+.short-who .face { box-shadow: 0 0 0 2px #fff; }
+.short-chan { font-weight: 700; font-size: 13px; color: rgba(255, 255, 255, 0.7); white-space: pre; }
+.short-follow { flex: none; height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: #fff; color: var(--text); font-weight: 800; font-size: 12px; cursor: pointer; }
+.short-follow[aria-pressed='true'] { background: transparent; color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5); }
+.short-follow:disabled { opacity: 0.6; cursor: default; }
+.short-icon { flex: none; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.16); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.short-icon svg { width: 18px; height: 18px; }
+.short-title { font-weight: 700; font-size: 15px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+.short-src { display: none; font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* As much of who and what as the strip has room for, whole lines only: a second line of title, then the numbers. */
+@container short-strip (min-height: 92px) { .short-title { -webkit-line-clamp: 2; } }
+@container short-strip (min-height: 112px) { .short-src { display: block; } }
+/* Over a Short, the tab bar dark and see-through, as Shorts' own. */
+:root[data-reels='short'] .tabbar { background: rgba(28, 28, 28, 0.78); box-shadow: none; outline: 0.5px solid rgba(255, 255, 255, 0.18); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); --focus: #fff; }
+:root[data-reels='short'] .tabbar a { color: var(--bg); }
+:root[data-reels='short'] .tabbar a.active { background: var(--bg); color: var(--text); }
+:root[data-reels='short'] .tabbar .nav-dot { background: var(--bg); }
+:root[data-reels='short'] .tabbar a.active .nav-dot { background: var(--text); }
+/* The viewer of the Feed's Shorts, over the page and its tab bar (ShortsViewer): Back at the top left. */
+:root[data-shorts] body { overflow: hidden; }
+.shorts-viewer { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; align-items: center; justify-content: center; }
+.shorts-back { position: absolute; z-index: 3; left: 13px; top: calc(11px + env(safe-area-inset-top, 0px)); width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.16); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 @media (min-width: 1024px) {
   /* Beside the sidebar: a phone-shaped column, the page under it as it is. */
   :root[data-reels] body { overflow: auto; }
@@ -973,6 +1008,8 @@ div.result-main { cursor: default; }
   .reel-side { bottom: 40px; }
   .reel-frame.upright { height: min(calc(100cqh - 294px), calc((100cqw - 140px) * 16 / 9)); }  /* who and what sit 80px lower here */
   .reels-error { position: static; }
+  .reel.short { --short-foot: 16px; }  /* no tab bar over it here */
+  .shorts-viewer .reels { height: calc(100vh - 32px); }
 }
 
 /* Today's "From your players": the two best, then the way to the rest. */

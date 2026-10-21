@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import type { FeedCircle, FeedEntry, FeedItem, FeedLayout, FeedPage as Page, FeedTabKey, FeedVerdict } from '../api'
 import { useNow } from '../clock'
 import { ItemSheet } from '../components/Feed'
-import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, usePlaying, type Follows } from '../components/FeedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, isShort, Reels, ShortsViewer, usePlaying, type Follows } from '../components/FeedLayouts'
 import { Circles } from '../components/FeedPost'
 import { ringed } from '../feed'
 import { markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
@@ -100,7 +100,21 @@ export function FeedPage() {
   }
   const picked = circles.find((c) => c.id === player)
   const items = page?.items ?? []
-  const { playing, play } = usePlaying(layout === 'edge' ? edge : null, null, items)
+  // A Short tapped from edge to edge opens the viewer of the Feed's Shorts over the page (BHA-384), as a step of its
+  // own (?short=<id>), so Back closes it where the Feed was; the list's own videos stop meanwhile.
+  const navigate = useNavigate()
+  const short = layout === 'edge' ? params.get('short') : null
+  const stepped = useRef(false) // opened here, so Back is the way out; a link straight to it replaces it instead
+  const openShort = (id: string) => {
+    stepped.current = true
+    setParams((p) => { const next = new URLSearchParams(p); next.set('short', id); return next })
+  }
+  const closeShort = useCallback(() => {
+    if (stepped.current) { stepped.current = false; navigate(-1); return }
+    setParams((p) => { const next = new URLSearchParams(p); next.delete('short'); return next }, { replace: true })
+  }, [navigate, setParams])
+  const { playing, play } = usePlaying(layout === 'edge' ? edge : null, null, items, short == null)
+  const tapped = (id: string) => (isShort(items.find((e) => e.item.id === id)?.item) ? openShort(id) : play(id))
   const sheet = open && (
     <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_: FeedItem, verdict: FeedVerdict) => hide(open, verdict)}>
       {layout === 'edge' && <EdgeSheetExtras entry={open} />}
@@ -171,7 +185,7 @@ export function FeedPage() {
       {items.length > 0 && (
         <div ref={setEdge} className="edge">
           {items.map((e) => (
-            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id} onPlay={play} onMore={() => setOpen(e)} />
+            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id} onPlay={tapped} onMore={() => setOpen(e)} />
           ))}
         </div>
       )}
@@ -179,6 +193,7 @@ export function FeedPage() {
       {page?.cursor && <div ref={end} className="row" style={{ justifyContent: 'center', minHeight: 48 }}>{loading && <span className="spinner" />}</div>}
       {error && page && <div className="error-box">{error} <button type="button" className="btn link" onClick={more}>Try again</button></div>}
       {done}
+      {short != null && items.length > 0 && <ShortsViewer entries={items} start={short} now={now} follows={follows} onMore={setOpen} onNear={more} onClose={closeShort} />}
       {sheet}
     </>
   )
