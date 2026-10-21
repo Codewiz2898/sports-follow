@@ -413,12 +413,17 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and on a player's Feed, and full screen between the tabs and what's at its foot, so nothing sits over YouTube's
   player (BHA-358). The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
   on the site's address (`feedLayouts.tsx` InlineVideo), the tab bar where it was; and by itself as it comes on
-  screen (BHA-359): muted, one at a time, the reel on screen or the topmost post more than half in view, stopping
-  once it's off the screen or the Feed's left. Always by default; the Account page has On Wi-Fi and Off
+  screen (BHA-359): muted until the fan turns the sound on (the app's sound button beside the video, YouTube's own,
+  or a tap to play one), then with it until they mute (BHA-381, `mobile/src/sound.ts`, kept for the day); one at a
+  time, the reel on screen or the topmost post more than half in view, stopping once it's off the screen or the
+  Feed's left. Always by default; the Account page has On Wi-Fi and Off
   (`mobile/src/autoplay.ts`, kept on the phone); a tap on one playing keeps it as the fan scrolls on. The web's
   Feed does the same (`web/src/autoplay.ts`, `FeedLayouts.tsx` usePlaying; the setting kept in the browser), and
   also never while the browser asks to save data; its On Wi-Fi is "not on mobile data or slower than 4G" where the
-  browser says (Chrome), as Always where it doesn't. A click into the muted player keeps it. It's
+  browser says (Chrome), as Always where it doesn't. A click into a player that started by itself keeps it. Its
+  sound is kept as the app's is (`web/src/sound.ts`, FeedPlayer), but a browser lets a video start with its sound
+  only once the page has been tapped: before that one starts muted with its sound held back, and the fan's next tap
+  on the page lets it out. It's
   `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
   Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
   escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,

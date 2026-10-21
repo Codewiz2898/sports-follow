@@ -41,6 +41,13 @@ export const CloseIcon = (p: SVGProps<SVGSVGElement>) => (
 export const ShareIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><circle cx="18" cy="5" r="2.6" /><circle cx="6" cy="12" r="2.6" /><circle cx="18" cy="19" r="2.6" /><path d="m8.4 13.3 7.2 4.3M15.6 6.4l-7.2 4.3" /></svg>
 )
+// A playing Feed video's sound button (FeedLayouts.tsx): a speaker with its sound, or crossed out.
+export const SoundIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+)
+export const MutedIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M11 5 6 9H3v6h3l5 4zM16 9l5 6M21 9l-5 6" /></svg>
+)
 export const OutIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><path d="M7 17 17 7M8 7h9v9" /></svg>
 )

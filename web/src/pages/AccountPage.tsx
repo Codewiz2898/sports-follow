@@ -27,7 +27,8 @@ export function AccountPage() {
   )
 }
 
-/** Whether the Feed's videos play by themselves as they come on screen, muted: Always (the default), On Wi-Fi, Off. */
+/** Whether the Feed's videos play by themselves as they come on screen, muted until the fan turns the sound on
+ * (sound.ts): Always (the default), On Wi-Fi, Off. */
 function Videos() {
   const autoplay = useAutoplaySetting()
   return (
@@ -36,7 +37,7 @@ function Videos() {
       <div className="card card-pad stack" style={{ gap: 12 }}>
         <span className="stack" style={{ gap: 4 }}>
           <span className="title" id="autoplay-label">Play videos as you scroll</span>
-          <span className="small muted">In your Feed, the video on screen starts by itself, muted. Never while your browser is saving data.</span>
+          <span className="small muted">In your Feed, the video on screen starts by itself, muted until you turn the sound on. Then the next ones play with it, until you mute. Never while your browser is saving data.</span>
         </span>
         <div className="segmented" role="radiogroup" aria-labelledby="autoplay-label">
           {AUTOPLAY.map(([key, label]) => (

@@ -3,9 +3,9 @@ import { useSyncExternalStore } from 'react'
 /**
  * Whether the Feed's videos start by themselves as they come on screen (BHA-359), the Android app's autoplay.ts:
  * always (the default, Bharath's call), only on Wi-Fi, or never, the fan's choice on the Account page, kept in this
- * browser. Muted when they do, one at a time (components/FeedLayouts.tsx usePlaying). Never while the browser asks to
- * save data; and "On Wi-Fi" is "not on mobile data or a slow connection", where the browser says which it's on
- * (Chrome does, Safari and Firefox don't: there it's as Always).
+ * browser. Muted when they do until the fan turns the sound on (sound.ts), one at a time (components/FeedLayouts.tsx
+ * usePlaying). Never while the browser asks to save data; and "On Wi-Fi" is "not on mobile data or a slow
+ * connection", where the browser says which it's on (Chrome does, Safari and Firefox don't: there it's as Always).
  */
 
 export type Autoplay = 'always' | 'wifi' | 'off'

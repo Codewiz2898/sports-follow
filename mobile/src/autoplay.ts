@@ -1,6 +1,6 @@
 // Whether the Feed's videos start by themselves as they come on screen (BHA-359): always (the default, Bharath's
-// call), only on Wi-Fi, or never, the fan's choice on the Account page, kept on this phone. Muted when they do,
-// one at a time (feedLayouts.tsx).
+// call), only on Wi-Fi, or never, the fan's choice on the Account page, kept on this phone. Muted when they do until
+// the fan turns the sound on (sound.ts), one at a time (feedLayouts.tsx).
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { addNetworkStateListener, getNetworkStateAsync, NetworkStateType, type NetworkState } from 'expo-network'
