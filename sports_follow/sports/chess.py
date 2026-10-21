@@ -41,34 +41,33 @@ def band(ev: dict[str, Any], current: int = 0) -> int:
 
 
 def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
-    """An evaluation with its settled band. The band moves only when the evaluations of two positions
-    in a row agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing.
+    """An evaluation with its settled band. The band goes by each position's first look ("look", the quick
+    one every position gets; engine.py) and moves only when the first looks of two positions in a row
+    agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing.
 
-    The engine looks at a position quickly, then deeper while the game stays on it (engine.py). A deeper
-    look replaces the position's reading ("raw") but is the same position, so it never counts as the
-    second of the two: a position's reading is held against the one of the position before it ("prior", at
-    the deepest that one was seen). So a position moves the band at most once, a glitched board searched
-    three times is still one reading, and a quick +3.4 told as "winning" isn't taken back on the same move
-    when a deeper look puts it at +2.4 or level: the next move's reading, against that deeper one, decides.
-    A deeper look that agrees with the position before moves the band then.
+    While someone has the game open, the engine goes on deepening the position it's on. A deeper reading of
+    the same position is shown (cp, mate and depth, for the board's bar) but never moves the band, nor what
+    the next position is held against ("raw"): a game's alerts are the same whether anyone watches it, and
+    don't hang on how far a search had got when a poll came.
 
     "told" is the winning band (2 or -2) the game last moved into, kept until it's level again or the
     other side is better: an evaluation hovering on the winning line (+2.6, +3.4, +2.7…) moves the band
     back and forth, and the player is winning once, not at every climb."""
     if before and before.get("at") == ev.get("at"):
         return before
+    if before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen"):
+        # A deeper reading of the position: shown, and the band as its first look settled it.
+        return {**ev, "move": before.get("move"), "raw": before.get("raw"), "band": before.get("band", 0), "told": before.get("told", 0)}
     settled = before.get("band", 0) if before else 0
-    raw = band(ev, settled)
-    deeper = before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen")
-    prior = (before or {}).get("prior" if deeper else "raw")
-    moved = before is None or raw == prior
+    raw = band(ev.get("look") or ev, settled)
+    moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
     told = before.get("told", 0) if before else 0
     if before is not None and abs(new) == 2 and new != settled:
         told = new
     elif new * told <= 0:
         told = 0
-    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "prior": prior, "band": new, "told": told}
+    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "band": new, "told": told}
 
 
 def _fullmove(fen: str | None) -> int | None:
@@ -188,7 +187,7 @@ class Chess(Sport):
         if turnaround:
             title, level = f"Turnaround: {title}", "key"
         opponent = stat(now.line, "Opponent")
-        body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
+        body = " · ".join(x for x in (f"Engine {_score(got.get('look') or got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:

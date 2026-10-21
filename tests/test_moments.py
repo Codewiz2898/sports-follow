@@ -213,12 +213,19 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     assert chess.settle(old, {"cp": 260, "at": 1})["told"] == 0
 
 
+def reading(move: int, cp: int, at: int, look: int | None = None, depth: int = 20) -> dict:
+    """The engine's latest evaluation of move `move`'s position as a poll reads it: what it shows (cp, depth) and
+    the position's first look (look, by default this one: a first look)."""
+    return {"cp": cp, "mate": None, "depth": depth, "look": {"cp": cp if look is None else look, "mate": None, "depth": 20}, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {move}"}
+
+
 def swings(looks: list[tuple[int, int]], colour: str = "White") -> list[tuple[int, str]]:
-    """The swings a fan of White hears from a stream of evaluations, each (move, centipawns): the engine's quick
-    look at a move's position, then its deeper ones while the game stays there (engine.py), as polls read them."""
-    ev, found = None, []
+    """The swings a fan hears from a stream of the engine's readings, each (move, centipawns), as polls read them:
+    a move's first look, then deeper readings while the game stays on it and someone has it open (engine.py)."""
+    ev, found, first = None, [], {}
     for at, (move, cp) in enumerate(looks, 1):
-        new = chess.settle(ev, {"cp": cp, "mate": None, "depth": 18 + at, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {move}"})
+        first.setdefault(move, cp)
+        new = chess.settle(ev, reading(move, cp, at, look=first[move], depth=18 + at))
         if ev is not None:
             before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
             found += [(move, f.title) for f in detect("Chess", "Magnus Carlsen", "1503014", before, now)]
@@ -226,30 +233,37 @@ def swings(looks: list[tuple[int, int]], colour: str = "White") -> list[tuple[in
     return found
 
 
-def test_a_deeper_look_at_the_same_position_never_takes_a_swing_back():
-    # A quick +3.4 at move 32 agrees with move 31 and is told at once; deeper looks at the same position put it at
-    # +2.4, then level, twice. Two looks in a row agreeing told "advantage gone" on the same move: no longer.
+def test_deeper_readings_never_move_the_band():
+    # Move 32's first look agrees with 31's: winning, told at once. Deeper readings of it at +2.4, then level, are
+    # shown but don't take it back on the same move (two in a row agreeing would have).
     assert swings([(30, 20), (31, 340), (32, 340), (32, 240), (32, 30), (32, 30)]) == [(32, "Magnus Carlsen is winning")]
-    # The next move's reading agrees with the deeper one, and that's told then.
-    looks = [(30, 20), (31, 340), (31, 350), (32, 340), (32, 240), (32, 30), (33, 30)]
-    assert swings(looks) == [(32, "Magnus Carlsen is winning"), (33, "Magnus Carlsen's advantage is gone")]
-    # Several looks at one position are one reading: a glitched board deepened is still a single position.
+    # Nor do they tell a swing the first looks don't: a glitched board searched on, or deeper readings agreeing with
+    # the move before where the first look didn't.
     assert swings([(30, 20), (31, 520), (31, 530), (31, 540), (32, 30)]) == []
-    # The next move doesn't agree with the deeper look: nothing to take back, nothing told.
-    assert swings([(30, 20), (31, 340), (32, 340), (32, 240), (32, 30), (33, 340)]) == [(32, "Magnus Carlsen is winning")]
+    assert swings([(30, 20), (31, 340), (32, 250), (32, 350), (32, 360)]) == []
+    # So a game's alerts are its first looks', whether anyone watched it (deeper readings) or not.
+    watched = [(30, 20), (30, 60), (31, 340), (31, 250), (32, 340), (32, 120), (33, 30), (33, 300)]
+    unwatched = [(m, cp) for i, (m, cp) in enumerate(watched) if i == 0 or watched[i - 1][0] != m]
+    assert swings(watched) == swings(unwatched) == [(32, "Magnus Carlsen is winning")]
+    # What's shown is the deepest reading, beside the band its first look settled.
+    told = chess.settle(None, reading(31, 20, 1))
+    first = chess.settle(told, reading(32, 360, 2))
+    deeper = chess.settle(first, reading(32, 900, 3, look=360, depth=30))
+    assert (deeper["cp"], deeper["depth"], deeper["band"], deeper["raw"]) == (900, 30, first["band"], first["raw"])
 
 
 def test_a_swing_on_a_new_move_is_told_as_fast_as_before():
-    # One look a position, as before deeper looks: told at the second position that agrees.
+    # Told at the second position whose first look agrees, deeper readings or not.
     assert swings([(30, 20), (31, 340), (32, 350)]) == [(32, "Magnus Carlsen is winning")]
     assert swings([(30, 20), (31, -340), (32, -350)], colour="Black") == [(32, "Magnus Carlsen is winning")]
-    # Deeper looks in between don't hold it back...
     assert swings([(30, 20), (30, 25), (31, 340), (31, 345), (32, 350)]) == [(32, "Magnus Carlsen is winning")]
-    # ...and one that agrees with the position before moves the band then, without waiting for the next move.
-    assert swings([(30, 20), (31, 340), (32, 250), (32, 350)]) == [(32, "Magnus Carlsen is winning")]
-    # An evaluation stored before deeper looks has no "prior": a deeper look at its position waits for the next move.
-    fen = "8/8/8/8/8/8/8/8 w - - 0 40"
-    assert chess.settle({"cp": 340, "at": 0, "band": 0, "raw": 2, "fen": fen}, {"cp": 350, "at": 1, "fen": fen})["band"] == 0
+    # The alert quotes the position's first look, not a deeper reading shown since.
+    level = chess.settle(chess.settle(None, reading(30, 20, 1)), reading(31, 360, 2))
+    ahead = chess.settle(level, reading(32, 360, 3))
+    shown = {**ahead, "cp": 900, "depth": 30}
+    seen = lambda ev: Seen("live", state={"game_id": "g1", "eval": ev}, line=line("White vs Gukesh D", Colour="White", Opponent="Gukesh D"))  # noqa: E731
+    [f] = detect("Chess", "Magnus Carlsen", "1503014", seen(level), seen(shown))
+    assert f.body == "Engine +3.6 · move 32 · vs Gukesh D"
 
 
 def test_levels_decide_who_hears():
