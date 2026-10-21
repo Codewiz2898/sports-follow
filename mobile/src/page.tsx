@@ -34,8 +34,9 @@ export function Page({ children, onRefresh, refreshing, top = true, bar = colour
 }
 
 /** A page that's a long list (the Feed): the same paper, padding and notice, but only the rows near the screen
- * are drawn, so their pictures load as they come near. `head` goes above the rows, `foot` below them. */
-export function PageList<T>({ head, foot, onRefresh, refreshing, ...list }: Omit<FlatListProps<T>, 'ListHeaderComponent' | 'ListFooterComponent' | 'refreshControl'> & { head: ReactElement; foot?: ReactElement; onRefresh?: () => void; refreshing?: boolean }) {
+ * are drawn, so their pictures load as they come near. `head` goes above the rows, `foot` below them; `gap`
+ * between them all. */
+export function PageList<T>({ head, foot, onRefresh, refreshing, gap = 14, ...list }: Omit<FlatListProps<T>, 'ListHeaderComponent' | 'ListFooterComponent' | 'refreshControl'> & { head: ReactElement; foot?: ReactElement; onRefresh?: () => void; refreshing?: boolean; gap?: number }) {
   const insets = useSafeAreaInsets()
   const { notice } = useAccount()
   return (
@@ -43,7 +44,7 @@ export function PageList<T>({ head, foot, onRefresh, refreshing, ...list }: Omit
       <FlatList
         {...list}
         style={s.page}
-        contentContainerStyle={[s.content, { gap: 14, paddingTop: insets.top + 20, paddingBottom: 120 + insets.bottom }]}
+        contentContainerStyle={[s.content, { gap, paddingTop: insets.top + 20, paddingBottom: 120 + insets.bottom }]}
         ListHeaderComponent={<View style={{ gap: 16 }}>{notice ? <AccountNotice /> : null}{head}</View>}
         ListFooterComponent={foot}
         refreshControl={onRefresh ? <RefreshControl refreshing={Boolean(refreshing)} onRefresh={onRefresh} /> : undefined}

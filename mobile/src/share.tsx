@@ -11,7 +11,7 @@ import { Btn, type BtnColours } from './ui'
 
 /** The share sheet: on Android the link as the text and the title as its subject, as Chrome's Web Share sends
  * them; on iOS the link as a URL. Android always reports it shared, and a failure has nothing to show. */
-function share({ path, title }: Shared) {
+export function share({ path, title }: Shared) {
   const url = shareLink(API_URL, path)
   Share.share(Platform.OS === 'ios' ? { url } : { message: url, title }, { subject: title }).catch(() => {})
 }
