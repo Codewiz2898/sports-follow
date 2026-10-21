@@ -27,7 +27,7 @@ function Line({ row, now }: { row: WireRow; now: number }) {
 }
 
 /**
- * The Wire on Today: an ink card of who's out and who's back, line-ups and news, the fan's players' first, then
+ * The Wire on Today: a white card of who's out and who's back, line-ups and news, the fan's players' first, then
  * a few of the best-known players they don't follow; each a tag, one line, where it's from and a time. Nothing
  * here says "breaking". Nothing at all when there's none.
  */

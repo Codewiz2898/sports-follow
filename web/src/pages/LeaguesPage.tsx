@@ -135,13 +135,13 @@ function ordinal(n: number): string {
 
 // ---------------------------------------------------------------- one league
 
-/** A league's ink band: a tag over its name in big type, and a line under it. */
+/** A league's band: a tag over its name in big type, and a line under it. */
 function Band({ name, tag, line }: { name: string; tag: string; line?: ReactNode }) {
   return (
     <header className="league-band">
       <span className="tag">{tag}</span>
       <span className="dsp league-name">{name}</span>
-      {line && <span className="small" style={{ fontWeight: 700, color: '#c9c9c2' }}>{line}</span>}
+      {line && <span className="small muted" style={{ fontWeight: 700 }}>{line}</span>}
     </header>
   )
 }
@@ -171,10 +171,10 @@ export function FriendLeaguePage() {
     <>
       <Head title="League" back="/me/leagues" />
       <Band name={league.name} tag={`${league.members} ${league.members === 1 ? 'member' : 'friends'}`} />
-      <section className="invite-box" style={{ background: 'var(--text)', color: 'var(--bg)' }} aria-label="Invite">
-        <span className="eyebrow" style={{ color: '#a9abb0' }}>Invite link</span>
+      <section className="invite-box" aria-label="Invite">
+        <span className="eyebrow">Invite link</span>
         <span style={{ fontWeight: 800, fontSize: 17, overflowWrap: 'anywhere' }}>{link}</span>
-        <ShareButton {...shareInvite(league, APP_NAME)} className="btn on-ink primary" text="Share invite" onShared={() => { void api.leagueShared(league.code).catch(() => {}) }} />
+        <ShareButton {...shareInvite(league, APP_NAME)} className="btn primary" text="Share invite" onShared={() => { void api.leagueShared(league.code).catch(() => {}) }} />
       </section>
 
       <section className="section" aria-label="Table">

@@ -161,7 +161,7 @@ export function SignIn({ failed, back, intro }: { failed: string | null; back?: 
   return (
     <>
       {intro ?? (
-        <section className="hero" data-sport="other" aria-label="Sign in">
+        <section className="hero plain" aria-label="Sign in">
           <span className="dsp" style={{ fontSize: 44 }}>Save your players</span>
           <p style={{ fontWeight: 600, maxWidth: '38ch' }}>
             Sign in to keep your players, alerts and muted games on every phone and computer. Everything you follow on this device comes with you.

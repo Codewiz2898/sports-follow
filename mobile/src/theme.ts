@@ -15,7 +15,7 @@ export const colour = {
   liveText: '#B8190F', // red as text: 4.5:1 or better on every light surface
   danger: '#B42318',
   dangerBg: '#FDE8E6',
-  inkMuted: '#A9ABB0', // muted text on ink (the board, the Wire, the next game)
+  inkMuted: '#A9ABB0', // muted text on ink (the board)
   inkLine: 'rgba(255,255,255,0.16)',
   inkRaised: '#26272A',
   follow: '#1F5BEF', // Follow on a Feed card (--follow): the boards' one blue, never a sport's identity
