@@ -93,6 +93,38 @@ def test_videos_around_a_moment_come_first_and_the_judges_score_leads_within_a_g
     ]
 
 
+def worth(days_old: float, views: int, interest: float) -> float:
+    """A made-up video's place in the Feed: its stored score (rank.score, read a day ago, a 3% like ratio, a channel a
+    sport lists), faded for its age as the Feed serves it."""
+    from sports_follow import rank
+
+    published = NOW - timedelta(days=days_old)
+    read_at = NOW - timedelta(days=min(1.0, days_old / 2))
+    features = {"views": views, "likes": views * 3 // 100, "reads": [{"at": read_at.isoformat(), "views": views, "likes": views * 3 // 100}]}
+    verdict = {"about_player": "subject", "interest": interest}
+    return rank.score(verdict, features, rank.LISTED, published) * feed.fade(published, NOW)
+
+
+@pytest.mark.parametrize(("ahead", "behind"), [
+    ((2, 50_000, 0.7), (90, 6_000_000, 0.9)),  # this week's good one leads a strong one from three months ago
+    ((3, 5_000, 0.5), (90, 6_000_000, 0.9)),  # and so does this week's middling one
+    ((90, 6_000_000, 0.9), (1, 500, 0.2)),  # a strong one from three months ago outranks a weak one from yesterday
+    ((90, 6_000_000, 0.9), (30, 200_000, 0.5)),  # and a middling one from last month
+    ((1, 500, 0.2), (90, 200_000, 0.5)),  # a middling old one doesn't outrank yesterday's weak one
+    ((1, 20_000, 0.6), (5, 20_000, 0.6)),  # alike but for age: newer first
+])  # fmt: skip
+def test_recency_is_weighed_as_the_feed_serves_so_this_weeks_good_ones_lead_and_a_strong_old_one_beats_a_weak_new_one(ahead, behind):
+    assert worth(*ahead) > worth(*behind)
+
+
+def test_the_fade_falls_over_the_first_days_and_levels_off():
+    assert feed.fade(NOW, NOW) == 1.0
+    assert feed.fade(NOW - feed.HALF_LIFE, NOW) == pytest.approx(feed.FADE_FLOOR + (1 - feed.FADE_FLOOR) / 2)
+    assert feed.fade(NOW - timedelta(days=90), NOW) == pytest.approx(feed.FADE_FLOOR, abs=1e-6)
+    assert feed.fade(NOW + timedelta(hours=1), NOW) == 1.0  # a clock a little ahead: not past fresh
+    assert feed.fade(None, NOW) == feed.fade(NOW - feed.HALF_LIFE * 4, NOW)
+
+
 def test_only_links_the_app_may_open_and_videos_it_can_play():
     assert feed._safe(video("https://youtu.be/1", "ok"))  # pyright: ignore[reportPrivateUsage]
     assert not feed._safe(video("javascript:alert(1)", "bad link"))  # pyright: ignore[reportPrivateUsage]

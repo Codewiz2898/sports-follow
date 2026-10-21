@@ -15,19 +15,23 @@ tuning) but never served: its score stays NULL. An admin's word on a row
 
 The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
-    trust x (INTEREST x the judge's interest + PACE x how fast it's watched + LIKES x its like ratio)
+    trust x (INTEREST x the judge's interest + POPULAR x how widely it's watched for its age + LIKES x its like ratio)
+
+It's age-fair and stays put as days pass: nothing in it is "now". How widely it's watched is its views a day since
+it was published, as its latest read counted them, on a log scale (popular_part); a read changes it, a day going
+by doesn't. Recency is the Feed's to weigh, as it serves (feed.py's fade), so last season's best and today's are
+scored alike and the Feed decides how much newer counts.
 
 A story from a publisher's feed (news.py) has no views or likes: how many outlets ran it stands in for both,
 
-    trust x (INTEREST x the judge's interest + (PACE + LIKES) x how many outlets ran it, up to OUTLETS_TOP)
+    trust x (INTEREST x the judge's interest + (POPULAR + LIKES) x how many outlets ran it, up to OUTLETS_TOP)
 
 and of a player's stories about the same thing within a day (news.clusters) only the best is served, counting
 the others' outlets (features["outlets"]); the rest keep a NULL score. A feed's trust is a channel's: high while a
 running sport lists it.
 
-How fast it's watched is views an hour between its last two reads (the first when it was found, then a re-read
-every few hours while it's under two days old, then the weekly check), or over its whole life while there's
-one read. A channel's trust is high when a running sport lists it, lower for one no sport lists any more,
+Its reads are the first when it was found, then a re-read every few hours while it's under two days old, then the
+weekly check: how fast it's watched lately (between the last two) says whether an older one is evergreen. A channel's trust is high when a running sport lists it, lower for one no sport lists any more,
 or what the admin panel sets for it (controls.channel_trust: 0 hides it). Signed-in fans reporting its
 videos, or saying they aren't about the player, lower a default trust, down to half of it at most; an
 admin's setting stands as it is.
@@ -60,8 +64,12 @@ log = logging.getLogger("sports_follow.rank")
 JUDGE_PER_RUN = 300  # candidates sent to the judge a run: what a poll finds is far fewer; a backlog clears in a few
 JUDGE_FOR = 12 * 60  # seconds a run of the judge may take: well inside the poll's lock (curator.POLL_LOCK)
 JUDGE_CHUNK = curate.WORKERS * 2  # judged side by side and stored together, so a run cut short keeps what it did
-INTEREST, PACE, LIKES = 0.45, 0.35, 0.20  # the score's weights; trust multiplies the sum
-PACE_TOP = 10_000  # views an hour that count as the most a video can be watched
+INTEREST, POPULAR, LIKES = 0.45, 0.35, 0.20  # the score's weights; trust multiplies the sum
+# Views a day since it was published that count as the most a video can be watched (popular_part), on a log scale:
+# 1,000 a day is half of it, 30 a day a quarter. A read in its first hours counts that long as MIN_AGE: an hour's
+# burst isn't a day's pace.
+PER_DAY_TOP = 1_000_000
+MIN_AGE = timedelta(hours=6)
 LIKES_TOP = 0.06  # a like ratio that counts as the most liked; 4-6% is a lot on YouTube
 LIKES_UNKNOWN = 0.5  # its part while there are too few views to tell (or likes are hidden)
 LIKES_FROM = 100  # views before the like ratio means anything
@@ -124,18 +132,19 @@ def growth(features: dict[str, Any]) -> float | None:
     return max(0, vb - va) / ((b - a).total_seconds() / 3600)
 
 
-def pace(features: dict[str, Any], published: datetime | None, now: datetime) -> float:
-    """Views an hour: between its two reads, else over its life so far (at least an hour of it)."""
-    found = growth(features)
-    if found is not None:
-        return found
-    views = whole(features.get("views")) or 0
-    reads = [r for r in features.get("reads") or [] if isinstance(r, dict)]
-    read_at = when(reads[-1].get("at")) if reads else None
-    if published is None:
-        return 0.0
-    hours = max(1.0, ((read_at or now) - published).total_seconds() / 3600)
-    return views / hours
+def per_day(features: dict[str, Any], published: datetime | None) -> float | None:
+    """Views a day since it was published, as its latest read counted them (at least MIN_AGE of its life): None
+    without a publication time or a read's."""
+    reads = [r for r in features.get("reads") or [] if isinstance(r, dict) and when(r.get("at")) is not None]
+    if published is None or not reads:
+        return None
+    last = reads[-1]
+    views = whole(last.get("views"))
+    views = whole(features.get("views")) if views is None else views
+    read_at = when(last.get("at"))
+    if views is None or read_at is None:
+        return None
+    return views / (max(read_at - published, MIN_AGE) / timedelta(days=1))
 
 
 def like_part(features: dict[str, Any]) -> float:
@@ -145,13 +154,15 @@ def like_part(features: dict[str, Any]) -> float:
     return min(1.0, likes / views / LIKES_TOP)
 
 
-def pace_part(per_hour: float) -> float:
-    return min(1.0, math.log10(1 + max(0.0, per_hour)) / math.log10(1 + PACE_TOP))
+def popular_part(features: dict[str, Any], published: datetime | None) -> float:
+    """How widely it's watched for its age, 0 to 1: log views a day over PER_DAY_TOP's; 0 when that can't be told."""
+    found = per_day(features, published)
+    return 0.0 if found is None else min(1.0, math.log10(1 + max(0.0, found)) / math.log10(1 + PER_DAY_TOP))
 
 
 def stream(source: str, kept: dict[str, Any] | None) -> str:
     """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, a
-    sweep's (gap, month, famous: sweeps.py), or a channel."""
+    sweep's (gap, wide, famous: sweeps.py), or a channel."""
     if is_story(source):
         return "news"
     kept = kept or {}
@@ -165,13 +176,14 @@ def passes(verdict: dict[str, Any] | None) -> bool:
     return bool(verdict) and verdict.get("about_player") == "subject" and not verdict.get("sponsored") and not verdict.get("risks")
 
 
-def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, published: datetime | None, now: datetime) -> float:
-    """The row's number, 0 to 1, before an admin's pin (see the module's docstring)."""
+def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, published: datetime | None) -> float:
+    """The row's number, 0 to 1, before an admin's pin (see the module's docstring): the same whatever day it's
+    worked out on, for the same reads."""
     try:
         interest = min(1.0, max(0.0, float(verdict.get("interest") or 0)))
     except (TypeError, ValueError):
         interest = 0.0
-    raw = INTEREST * interest + PACE * pace_part(pace(features, published, now)) + LIKES * like_part(features)
+    raw = INTEREST * interest + POPULAR * popular_part(features, published) + LIKES * like_part(features)
     if verdict.get("about_player") == "mention":
         raw *= MENTION
     return round(max(0.0, trust) * raw, 4)
@@ -188,7 +200,7 @@ def story_score(verdict: dict[str, Any], outlets: int, trust: float) -> float:
         interest = min(1.0, max(0.0, float(verdict.get("interest") or 0)))
     except (TypeError, ValueError):
         interest = 0.0
-    raw = INTEREST * interest + (PACE + LIKES) * outlets_part(outlets)
+    raw = INTEREST * interest + (POPULAR + LIKES) * outlets_part(outlets)
     if verdict.get("about_player") == "mention":
         raw *= MENTION
     return round(max(0.0, trust) * raw, 4)
@@ -413,7 +425,7 @@ def rescore(now: datetime | None = None, channel: str | None = None, row: int | 
             if r.id in outlets:
                 worth = lambda far, r=r: story_score(r.verdict, outlets[r.id][0], far)  # noqa: E731
             else:
-                worth = lambda far, r=r: score(r.verdict, r.features or {}, far, published[r.id], now)  # noqa: E731
+                worth = lambda far, r=r: score(r.verdict, r.features or {}, far, published[r.id])  # noqa: E731
             value: float | None = None
             if r.review in ("approved", "pinned"):
                 # The admin's word on this one item stands over their word on its channel: served, if hidden there.

@@ -94,9 +94,9 @@ FEED_MOMENT_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MOMENT_SEAR
 # Searches in any 24 hours for a followed player with nothing to watch this week (sweeps.py: the gap search), the
 # most followed first. 0 turns them off.
 FEED_GAP_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_GAP_SEARCHES", 20)))
-# Searches in any 24 hours for each followed player's most watched videos of the last 30 days (sweeps.py: the month
-# sweep, for the feed's "This month"), each player at most weekly. 0 turns them off.
-FEED_MONTH_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MONTH_SEARCHES", 14)))
+# Searches in any 24 hours for each followed player's most watched videos of the last six months (sweeps.py: the
+# wide sweep), each player at most weekly, a seventh of them a day. 0 turns them off.
+FEED_WIDE_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_WIDE_SEARCHES", 14)))
 # Searches in any 7 days for a followed player's most watched videos ever (sweeps.py: the famous sweep), spread
 # over the week's days; each player at most once a month. 0 turns them off.
 FEED_FAMOUS_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES", 35)))

@@ -36,7 +36,7 @@ def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811
 
 def test_without_a_key_nothing_is_swept(monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
-    assert sweeps.run(NOW) == {"gap searched": 0, "month searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
+    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
 
 
 def test_a_sweeps_rows_are_counted_as_its_own_stream():
@@ -44,8 +44,8 @@ def test_a_sweeps_rows_are_counted_as_its_own_stream():
     assert rank.stream("youtube", {"swept": 5, "stream": "famous"}) == "famous"
     assert rank.stream("youtube", {"searched_for": 9}) == "search" and rank.stream("youtube", {}) == "channels"
     assert rank.stream("youtube", {"stream": "made-up"}) == "channels"
-    assert rank.stream("youtube", {"swept": 6, "stream": "month"}) == "month"
-    assert {"gap", "month", "famous"} <= set(metrics.STREAMS)
+    assert rank.stream("youtube", {"swept": 6, "stream": "wide"}) == "wide"
+    assert {"gap", "wide", "famous"} <= set(metrics.STREAMS)
 
 
 def test_what_a_sweep_finds_stored_already_counts_as_spent_for_nothing(measured):  # noqa: F811
@@ -84,12 +84,12 @@ def test_however_full_the_sweeps_caps_the_days_moment_searches_all_run(fake, mon
 
 def test_the_default_caps_share_the_day_with_the_moment_searches():
     """A day's 40 moment searches (4,040 units with their videos.list reads) fit under the 9,000 spendable less the
-    quarter their gate keeps for the channel poll and the weekly check; the sweeps' caps (20 gap, 14 month, 5
+    quarter their gate keeps for the channel poll and the weekly check; the sweeps' caps (20 gap, 14 wide, 5
     famous) are ceilings, and the gate above holds them to what's left of that."""
     from sports_follow import config
 
     assert config.FEED_MOMENT_SEARCHES * (youtube.SEARCH_COST + 1) <= youtube.PER_DAY - youtube.MARGIN - searches.KEEP_SHARE * youtube.PER_DAY
-    assert (config.FEED_GAP_SEARCHES, config.FEED_MONTH_SEARCHES, math.ceil(config.FEED_FAMOUS_SEARCHES / 7)) == (20, 14, 5)
+    assert (config.FEED_GAP_SEARCHES, config.FEED_WIDE_SEARCHES, math.ceil(config.FEED_FAMOUS_SEARCHES / 7)) == (20, 14, 5)
 
 
 def test_the_daily_sweep_runs_in_the_feed_lane_then_ranks_what_it_kept(monkeypatch):

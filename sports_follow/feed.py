@@ -9,7 +9,8 @@ the news the player's page already has.
 `judged` is where the pipeline plugs in: the rows the curator judged and scored (rank.py), served as videos,
 and stories from the publishers' feeds (news.py) as news, each with the number of outlets that ran it. While a
 player has any of those stories they are the feed's news, and the curator puts them on the card too (news_for,
-rank.cards), so the player page's news is theirs; without any, the card's news is. Their score fades with age (HALF_LIFE); a page holds one video from each channel and
+rank.cards), so the player page's news is theirs; without any, the card's news is. Their score, age-fair as the curator stores it (rank.py),
+fades with age only here (fade); a page holds one video from each channel and
 PER_MOMENT around each moment; older ones still being watched are "the ones everyone's seen" (evergreen). If
 reading them fails, a feed is the card's news alone (never emptier than the News tab was), and Today's rail,
 which takes no news (the Wire has it), is empty.
@@ -48,7 +49,15 @@ MONTH = timedelta(days=30)
 THIS_WEEK = "This week"
 THIS_MONTH = "This month"  # 8 to 30 days old
 EARLIER = "Earlier"
-HALF_LIFE = timedelta(days=3)  # a video's score halves over this, so last week's best gives way to today's
+# Recency, weighed only as the Feed serves (the stored score is age-fair, rank.py): a share's score is multiplied by
+#
+#     FADE_FLOOR + (1 - FADE_FLOOR) x 0.5 ^ (age / HALF_LIFE)
+#
+# which falls fast over the first days and levels off at FADE_FLOOR. So this week's good ones lead (an interesting,
+# well-watched video two days old keeps about 80% of its score), and a strong one from three months ago (45%) still
+# outranks a weak one from yesterday (89% of a much lower score): tests/test_feed.py pins the order of a few.
+HALF_LIFE = timedelta(days=3)
+FADE_FLOOR = 0.45
 PER_MOMENT = 2  # videos on a page around one moment: the best two of the many edits of one goal
 NEWS_ON_CARD = 10  # stories a player page's news holds (news_for), newest first
 
@@ -155,6 +164,12 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
         return {}
 
 
+def fade(published: datetime | None, now: datetime) -> float:
+    """What of a share's score is left at its age (the curve above); one with no date counts as HALF_LIFE x 4 old."""
+    age = (now - published) if published else HALF_LIFE * 4
+    return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
+
+
 def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
     fades only past its pin, so it leads however old, and is never put among the evergreen."""
@@ -165,8 +180,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
     score = (r.score or 0.0) - (rank.PIN if pinned else 0.0)
     published = rank.when(kept.get("published"))
     evergreen = not pinned and rank.evergreen(features, published, now)
-    age = (now - published) if published else HALF_LIFE * 4
-    faded = (score if evergreen else score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)) + (rank.PIN if pinned else 0.0)
+    faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=str(kept.get("title") or "").strip() or "A video", url=r.url,
         source=str(kept.get("channel") or source), published_at=str(kept.get("published") or "") or None,
@@ -179,8 +193,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
 
 def _faded(score: float, pinned: bool, published: datetime | None, now: datetime) -> float:
     """A row's score faded by age, a pinned one only past its pin."""
-    age = (now - published) if published else HALF_LIFE * 4
-    return score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE) + (rank.PIN if pinned else 0.0)
+    return score * fade(published, now) + (rank.PIN if pinned else 0.0)
 
 
 def _story(r: Any, now: datetime) -> Candidate | None:
