@@ -52,10 +52,13 @@ export interface BoardProps<S = unknown> {
 export type Board = (props: BoardProps<never>) => ReactNode
 
 /** What a sport's part of a match page is drawn from (the web's MatchProps): its sections (the server's
- * Sport.match_page, by name: a timeline, a scorecard, maps, moves), and the game's live block, if it has one yet. */
+ * Sport.match_page, by name: a timeline, a scorecard, maps, moves), the game's live block, if it has one yet, the
+ * names of the fan's players in it, to mark them, and its sport's colours (the web's, from the page's data-sport). */
 export interface MatchProps<P = unknown> {
   page: P
   live: LiveStatus | null
+  yours?: string[]
+  tone: Tone
 }
 
 export type MatchPart = (props: MatchProps<never>) => ReactNode

@@ -1,9 +1,10 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
 import './esports.css'
 import {
-  acrossMaps, amount, banNote, dotaLine, mapBest, draftRounds, esports as facts, everyMapBans, isLobby, isYours, LANES, laneWords, leadLine, leadOf, liveLeadOf,
-  lobbyRows, lobbyWinners, place, points, seriesBest, shortTeam, towersLeft, whoPlayed, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState,
-  type EsportsTeam, type LaneBuildings, type LiveDetail, type MapDetail, type MapMark, type PageTeam, type Reading,
+  acrossMaps, banNote, boardSide, dotaLine, mapBest, draftRounds, esports as facts, everyMapBans, followedIn, isLobby, isYours, LANES, laneWords, leader,
+  leadLine, leadOf, leadSummary, liveGold, liveLeadOf, liveNow, lobbyRows, lobbyWinners, namesYours, nearest, place, points, seriesBest, shortTeam, sparkTop,
+  towersLeft, whoPlayed, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam, type LaneBuildings, type LiveDetail,
+  type MapDetail, type MapMark, type PageTeam, type Reading,
 } from './facts/esports'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
@@ -103,11 +104,6 @@ function Spark({ readings, top, label }: { readings: Reading[]; top: number; lab
   )
 }
 
-/** Who leads, in a few words: "Yandex +4.4k", "Level". */
-function leader(v: number, [a, b]: PageTeam[]): string {
-  return Math.round(v) === 0 ? 'Level' : `${v > 0 ? a.short : b.short} +${amount(v)}`
-}
-
 /** A map's lead over time (gold, in Dota 2), up for the first team: a finished map's minute by minute, each
  * mark (a Roshan) on it in its taker's colour, or the map being played's so far. A pointer or the arrow
  * keys read any reading. */
@@ -121,22 +117,16 @@ function LeadGraph({ id, title, what, readings, marks = [], teams }: { id: strin
   const minute = (e: PointerEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
     const t = ((((e.clientX - box.left) / box.width) * W - 8) / (W - 16)) * line.end
-    setAt(readings.reduce((best, [rt], i) => (Math.abs(rt - t) < Math.abs(readings[best][0] - t) ? i : best), 0))
+    setAt(nearest(readings, t))
   }
   const key = (e: KeyboardEvent<SVGSVGElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
     setAt((i) => Math.max(0, Math.min(last, (i ?? last) + (e.key === 'ArrowLeft' ? -1 : 1))))
   }
-  const most = (sign: number) => readings.reduce((best, [, v], i) => (sign * v > sign * readings[best][1] ? i : best), 0)
-  const [up, down] = [readings[most(1)], readings[most(-1)]]
-  const summary = [
-    up[1] > 0 ? `${a.short} up most, ${amount(up[1])}, at minute ${Math.round(up[0] / 60)}` : `${a.short} never ahead`,
-    down[1] < 0 ? `${b.short} up most, ${amount(down[1])}, at minute ${Math.round(down[0] / 60)}` : `${b.short} never ahead`,
-    `at the last reading ${leader(readings[last][1], teams)}`,
-  ].join('; ')
+  const summary = leadSummary(readings, teams)
   const ticks = Array.from({ length: Math.floor(line.end / 600) + 1 }, (_, i) => i * 600)
-  const [t, v] = readings[at ?? last]
+  const [t, v] = readings[Math.min(at ?? last, last)] // a reading stepped to on a longer line: its last
   const area = `${line.points} ${line.x(readings[last][0]).toFixed(1)},${line.mid} ${line.x(readings[0][0]).toFixed(1)},${line.mid}`
   return (
     <div className="card card-pad stack lead-graph" style={{ gap: 10 }}>
@@ -192,8 +182,8 @@ function LaneSide({ lane, right }: { lane?: LaneBuildings; right?: boolean }) {
 function LiveMap({ live, board, teams, yours }: { live: LiveDetail; board?: DotaLiveMap | null; teams: PageTeam[]; yours?: string[] }) {
   const [a, b] = teams
   const now = board && board.n === live.n ? board : null
-  const side = (id: string) => (now ? (now.radiant.id === id ? now.radiant : now.dire) : null)
-  const gold = now ? (now.gold_lead.amount >= 1000 ? `${teams.find((t) => t.id === now.gold_lead.id)?.short ?? ''} up ${amount(now.gold_lead.amount)} gold` : 'Level on gold') : null
+  const side = (id: string) => (now ? boardSide(now, id) : null)
+  const gold = now ? liveGold(now, teams) : null
   const readings = liveLeadOf(live, a.id)
   const built = live.buildings
   return (
@@ -244,13 +234,6 @@ function LiveMap({ live, board, teams, yours }: { live: LiveDetail; board?: Dota
   )
 }
 
-const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-/** The fan's players' names as whole words to find in a line ("Aegis to Yatoro"). */
-function names(yours?: string[]): RegExp[] {
-  return (yours ?? []).map((y) => y.trim()).filter(Boolean).map((y) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(y)}($|[^\\p{L}\\p{N}_])`, 'iu'))
-}
-
 /** One finished map: who took it and both sides' totals, its lead by minute, how it went, every player with
  * their items, and its draft. */
 function MapView({ maps, map, teams, yours }: { maps: MapDetail[]; map: MapDetail; teams: PageTeam[]; yours?: string[] }) {
@@ -282,7 +265,7 @@ function MapView({ maps, map, teams, yours }: { maps: MapDetail[]; map: MapDetai
         <MatchSection title={`How map ${map.n} went`}>
           <ol className="card list map-moments">
             {(map.events ?? []).map((e, i) => {
-              const ours = names(yours).some((y) => y.test(`${e.title} ${e.note ?? ''}`))
+              const ours = namesYours(`${e.title} ${e.note ?? ''}`, yours)
               return (
                 <li key={`${e.t}-${i}`} className={ours ? 'yours' : undefined}>
                   <span className="num">{e.clock}</span>
@@ -364,7 +347,7 @@ function SeriesDetail({ maps, teams, yours, live }: { maps: MapDetail[]; teams: 
   const map = maps.find((m) => m.n === picked) ?? maps[maps.length - 1]
   const best = seriesBest(maps)
   const bans = everyMapBans(maps)
-  const followed = [...new Set(maps.flatMap((m) => (m.players ?? []).map((p) => p.name)))].filter((n) => isYours(n, yours))
+  const followed = followedIn(maps, yours)
   return (
     <>
       {best && (
@@ -452,10 +435,9 @@ function EsportsMatch({ page, live, yours }: MatchProps<EsportsPage>) {
   const teams = page.teams?.length === 2 ? page.teams : null
   const detail = teams ? (page.detail?.maps ?? []) : []
   const board = (live?.state as unknown as EsportsState | undefined)?.dota?.live
-  // The map being played, while the board says it still is (a read can be a minute behind a map's end).
-  const now = teams && live?.is_live && board && board.n === page.detail?.live?.n ? page.detail.live : null
+  const now = liveNow(page, board, !!live?.is_live)
   const told = new Map(detail.map((m) => [m.n, m]))
-  const top = Math.max(2000, ...detail.flatMap((m) => (m.lead?.by_minute ?? []).map((v) => Math.abs(v))))
+  const top = sparkTop(detail)
   return (
     <>
       {now && teams && <LiveMap live={now} board={board} teams={teams} yours={yours} />}

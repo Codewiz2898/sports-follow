@@ -99,6 +99,50 @@ export function amount(n: number): string {
   return Math.abs(n) >= 1000 ? `${(Math.abs(n) / 1000).toFixed(1)}k` : String(Math.abs(n))
 }
 
+/** Who leads, in a few words: "Yandex +4.4k", "Level". */
+export function leader(v: number, [a, b]: PageTeam[]): string {
+  return Math.round(v) === 0 ? 'Level' : `${v > 0 ? a.short : b.short} +${amount(v)}`
+}
+
+/** A lead line in words, for a screen reader: when each side was up most, and who leads at the last reading. */
+export function leadSummary(readings: Reading[], teams: PageTeam[]): string {
+  const [a, b] = teams
+  const most = (sign: number) => readings.reduce((best, [, v], i) => (sign * v > sign * readings[best][1] ? i : best), 0)
+  const [up, down] = [readings[most(1)], readings[most(-1)]]
+  return [
+    up[1] > 0 ? `${a.short} up most, ${amount(up[1])}, at minute ${Math.round(up[0] / 60)}` : `${a.short} never ahead`,
+    down[1] < 0 ? `${b.short} up most, ${amount(down[1])}, at minute ${Math.round(down[0] / 60)}` : `${b.short} never ahead`,
+    `at the last reading ${leader(readings[readings.length - 1][1], teams)}`,
+  ].join('; ')
+}
+
+/** The reading nearest a time into the map (where a pointer is on a lead line). */
+export function nearest(readings: Reading[], t: number): number {
+  return readings.reduce((best, [rt], i) => (Math.abs(rt - t) < Math.abs(readings[best][0] - t) ? i : best), 0)
+}
+
+/** The series' one scale for its maps' small lead lines, so they compare: the biggest lead in any map, at least 2k. */
+export function sparkTop(maps: MapDetail[]): number {
+  return Math.max(2000, ...maps.flatMap((m) => (m.lead?.by_minute ?? []).map((v) => Math.abs(v))))
+}
+
+/** The map being played's part, while the board says that map is still on (a read can be a minute behind a
+ * map's end), for a series whose two teams the page names. */
+export function liveNow(page: EsportsPage, board: DotaLiveMap | null | undefined, live: boolean): LiveDetail | null {
+  const now = page.detail?.live
+  return page.teams?.length === 2 && live && board && now && board.n === now.n ? now : null
+}
+
+/** One side on the board of the map being played, by its team id. */
+export function boardSide(board: DotaLiveMap, id: string): DotaLiveMap['radiant'] {
+  return board.radiant.id === id ? board.radiant : board.dire
+}
+
+/** The board's gold lead in the map being played: "Spirit up 4.4k gold", or under a thousand "Level on gold". */
+export function liveGold(board: DotaLiveMap, teams: PageTeam[]): string {
+  return board.gold_lead.amount >= 1000 ? `${teams.find((t) => t.id === board.gold_lead.id)?.short ?? ''} up ${amount(board.gold_lead.amount)} gold` : 'Level on gold'
+}
+
 /** Points along a lead line in a w×h box (x from pad to w-pad, from the map's start to its last reading;
  * zero across the middle), scaled to its biggest lead (at least `floor`), with where each time and amount
  * falls, and the lead at any time between readings. */
@@ -199,6 +243,18 @@ export function acrossMaps(maps: MapDetail[], name: string): { maps: { n: number
 export function isYours(name: string, yours: string[] | undefined): boolean {
   const n = name.trim().toLowerCase()
   return !!n && (yours ?? []).some((y) => y.trim().toLowerCase() === n)
+}
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Whether a line ("Aegis to Yatoro") names one of the fan's players, as a whole word. */
+export function namesYours(text: string, yours: string[] | undefined): boolean {
+  return (yours ?? []).map((y) => y.trim()).filter(Boolean).some((y) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(y)}($|[^\\p{L}\\p{N}_])`, 'iu').test(text))
+}
+
+/** The fan's players in the series' maps, each once, as they first appear. */
+export function followedIn(maps: MapDetail[], yours: string[] | undefined): string[] {
+  return [...new Set(maps.flatMap((m) => (m.players ?? []).map((p) => p.name)))].filter((n) => isYours(n, yours))
 }
 
 /** Who won each of a lobby's matches so far, in a line: "M1 (Erangel): GodLike · M2: Soul"; "" before any. */
