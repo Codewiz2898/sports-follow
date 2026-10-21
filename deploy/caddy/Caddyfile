@@ -25,11 +25,13 @@
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		# What the app's pages may load: everything from here, except Google Fonts' stylesheet and fonts,
-		# and on a player's Feed, YouTube's thumbnails and, once a fan taps play, its no-cookie player; on a
-		# match page's Watch live, once tapped, Twitch's or Kick's player.
+		# on the Feed, pictures over https from anywhere (YouTube's thumbnails, and the image each publisher's
+		# feed attaches to a story, which lives on the publisher's own image hosts, not the feed's), and, once
+		# a fan taps play, YouTube's no-cookie player; on a match page's Watch live, once tapped, Twitch's or
+		# Kick's player.
 		# No other site may put them in a frame (until there's a real domain, every *.sslip.io server is
 		# the same site, so SameSite cookies alone don't stop a sibling from framing the app).
-		Content-Security-Policy "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://i.ytimg.com; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://player.kick.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://player.kick.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		X-Frame-Options "DENY"
 		-Server
 	}

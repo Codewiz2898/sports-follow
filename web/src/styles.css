@@ -62,14 +62,15 @@ p { margin: 0; }
 .main { display: flex; flex-direction: column; gap: 16px; padding: calc(20px + env(safe-area-inset-top, 0px)) var(--gutter) 120px; max-width: 560px; width: 100%; margin: 0 auto; }
 .sidebar { display: none; }
 
-/* Phone: a floating ink pill, three places. */
+/* Phone: a floating ink pill, four places. */
 .tabbar {
   position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 10;
   max-width: 440px; margin: 0 auto; height: 64px; padding: 0 8px;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: center;
   border-radius: 999px; background: var(--text); box-shadow: 0 12px 32px rgba(13, 13, 13, 0.28);
 }
-.tabbar a { display: flex; align-items: center; justify-content: center; gap: 8px; height: 48px; border-radius: 999px; color: var(--bg); font-weight: 700; font-size: 14px; }
+.tabbar a { position: relative; display: flex; align-items: center; justify-content: center; gap: 6px; height: 48px; border-radius: 999px; color: var(--bg); font-weight: 700; font-size: 14px; }
+@media (max-width: 379px) { .tabbar a svg { display: none; } }  /* a small phone: the words alone */
 .tabbar a.active { background: var(--bg); color: var(--text); font-weight: 800; }
 
 @media (min-width: 1024px) {
@@ -96,6 +97,10 @@ p { margin: 0; }
 .side-head.active { color: var(--text); }
 .nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: var(--live); color: #fff; font-size: 11px; font-weight: 800; }
 .tabbar .nav-count { margin-left: -2px; }
+/* Something new in the Feed: a dot by its name, in the bar's paper colour (red is only for live). */
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text); flex-shrink: 0; margin-left: auto; }
+.tabbar .nav-dot { background: var(--bg); margin: -12px 0 0 -3px; }
+.tabbar a.active .nav-dot { background: var(--text); }
 
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .page-title { font-size: 54px; }
@@ -735,12 +740,6 @@ div.result-main { cursor: default; }
 /* Overview's line of a post under the top video. */
 .feed-line { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 18px; border: 0; text-align: left; cursor: pointer; }
 /* Today's "From your players": a block of the player's sport colour per share. */
-.feed-share { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; width: 204px; min-height: 196px; padding: 14px 16px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }
-.feed-share .who { font-size: 30px; overflow-wrap: anywhere; }
-.feed-share .line { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.feed-share .line.said { font-style: italic; font-weight: 600; }
-.feed-share .from { font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--on-sport-soft); }
-.feed-share-play { position: absolute; right: 12px; top: 12px; width: 36px; height: 36px; border-radius: 50%; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; }
 
 /* ---------------------------------------------------------------- calling games (components/Picks.tsx, pages/Leagues.tsx)
    A question's answers are tiles; the fan's pick wears its sport's colour, as everything that's theirs does. The
@@ -789,3 +788,59 @@ div.result-main { cursor: default; }
 .friend { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--bg); font-size: 12px; font-weight: 800; }
 .pick-slot { width: 264px; }
 .pick-slot > .pick-card { height: 100%; }
+
+/* ---------------------------------------------------------------- the Feed tab (pages/FeedPage.tsx, components/FeedPost.tsx) */
+/* A player's photo in a circle, or their initials on their sport's colour. */
+.face { position: relative; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: var(--face, 38px); height: var(--face, 38px); border-radius: 50%; overflow: hidden;
+  background: var(--sport); color: var(--on-sport); font-size: calc(var(--face, 38px) * 0.32); font-weight: 800; letter-spacing: 0.02em; }
+.face img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 15%; }
+.face.all { background: var(--text); color: var(--bg); font-size: 12px; }
+
+/* The players across the top: a ring in their sport's colour while there's something new of theirs, grey once seen. */
+.circles { display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--gutter)); padding: 2px var(--gutter); }
+.circles::-webkit-scrollbar { display: none; }
+.circle { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 64px; flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--text); cursor: pointer; }
+.circle .ring { width: 62px; height: 62px; border-radius: 50%; padding: 3px; background: #c9c9c2; display: flex; align-items: center; justify-content: center; }
+.circle .ring.lit { background: var(--sport); }
+.circle .ring.all { background: var(--text); }
+.circle .ring .face { border: 3px solid var(--bg); width: 56px; height: 56px; }
+.circle .nm { font-size: 11px; font-weight: 700; max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.circle[aria-pressed='true'] .nm { font-weight: 800; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+@media (min-width: 1024px) { .circles { margin: 0; padding: 2px 0; flex-wrap: wrap; overflow: visible; } }
+
+.feed-day { display: flex; flex-direction: column; gap: 12px; }
+.feed-day-head { display: flex; align-items: center; gap: 10px; margin: 6px 4px 0; color: var(--text); }
+.feed-day-head::after { content: ""; flex: 1; height: 2px; background: var(--line); }
+.posts { display: flex; flex-direction: column; gap: 14px; }
+@media (min-width: 1024px) { .posts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; } }
+
+/* A card: who and where from, the picture, the words, Share and the source. */
+.post { display: flex; flex-direction: column; overflow: hidden; border-radius: var(--radius-card); background: var(--surface); }
+.post-head { display: flex; align-items: center; gap: 8px; padding: 12px 6px 10px 14px; }
+.post-who { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.post-who .who { font-weight: 800; font-size: 14px; line-height: 1.2; }
+.post-sub { font-size: 12px; font-weight: 700; color: var(--muted); line-height: 1.3; }
+.post-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; flex-shrink: 0; }
+.post-tag.own { background: var(--text); color: var(--bg); }
+.post-more { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.post-more:hover { background: var(--bg); color: var(--text); }
+.post-media { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; background: var(--sport); }
+.post-media.video { background: var(--text); }
+.post-media img, .post-media iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+.post-play { position: relative; width: 58px; height: 58px; border-radius: 50%; border: 0; background: rgba(243, 243, 239, 0.95); color: var(--text); display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); cursor: pointer; }
+.post-play:hover { background: #fff; }
+.post-chip { position: absolute; right: 10px; bottom: 10px; height: 22px; padding: 0 8px; border-radius: 999px; background: rgba(13, 13, 13, 0.78); color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; line-height: 22px; }
+/* A story without an image: its headline is the picture, on the sport's colour. */
+.post-block { display: flex; flex-direction: column; justify-content: space-between; gap: 16px; aspect-ratio: 4 / 3; padding: 18px; background: var(--sport); color: var(--on-sport); }
+.post-block .eyebrow { color: var(--on-sport-soft); }
+.post-block .dsp { font-size: 34px; line-height: 0.98; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+.post-quote { margin: 0; padding: 18px 18px 8px; font-size: 18px; font-weight: 600; font-style: italic; line-height: 1.4; color: #2a2b2e; }
+.post-cap { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 4px; }
+.post-title { font-weight: 700; font-size: 15px; line-height: 1.35; }
+.post-acts { display: flex; align-items: center; gap: 18px; padding: 4px 14px 12px; }
+.post-act { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0; border: 0; background: none; color: var(--text); font-size: 13px; font-weight: 800; cursor: pointer; }
+.post-act.link { margin-left: auto; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; text-align: right; }
+
+/* Today's "From your players": the two best, then the way to the rest. */
+.from-players .posts { gap: 12px; }
+.from-players .all { width: 100%; height: 52px; }

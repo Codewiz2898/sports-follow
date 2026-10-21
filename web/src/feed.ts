@@ -4,7 +4,7 @@
 // (mobile/src/feed.tsx), so it touches nothing of a browser's.
 
 import { dateOnly, day, parseDate } from './format'
-import type { Feed, FeedItem } from './types'
+import type { Feed, FeedCircle, FeedEntry, FeedItem } from './types'
 
 export type FeedKind = FeedItem['kind']
 export const FEED_KINDS: [FeedKind, string][] = [['video', 'Videos'], ['post', 'Posts'], ['news', 'News']]
@@ -101,4 +101,50 @@ export function fromTheFans(feed: Feed | null): { top: FeedItem; line?: FeedItem
 /** "4 outlets", for a story more than one outlet ran; nothing otherwise. */
 export function outlets(n?: number | null): string {
   return n && n > 1 ? `${n} outlets` : ''
+}
+
+// ---------------------------------------------------------------- the fan's own Feed (GET /api/me/feed/items)
+
+/** The fan's Feed's entries as their day groups, in order: one group for each run of entries of one day. */
+export function byDay(entries: FeedEntry[]): { day: string; entries: FeedEntry[] }[] {
+  const out: { day: string; entries: FeedEntry[] }[] = []
+  for (const e of entries) {
+    const last = out.at(-1)
+    if (last && last.day === e.day) last.entries.push(e)
+    else out.push({ day: e.day, entries: [e] })
+  }
+  return out
+}
+
+/** How long something new keeps a player's circle ringed while the fan hasn't looked at them. */
+export const RING_FOR = 2 * 864e5
+
+/** Whether a player's circle is ringed in their sport's colour: something of theirs came in after the fan last
+ * looked at them (`seen`, when they tapped the circle), and within RING_FOR. */
+export function ringed(circle: FeedCircle, seen: string | null | undefined, now: number): boolean {
+  const newest = parseDate(circle.newest)?.getTime()
+  if (newest == null || now - newest > RING_FOR) return false
+  const looked = parseDate(seen ?? null)?.getTime()
+  return looked == null || newest > looked
+}
+
+/** Whether the Feed tab has its dot: something came in after the fan last opened it (or ever, before they first did). */
+export function hasNew(newest: string | null | undefined, opened: string | null | undefined): boolean {
+  const at = parseDate(newest ?? null)?.getTime()
+  if (at == null) return false
+  const looked = parseDate(opened ?? null)?.getTime()
+  return looked == null || at > looked
+}
+
+/** A card's head line: where it's from and when ("Cover Drive Edits · 3h"), a post's account where it was posted. */
+export function fromLine(item: FeedItem, now: number): string {
+  const from = item.kind === 'post' ? postFrom(item) : [item.source, outlets(item.outlets)].filter(Boolean).join(' · ')
+  return [from, ago(item.published_at, now, true)].filter(Boolean).join(' · ')
+}
+
+/** What a card's link at the bottom says: a story "Read at <outlet>", a post "Open on <platform>", a video "Watch at <channel>". */
+export function openLabel(item: FeedItem): string {
+  if (item.kind === 'post') return `Open on ${item.post?.platform ?? 'the post'}`
+  if (item.kind === 'video') return item.source ? `Watch at ${item.source}` : 'Watch where it was posted'
+  return item.source ? `Read at ${item.source}` : 'Read the story'
 }
