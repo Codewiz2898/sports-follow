@@ -1,8 +1,9 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
 import './esports.css'
 import {
-  acrossMaps, amount, banNote, dotaLine, mapBest, draftRounds, esports as facts, everyMapBans, isLobby, isYours, leadLine, leadOf, lobbyRows, lobbyWinners, place, points,
-  seriesBest, shortTeam, whoPlayed, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam, type MapDetail, type PageTeam,
+  acrossMaps, amount, banNote, dotaLine, mapBest, draftRounds, esports as facts, everyMapBans, isLobby, isYours, LANES, laneWords, leadLine, leadOf, liveLeadOf,
+  lobbyRows, lobbyWinners, place, points, seriesBest, shortTeam, towersLeft, whoPlayed, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState,
+  type EsportsTeam, type LaneBuildings, type LiveDetail, type MapDetail, type MapMark, type PageTeam, type Reading,
 } from './facts/esports'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
@@ -92,8 +93,8 @@ function EsportsBoard(props: BoardProps<EsportsState | BattleRoyaleState>) {
 }
 
 /** A map's lead line, small, on the series' one scale so the maps compare: up is the first team's. */
-function Spark({ values, top, label }: { values: number[]; top: number; label: string }) {
-  const line = leadLine(values, 92, 32, 3, top)
+function Spark({ readings, top, label }: { readings: Reading[]; top: number; label: string }) {
+  const line = leadLine(readings, 92, 32, 3, top)
   return (
     <svg className="spark" width="92" height="32" viewBox="0 0 92 32" role="img" aria-label={label}>
       <line x1="0" y1={line.mid} x2="92" y2={line.mid} className="zero" />
@@ -104,81 +105,142 @@ function Spark({ values, top, label }: { values: number[]; top: number; label: s
 
 /** Who leads, in a few words: "Yandex +4.4k", "Level". */
 function leader(v: number, [a, b]: PageTeam[]): string {
-  return v === 0 ? 'Level' : `${v > 0 ? a.short : b.short} +${amount(v)}`
+  return Math.round(v) === 0 ? 'Level' : `${v > 0 ? a.short : b.short} +${amount(v)}`
 }
 
-/** A map's lead by minute (gold, in Dota 2), up for the first team, each mark (a Roshan) on it in its taker's
- * colour; a pointer or the arrow keys read any minute. */
-function LeadGraph({ map, teams }: { map: MapDetail; teams: PageTeam[] }) {
+/** A map's lead over time (gold, in Dota 2), up for the first team: a finished map's minute by minute, each
+ * mark (a Roshan) on it in its taker's colour, or the map being played's so far. A pointer or the arrow
+ * keys read any reading. */
+function LeadGraph({ id, title, what, readings, marks = [], teams }: { id: string; title: string; what: string; readings: Reading[]; marks?: MapMark[]; teams: PageTeam[] }) {
   const [a, b] = teams
-  const values = leadOf(map, a.id)
   const [at, setAt] = useState<number | null>(null)
   const W = 354
   const H = 128
-  const line = leadLine(values, W, H, 8)
-  const last = values.length - 1
+  const line = leadLine(readings, W, H, 8)
+  const last = readings.length - 1
   const minute = (e: PointerEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect()
-    const fx = ((e.clientX - box.left) / box.width) * W
-    setAt(Math.max(0, Math.min(last, Math.round(((fx - 8) / (W - 16)) * last))))
+    const t = ((((e.clientX - box.left) / box.width) * W - 8) / (W - 16)) * line.end
+    setAt(readings.reduce((best, [rt], i) => (Math.abs(rt - t) < Math.abs(readings[best][0] - t) ? i : best), 0))
   }
   const key = (e: KeyboardEvent<SVGSVGElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
-    setAt((m) => Math.max(0, Math.min(last, (m ?? last) + (e.key === 'ArrowLeft' ? -1 : 1))))
+    setAt((i) => Math.max(0, Math.min(last, (i ?? last) + (e.key === 'ArrowLeft' ? -1 : 1))))
   }
-  const most = (sign: number) => values.reduce((best, v, i) => (sign * v > sign * values[best] ? i : best), 0)
-  const [upMost, downMost] = [most(1), most(-1)]
+  const most = (sign: number) => readings.reduce((best, [, v], i) => (sign * v > sign * readings[best][1] ? i : best), 0)
+  const [up, down] = [readings[most(1)], readings[most(-1)]]
   const summary = [
-    values[upMost] > 0 ? `${a.short} up most, ${amount(values[upMost])}, at minute ${upMost}` : `${a.short} never ahead`,
-    values[downMost] < 0 ? `${b.short} up most, ${amount(values[downMost])}, at minute ${downMost}` : `${b.short} never ahead`,
-    `at the end ${leader(values[last], teams)}`,
+    up[1] > 0 ? `${a.short} up most, ${amount(up[1])}, at minute ${Math.round(up[0] / 60)}` : `${a.short} never ahead`,
+    down[1] < 0 ? `${b.short} up most, ${amount(down[1])}, at minute ${Math.round(down[0] / 60)}` : `${b.short} never ahead`,
+    `at the last reading ${leader(readings[last][1], teams)}`,
   ].join('; ')
-  const y = (t: number) => {
-    const m = Math.max(0, Math.min(last, t / 60))
-    const i = Math.floor(m)
-    return line.y(values[i] + (values[Math.min(last, i + 1)] - values[i]) * (m - i))
-  }
-  const ticks = Array.from({ length: Math.floor(last / 10) + 1 }, (_, i) => i * 10)
-  const shown = at ?? last
-  const area = `${line.points} ${line.x(last).toFixed(1)},${line.mid} ${line.x(0).toFixed(1)},${line.mid}`
+  const ticks = Array.from({ length: Math.floor(line.end / 600) + 1 }, (_, i) => i * 600)
+  const [t, v] = readings[at ?? last]
+  const area = `${line.points} ${line.x(readings[last][0]).toFixed(1)},${line.mid} ${line.x(readings[0][0]).toFixed(1)},${line.mid}`
   return (
     <div className="card card-pad stack lead-graph" style={{ gap: 10 }}>
       <span className="row">
-        <span className="eyebrow">Map {map.n}, {map.lead?.what ?? 'lead'} by minute</span>
-        <span className="small" style={{ fontWeight: 800 }} aria-live="polite">{shown}′ · {leader(values[shown], teams)}</span>
+        <span className="eyebrow">{title}</span>
+        <span className="small" style={{ fontWeight: 800 }} aria-live="polite">{Math.round(t / 60)}′ · {leader(v, teams)}</span>
       </span>
-      <svg viewBox={`0 0 ${W} ${H + 46}`} role="img" aria-label={`${a.short}'s ${map.lead?.what ?? 'lead'} lead by minute in map ${map.n}: ${summary}.`} tabIndex={0}
+      <svg viewBox={`0 0 ${W} ${H + 46}`} role="img" aria-label={`${a.short}'s ${what} lead, ${title.toLowerCase()}: ${summary}.`} tabIndex={0}
         onPointerMove={minute} onPointerDown={minute} onPointerLeave={() => setAt(null)} onKeyDown={key} onBlur={() => setAt(null)}>
         <defs>
-          <clipPath id={`up-${map.n}`}><rect x="0" y="0" width={W} height={line.mid} /></clipPath>
-          <clipPath id={`down-${map.n}`}><rect x="0" y={line.mid} width={W} height={H} /></clipPath>
+          <clipPath id={`up-${id}`}><rect x="0" y="0" width={W} height={line.mid} /></clipPath>
+          <clipPath id={`down-${id}`}><rect x="0" y={line.mid} width={W} height={H} /></clipPath>
         </defs>
         <text x="8" y="11" className="axis">{a.short} ahead</text>
         <g transform="translate(0 16)">
-          <polygon points={area} clipPath={`url(#up-${map.n})`} className="fill up" />
-          <polygon points={area} clipPath={`url(#down-${map.n})`} className="fill down" />
+          <polygon points={area} clipPath={`url(#up-${id})`} className="fill up" />
+          <polygon points={area} clipPath={`url(#down-${id})`} className="fill down" />
           <line x1="4" y1={line.mid} x2={W - 4} y2={line.mid} className="zero" />
           <polyline points={line.points} className="line" />
-          {at !== null && <line x1={line.x(at)} y1="0" x2={line.x(at)} y2={H} className="cross" />}
-          {(map.marks ?? []).map((m) => (
+          {at !== null && <line x1={line.x(t)} y1="0" x2={line.x(t)} y2={H} className="cross" />}
+          {marks.map((m) => (
             <g key={`${m.t}-${m.team}`} className={m.team === a.id ? 'mark first' : 'mark'}>
-              <circle cx={line.x(m.t / 60)} cy={y(m.t)} r="8" />
-              <text x={line.x(m.t / 60)} y={y(m.t) + 3.5} textAnchor="middle">{m.label}</text>
+              <circle cx={line.x(m.t)} cy={line.y(line.at(m.t))} r="8" />
+              <text x={line.x(m.t)} y={line.y(line.at(m.t)) + 3.5} textAnchor="middle">{m.label}</text>
             </g>
           ))}
         </g>
         <text x="8" y={H + 28} className="axis">{b.short} ahead</text>
-        {ticks.map((m) => <text key={m} x={line.x(m)} y={H + 44} textAnchor={m === 0 ? 'start' : 'middle'} className="axis">{m}′</text>)}
+        {ticks.map((s) => <text key={s} x={line.x(s)} y={H + 44} textAnchor={s === 0 ? 'start' : 'middle'} className="axis">{s / 60}′</text>)}
       </svg>
-      {(map.marks ?? []).length > 0 && (
+      {marks.length > 0 && (
         <span className="row small muted" style={{ justifyContent: 'flex-start', gap: 14, flexWrap: 'wrap' }}>
-          {teams.map((t, i) => (map.marks ?? []).some((m) => m.team === t.id) && (
-            <span key={t.id} className="row" style={{ gap: 6 }}><span className={i === 0 ? 'mark-key first' : 'mark-key'} aria-hidden="true">{map.marks?.[0].label}</span>{map.marks?.[0].name}, {t.short}</span>
+          {teams.map((team, i) => marks.some((m) => m.team === team.id) && (
+            <span key={team.id} className="row" style={{ gap: 6 }}><span className={i === 0 ? 'mark-key first' : 'mark-key'} aria-hidden="true">{marks[0].label}</span>{marks[0].name}, {team.short}</span>
           ))}
         </span>
       )}
     </div>
+  )
+}
+
+/** One side's buildings in a lane, from its base out to the river: its barracks, then T3, T2, T1 (or the
+ * other way round, for the side on the right). */
+function LaneSide({ lane, right }: { lane?: LaneBuildings; right?: boolean }) {
+  if (!lane) return <span className="small muted" style={{ textAlign: right ? 'left' : 'right' }}>–</span>
+  const rax = <span className="rax">{lane.barracks.map((up, i) => <span key={i} className={up ? 'pip box' : 'pip box down'} />)}</span>
+  const towers = [...lane.towers].reverse().map((up, i) => <span key={i} className={up ? 'pip' : 'pip down'} />)
+  return <span className={right ? 'lane-side right' : 'lane-side'}>{right ? <>{[...towers].reverse()}{rax}</> : <>{rax}{towers}</>}</span>
+}
+
+/** The map being played: its clock, kills and gold lead (the board's, as fresh as the polls), its gold line
+ * so far, which towers and barracks stand in each lane, and all ten heroes, the fan's players marked. */
+function LiveMap({ live, board, teams, yours }: { live: LiveDetail; board?: DotaLiveMap | null; teams: PageTeam[]; yours?: string[] }) {
+  const [a, b] = teams
+  const now = board && board.n === live.n ? board : null
+  const side = (id: string) => (now ? (now.radiant.id === id ? now.radiant : now.dire) : null)
+  const gold = now ? (now.gold_lead.amount >= 1000 ? `${teams.find((t) => t.id === now.gold_lead.id)?.short ?? ''} up ${amount(now.gold_lead.amount)} gold` : 'Level on gold') : null
+  const readings = liveLeadOf(live, a.id)
+  const built = live.buildings
+  return (
+    <>
+      <MatchSection title={`Map ${live.n} · now`} note={now?.clock ?? null}>
+        <div className="card card-pad stack" style={{ gap: 12 }}>
+          {now && (
+            <div className="totals">
+              <span className="dsp muted">{a.short}</span><span /><span className="dsp muted" style={{ textAlign: 'right' }}>{b.short}</span>
+              <span className="num">{side(a.id)?.kills ?? '–'}</span><span className="eyebrow">Kills</span><span className="num" style={{ textAlign: 'right' }}>{side(b.id)?.kills ?? '–'}</span>
+            </div>
+          )}
+          {gold && <span className="dsp" style={{ fontSize: 26 }}>{gold}</span>}
+          {built && (
+            <div className="stack lanes" style={{ gap: 10 }}>
+              <span className="row"><span className="eyebrow">Towers and barracks</span><span className="tiny muted">Towers left: {a.short} {towersLeft(built[a.id])} · {b.short} {towersLeft(built[b.id])}</span></span>
+              {LANES.map((lane) => (
+                <div key={lane} className="lane" role="img" aria-label={laneWords(lane, [{ short: a.short, lanes: built[a.id] }, { short: b.short, lanes: built[b.id] }])}>
+                  <LaneSide lane={built[a.id]?.[lane]} />
+                  <span className="eyebrow" aria-hidden="true">{lane}</span>
+                  <LaneSide lane={built[b.id]?.[lane]} right />
+                </div>
+              ))}
+              <span className="tiny muted">Barracks at each end, then towers out to the river. Hollow: fallen.</span>
+            </div>
+          )}
+        </div>
+      </MatchSection>
+      {readings.length > 1 && <LeadGraph id="live" title={`Map ${live.n}, gold so far`} what={live.lead?.what ?? 'lead'} readings={readings} teams={teams} />}
+      {(live.heroes ?? []).length > 0 && (
+        <MatchSection title={`Heroes on map ${live.n}`}>
+          <div className="card heroes">
+            {teams.map((t) => (
+              <div key={t.id} className="stack" style={{ gap: 2 }}>
+                <span className="dsp muted team">{t.short}</span>
+                {(live.heroes ?? []).filter((h) => h.team === t.id).map((h) => (
+                  <span key={`${h.name}-${h.as}`} className={isYours(h.name, yours) ? 'hero-row yours' : 'hero-row'}>
+                    <span className="dsp">{h.name || h.as}</span>
+                    <span className="tiny muted">{h.as}{isYours(h.name, yours) ? ' · you follow' : ''}</span>
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </MatchSection>
+      )}
+    </>
   )
 }
 
@@ -215,7 +277,7 @@ function MapView({ maps, map, teams, yours }: { maps: MapDetail[]; map: MapDetai
           </div>
         )}
       </div>
-      {(map.lead?.by_minute ?? []).length > 1 && <LeadGraph map={map} teams={teams} />}
+      {(map.lead?.by_minute ?? []).length > 1 && <LeadGraph id={`map-${map.n}`} title={`Map ${map.n}, ${map.lead?.what ?? 'lead'} by minute`} what={map.lead?.what ?? 'lead'} readings={leadOf(map, a.id)} marks={map.marks} teams={teams} />}
       {(map.events ?? []).length > 0 && (
         <MatchSection title={`How map ${map.n} went`}>
           <ol className="card list map-moments">
@@ -389,15 +451,20 @@ function EsportsMatch({ page, live, yours }: MatchProps<EsportsPage>) {
   if (!page.maps?.length) return null
   const teams = page.teams?.length === 2 ? page.teams : null
   const detail = teams ? (page.detail?.maps ?? []) : []
+  const board = (live?.state as unknown as EsportsState | undefined)?.dota?.live
+  // The map being played, while the board says it still is (a read can be a minute behind a map's end).
+  const now = teams && live?.is_live && board && board.n === page.detail?.live?.n ? page.detail.live : null
   const told = new Map(detail.map((m) => [m.n, m]))
   const top = Math.max(2000, ...detail.flatMap((m) => (m.lead?.by_minute ?? []).map((v) => Math.abs(v))))
   return (
     <>
+      {now && teams && <LiveMap live={now} board={board} teams={teams} yours={yours} />}
       <MatchSection title="Maps" note={teams && detail.some((m) => m.lead) ? `${teams[0].short} up, ${teams[1].short} down` : null}>
         <ol className="card list">
           {page.maps.map((m) => {
             const d = told.get(m.n)
             const values = d && teams ? leadOf(d, teams[0].id) : []
+            const end = values[values.length - 1]?.[1] ?? 0
             return (
               <li key={m.n} className={values.length > 1 ? 'map-row' : 'row'}>
                 <span className="stack">
@@ -405,7 +472,7 @@ function EsportsMatch({ page, live, yours }: MatchProps<EsportsPage>) {
                   {values.length <= 1 && m.best && <span className="small muted">{m.best}</span>}
                   {values.length > 1 && m.winner && <span className="dsp" style={{ fontSize: 18 }}>{shortTeam(m.winner)}</span>}
                 </span>
-                {values.length > 1 && teams && <Spark values={values} top={top} label={`Map ${m.n}: ${leader(values[values.length - 1], teams)} at the end`} />}
+                {values.length > 1 && teams && <Spark readings={values} top={top} label={`Map ${m.n}: ${leader(end, teams)} at the end`} />}
                 {values.length > 1 ? (
                   <span className="stack" style={{ alignItems: 'flex-end', textAlign: 'right', minWidth: 0 }}>
                     {d?.length && <span className="num" style={{ fontSize: 15 }}>{d.length}</span>}
