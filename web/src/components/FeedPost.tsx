@@ -45,7 +45,7 @@ function Picture({ src, onGone }: { src: string; onGone: () => void }) {
   return <img ref={check} src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={onGone} onLoad={(e) => check(e.currentTarget)} />
 }
 
-/** One item of the Feed as a post. `more`: the player's own Feed, for "More from …" under a video (left out on their own page). */
+/** One item of the Feed as a post. `more`: "More from …" under a video, to the player's own Feed (on their own page, the video's source instead). */
 export function FeedPost({ who, item, now, moment, more = true, onMore }: { who: FeedWho; item: FeedItem; now: number; moment?: string | null; more?: boolean; onMore?: () => void }) {
   const [playing, setPlaying] = useState(false)
   const [noPicture, setNoPicture] = useState(false)
@@ -109,8 +109,9 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
       {caption && <div className="post-cap">{caption}</div>}
       <div className="post-acts">
         <ShareButton {...shareFeedItem(who.id, item)} className="post-act" text="Share" />
-        {item.kind === 'video'
-          ? more && <Link to={`/player/${who.id}?tab=feed`} className="post-act link">More from {short}</Link>
+        {/* A video's way on is the player's own Feed; on their page, where it already is, the video where it was posted. */}
+        {item.kind === 'video' && more
+          ? <Link to={`/player/${who.id}?tab=feed`} className="post-act link">More from {short}</Link>
           : href && <a href={href} target="_blank" rel="noreferrer" className="post-act link">{openLabel(item)}</a>}
       </div>
     </article>

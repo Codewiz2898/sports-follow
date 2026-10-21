@@ -301,7 +301,7 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
 export function FromYourPlayers({ now }: { now: number }) {
   const { cards, loaded } = useFollowing()
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, hide } = useMyFeed(null, 2, loaded ? who : undefined)
+  const { page, hide } = useMyFeed(null, 2, loaded ? who : null)  // once, when the follow list is in
   const [open, setOpen] = useState<FeedEntry | null>(null)
   if (!loaded || !page?.items.length) return null
   return (

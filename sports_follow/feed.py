@@ -371,16 +371,18 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     and PER_MOMENT around a moment), under the day each was published in the fan's days (tz: minutes east of UTC),
     the newest day first. Within a day the ranking decides, but players take turns: the next item is the best of a
     player other than the last one's, while there is one (a day carries on from the one before). A story two
-    players' feeds hold is there once, with the first of them. Read from rows only, never a model or a source.
+    players' feeds hold is there once, with the first of them (the picked player's, when one is), and hiding it from
+    either hides it. Read from rows only, never a model or a source.
 
-    cursor: where the last page ended (Page.cursor), which keeps that page's order and carries on after its last
-    item: the order is the one at the cursor's time (the days, the fading, and what the fan had hidden by then), so
-    an item hidden since keeps its place, unserved, and nothing slides past the fan between pages. ValueError for
-    a cursor this never made."""
+    cursor: where the last page ended (Page.cursor), which carries on after its last item in the order as it was at
+    the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
+    unserved), and only the rows that had come in by then (a newer one waits for the next first page). The judge's
+    scores aren't kept with it, so a rescore meanwhile (views growing) can still move an item across the page's end.
+    ValueError for a cursor this never made."""
     real = now or datetime.now(timezone.utc)
     at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, None)
     limit = max(0, min(limit, MAX_PAGE))
-    everyone, circles = _everyone(db, fan, at, tz)
+    everyone, circles = _everyone(db, fan, at, tz, player, cursor is not None)
     ordered = [(e, m, gone) for e, m, gone in everyone if player is None or e.player.id == player]
     if after is not None:
         start = next((i + 1 for i, (e, _, _) in enumerate(ordered) if e.item.id == after), start)
@@ -403,21 +405,23 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     return Page(items=items, cursor=nxt, count=sum(not gone for _, _, gone in ordered), newest=newest, players=circles)
 
 
-def _everyone(db: Session, fan: str, now: datetime, tz: int) -> tuple[list[tuple[Entry, int | None, bool]], list[Circle]]:
+def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None = None, then: bool = False) -> tuple[list[tuple[Entry, int | None, bool]], list[Circle]]:
     """The fan's whole Feed in its order at now, each item with the moment it's about (by id) and whether the fan has
-    hidden it since (in its place, not served), and the players' circles."""
+    hidden it since (in its place, not served), and the players' circles. A story two players hold goes with the
+    picked player when there is one; then: the order as a page read at now had it, without what came in since."""
     ids = list(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan).order_by(Follow.created_at)))
     if not ids:
         return [], []
     cards = {pid: card for pid, card in db.execute(select(PlayerCard.player_id, PlayerCard.card).where(PlayerCard.player_id.in_(ids))).all()}
     kept = judged(db, ids, now)
-    hidden: dict[int, set[str]] = {}  # by now: out of the order
-    since: set[tuple[int, str]] = set()  # after now (a page read earlier): in their places, not served
-    for pid, item, said in db.execute(select(FeedFeedback.player_id, FeedFeedback.item_id, FeedFeedback.created_at).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id.in_(ids))).all():
+    # By item, whichever player it was hidden from: a story two followed players hold is one card.
+    hidden: set[str] = set()  # by now: out of the order
+    since: set[str] = set()  # after now (a page read earlier): in their places, not served
+    for item, said in db.execute(select(FeedFeedback.item_id, FeedFeedback.created_at).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id.in_(ids))).all():
         if said is None or said <= now:
-            hidden.setdefault(pid, set()).add(item)
+            hidden.add(item)
         else:
-            since.add((pid, item))
+            since.add(item)
     whose: dict[int, Who] = {}
     days: dict[str, list[tuple[int, Candidate]]] = {d: [] for d in DAYS}
     for pid in ids:
@@ -429,7 +433,9 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int) -> tuple[list[tuple
         about = card.get("player") or {}
         photo = about.get("photo")
         whose[pid] = Who(id=pid, name=str(about.get("name") or ""), sport=about.get("sport") or None, photo=photo if isinstance(photo, dict) and photo.get("url") else None)
-        for c in _page(_unseen(candidates, hidden.get(pid, set())), now):
+        for c in _page(_unseen(candidates, hidden), now):
+            if then and c.arrived is not None and c.arrived > now:
+                continue
             days[_day(c, now, tz)].append((pid, c))
     entries: list[tuple[Entry, int | None, bool]] = []
     counts: dict[int, int] = {}
@@ -438,16 +444,18 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int) -> tuple[list[tuple
     last = None
     for day in DAYS:
         ranked = []
-        for pid, c in sorted(days[day], key=lambda pc: _newest(pc[1])):  # a story two players' feeds hold: the first's
+        for pid, c in sorted(days[day], key=lambda pc: (pc[0] != player, _newest(pc[1]))):  # a story two players hold: the first's
             if c.item.id not in seen:
                 seen.add(c.item.id)
                 ranked.append((pid, c))
         for pid, c in _turns(ranked, last):
             last = pid
             came = c.arrived or _when(c.item.published_at)
-            gone = (pid, c.item.id) in since
+            gone = c.item.id in since
             if not gone:
-                if came and (pid not in newest or came > newest[pid]):
+                # New for the dot and the ring only when it's of the last two days: a months-old video the sweep only
+                # now found (or a rejudge) comes in fresh, but under Earlier, where nothing new is.
+                if came and day in (TODAY, YESTERDAY) and (pid not in newest or came > newest[pid]):
                     newest[pid] = came
                 counts[pid] = counts.get(pid, 0) + 1
             entries.append((Entry(day=day, player=whose[pid], item=c.item, arrived=came.isoformat() if came else None), c.moment_id, gone))

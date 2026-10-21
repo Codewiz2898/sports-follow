@@ -169,3 +169,45 @@ def test_the_route_refuses_a_cursor_it_never_made_and_answers_no_follows_with_no
     with pytest.raises(server.HTTPException) as refused:
         server.my_feed_items(server.Response(), cursor="bogus", fan="nobody", db=db)
     assert refused.value.status_code == 422
+
+
+@needs_db
+def test_a_story_two_players_hold_is_one_card_hidden_from_either_and_the_picked_players_copy(db, monkeypatch):  # noqa: F811
+    kohli = player(db, "kohli", {"player": {"name": "Virat Kohli", "sport": "cricket"}, "news": []})
+    rohit = player(db, "rohit", {"player": {"name": "Rohit Sharma", "sport": "cricket"}, "news": []})
+    both = item("Kohli and Rohit see India home", 2, kind="news")
+    kept = {kohli: [Candidate(both, score=0.9)], rohit: [Candidate(both, score=0.4), Candidate(item("r1", 3, kind="news"), score=0.3)]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    follow(db, "fan", kohli, rohit)
+    whole = feed.page(db, "fan", now=NOW)
+    assert [(e.player.id, e.item.title) for e in whole.items] == [(kohli, "Kohli and Rohit see India home"), (rohit, "r1")]
+    # Picking Rohit shows his copy of it; hiding it from Kohli's card hides it from Rohit's too.
+    assert [e.item.title for e in feed.page(db, "fan", player=rohit, now=NOW).items] == ["Kohli and Rohit see India home", "r1"]
+    feed.feedback(db, "fan", kohli, both.id, "not_interested")
+    db.execute(update(FeedFeedback).values(created_at=NOW - timedelta(minutes=1)))
+    db.commit()
+    assert [e.item.title for e in feed.page(db, "fan", now=NOW).items] == ["r1"]
+    assert [e.item.title for e in feed.page(db, "fan", player=rohit, now=NOW).items] == ["r1"]
+
+
+@needs_db
+def test_only_the_last_two_days_light_the_dot_and_a_later_page_leaves_out_what_came_in_since(db, monkeypatch):  # noqa: F811
+    gukesh = player(db, "gukesh", {"player": {"name": "Gukesh D", "sport": "chess"}, "news": []})
+    # A months-old video the sweep only just found comes in fresh, but isn't new: no dot, no ring.
+    found = Candidate(item("old one", 24 * 150), score=0.9, arrived=NOW - timedelta(minutes=5))
+    kept = {gukesh: [found]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    follow(db, "fan", gukesh)
+    quiet = feed.page(db, "fan", now=NOW)
+    assert [e.day for e in quiet.items] == ["Earlier"] and quiet.newest is None and quiet.players[0].newest is None
+
+    kept[gukesh] = [Candidate(item("a", 1), score=0.9, arrived=NOW - timedelta(hours=1), channel="a"),
+                    Candidate(item("b", 2), score=0.8, arrived=NOW - timedelta(hours=2), channel="b"), found]  # fmt: skip
+    first = feed.page(db, "fan", limit=1, now=NOW)
+    assert [e.item.title for e in first.items] == ["a"] and first.newest == (NOW - timedelta(hours=1)).isoformat()
+    # Judged after the first page was read, and better than what's left: it waits for the next first page.
+    kept[gukesh].append(Candidate(item("late", 0.5), score=0.95, arrived=NOW + timedelta(minutes=10), channel="late"))
+    later = NOW + timedelta(minutes=20)
+    nxt = feed.page(db, "fan", cursor=first.cursor, limit=5, now=later)
+    assert [e.item.title for e in nxt.items] == ["b", "old one"]
+    assert [e.item.title for e in feed.page(db, "fan", now=later).items][:2] == ["late", "a"]

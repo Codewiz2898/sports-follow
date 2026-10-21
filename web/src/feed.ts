@@ -142,8 +142,9 @@ export function fromLine(item: FeedItem, now: number): string {
   return [from, ago(item.published_at, now, true)].filter(Boolean).join(' · ')
 }
 
-/** What a card's link at the bottom says: a story "Read at <outlet>", a post "Open on <platform>". */
+/** What a card's link at the bottom says: a story "Read at <outlet>", a post "Open on <platform>", a video "Watch at <channel>". */
 export function openLabel(item: FeedItem): string {
   if (item.kind === 'post') return `Open on ${item.post?.platform ?? 'the post'}`
+  if (item.kind === 'video') return item.source ? `Watch at ${item.source}` : 'Watch where it was posted'
   return item.source ? `Read at ${item.source}` : 'Read the story'
 }

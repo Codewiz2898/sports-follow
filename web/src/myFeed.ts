@@ -7,8 +7,8 @@ import { api, type FeedEntry, type FeedPage as Page, type FeedVerdict } from './
 import { noteNewest } from './feedSeen'
 
 /** The fan's Feed, a page at a time, one player's when `player` is set; and a way to hide an item now. `size`: items a
- * page; `again`: anything that, changed, reads it again from the start (who the fan follows). */
-export function useMyFeed(player: number | null, size?: number, again?: string) {
+ * page; `again`: anything that, changed, reads it again from the start (who the fan follows), and null waits. */
+export function useMyFeed(player: number | null, size?: number, again?: string | null) {
   const [page, setPage] = useState<Page | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -16,6 +16,7 @@ export function useMyFeed(player: number | null, size?: number, again?: string) 
   current.current = { player, page }
 
   useEffect(() => {
+    if (again === null) return
     let stale = false
     setPage(null)
     setError(null)
