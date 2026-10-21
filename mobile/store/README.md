@@ -1,6 +1,6 @@
 # Google Play: what the Console asks for
 
-Everything the first upload of the stann Android app (`io.stann.app`) needs, ready to paste or run, so the
+Everything the first upload of the Slam Android app (`io.slam.app`) needs, ready to paste or run, so the
 closed-testing release can go up the day the developer account is verified. Linear: BHA-8 (the epic), with
 BHA-25 (upload key), BHA-26 (the account), BHA-39 (the closed test) and BHA-168 (data safety) under it.
 
@@ -22,14 +22,15 @@ folder.
 Each step is Bharath's: the Console is his account.
 
 1. **Create the app**: done 19 Oct 2026 as `stann`, app, free (which Play never lets change), default language
-   English.
+   English. Its name is the store listing's, which can change until the app is published: make it
+   `listing.md`'s (BHA-348). The package isn't set until the first upload, which makes it `io.slam.app` for good.
 2. **Set up your app** (the Dashboard's checklist): privacy policy, app access, ads, content rating, target
    audience, news app, data safety (`data-safety.md`), government app, financial features, health, account
    deletion. `listing.md` has every answer.
 3. **Main store listing**: the text from `listing.md`, `icon-512.png`, `feature-1024x500.png`, the
    screenshots (`graphics.md`).
 4. **Upload key**, once (`release-build.md`), then the build, then **Testing → Closed testing**: a track
-   ("stann testers"), the `.aab`, the testers' Google Group (`closed-testing.md`), roll out. Google reviews
+   ("Slam testers"), the `.aab`, the testers' Google Group (`closed-testing.md`), roll out. Google reviews
    closed-testing releases too; a day or three.
 5. **Setup → App integrity**: copy the app signing key's SHA-256 into the server's
    `SPORTS_FOLLOW_ANDROID_CERT_SHA256` with the upload key's (App Links).

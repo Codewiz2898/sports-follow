@@ -14,7 +14,7 @@ comes from. `make_graphics.py` draws the first two from the app's own assets and
 
 ```bash
 python mobile/store/make_graphics.py                       # icon and feature graphic
-python mobile/store/make_graphics.py --screenshots ~/Desktop/stann-shots
+python mobile/store/make_graphics.py --screenshots ~/Desktop/slam-shots
 ```
 
 (From the repo root with its venv; Pillow is in `requirements.txt`. The fonts come from
@@ -32,14 +32,14 @@ Gukesh, Salah and one esports player cover four sports' colours.
 export JAVA_HOME=~/.local/jdk-17/Contents/Home ANDROID_HOME=~/.local/android-sdk
 ~/.local/android-sdk/emulator/emulator -avd stann_pixel &
 cd mobile && npm run android                               # a debug build; the pages are the same
-~/.local/android-sdk/platform-tools/adb exec-out screencap -p > ~/Desktop/stann-shots/1-today.png
+~/.local/android-sdk/platform-tools/adb exec-out screencap -p > ~/Desktop/slam-shots/1-today.png
 ```
 
 Take them in this order, on a day with a live game if possible (a live board is the best first picture):
 
 1. **Today**, with a live game of a followed player on top, then the results rail (`1-today.png`).
 2. **A player's page** with the live board or last result and their line (`2-player.png`).
-3. **An alert**: pull down the notification shade with a stann moment card opened (Alerts' Settings has
+3. **An alert**: pull down the notification shade with a moment card opened (Alerts' Settings has
    "Send a test alert"; a real one looks better) (`3-alert.png`).
 4. **The lock screen with a live card**, from a followed game that's on (`4-lockscreen.png`).
 5. **Search** with results across sports for a name like "Rohit" (`5-search.png`).

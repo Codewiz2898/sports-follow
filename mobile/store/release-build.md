@@ -15,7 +15,7 @@ The keystore lives with the other local secrets, in `~/.config/sports-follow/`, 
 
 ```bash
 export JAVA_HOME=~/.local/jdk-17/Contents/Home
-"$JAVA_HOME/bin/keytool" -genkeypair -v -keystore ~/.config/sports-follow/upload-key.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=stann, O=stann, C=IN"
+"$JAVA_HOME/bin/keytool" -genkeypair -v -keystore ~/.config/sports-follow/upload-key.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Slam, O=Slam, C=IN"
 ```
 
 It asks for a keystore password; use the same for the key (press Enter when it asks for the key's). Then:
@@ -41,7 +41,7 @@ Its fingerprint, for the server's App Links setting (`SPORTS_FOLLOW_ANDROID_CERT
    version fans should see, `version`. One place for each; nothing else to edit.
 2. **Build.** From `mobile/`, with the app's Firebase file (notifications). The config plugin
    `plugins/with-upload-key.js` writes a release signing config at prebuild that Gradle reads from the environment
-   when it runs: `STANN_UPLOAD_KEYSTORE` set, the upload key; unset, the debug key, as Expo's template leaves it.
+   when it runs: `SPORTS_FOLLOW_UPLOAD_KEYSTORE` set, the upload key; unset, the debug key, as Expo's template leaves it.
    The password goes to the Gradle command alone, not into the shell, so it isn't in the history or in a
    long-lived daemon's environment.
 
@@ -50,15 +50,15 @@ Its fingerprint, for the server's App Links setting (`SPORTS_FOLLOW_ANDROID_CERT
    export JAVA_HOME=~/.local/jdk-17/Contents/Home ANDROID_HOME=~/.local/android-sdk
    export GOOGLE_SERVICES_JSON=~/.config/sports-follow/google-services.json
    npx expo prebuild --platform android --clean
-   (cd android && STANN_UPLOAD_KEYSTORE=~/.config/sports-follow/upload-key.jks STANN_UPLOAD_KEYSTORE_PASSWORD="$(cat ~/.config/sports-follow/upload-key.password)" ./gradlew --no-daemon :app:bundleRelease)
+   (cd android && SPORTS_FOLLOW_UPLOAD_KEYSTORE=~/.config/sports-follow/upload-key.jks SPORTS_FOLLOW_UPLOAD_KEYSTORE_PASSWORD="$(cat ~/.config/sports-follow/upload-key.password)" ./gradlew --no-daemon :app:bundleRelease)
    ```
 
    The bundle is `mobile/android/app/build/outputs/bundle/release/app-release.aab`. `--clean` regenerates
    `android/` from `app.config.ts`, so the version, the plugin's signing and the App Links routes are the
    config's; `npm run android` afterwards is unaffected (debug builds keep the debug key).
 
-   Variables: `STANN_UPLOAD_KEY_ALIAS` if the key isn't `upload`; `STANN_UPLOAD_KEY_PASSWORD` if the key's
-   password differs from the keystore's.
+   Variables: `SPORTS_FOLLOW_UPLOAD_KEY_ALIAS` if the key isn't `upload`; `SPORTS_FOLLOW_UPLOAD_KEY_PASSWORD` if
+   the key's password differs from the keystore's.
 3. **Check it** before uploading: it's signed by the upload key, and it's the version you meant.
 
    ```bash
@@ -66,7 +66,7 @@ Its fingerprint, for the server's App Links setting (`SPORTS_FOLLOW_ANDROID_CERT
    "$JAVA_HOME/bin/keytool" -printcert -jarfile android/app/build/outputs/bundle/release/app-release.aab | grep SHA256
    ```
 
-   The second fingerprint must equal the keystore's (above). The debug key's would mean `STANN_UPLOAD_KEYSTORE`
+   The second fingerprint must equal the keystore's (above). The debug key's would mean `SPORTS_FOLLOW_UPLOAD_KEYSTORE`
    wasn't set on the Gradle command.
 4. **Upload** in Play Console, **Testing → Closed testing → (track) → Create new release**, drop the
    `.aab`, write a short release note, roll out. The first upload is where Play asks to turn on Play App

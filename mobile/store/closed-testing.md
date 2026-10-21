@@ -33,7 +33,7 @@ Play App Signing and App Links working, which is the dress rehearsal (BHA-244) o
 ## Where the 12 testers come from
 
 Testers are Google accounts. Give Play either a list of email addresses or a Google Group; a **Google Group**
-is easier (`stann-testers@googlegroups.com`: add a person, they're a tester; Google counts opted-in members).
+is easier (`slam-testers@googlegroups.com`: add a person, they're a tester; Google counts opted-in members).
 
 - **Family and friends with Android phones**: the surest dozen. Ask for 15, since a few won't finish the opt-in.
 - **The people already testing the vivo builds** and anyone who has installed stann.in from Chrome.
@@ -51,14 +51,14 @@ counts as engagement.
 ## The message to send (WhatsApp)
 
 ```
-Hi! I've built an app called stann: follow any athlete, in any sport, and get an alert the moment they do something (a goal, a wicket, Gukesh winning). It's on stann.in today, and the Android app is going on the Play Store.
+Hi! I've built an app called Slam: follow any athlete, in any sport, and get an alert the moment they do something (a goal, a wicket, Gukesh winning). It's on stann.in today, and the Android app is going on the Play Store.
 
 Google needs 12 people to test it for two weeks before it can go public. Could you be one?
 
 It takes two minutes:
 1. Join the testers group: <group link>
 2. Open <opt-in link> and tap "Become a tester" (same Google account as your phone).
-3. Install stann from the Play link on that page.
+3. Install Slam from the Play link on that page.
 4. Keep it installed for two weeks, follow a player or two, and tell me anything that looks wrong.
 
 No ads, no selling data, and if you sign in you can delete everything from Account at any time. Thanks!

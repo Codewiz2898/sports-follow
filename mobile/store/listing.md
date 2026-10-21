@@ -8,7 +8,7 @@ in its voice: short, plain sentences, no claims the app doesn't keep.
 
 | Field | Value | Limit |
 |---|---|---|
-| App name | `stann` | 30 |
+| App name | `Slam: live alerts for players` | 30 (this is 29) |
 | Short description | `Follow any athlete, any sport: live scores, results and alerts for your players.` | 80 (this is exactly 80) |
 | Full description | below | 4,000 |
 | App category | Application → **Sports** | |
@@ -18,7 +18,13 @@ in its voice: short, plain sentences, no claims the app doesn't keep.
 | Privacy policy (App content) | `https://stann.in/privacy` | |
 | Account deletion (App content) | `https://stann.in/account` (sign in, then Delete account) | |
 
-Google shows the name and short description as typed: keep "stann" lower case, as fans see it everywhere.
+The app is Slam (`sports_follow/app.json`: the launcher, every page, the emails), so the store name starts with it
+and says what the app is, for search to tell it apart from the other SLAMs on Play: SLAM Media's basketball
+magazine app "SLAM.", WWE SLAM, Slam Stars, Slam Fitness and the slambook apps. "Slam: live alerts for your
+players" is 34 characters, over Play's 30. Google shows the name and short description as typed.
+
+The addresses are stann.in's until the new domain is bought (BHA-348). They can change in the Console at any
+time, unlike the package: change them here and there together.
 
 **Never the word "news"** in the name, either description, the tags or a What's new note. Bharath answered No
 to the News app declaration (19 Oct 2026), and Google rejects a listing that calls itself news while declaring
@@ -27,7 +33,7 @@ it isn't. Say alerts, moments, live scores, updates or follow instead.
 ## Full description
 
 ```
-stann follows the athletes you care about, in any sport: football, cricket, tennis, basketball, chess and esports. Pick a player and their games come to you.
+Slam follows the athletes you care about, in any sport: football, cricket, tennis, basketball, chess and esports. Pick a player and their games come to you.
 
 Your players first
 Today opens on your players' live games, then their results and what's coming up. Follow a team and its games come too. Follow one match for its moments alone, until it ends.
@@ -50,7 +56,7 @@ Everything works without an account. Sign in with an email code and your players
 No ads. No selling your data. Read the policy at stann.in/privacy.
 ```
 
-That text is 1,144 characters. Play keeps line breaks; it ignores Markdown, so the headings are plain lines.
+That text is 1,143 characters. Play keeps line breaks; it ignores Markdown, so the headings are plain lines.
 
 Before pasting, check the sports named in the first line against what production has turned on (the admin
 panel's sports, BHA-207 for PUBG): the listing must not promise a sport that's off. Esports titles are left

@@ -1,9 +1,9 @@
 """Draw the Play Store's graphics from the app's own assets, and fit screenshots to Play's rules.
 
-- icon-512.png: the store icon, stann's badge on a full paper square (Play rounds the corners itself), a
+- icon-512.png: the store icon, the app's badge on a full paper square (Play rounds the corners itself), a
   32-bit PNG as Play asks, opaque. The same picture as web/public/icons/maskable-512.png, drawn by
   web/scripts/make_icons.py's rasterizer.
-- feature-1024x500.png: the feature graphic, the badge and "stann" (Fredoka, as in the header), the site's
+- feature-1024x500.png: the feature graphic, the badge and the name (Fredoka, lower case, as in the header), the site's
   one-line pitch in the leaning display type (Anton, the app's own slanted copy) and a line of Manrope.
   24-bit PNG with no alpha, as Play asks.
 - screenshots/: with --screenshots DIR, every PNG or JPEG in DIR made opaque and brought within Play's limit
@@ -15,13 +15,14 @@ Run from the repo root with its venv (Pillow is in requirements.txt), after `npm
 (the fonts come from node_modules/@expo-google-fonts):
 
     python mobile/store/make_graphics.py
-    python mobile/store/make_graphics.py --screenshots ~/Desktop/stann-shots
+    python mobile/store/make_graphics.py --screenshots ~/Desktop/slam-shots
 """
 
 from __future__ import annotations
 
 import argparse
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -41,6 +42,8 @@ FREDOKA = FONTS / "fredoka" / "600SemiBold" / "Fredoka_600SemiBold.ttf"  # the l
 MANROPE = FONTS / "manrope" / "600SemiBold" / "Manrope_600SemiBold.ttf"  # body text
 ANTON_SLANTED = MOBILE / "assets" / "fonts" / "AntonSlanted.ttf"  # the display type's lean, as the app draws it
 
+# The name as the logo writes it: sports_follow/app.json's, in lower case (styles.css .brand).
+NAME = json.loads((ROOT / "sports_follow" / "app.json").read_text(encoding="utf-8"))["name"].lower()
 PITCH = "Follow any athlete in any sport"  # web/index.html's description, its first clause
 LINE = "Live scores, results and alerts for the players you follow. No ads."
 
@@ -77,16 +80,16 @@ def feature() -> Path:
     # Row 1: the badge and the name, as the header pairs them (.brand: the badge 1.2 times the type's size).
     name_font = ImageFont.truetype(str(FREDOKA), 168)
     mark = badge(200)
-    name_w = name_font.getlength("stann")
+    name_w = name_font.getlength(NAME)
     gap = 28
     row_w = mark.width + gap + name_w
     x = (width - row_w) / 2
     top = 64
     im.paste(mark, (round(x), top), mark)
     # Fredoka's x-height sits low in its box: align the word's visual middle with the badge's centre.
-    _, name_top, _, name_bottom = name_font.getbbox("stann")
+    _, name_top, _, name_bottom = name_font.getbbox(NAME)
     name_y = top + mark.height / 2 - (name_top + name_bottom) / 2
-    draw.text((x + mark.width + gap, name_y), "stann", font=name_font, fill=INK)
+    draw.text((x + mark.width + gap, name_y), NAME, font=name_font, fill=INK)
 
     # Row 2: the pitch, in the leaning display type, upper case as .dsp sets it.
     pitch_font = fitted(ANTON_SLANTED, PITCH.upper(), 60, width - 120)
