@@ -139,6 +139,32 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
     return out
 
 
+def search_name(player: Followed, names: dict[int, set[tuple[str, ...]]]) -> str:
+    """The name a search asks for a player by (sweeps.py, searches.py): the one fans and titles write, "Jasprit Bumrah"
+    for the registry's "Jasprit Jasbirsingh Bumrah". Of their own name and their aliases, the shortest that their
+    phrases among these players hold (names: phrases()) and no other player's do, sharing a word with their own name
+    ("MS Dhoni" for Mahendra Singh Dhoni; not a nickname alone, nor a name in another script). One
+    word only when it's their own name ("TenZ"): a surname or nickname is theirs among those followed, not among
+    everyone a search finds. None qualifying (two followed players share every name): their own name."""
+    theirs = names.get(player.player_id, set())
+    others = {phrase for pid, held in names.items() if pid != player.player_id for phrase in held}
+    own = set(naming.words(player.name))
+    best: tuple[tuple[int, bool, int, bool], str] | None = None
+    for name in (player.name, *player.aliases):
+        spelt = [tuple(s) for s in naming.spellings(name)]
+        plain = spelt[0] if spelt else ()
+        if not plain or plain not in theirs or any(s in others for s in spelt) or not own & set(plain):
+            continue
+        if len(plain) == 1 and name != player.name:
+            continue
+        # Fewest words; of those, one their own name's words make ("Virat Kohli" before "King Kohli"); then the fewest
+        # letters; of one name's forms, the one written with capitals.
+        key = (len(plain), not set(plain) <= own, len("".join(plain)), name == name.lower())
+        if best is None or key < best[0]:
+            best = (key, name)
+    return best[1] if best else player.name
+
+
 def _holds(words: list[str], phrase: tuple[str, ...]) -> bool:
     n = len(phrase)
     return any(tuple(words[i:i + n]) == phrase for i, w in enumerate(words) if w == phrase[0])

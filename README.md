@@ -503,7 +503,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Big moments are searched for too** (`sports_follow/searches.py`, BHA-303): fans post edits of a hundred or a
   brace within hours, mostly on channels no sport lists. After each poll the curator queues a search for each key
   moment of a followed player's (not one taken back; a search whose moment is taken back goes) that its sport has words for (`Sport.search_words`: "century
-  Lord's", "brace Liverpool vs Everton", "wins game 4"), after the player's name: one per player and game, `feed_search`,
+  Lord's", "brace Liverpool vs Everton", "wins game 4"), after the player's name as fans write it (below): one per player and game, `feed_search`,
   which a later moment in the game takes over (the brace over the goal) until its last run. Each runs twice, three
   hours after the moment and a day after, for videos published since, most viewed first, embeddable and syndicated,
   as a viewer in India finds them; one the cap held back for a day runs once, its last at least eight hours after
@@ -546,6 +546,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player every 4 months or so and the famous sweep waits for a day with fewer gaps. More for the sweeps means a
   lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` (each moment search less is 101 units more) or more YouTube quota. Off
   without the key.
+- **What every search asks for** (BHA-341): the player by the name fans and titles write (`candidates.search_name`):
+  of their own name and their aliases, the shortest that still names them and no other followed player of their
+  sport, sharing a word with their own name: "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
+  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
+  players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
+  the same 100 units, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
+  `-#shorts`, YouTube's NOT): most watched first, results are mostly Shorts, and those under a minute are refused
+  for length. `videoDuration` can't do it: its `short` is anything under 4 minutes, where 1-4 minute highlight
+  clips are too. A Short nothing tags is still refused, as `too_short` in the funnel, which is how to tell whether
+  the NOT works.
 - **News comes from publishers' own feeds** (`sports_follow/news.py`, `sports_follow/adapters/publisher_rss.py`,
   BHA-325), into the same pipeline as videos. Every 20 minutes the curator reads each RSS or Atom feed a running sport
   lists (`Sport.news_feeds`), through the source cache (a feed at most every 15 minutes) and conditionally (the ETag

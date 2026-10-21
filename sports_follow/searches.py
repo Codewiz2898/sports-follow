@@ -3,7 +3,7 @@ post edits of a hundred or a brace within hours of it, mostly on channels no spo
 those), so each big moment is searched for on the video sources that can search (VideoSource.search_cost).
 
 Which moments, and in which words, is the sport's to say (Sport.search_words): "hundred Lord's", "brace Liverpool vs
-Everton", "wins game 4", after the player's name. A followed player's key moment the sport has words for is queued
+Everton", "wins game 4", after the player's name as fans write it (candidates.search_name). A followed player's key moment the sport has words for is queued
 (queue), one search per player and game: a later moment of theirs in the game takes it over (the brace over the goal)
 until its last run, and it looks for videos published since the first.
 
@@ -75,6 +75,8 @@ def queue(now: datetime | None = None) -> dict[str, int]:
         have = {(s.player_id, s.event_id): s for s in session.scalars(select(FeedSearch).where(FeedSearch.player_id.in_({p for p, _ in pairs})))
                 if (s.player_id, s.event_id) in pairs}
         seen: dict[tuple[int, int, str], int] = {}  # each kind's moments so far, by player and game: a second goal is 2
+        players = {p.player_id: p for p in candidates.followed(session)}
+        names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
         for r in rows:
             kind, detail = notify.kind_detail(r.key, r.event_id, r.player_id)
             n = seen[(r.player_id, r.event_id, kind)] = seen.get((r.player_id, r.event_id, kind), 0) + 1
@@ -84,7 +86,10 @@ def queue(now: datetime | None = None) -> dict[str, int]:
             said = sports.of(r.sport).search_words(fired)
             if not said:
                 continue
-            query = words(r.name, said)[:300]
+            target = players.get(r.player_id)
+            if target is not None and target.sport not in names:
+                names[target.sport] = candidates.phrases([p for p in players.values() if p.sport == target.sport])
+            query = words(candidates.search_name(target, names[target.sport]) if target else r.name, said)[:300]
             row = have.get((r.player_id, r.event_id))
             if row is None:
                 new = session.scalar(insert(FeedSearch).values(player_id=r.player_id, event_id=r.event_id, moment_id=r.id, query=query, priority=r.priority,

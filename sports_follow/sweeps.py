@@ -5,8 +5,8 @@ has the season's best unseen. Three searches find them some, from any channel, o
 second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week
-  (feedstats.covered), searched for by their name and their sport's words (Sport.video_words), for videos of the
-  last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES in any 24 hours; one
+  (feedstats.covered), searched for by the name fans write (candidates.search_name) and their sport's words
+  (Sport.video_words), for videos of the last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES in any 24 hours; one
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
 - The wide sweep: every followed player, gaps or not, for videos of the last WIDE_DAYS (six months), most watched
   first: what fans watched this season, which the ranking weighs for its age (rank.py) and the Feed fades only as it
@@ -166,9 +166,10 @@ def famous_due(session: Session, players: list[candidates.Followed], followers: 
     return _rotated(due, followers, last)[:left]
 
 
-def query(player: candidates.Followed) -> str:
-    """What a sweep searches for: the player's name and their sport's words for its videos."""
-    return words(player.name, sports.of(player.sport).video_words())[:300]
+def query(player: candidates.Followed, names: dict[int, set[tuple[str, ...]]]) -> str:
+    """What a sweep searches for: the player's name as fans write it (candidates.search_name, among their sport's
+    followed players' names) and their sport's words for its videos."""
+    return words(candidates.search_name(player, names), sports.of(player.sport).video_words())[:300]
 
 
 def _sweep(stream: str, due: list[candidates.Followed], after: datetime | None, now: datetime, sources: list[VideoSource],
@@ -176,7 +177,7 @@ def _sweep(stream: str, due: list[candidates.Followed], after: datetime | None, 
     """Search for each of these players, on each source, for videos published after then (or ever), and keep what
     names them. Returns False when it stopped for want of room in a source's allowance, or for a shutdown."""
     for p in due:
-        said, sweep, found, kept = query(p), None, 0, 0
+        said, sweep, found, kept = query(p, names[p.sport]), None, 0, 0
         for source in sources:
             if shutdown.stopping.is_set() or not _room(source, now):
                 return False
