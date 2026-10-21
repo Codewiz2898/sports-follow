@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, type League, type LeagueGame, type MyPredictions } from '../api'
 import { dayLabel, shortWhen } from '../format'
 import { wordSize } from '../lines'
-import { callNote } from '../predictions'
+import { callNote, callWords } from '../predictions'
 import { sharedLook, useShared } from '../shared'
 import { leagueAbout, leagueComing } from '../today'
 import { Backdrop, sportKey } from '../sports'
@@ -51,15 +51,17 @@ function LeagueCard({ game, className, label, children }: { game: LeagueGame; cl
 export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame; now: number; calls?: MyPredictions | null }) {
   const key = sportKey(game.sport)
   const word = game.word || game.title
+  const call = callNote(calls, game.match, now)
+  // The label is read in place of what's on the card: the fan's call goes in it too.
   return (
-    <LeagueCard game={game} className="league-card league-result" label={`${game.competition}: ${game.line || game.title}, ${word}`}>
+    <LeagueCard game={game} className="league-card league-result" label={[`${game.competition}: ${game.line || game.title}, ${word}`, callWords(call)].filter(Boolean).join('. ')}>
       <Backdrop sport={key} seed={game.key} />
       <span className="head"><span className="sport-tag">{game.competition}</span><span className="eyebrow">{dayLabel(game.start_utc, new Date(now))}</span></span>
       <span className="dsp word" style={{ '--word': `${wordSize(word)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: 2 }}>
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
         <span className="line soft">{leagueAbout(game)}</span>
-        <CallTag note={callNote(calls, game.match, now)} />
+        <CallTag note={call} />
       </span>
     </LeagueCard>
   )
@@ -70,15 +72,16 @@ export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame
 export function LeagueComingCard({ game, now, calls = null }: { game: LeagueGame; now: number; calls?: MyPredictions | null }) {
   const key = sportKey(game.sport)
   const { big, when } = leagueComing(game, now)
+  const call = callNote(calls, game.match, now)
   return (
-    <LeagueCard game={game} className="league-card league-coming" label={`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`}>
+    <LeagueCard game={game} className="league-card league-coming" label={[`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`, callWords(call)].filter(Boolean).join('. ')}>
       <Backdrop sport={key} seed={game.key} />
       <span className="sport-tag">{game.competition}</span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 2 }}>
         <span className="line strong">{game.title}</span>
         <span className="line soft">{leagueAbout(game, when)}</span>
-        <CallTag note={callNote(calls, game.match, now)} />
+        <CallTag note={call} />
       </span>
     </LeagueCard>
   )

@@ -81,6 +81,7 @@ p { margin: 0; }
   }
   :root { --page-x: 40px; }
   .main { max-width: none; padding: 32px var(--page-x) 56px; margin: 0; }  /* the page runs to the window's edge, or the side column's */
+  .main p { max-width: 80ch; }  /* while a line of text stays short enough to read (Privacy's, an account's) */
   .tabbar { display: none; }
 }
 

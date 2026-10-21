@@ -68,6 +68,14 @@ export function shareText(q: Prediction): string {
  * else their pick. */
 export type CallNote = { kind: 'call'; left: number } | { kind: 'said'; label: string } | { kind: 'right'; points: number } | { kind: 'wrong'; label: string }
 
+/** A call note in words, as its tag says it: for a card whose label is read in place of what's on it. */
+export function callWords(note: CallNote | null): string {
+  if (!note) return ''
+  if (note.kind === 'call') return 'Call it'
+  if (note.kind === 'right') return `You called it · +${note.points}`
+  return `You said ${note.label}`
+}
+
 /**
  * A game's note from the fan's calls (GET /api/me/predictions), by its address (`match`, after /match/): the
  * points of every right call once its questions settle ("You called it · +38"), or what they said when none was

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { api, type MyPredictions } from '../api'
-import type { CallNote } from '../predictions'
+import { callWords, type CallNote } from '../predictions'
 import { sharedLook, useShared } from '../shared'
 import { CheckIcon } from './Icons'
 
@@ -37,7 +37,11 @@ export function callsChanged() {
  */
 export function CallTag({ note }: { note: CallNote | null }) {
   if (!note) return null
-  if (note.kind === 'call') return <span className="call-tag" aria-label={note.left > 1 ? `${note.left} questions to call` : undefined}>Call it</span>
-  if (note.kind === 'right') return <span className="call-tag right"><CheckIcon width={12} height={12} strokeWidth={3.4} />You called it · +{note.points}</span>
-  return <span className="call-tag said">{note.kind === 'said' && <CheckIcon width={12} height={12} strokeWidth={3.4} />}You said {note.label}</span>
+  const kind = note.kind === 'call' ? '' : note.kind === 'right' ? ' right' : ' said'
+  return (
+    <span className={`call-tag${kind}`}>
+      {(note.kind === 'right' || note.kind === 'said') && <CheckIcon width={12} height={12} strokeWidth={3.4} />}
+      {callWords(note)}
+    </span>
+  )
 }
