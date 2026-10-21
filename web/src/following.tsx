@@ -200,6 +200,9 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       const m = e.moment
       const level = m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts ?? 'key' : gameLevel(m, matchesRef.current, teamsRef.current)
       if (level == null || !wanted(level, m)) return
+      // A board's moment its other side tells, where the fan follows that player too: theirs shows, as the push does.
+      const voice = m.voice != null ? cardsRef.current.find((c) => c.player_id === m.voice) : undefined
+      if (voice && wanted(voice.alerts ?? 'key', m)) return
       // A result told from both sides the fan follows shows once.
       const sideFinal = m.kind === 'final' && Boolean(m.sides?.length)
       if (sideFinal && toasted.current.some((t) => t.event === (m.event_id ?? null) && t.kind === 'final:side')) return

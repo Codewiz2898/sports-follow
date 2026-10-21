@@ -69,6 +69,12 @@ class Found:
     # A game's own moment (Sport.game_moments): the players it's about, by their ids in the source (a goal's
     # scorer, both players of a chess board), or "*", the whole game (its start, its result, a map).
     about: tuple[str, ...] = ()
+    # A player's moment of a game under several fixtures (a chess board is one of each player's, and each finds
+    # the moment from its own side): the player, by their id in the source, whose side tells it to a fan who
+    # follows both (the side the game went toward, the winner; White where it went neither way, the start or a
+    # draw). The other side's word for it isn't sent them where this side's fixture is being polled to say it
+    # (alerts.voiced). "" where only its player says it.
+    voice: str = ""
 
 
 @dataclass(frozen=True)
@@ -637,6 +643,19 @@ class Sport:
         each player's): an id they share, so its questions are one set whichever address asks, and Today shows it
         once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
+
+    def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
+        """Who's on a game under several fixtures (board), by their ids in the source, each with a fixture of their
+        own: its fixtures here are theirs, so alerts, live cards and mutes take them for one game (structured.boards).
+        () where the fixture is the game."""
+        return ()
+
+    def pairing(self, state: dict[str, Any]) -> str:
+        """Which meeting of its players a game under several fixtures is, as each of its fixtures' boards says it: the
+        same all through it, a mini-match's games too, and another for the same players meeting again (another round),
+        so its fixtures are told apart from theirs (structured.boards). By default its players alone; "" where its
+        board can't say, and its fixtures aren't taken for one game (each side tells its own)."""
+        return "|".join(sorted(self.board_players(state)))
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """The questions fans may call about this game, from its board before it starts: none, for a sport that

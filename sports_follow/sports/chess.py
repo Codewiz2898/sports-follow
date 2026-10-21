@@ -105,6 +105,15 @@ def _points(result: str) -> tuple[float, float] | None:
     return value(match.group(1)), value(match.group(2))
 
 
+def _sides(now: Seen) -> tuple[str, str, str]:
+    """The board's players by their FIDE ids, as the player's line puts them: theirs, their opponent's, and White's
+    ("" before the pairing's out)."""
+    white, black = (str((now.state.get(c) or {}).get("id") or "") for c in ("white", "black"))
+    colour = stat(now.line, "Colour")
+    mine, theirs = (white, black) if colour == "White" else (black, white) if colour == "Black" else ("", "")
+    return mine, theirs, white
+
+
 def _won(text: str, priority: int = 0) -> Poster | None:
     """A win as a poster, from a result's line at the end of `text` ("Won with Black vs Firouzja", or a
     moment's "Gukesh D: Won the match 2–1 vs So")."""
@@ -152,14 +161,20 @@ class Chess(Sport):
     def starts_unlisted(self, now: Seen) -> bool:
         return True
 
+    # A board is a fixture of each of its players, so each of its moments is found twice, once from each side; a fan
+    # who follows both hears it from one (Found.voice): a swing from the side it went toward, the result from the
+    # winner's, the start and a draw from White's.
+
     def start(self, who: str, now: Seen) -> Found:
         rnd = now.state.get("round") or "Their game"
         opp = stat(now.line, "Opponent")
-        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}")
+        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}", voice=_sides(now)[2])
 
     def final(self, who: str, now: Seen) -> Found:
         head = (now.line or {}).get("headline") or ""
-        return Found("final", "key", f"{who}: {head or 'result'}", now.score)
+        mine, theirs, white = _sides(now)
+        voice = mine if head.startswith("Won") else theirs if head.startswith("Lost") else white
+        return Found("final", "key", f"{who}: {head or 'result'}", now.score, voice=voice)
 
     def settle(self, before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return settle(before, ev)
@@ -194,8 +209,15 @@ class Chess(Sport):
         if turnaround:
             title, level = f"Turnaround: {title}", "key"
         opponent = stat(now.line, "Opponent")
-        body = " · ".join(x for x in (f"Engine {_score(got.get('look') or got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
-        return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
+        # The move the band moved at (settle's "since"), not the one the poll came at: a look can land between the
+        # two sides' polls, and each side's word for the swing is still the same play.
+        move = got.get("since") or got.get("move")
+        body = " · ".join(x for x in (f"Engine {_score(got.get('look') or got, side)}", f"move {move}" if move else None, f"vs {opponent}" if opponent else None) if x)
+        mine, theirs, _ = _sides(now)
+        # Its game, its band from White's side and its move: the same from either side of the board, so each side's
+        # word for a swing is told as one play (alerts.voiced_by), and one game of a mini-match isn't taken for another.
+        return [Found("swing", level, title, body, f"{self.board(now.state)}w{got['band']}m{move or 0}", 85 if turnaround else 70 if level == "key" else 30,
+                      voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """The board turning, as the engine sees it, told once, in during's words from the side it moved
@@ -270,6 +292,16 @@ class Chess(Sport):
     def board(self, state: dict[str, Any]) -> str:
         """The game's id at its source: each player's fixture shows the same board, and asks one question."""
         return str(state.get("game_id") or "")
+
+    def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
+        """White and Black by their FIDE ids, the same all through a mini-match's games."""
+        return tuple(str(p["id"]) for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id"))
+
+    def pairing(self, state: dict[str, Any]) -> str:
+        """Its tournament's and round's names and its two players: a round is one meeting, its mini-match's games
+        and all."""
+        players, tournament, rnd = sorted(self.board_players(state)), state.get("tournament"), state.get("round")
+        return "|".join([str(tournament), str(rnd), *players]) if len(players) == 2 and tournament and rnd else ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A

@@ -19,6 +19,9 @@ from sports_follow import moments, notify
 from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
+from .test_new_adapters import CARLSEN, LAZAVIK
+from .test_predictions import board
+
 
 def line(headline: str, **stats: str) -> dict:
     return {"headline": headline, "stats": [{"label": k.replace("_", " "), "value": v} for k, v in stats.items()]}
@@ -192,6 +195,58 @@ def test_a_swing_says_the_engine_score_as_the_board_does():
     assert (chess._score({"mate": -3}, -1), chess._score({"mate": -3}, 1)) == ("mate in 3", "facing mate in 3")
 
 
+def test_both_sides_of_a_chess_board_name_the_side_that_tells_its_moments():
+    # A board is a fixture of each player's, so each finds its moments from its own side (BHA-378); both name the one
+    # a fan who follows both hears it from: a swing's the side it went toward, the result's the winner, the start's
+    # and a draw's White. The recorded Esports World Cup grand final: Carlsen won game 1 with White, game 2 was drawn.
+    def seen(fide: str, snap, band: int | None = None) -> Seen:
+        state = {**snap.state, **({"eval": {"cp": band * 200, "band": band, "raw": band, "told": band if abs(band) == 2 else 0, "move": 40}} if band is not None else {})}
+        return Seen(snap.status, state, {"headline": snap.lines[fide].headline, "stats": snap.lines[fide].stats}, snap.score_label, snap.clock_label)
+
+    names = {CARLSEN: "Magnus Carlsen", LAZAVIK: "Denis Lazavik"}
+
+    def found(fide: str, before: Seen, now: Seen) -> tuple[str, str]:
+        [f] = detect("Chess", names[fide], fide, before, now)
+        return f.title, f.voice
+
+    for fide in names:
+        to_come, on, over = board(status="*", fide=fide), board(status="*", ongoing=True, fide=fide), board(0, fide=fide)
+        told = [found(fide, seen(fide, to_come), seen(fide, on)), found(fide, seen(fide, on), seen(fide, over)), found(fide, seen(fide, on, 0), seen(fide, on, 2)),
+                found(fide, seen(fide, on, 2), seen(fide, on, -2)), found(fide, seen(fide, on, -2), seen(fide, on, 0))]
+        drawn = found(fide, seen(fide, board(1, status="*", ongoing=True, fide=fide)), seen(fide, board(1, fide=fide)))
+        assert [voice for _, voice in [*told, drawn]] == [CARLSEN, CARLSEN, CARLSEN, LAZAVIK, CARLSEN, LAZAVIK]  # Lazavik had White in game 2
+        if fide == LAZAVIK:
+            assert [title for title, _ in told] == ["Denis Lazavik is playing", "Denis Lazavik: Lost with Black vs Magnus Carlsen", "Denis Lazavik is in trouble",
+                                                     "Turnaround: Denis Lazavik is winning", "Denis Lazavik's advantage is gone"]
+    # Each side words a swing's play the same (its band from White's side, its move), so the two are told as one.
+    on = {fide: board(status="*", ongoing=True, fide=fide) for fide in names}
+    [a], [b] = (detect("Chess", names[fide], fide, seen(fide, on[fide], 0), seen(fide, on[fide], 2)) for fide in names)
+    assert a.detail == b.detail == "mJnv1YBUw2m40"
+    # And both name the same meeting of theirs; where the board can't say which (no round), none.
+    assert chess.SPORT.pairing(on[CARLSEN].state) == chess.SPORT.pairing(on[LAZAVIK].state) != ""
+    assert chess.SPORT.pairing({**on[CARLSEN].state, "round": None}) == ""
+    # Before the pairing's out there's no board: only its player says it.
+    assert detect("Chess", "Magnus Carlsen", CARLSEN, Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Round 5")))[0].voice == ""
+
+
+def test_both_sides_word_a_swing_by_the_move_the_band_moved_at():
+    # Carlsen's side polled after move 42's look, which moved the band; Lazavik's after move 43's, settled from the
+    # board's (engine.settled), the band still the one that moved at 42. Both word the swing as the play at 42.
+    on = {fide: board(status="*", ongoing=True, fide=fide) for fide in (CARLSEN, LAZAVIK)}
+    level = {"cp": 20, "band": 0, "raw": 0, "told": 0, "move": 41, "since": 30, "at": 1}
+    at_42 = {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 42, "since": 42, "at": 2}
+    at_43 = {**at_42, "cp": 345, "move": 43, "at": 3}
+
+    def swing(fide: str, name: str, ev: dict):
+        line = {"headline": on[fide].lines[fide].headline, "stats": on[fide].lines[fide].stats}
+        [f] = detect("Chess", name, fide, Seen("live", {**on[fide].state, "eval": level}, line), Seen("live", {**on[fide].state, "eval": ev}, line))
+        return f
+
+    carlsen, lazavik = swing(CARLSEN, "Magnus Carlsen", at_42), swing(LAZAVIK, "Denis Lazavik", at_43)
+    assert carlsen.detail == lazavik.detail == "mJnv1YBUw2m42" and carlsen.voice == lazavik.voice == CARLSEN
+    assert "move 42" in carlsen.body and "move 42" in lazavik.body
+
+
 def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     # H4: an evaluation hovering between +2.6 and +3.4 told "Magnus Carlsen is winning" at moves 33, 37
     # and 41, each a key push. Each reading comes twice here: a band moves once two agree.
@@ -303,7 +358,7 @@ def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypat
 
     @contextmanager
     def session():
-        yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)))
+        yield SimpleNamespace(scalars=lambda stmt: SimpleNamespace(all=lambda: next(answers)), execute=lambda stmt: [])  # no boards (structured.games)
 
     devices = [(11, (1, "webpush", "https://fcm.googleapis.com/fcm/send/a", "k", "a"), {}, 60, None), (11, (2, "webpush", "https://web.push.apple.com/b", "k", "a"), {}, 60, None)]
     monkeypatch.setattr(notify, "session", session)

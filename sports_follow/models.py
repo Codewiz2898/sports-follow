@@ -619,6 +619,8 @@ class Moment(Base):
     corrects: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)
     # A game's own moment: the players it's about, by their ids in its source (a goal's scorer), or ["*"], the
     # whole game (the result). A fan who follows one of them hears it once, as their player's (alerts.plan).
+    # A player's moment of a game under several fixtures (a chess board, one of each player's): [the player whose
+    # side tells it to a fan who follows both], by their id in its source (Found.voice); else none.
     about: Mapped[list | None] = mapped_column(JSONB)
 
 
