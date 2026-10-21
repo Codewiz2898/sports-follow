@@ -214,13 +214,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   within half an hour of its start, the web app plays a Twitch or Kick channel inside the page once it's
   tapped (`player.twitch.tv`, told the page's host; `player.kick.com`), as it does a YouTube video
   (youtube-nocookie.com), with "Open on Twitch" beside it; any other platform is a "Watch on Douyu" link.
-  Twitch's player must be at least 400×300, so where the column is narrower (a phone) it opens over the
-  whole screen instead, sideways while the phone is held upright. A player a fan has started stays while the
-  page is open, though the game is called over before the broadcast, which runs behind, has shown the end.
-  The Android app plays the same three over the whole screen once tapped (`mobile/src/watch.tsx`): a YouTube one
-  upright, the video across the middle, with Expand to turn it sideways and Collapse (or Back) to turn it upright
-  again, and Twitch's and Kick's turned sideways, as their players won't play narrower than a phone held upright is
-  (BHA-358: nothing turns on its own), with "Open on Twitch" under it and the rest as links. An app isn't a site Twitch can be told, so it shows the
+  The player is the column's width, 16:9, a phone's too, and its own full-screen button makes it bigger. On a
+  phone that's smaller than Twitch's stated minimum for an embedded player (400×300): Bharath chose on 21 Oct
+  to have it play in the page anyway (BHA-387). A phone never autoplays it, so there the fan taps the player's
+  own play too. A player a fan has started stays while the page is open, though the game is called over before
+  the broadcast, which runs behind, has shown the end. The Android app plays the same three in the page too
+  (`mobile/src/watch.tsx`), at the content's width, with "Open on Twitch" and Expand under it: Expand turns it
+  sideways over the whole screen, and Collapse (or Back) puts it back in the page (BHA-358: nothing turns on its
+  own); the rest are links. An app isn't a site Twitch can be told, so it shows the
   site's own page of the player alone, `/watch/<player>/<id>` (`watch.page`; a player the app doesn't have, or an
   id of another shape than its player plays, is a 404), in a WebView that keeps to that page: a link out of the
   player opens in the platform's app or the browser. That page brings its own Content-Security-Policy, stricter
@@ -415,7 +416,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Share and More down the right). A video taller than it's wide (a Short: `video.upright`, from the player part
   videos.list gives with `maxWidth`, `VideoSource.upright`) is framed 9:16, in the middle of a 4:5 band edge to edge
   and on a player's Feed, and full screen between the tabs and what's at its foot, so nothing sits over YouTube's
-  player (BHA-358). The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
+  player (BHA-358). Since BHA-384 a Short plays as Shorts do: in the full-screen layout on black, its frame under
+  the tabs as wide as the phone allows (`feed.shortFrame`, `.reel.short`), who and what in a strip under it, the tab bar
+  dark and see-through over that strip, YouTube's player without its controls; tapped from edge to edge, it opens a
+  viewer of the Feed's Shorts over the page (`?short=<id>` on the web, so Back closes it), swiping from one to the
+  next. Nothing of the app's goes over the player, as YouTube's rules want. The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
   on the site's address (`feedLayouts.tsx` InlineVideo), the tab bar where it was; and by itself as it comes on
   screen (BHA-359): muted until the fan turns the sound on (the app's sound button beside the video, YouTube's own,
   or a tap to play one), then with it until they mute (BHA-381, `mobile/src/sound.ts`, kept for the day); one at a
@@ -1115,8 +1120,8 @@ Every page is there: Today (with the welcome for a new fan), Live now, Search an
 player's page with its tabs, a game's match page (with Follow for the game itself), Following, Alerts,
 Account (sign-in by email code), Credits, Privacy and a campaign's page (stann.in/gukesh, without the web's
 "install the app" part). Where the web listens to the fan stream, the app reads again every 30 s for now
-(BHA-231). A match page's Watch live plays Twitch, Kick and YouTube in a WebView (`react-native-webview`), turned
-sideways (`expo-screen-orientation`), so a build from before those two (BHA-345) has to be rebuilt. A server
+(BHA-231). A match page's Watch live plays Twitch, Kick and YouTube in a WebView (`react-native-webview`), in the
+page or, expanded, turned sideways (`expo-screen-orientation`), so a build from before those two (BHA-345) has to be rebuilt. A server
 from before `/watch/` answers it with the web app's own page, so the server goes out before an app build that
 plays streams. Notifications come through
 FCM (below), drawn by the app, with a live card on the lock screen; a home-screen widget follows. The native project

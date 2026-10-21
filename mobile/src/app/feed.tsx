@@ -13,10 +13,10 @@ import { StatusBar } from 'expo-status-bar'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { ringed } from '../../../web/src/feed'
-import type { FeedCircle, FeedEntry, FeedTabKey } from '../api'
+import { isShort, ringed } from '../../../web/src/feed'
+import type { FeedCircle, FeedEntry, FeedItem, FeedTabKey } from '../api'
 import { useNow } from '../clock'
-import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, useFeedLayout, useFollows, usePlaying } from '../feedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, ShortsViewer, useFeedLayout, useFollows, usePlaying } from '../feedLayouts'
 import { feedHasNew, markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
 import { useFollowing } from '../following'
 import { SearchIcon } from '../icons'
@@ -51,7 +51,11 @@ export default function FeedScreen() {
   const { follows, error: followError } = useFollows()
   // Its videos play in their cards, by themselves too (autoplay.ts), while it's in front and the app is.
   const front = useInFront()
-  const videos = usePlaying(focused && front)
+  // A Short tapped from edge to edge opens the viewer of the Feed's Shorts over it (BHA-384); the Feed's own stop meanwhile.
+  const [shorts, setShorts] = useState<string | null>(null)
+  const videos = usePlaying(focused && front && shorts == null)
+  const play = useCallback((item: FeedItem) => (isShort(item) ? setShorts(item.id) : videos.play(item)), [videos.play])
+  const [onShort, setOnShort] = useState(false) // a Short on the full screen's screen
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   const [circles, setCircles] = useState<FeedCircle[]>([])
   const [refreshing, setRefreshing] = useState(false)
@@ -71,7 +75,7 @@ export default function FeedScreen() {
   useEffect(() => { if (!loading) setRefreshing(false) }, [loading])
   // Full screen and in front: the tab bar turns paper over the dark, and the status bar's icons light.
   const reels = focused && layout === 'full'
-  useTabBarOverInk(reels)
+  useTabBarOverInk(reels, reels && onShort)
 
   const showTab = (to: FeedTabKey) => router.setParams({ tab: to === 'following' ? 'following' : undefined, player: undefined })
   const pick = (id: number | null) => {
@@ -83,7 +87,7 @@ export default function FeedScreen() {
   const retry = failed === 'first' ? () => setAgain((n) => n + 1) : more
   const sheet = (
     <ItemSheet item={opened?.item ?? null} name={opened?.player.name ?? ''} onClose={() => setOpened(null)} onHide={(_, verdict) => (opened ? hide(opened, verdict) : Promise.resolve())}>
-      {opened && layout === 'edge' ? <EdgeSheetExtras entry={opened} onGo={() => setOpened(null)} /> : null}
+      {opened && layout === 'edge' ? <EdgeSheetExtras entry={opened} onGo={() => { setOpened(null); setShorts(null) }} /> : null}
     </ItemSheet>
   )
 
@@ -123,7 +127,7 @@ export default function FeedScreen() {
     return (
       <>
         <Reels
-          entries={items} now={now} tab={tab} read={read} onTab={showTab} follows={follows} videos={videos} onMore={setOpened}
+          entries={items} now={now} tab={tab} read={read} onTab={showTab} follows={follows} videos={videos} onMore={setOpened} onShort={setOnShort}
           onNear={error ? undefined : more}
           footer={error ? (
             <View style={s.done}>
@@ -132,7 +136,7 @@ export default function FeedScreen() {
             </View>
           ) : !page || page.cursor ? <Spinner color="#FFFFFF" /> : items.length === 0 ? empty : done(true)}
         />
-        {followError ? <View style={[s.reelsError, { top: insets.top + 64 }]}><ErrorBox>{followError}</ErrorBox></View> : null}
+        {followError ? <View style={[s.reelsError, { bottom: 92 + insets.bottom }]}><ErrorBox>{followError}</ErrorBox></View> : null /* above the tab bar, never over a Short's player */}
         {reels ? <StatusBar style="light" /> : null}
         {sheet}
       </>
@@ -172,7 +176,7 @@ export default function FeedScreen() {
         data={items}
         keyExtractor={(x) => x.item.id}
         renderItem={({ item: x }) => (
-          <EdgePost entry={x} now={now} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onKeep={videos.keep} onMore={() => setOpened(x)} />
+          <EdgePost entry={x} now={now} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={play} onKeep={videos.keep} onMore={() => setOpened(x)} />
         )}
         extraData={videos.playing}
         viewabilityConfigCallbackPairs={videos.pairs}
@@ -187,6 +191,9 @@ export default function FeedScreen() {
         onRefresh={read == null ? undefined : () => { setRefreshing(true); setAgain((n) => n + 1) }}
         refreshing={refreshing}
       />
+      {shorts != null ? (
+        <ShortsViewer entries={items} start={shorts} now={now} follows={follows} onMore={setOpened} onNear={error ? undefined : more} onClose={() => setShorts(null)} />
+      ) : null}
       {sheet}
     </>
   )

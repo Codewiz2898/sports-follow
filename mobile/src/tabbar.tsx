@@ -3,7 +3,8 @@
 // while something came into it since the fan last opened it (feedSeen.ts); a small phone shows the words alone.
 // A place is one screen: tapping it goes back to that screen when it's already open under this one (what's over
 // it closes) rather than opening another on top, so the stack and Back don't grow with every tap.
-// Over the full-screen Feed it turns paper, with the place it's on in ink (the web's :root[data-reels] .tabbar).
+// Over the full-screen Feed it turns paper, with the place it's on in ink (the web's :root[data-reels] .tabbar); over
+// a Short there, dark and see-through, as Shorts' own bar is (BHA-384, :root[data-reels='short']).
 
 import { router, useNavigationContainerRef, usePathname } from 'expo-router'
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
@@ -49,24 +50,34 @@ export function useGoToPlace() {
 }
 
 // The screens asking for the bar over ink (a full-screen Feed while it's in front): the bar is paper while any
-// does. A set, not a flag, so a Feed leaving as another screen comes can't turn it off for one that stays.
-const overInk = new Set<object>()
+// does, and glass (dark, see-through) while any asks for that (a Short on screen). A map, not a flag, so a Feed
+// leaving as another screen comes can't turn it off for one that stays.
+const overInk = new Map<object, 'paper' | 'glass'>()
 const listeners = new Set<() => void>()
 const told = () => listeners.forEach((heard) => heard())
 
-/** The bar in paper while `on` (the screen calling it is dark), and back to ink once it isn't or the screen goes. */
-export function useTabBarOverInk(on: boolean) {
+/** The bar in paper while `on` (the screen calling it is dark), glass while `glass` too (a Short fills it), and back
+ * to ink once it isn't or the screen goes. */
+export function useTabBarOverInk(on: boolean, glass = false) {
   useEffect(() => {
     if (!on) return
     const me = {}
-    overInk.add(me)
+    overInk.set(me, glass ? 'glass' : 'paper')
     told()
     return () => { overInk.delete(me); told() }
-  }, [on])
+  }, [on, glass])
 }
 
-function useOverInk(): boolean {
-  return useSyncExternalStore((heard) => { listeners.add(heard); return () => { listeners.delete(heard) } }, () => overInk.size > 0)
+function useOverInk(): 'ink' | 'paper' | 'glass' {
+  return useSyncExternalStore((heard) => { listeners.add(heard); return () => { listeners.delete(heard) } },
+    () => ([...overInk.values()].includes('glass') ? 'glass' : overInk.size > 0 ? 'paper' : 'ink'))
+}
+
+// The bar's ground, its words, and the place that's on (its ground and words), over each.
+const LOOKS = {
+  ink: { bar: colour.text, words: colour.bg, onGround: colour.bg, onWords: colour.text },
+  paper: { bar: colour.bg, words: colour.text, onGround: colour.text, onWords: colour.bg },
+  glass: { bar: 'rgba(28,28,28,0.78)', words: colour.bg, onGround: colour.bg, onWords: colour.text },
 }
 
 export function TabBar() {
@@ -78,9 +89,8 @@ export function TabBar() {
   const icons = useWindowDimensions().width >= 380
   const go = useGoToPlace()
   const [typing, setTyping] = useState(false)
-  const paper = useOverInk()
-  const bar = paper ? colour.bg : colour.text // the bar's ground; a place that's on is the other
-  const ink = paper ? colour.text : colour.bg
+  const over = useOverInk()
+  const look = LOOKS[over]
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () => setTyping(true))
     const hide = Keyboard.addListener('keyboardDidHide', () => setTyping(false))
@@ -88,14 +98,14 @@ export function TabBar() {
   }, [])
   if (typing || path === '/welcome') return null
   return (
-    <View style={[s.bar, { bottom: 16 + insets.bottom, backgroundColor: bar }, paper && s.barOnInk]} accessibilityRole="tablist">
+    <View style={[s.bar, { bottom: 16 + insets.bottom, backgroundColor: look.bar }, over === 'paper' && s.barOnInk, over === 'glass' && s.glass]} accessibilityRole="tablist">
       {PLACES.map(({ path: to, label, Icon, lit }) => {
         const on = lit(path)
         return (
-          <Pressable key={to} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={to === '/feed' && dot ? `${label}, something new` : label} onPress={() => go(to)} style={[s.place, on && { backgroundColor: ink }]}>
-            {icons ? <Icon size={20} color={on ? bar : ink} /> : null}
-            <Text style={[s.label, { color: ink }, on && [s.labelOn, { color: bar }]]} numberOfLines={1}>{label}</Text>
-            {to === '/feed' && dot ? <View style={[s.dot, { backgroundColor: on ? bar : ink }]} accessibilityLabel="new in your Feed" /> : null}
+          <Pressable key={to} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={to === '/feed' && dot ? `${label}, something new` : label} onPress={() => go(to)} style={[s.place, on && { backgroundColor: look.onGround }]}>
+            {icons ? <Icon size={20} color={on ? look.onWords : look.words} /> : null}
+            <Text style={[s.label, { color: look.words }, on && [s.labelOn, { color: look.onWords }]]} numberOfLines={1}>{label}</Text>
+            {to === '/feed' && dot ? <View style={[s.dot, { backgroundColor: on ? look.onWords : look.words }]} accessibilityLabel="new in your Feed" /> : null}
             {to === '/notifications' && unread ? (
               <View style={s.count} accessibilityLabel={`${unread} new`}><Text style={s.countText}>{unread > 9 ? '9+' : unread}</Text></View>
             ) : null}
@@ -113,6 +123,7 @@ const s = StyleSheet.create({
     shadowColor: colour.text, shadowOpacity: 0.28, shadowRadius: 16, shadowOffset: { width: 0, height: 12 }, elevation: 12,
   },
   barOnInk: { shadowColor: '#000000', shadowOpacity: 0.4, shadowRadius: 32 },
+  glass: { elevation: 0, shadowOpacity: 0, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.18)' },  // no shadow through it
   place: { flex: 1, height: 48, borderRadius: 999, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   label: { fontFamily: font[700], fontSize: 14, color: colour.bg },
   labelOn: { fontFamily: font[800], color: colour.text },

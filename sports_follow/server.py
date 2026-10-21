@@ -2564,7 +2564,7 @@ def _route_of(method: str, path: str) -> str | None:
 @app.get("/watch/{player}/{plays}", include_in_schema=False)
 def watch_page(player: str, plays: str, request: Request) -> Response:
     """A match page's stream played by the app's own player, alone on a page of the site (watch.page): what the
-    Android app shows over the whole screen, as Twitch's player must sit in a page on the site it's told. It brings
+    Android app's match page plays, as Twitch's player must sit in a page on the site it's told. It brings
     its own Content-Security-Policy, which the Caddyfile leaves it. No such player, or what it plays of another
     shape, is a 404; nothing else is read."""
     made = watch.page(player, plays, request.url.hostname or "")

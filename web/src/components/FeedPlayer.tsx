@@ -12,7 +12,7 @@ import { holdSound, mayPlayAloud, setSound, useSound } from '../sound'
  * turned on and off where it plays, through the API, and YouTube's own sound button turns it on or off for the videos
  * after it too. One that should have its sound but may not yet (the page not tapped: the browser's rule) starts muted
  * with its sound held back, as does one the browser won't start aloud, and the fan's next tap on the page lets it
- * out. The Android app's InlineVideo does the same.
+ * out. `bare`: without YouTube's controls, a Short's (BHA-384). The Android app's InlineVideo does the same.
  */
 
 interface YTPlayer {
@@ -50,7 +50,7 @@ const PLAYING = 1
 const BUFFERING = 3
 
 /** Draw it once a video (`key` it by the video): a later change of sound goes through YouTube's API, not a reload. */
-export function FeedPlayer({ item, playerId }: { item: FeedItem; playerId: number }) {
+export function FeedPlayer({ item, playerId, bare }: { item: FeedItem; playerId: number; bare?: boolean }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [refused, setRefused] = useState(false)
   const id = item.video?.youtube_id ?? ''
@@ -143,7 +143,7 @@ export function FeedPlayer({ item, playerId }: { item: FeedItem; playerId: numbe
     )
   }
   return (
-    <iframe ref={frame} src={youtubeEmbed(id, startMuted, window.location.origin)} title={item.title}
+    <iframe ref={frame} src={youtubeEmbed(id, startMuted, window.location.origin, bare)} title={item.title}
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
   )
 }
