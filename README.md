@@ -268,7 +268,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
   leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming
   law, 2025), no odds. What's asked is each sport's (`Sport.asks`, below): a chess game's result (either player, or
-  a draw), who takes each map of a team esports series; other sports ask nothing yet. A question (`prediction_question`)
+  a draw), who takes each map of a team esports series, who wins a football match (home, a draw or away, from its
+  final score: extra time counts, a shootout doesn't) and who wins a limited-overs cricket match (a tie a Super Over
+  doesn't settle, no result or a washout is voided); a game called off is voided (the board's `cancelled`),
+  one postponed waits for its new date. Other sports ask nothing yet. A question (`prediction_question`)
   belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
   game, a look at its match page (which lists its questions), or the worker's read of a fan's game coming up
@@ -720,8 +723,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   scorecard, an esports series by map, a finished chess game's moves; by default the source's key events)
   and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), what fans may call
   before a game and how its board answers it (`predicts`, `asks`, `closed`, `answer`, and `board` where one game is
-  under several fixtures: a chess game's result, each map of an esports series; predictions.py; Today's cards say the
-  game by `board` too, so a chess board two of a fan's players are on is one card), how an Android
+  under several fixtures: a chess game's result, each map of an esports series, a football or cricket match's
+  winner; predictions.py; Today's cards say the game by `board` too, so a chess board two of a fan's players are
+  on is one card), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's

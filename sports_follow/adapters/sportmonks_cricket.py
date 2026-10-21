@@ -48,6 +48,9 @@ SQUAD_BACK = 365  # days back a team's latest season is looked for (team): a fra
 
 _FINAL = {"Finished"}
 _OFF = {"Cancl.", "Postp.", "Aban."}
+# Called off, or washed out: the board says so (state's cancelled), and a prediction on it is voided
+# (sports.cricket), where a postponed one waits.
+_CALLED_OFF = {"Cancl.", "Aban."}
 _BREAKS = {"Innings Break", "Lunch", "Tea Break", "Dinner", "Int."}
 _OVERS = {"T20I": 20, "T20": 20, "ODI": 50, "List A": 50, "T10": 10}
 _FORMATS = {"Test/5day": "Test", "4day": "First-class"}
@@ -277,6 +280,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
             "summary": x.get("note") or "",
             "format": _format(x),
             "player_of_match": (x.get("manofmatch") or {}).get("fullname"),
+            "cancelled": x.get("status") in _CALLED_OFF,
         },
         lines=parse_lines(x) if status in ("live", "final") else {},
         moments=[],

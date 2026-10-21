@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, values, words
+from .base import DRAW, VOID, Ask, Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -451,6 +451,32 @@ class Football(Sport):
     def back_fact(self, who: str, kind: str) -> Fact | None:
         """ "Back": "William Saliba is fit again", "Phil Foden is back from suspension"."""
         return Fact("Back", f"{who} {BACK[kind]}") if kind in BACK else None
+
+    # ---- predictions (predictions.py): who wins, called before kick-off
+
+    predicts = True
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """Who wins, or a draw, once both sides are known: home, a draw, away, each side by its id at the source."""
+        home, away = state.get("home") or {}, state.get("away") or {}
+        if not (home.get("id") and home.get("name") and away.get("id") and away.get("name")) or str(home["id"]) == str(away["id"]):
+            return []
+        return [Ask("result", "Who wins?", ((str(home["id"]), str(home["name"])), (DRAW, "Draw"), (str(away["id"]), str(away["name"]))))]
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """From the final score, as the game's record has it: the side with more goals (extra time's count), level a
+        draw (a shootout isn't part of the score, so a game level after extra time is one). VOID for a game called off:
+        cancelled, abandoned, or given to a side without being played out (the board's cancelled)."""
+        if state.get("cancelled"):
+            return VOID
+        home, away = state.get("home") or {}, state.get("away") or {}
+        goals = [str(side.get("score") or "") for side in (home, away)]
+        if status != "final" or not all(g.isdigit() for g in goals):
+            return None
+        home_goals, away_goals = int(goals[0]), int(goals[1])
+        if home_goals == away_goals:
+            return DRAW
+        return str((home if home_goals > away_goals else away).get("id") or "") or None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         played = [ln for ln in lines if ln.get("headline") not in (None, "On the bench")]
