@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import QuartzCore
 
 /// The overlays Bharath picked on the design canvas (21 Oct): the B1 scorebug during the clip, the E1 title
@@ -204,26 +205,148 @@ struct Overlays {
         return root
     }
 
-    /// The end card on every cut and montage: "clipped on | slam", with the match line under it on a montage.
-    func endCard(kicker: String?) -> CALayer {
-        let root = box(Overlays.paper, CGRect(x: 0, y: 0, width: W, height: H))
-        root.addSublayer(box(Overlays.crimson, CGRect(x: 0, y: 0, width: 36 * u, height: H)))
-        let words = text("clipped on", "Manrope", 30, Overlays.ink)
-        let logo = text("slam", "Fredoka", 84, Overlays.blue)
-        let gap = 26 * u, rule = 3 * u, ruleH = 70 * u
-        let rowW = words.bounds.width + gap + rule + gap + logo.bounds.width
-        let x0 = 36 * u + (W - 36 * u - rowW) / 2
-        let mid = H / 2 + (kicker == nil ? 0 : 14 * u)
-        words.frame.origin = CGPoint(x: x0, y: mid - words.bounds.height / 2)
-        root.addSublayer(words)
-        root.addSublayer(box(Overlays.ink, CGRect(x: words.frame.maxX + gap, y: mid - ruleH / 2, width: rule, height: ruleH)))
-        logo.frame.origin = CGPoint(x: words.frame.maxX + gap + rule + gap, y: mid - logo.bounds.height / 2)
-        root.addSublayer(logo)
-        if let kicker, !kicker.isEmpty {
-            let k = text(kicker, "Manrope", 15, Overlays.crimson, kern: 1.5)
-            k.frame.origin = CGPoint(x: 36 * u + (W - 36 * u - k.bounds.width) / 2, y: mid - ruleH / 2 - 22 * u - k.bounds.height)
-            root.addSublayer(k)
-        }
+    enum EndStyle: String { case stamp, ink }  // canvas F3/G1 and F6/G2, picked 21 Oct
+
+    /// The animated end card, starting `t0` seconds into the video: the blue stamp (F3) or ink + Anton (F6).
+    /// `line` is the match line the ink card ends on ("TY 21–18 GL · DOTA 2 · GAME 2"), if any.
+    func endCard(_ style: EndStyle, line: String?, at t0: Double) -> CALayer {
+        style == .stamp ? stampCard(at: t0) : inkCard(line: line, at: t0)
+    }
+
+    /// A keyframe animation at seconds after t0 (the video's own clock), holding its first value before
+    /// and its last after.
+    private func kf(_ path: String, _ values: [Any], _ times: [Double], at t0: Double,
+                    ease: CAMediaTimingFunctionName = .easeOut) -> CAKeyframeAnimation {
+        let a = CAKeyframeAnimation(keyPath: path)
+        let start = times.first ?? 0, d = max(0.001, (times.last ?? 0) - start)
+        a.values = values
+        a.keyTimes = times.map { NSNumber(value: ($0 - start) / d) }
+        a.timingFunctions = Array(repeating: CAMediaTimingFunction(name: ease), count: max(1, values.count - 1))
+        a.beginTime = AVCoreAnimationBeginTimeAtZero + t0 + start
+        a.duration = d
+        a.fillMode = .both
+        a.isRemovedOnCompletion = false
+        return a
+    }
+
+    private func stampCard(at t0: Double) -> CALayer {
+        let root = box(Overlays.ink, CGRect(x: 0, y: 0, width: W, height: H))
+        let panel = box(Overlays.blue, root.bounds)
+        panel.add(kf("transform.translation.x", [W, 0], [0, 0.16], at: t0), forKey: "wipe")
+        root.addSublayer(panel)
+        let group = CALayer()
+        group.frame = root.bounds
+        let kicker = text("CLIPPED ON", "Manrope", 20, .white, kern: 6)
+        let word = text("SLAM", "Anton", 230, .white, kern: 4)
+        word.setAffineTransform(Overlays.slant)
+        let slam = CALayer()  // scaled from outside; the slant stays on the word inside
+        slam.frame = CGRect(origin: .zero, size: word.bounds.size)
+        slam.addSublayer(word)
+        let bar = box(.white, CGRect(x: 0, y: 0, width: 120 * u, height: 8 * u))
+        let total = kicker.bounds.height + 4 * u + word.bounds.height + 10 * u + bar.bounds.height
+        var y = H / 2 + total / 2
+        y -= kicker.bounds.height
+        kicker.frame.origin = CGPoint(x: (W - kicker.bounds.width) / 2, y: y)
+        y -= 4 * u + word.bounds.height
+        slam.frame.origin = CGPoint(x: (W - word.bounds.width) / 2, y: y)
+        y -= 10 * u + bar.bounds.height
+        bar.frame.origin = CGPoint(x: (W - bar.bounds.width) / 2, y: y)
+        slam.add(kf("transform.scale", [1.8, 0.93, 1.03, 1.0], [0.22, 0.42, 0.54, 0.67], at: t0), forKey: "slam")
+        slam.add(kf("opacity", [0, 1], [0.22, 0.4], at: t0), forKey: "in")
+        kicker.add(kf("opacity", [0, 1], [0.45, 0.8], at: t0), forKey: "in")
+        kicker.add(kf("transform.translation.y", [18 * u, 0], [0.45, 0.8], at: t0), forKey: "drop")
+        bar.add(kf("transform.scale.x", [0, 1], [0.64, 0.99], at: t0), forKey: "draw")
+        // The impact: a small shake as SLAM lands.
+        group.add(kf("transform.translation", [CGSize.zero, CGSize(width: -7 * u, height: -5 * u), CGSize(width: 6 * u, height: 4 * u),
+                                               CGSize(width: -3 * u, height: -2 * u), CGSize.zero].map { NSValue(size: $0) },
+                     [0.42, 0.45, 0.51, 0.58, 0.64], at: t0, ease: .linear), forKey: "shake")
+        group.addSublayer(kicker)
+        group.addSublayer(slam)
+        group.addSublayer(bar)
+        root.addSublayer(group)
         return root
+    }
+
+    private func inkCard(line: String?, at t0: Double) -> CALayer {
+        let root = box(Overlays.ink, CGRect(x: 0, y: 0, width: W, height: H))
+        let left = 96 * u
+        let kicker = text("clipped on", "Manrope", 22, NSColor.white.withAlphaComponent(0.78))
+        let letters = ["S", "L", "A", "M"].map { text($0, "Anton", 200, .white) }
+        let rowH = (letters.map(\.bounds.height).max() ?? 0)
+        let rowW = letters.reduce(0) { $0 + $1.bounds.width }
+        let badge = CALayer()
+        badge.contents = Overlays.badge(size: 72 * u * 2)
+        badge.frame = CGRect(x: 0, y: 0, width: 72 * u, height: 72 * u)
+        let underline = box(Overlays.blue, CGRect(x: 0, y: 0, width: 420 * u, height: 14 * u))
+        var chip: CALayer?
+        if let line, !line.isEmpty {
+            let t = text(line.uppercased(), "Manrope", 14, Overlays.crimson, kern: 1.5)
+            let c = box(Overlays.paper, CGRect(x: 0, y: 0, width: t.bounds.width + 20 * u, height: t.bounds.height + 8 * u))
+            t.frame.origin = CGPoint(x: 10 * u, y: 4 * u)
+            c.addSublayer(t)
+            chip = c
+        }
+        let total = kicker.bounds.height + 6 * u + rowH + 6 * u + underline.bounds.height + (chip.map { 20 * u + $0.bounds.height } ?? 0)
+        var y = H / 2 + total / 2 - kicker.bounds.height
+        kicker.frame.origin = CGPoint(x: left, y: y)
+        y -= 6 * u + rowH
+        // The letters rise from behind a mask, one after another, under the app's slant.
+        let mask = CALayer()
+        mask.frame = CGRect(x: left, y: y, width: rowW, height: rowH)
+        mask.masksToBounds = true
+        let slanted = CALayer()
+        slanted.frame = mask.bounds
+        var x: CGFloat = 0
+        for (i, l) in letters.enumerated() {
+            l.frame.origin = CGPoint(x: x, y: 0)
+            x += l.bounds.width
+            let b = 0.29 + Double(i) * 0.095
+            l.add(kf("transform.translation.y", [-rowH * 1.1, 0], [b, b + 0.32], at: t0), forKey: "rise")
+            slanted.addSublayer(l)
+        }
+        mask.setAffineTransform(Overlays.slant)
+        mask.addSublayer(slanted)
+        badge.frame.origin = CGPoint(x: left + rowW + 22 * u, y: y + 26 * u)
+        y -= 6 * u + underline.bounds.height
+        underline.anchorPoint = CGPoint(x: 0, y: 0.5)
+        underline.frame.origin = CGPoint(x: left, y: y)
+        if let chip {
+            y -= 20 * u + chip.bounds.height
+            chip.frame.origin = CGPoint(x: left, y: y)
+            chip.add(kf("opacity", [0, 1], [1.12, 1.41], at: t0), forKey: "in")
+            chip.add(kf("transform.translation.x", [-28 * u, 0], [1.12, 1.41], at: t0), forKey: "slide")
+        }
+        kicker.add(kf("opacity", [0, 1], [0.19, 0.45], at: t0), forKey: "in")
+        kicker.add(kf("transform.translation.y", [-10 * u, 0], [0.19, 0.45], at: t0), forKey: "up")
+        underline.add(kf("transform.scale.x", [0, 1], [0.8, 1.12], at: t0), forKey: "sweep")
+        badge.add(kf("transform.scale", [0, 1.18, 1], [0.93, 1.12, 1.25], at: t0), forKey: "pop")
+        badge.add(kf("transform.rotation.z", [40 * Double.pi / 180, -6 * Double.pi / 180, 0], [0.93, 1.12, 1.25], at: t0), forKey: "twist")
+        [kicker, mask, badge, underline].forEach(root.addSublayer)
+        if let chip { root.addSublayer(chip) }
+        return root
+    }
+
+    /// Slam's badge (web/public/icons/mark.svg): a blue disc edged with 14 bumps, a white Fredoka "s".
+    static func badge(size: CGFloat) -> CGImage? {
+        let n = Int(size.rounded(.up))
+        guard n > 0, let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0,
+                                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let k = CGFloat(n) / 512, c = CGPoint(x: CGFloat(n) / 2, y: CGFloat(n) / 2)
+        ctx.setFillColor(blue.cgColor)
+        ctx.fillEllipse(in: CGRect(x: c.x - 207.4 * k, y: c.y - 207.4 * k, width: 414.8 * k, height: 414.8 * k))
+        for i in 0..<14 {
+            let a = CGFloat(i) * 2 * .pi / 14
+            let p = CGPoint(x: c.x + cos(a) * 201.2 * k, y: c.y + sin(a) * 201.2 * k)
+            ctx.fillEllipse(in: CGRect(x: p.x - 54.8 * k, y: p.y - 54.8 * k, width: 109.6 * k, height: 109.6 * k))
+        }
+        let font = Fonts.named("Fredoka", size: 300 * k) ?? NSFont.boldSystemFont(ofSize: 300 * k)
+        let s = NSAttributedString(string: "s", attributes: [.font: font, .foregroundColor: NSColor.white])
+        let sz = s.size()
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        s.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2 + font.descender / 2))
+        NSGraphicsContext.restoreGraphicsState()
+        return ctx.makeImage()
     }
 }

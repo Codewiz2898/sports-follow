@@ -167,8 +167,8 @@ enum Montage {
             parent.addSublayer(logo)
         }
         // One match across the clips: its name on the end card.
-        let kickers = Set(clips.compactMap { moment(for: $0) }.filter { $0.teams != nil }.map { "\($0.headline.uppercased()) · \($0.kicker)" })
-        let end = o.endCard(kicker: kickers.count == 1 ? kickers.first : nil)
+        let kickers = Set(clips.compactMap { moment(for: $0) }.filter { $0.teams != nil }.map { "\($0.headline) · \($0.kicker)" })
+        let end = o.endCard(ClipEditor.endStyle, line: kickers.count == 1 ? kickers.first : nil, at: cardRange.start.seconds)
         end.opacity = 0
         end.add(ClipEditor.visible(from: cardRange.start.seconds, to: T, total: T), forKey: "show")
         parent.addSublayer(end)

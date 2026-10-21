@@ -19,7 +19,8 @@ enum ClipEditor {
     static let inkSolid = NSColor(srgbRed: 0x0d / 255, green: 0x0d / 255, blue: 0x0d / 255, alpha: 1).cgColor
     static let paper = NSColor(srgbRed: 0xf3 / 255, green: 0xf3 / 255, blue: 0xef / 255, alpha: 1).cgColor
 
-    static let endSeconds = 1.2
+    static let endSeconds = 2.0
+    static var endStyle = Overlays.EndStyle.stamp
 
     /// The cut: the clip with the title card over its first 2 s and the scorebug after, then the last
     /// `replaySeconds` at half speed (the slate as it starts, cinema bars through it), then the end card.
@@ -92,7 +93,9 @@ enum ClipEditor {
         add(o.cinemaBars(m), clip, slowEnd)
         add(o.slate(), clip, min(clip + 0.8, slowEnd))
         if card > 0 { add(o.titleCard(m), 0, card) }
-        add(o.endCard(kicker: nil), slowEnd, total)
+        let line = m.isEmpty ? nil : ([m.kills.map { k in m.teams.map { "\($0[0]) \(k[0])–\(k[1]) \($0[1])" } ?? "\(k[0])–\(k[1])" }, "Dota 2",
+                                         m.game.map { "Game \($0)" }].compactMap { $0 }.joined(separator: " · "))
+        add(o.endCard(endStyle, line: line, at: slowEnd), slowEnd, total)
         return (parent, video)
     }
 

@@ -28,6 +28,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private var verticalItem: NSMenuItem?
     private var montageTask: Task<Void, Never>?
     private var pickedName: String?
+    private var endItems: [NSMenuItem] = []
     private var matchItem: NSMenuItem?
 
     init(opts: Options, probeOnly: Bool) {
@@ -276,6 +277,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         menu.addItem(vt)
         verticalItem = vt
         menu.addItem(.separator())
+        for (title, style) in [("End card: blue stamp", Overlays.EndStyle.stamp), ("End card: ink + Anton", .ink)] {
+            let it = NSMenuItem(title: title, action: #selector(pickEnd(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = style.rawValue
+            it.state = ClipEditor.endStyle == style ? .on : .off
+            menu.addItem(it)
+            endItems.append(it)
+        }
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -289,6 +299,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     }
     @objc private func pickAgain() {
         if opts.picker { SCContentSharingPicker.shared.present() } else { presentPicker() }
+    }
+    @objc private func pickEnd(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let style = Overlays.EndStyle(rawValue: raw) else { return }
+        ClipEditor.endStyle = style
+        endItems.forEach { $0.state = ($0.representedObject as? String) == raw ? .on : .off }
+        Log.json("end-card", ["style": raw])
     }
     @objc private func montageToday() { makeMontage(Montage.todaysClips()) }
     @objc private func montagePick() {
