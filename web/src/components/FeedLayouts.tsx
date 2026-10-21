@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { FeedEntry, FeedItem, FeedTabKey } from '../api'
-import { ago, duration, views } from '../feed'
+import type { FeedEntry, FeedTabKey } from '../api'
+import { duration, sourceLine } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
@@ -39,12 +39,6 @@ export function FeedTabs({ tab, onTab, className }: { tab: FeedTabKey; onTab: (t
 
 /** What a follow button needs: whether the fan follows the entry's player now, and the way to change that. */
 export interface Follows { following: (entry: FeedEntry) => boolean; toggle: (entry: FeedEntry) => void; busy: (entry: FeedEntry) => boolean }
-
-/** "channel · 81K views · 2d": where a video is from, how watched and when; a story's outlet and when. */
-function sourceLine(item: FeedItem, now: number, withLength = false): string {
-  const length = withLength ? duration(item.video?.duration) : ''
-  return [item.source, length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
-}
 
 /** A still as its host serves it, lazily; nothing once it fails, or for YouTube's grey 120×90 stand-in for none. */
 function Still({ src, className, onGone }: { src: string; className?: string; onGone: () => void }) {
