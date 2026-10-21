@@ -12,10 +12,12 @@ is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
-until its questions settle, each poll settling what its board answers (polled): a right pick scores 100 less the
-share (%) of fans who picked the same, at least FLOOR, so a call few made is worth more; a wrong one 0. A question
-its game won't answer (a map the series didn't need) is voided, its picks unscored; one still unanswered STALE past
-its start is voided too (sweep). A result the source takes back settles again.
+until its questions settle, armed by its start: a followed player's or team's refresh moves that, as for any game
+they're in, and a read of the game moves it for one nobody follows anyone in (made; a big game is read again when
+the league's read says it moved: prepare). Each poll settles what its board answers (polled): a right pick scores
+100 less the share (%) of fans who picked the same, at least FLOOR, so a call few made is worth more; a wrong one 0.
+A question its game won't answer (a map the series didn't need) is voided, its picks unscored; one still unanswered
+STALE past its start is voided too (sweep). A result the source takes back settles again.
 
 Fans see how everyone split once they've picked, or once the question's closed; friends' picks in a league once
 it's closed. A league's table is its members' points on the questions settled since it was made.
@@ -27,7 +29,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, delete, exists, func, literal, or_, select, union, update
+from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, union, update
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session, aliased
 
@@ -46,6 +48,7 @@ POSTPONED_KEEP = timedelta(days=30)  # a postponed game's questions wait this lo
 OPEN, CLOSED, SETTLED, VOIDED = "open", "closed", "settled", "void"
 UNSETTLED = (OPEN, CLOSED)
 PRE_START = ("scheduled", "armed")  # a game whose questions can still be made: a postponed one waits for its date
+TO_COME = (*PRE_START, "postponed")  # a game that hasn't started here, whose start a read can still move
 AHEAD = timedelta(hours=26)  # prepare reads a fan's game coming up this far ahead, to ask in time
 PREPARE_EVERY = 2 * 3600  # and each game at most this often till its board asks (a chess round's pairings come late)
 PREPARE_MOST = 10  # games read a run
@@ -181,10 +184,10 @@ def _read(db: Session, system: str, fixture: str, game: dict[str, Any], keys: li
 def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     """The games coming up within AHEAD, in a sport that asks, with no questions yet: those of fans' players, teams
     and followed games, and Today's big games (league.coming), whoever follows them, so a fan who follows nobody can
-    call those too; and a big game whose start the league's read has moved since its questions were made, while
-    nothing polls them (moved, for an event's), so they move with it. The reads to ask for (worker.prepare_questions),
-    whose boards make them, or move them (made). A game is asked for at most every PREPARE_EVERY, PREPARE_MOST a
-    run, soonest first."""
+    call those too; and a big game whose start the league's read has moved since its questions were made, or since
+    a pick gave them an event no followed refresh moves (moved, for those), so they and its event move with it. The
+    reads to ask for (worker.prepare_questions), whose boards make them, or move them (made). A game is asked for at
+    most every PREPARE_EVERY, PREPARE_MOST a run, soonest first."""
     from . import match  # the match page's reads (match reads Live now, which reads search, which reads the pipeline)
 
     now = now or _now()
@@ -194,15 +197,20 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     with session() as db:
         theirs = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(_fans_events()), Event.status.in_(PRE_START), Event.start_utc.is_not(None),
                                                                                  Event.start_utc > now, Event.start_utc <= now + AHEAD, ~asked)).all()
-        made = db.execute(select(Question.keys, Question.starts_at, Question.status, Question.event_id)
+        unrefreshed = and_(Event.id == Question.event_id, Event.status.in_(TO_COME), Event.id.not_in(_refreshed()))
+        made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc).outerjoin(Event, unrefreshed)
                           .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
-    unpolled: dict[str, set[datetime | None]] = {}  # each big game asked of: the starts of its open questions nothing polls
-    for keys, starts_at, status, event_id in made:
+    # Each big game asked of: the starts held here that only a read of it moves (made). Its open questions' while
+    # nothing polls them; once a pick gives them an event to be polled by (pick), that event's while it's still to
+    # start, unless a followed player's or team's refresh moves it (structured.upsert_game).
+    held: dict[str, set[datetime | None]] = {}
+    for keys, status, starts_at, event_id, ours, event_start in made:
+        start = ([starts_at] if status == OPEN else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
         for key in keys or []:
-            unpolled.setdefault(key, set()).update([starts_at] if status == OPEN and event_id is None else [])
+            held.setdefault(key, set()).update(start)
     # A start the league's read and the game's own disagree on (an older league read) is read again every
     # PREPARE_EVERY till the league's next read: a few reads a game at most, in the refresh lane.
-    due = [game for game in big if game[1] not in unpolled or unpolled[game[1]] - {game[0]}]
+    due = [game for game in big if game[1] not in held or held[game[1]] - {game[0]}]
     games = {key: (start, key, sport) for start, key, sport in [*theirs, *due]}  # a fan's game that's a big one, once
     out: list[tuple[str, str]] = []
     redis = bus.sync_redis()
@@ -219,7 +227,10 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
 
 def made(system: str, fixture: str) -> None:
     """After a game's read (worker.read_match): the questions its board asks, if it's still to start, under every
-    fixture the read lists (a chess board's two); or, under way or over, what it answers of those made before."""
+    fixture the read lists (a chess board's two); or, under way or over, what it answers of those made before. Its
+    events here still to start that no followed player's or team's refresh brings up to date (a game picked from
+    its card or its match page) start when the read says (_rescheduled), so they're armed, and their questions
+    close, by the game's start now."""
     from . import match
 
     game = (match.last_read(system, fixture) or {}).get("game")
@@ -227,8 +238,25 @@ def made(system: str, fixture: str) -> None:
         return
     keys = list(dict.fromkeys(f"{system}:{f}" for f in [fixture, *(game.get("fixtures") or [])]))
     with session() as db:
+        _rescheduled(db, keys, game)
         polled_by = db.scalar(select(Event.id).where(Event.key.in_(keys), Event.live_binding.is_not(None)).order_by(Event.id).limit(1))
         _read(db, system, fixture, game, keys, polled_by, _now())
+
+
+def _rescheduled(db: Session, keys: list[str], game: dict[str, Any]) -> None:
+    """A read's start and status, where it says the game's still to come, for its events here still to start that
+    nothing else moves, as a schedule read sets them (structured.reschedule). A followed player's or team's refresh
+    moves theirs (_refreshed): the two taking turns would move one back and forth, and remind its fans again each
+    time (moved). A read that finds the game under way or over leaves its event to the poller, which a read calling
+    it over too soon (a chess mini-match's next game) would stop."""
+    from . import structured  # its polls make questions here
+
+    status = game.get("status")
+    start = datetime.fromisoformat(game["start_utc"]) if game.get("start_utc") else None
+    if start is None or status not in TO_COME:
+        return  # a read with no start doesn't take away one known
+    for event in db.scalars(select(Event).where(Event.key.in_(keys), Event.status.in_(TO_COME), Event.start_utc.is_distinct_from(start), Event.id.not_in(_refreshed()))):
+        structured.reschedule(db, event, start, status)
 
 
 # ---------------------------------------------------------------- closing and settling
@@ -448,6 +476,13 @@ def for_players(db: Session, fan: str | None, player_ids: list[int], now: dateti
                              .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(6)))
     settled = list(db.scalars(select(Question).where(theirs, Question.status == SETTLED, Question.settled_at >= now - RECENT).order_by(Question.settled_at.desc()).limit(3)))
     return shown(db, fan, [*coming, *settled], now)
+
+
+def _refreshed() -> Any:
+    """The events a followed player's or team's refresh brings up to date, their start too (structured.upsert_game)."""
+    players = select(EventPlayer.event_id).join(Follow, Follow.player_id == EventPlayer.player_id)
+    teams = select(EventTeam.event_id).join(TeamFollow, TeamFollow.team_id == EventTeam.team_id)
+    return union(players, teams)
 
 
 def _fans_events(fan: str | None = None) -> Any:

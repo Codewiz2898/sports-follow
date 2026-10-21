@@ -464,6 +464,17 @@ def test_questions_are_made_ahead_from_a_read_of_a_fans_game_coming_up(db, redis
     assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("settled", CARLSEN)
 
 
+def made_up(system: str, sport: str, games: dict[str, datetime]) -> SimpleNamespace:
+    """A source whose schedule lists its games when each starts now, and reads one the same."""
+    return SimpleNamespace(
+        system=system, sports=(sport,), name=system, fixture_pattern=re.compile(r"\d+"), live_cadence=10, live_note=None, lag_note=None,
+        credit=lambda snap: system, budgets=lambda: (), locator=lambda fixture: {"fixture": fixture},
+        schedule=lambda first, last: [Fixture(source_id=i, title=f"Game {i}", competition="Super Lig", start_utc=at, venue=None, status="scheduled",
+                                              team_ids=[str(HOME), str(AWAY)], locator={}, sport=sport) for i, at in games.items()],
+        match=lambda fixture: LiveGame(source_id=fixture, title="Trabzonspor vs Galatasaray", competition="Super Lig", start_utc=games[fixture],
+                                       snapshot=sm.parse_match(football_match("NS", 0, 0)), sport=sport))
+
+
 def test_a_fan_who_follows_nobody_has_todays_big_games_to_call(db, redis, monkeypatch):
     """Today's big games coming up within AHEAD (league.coming), in a sport that asks, are read ahead for their
     questions though nobody follows anyone in them, and Today's calls list those, under the address their cards
@@ -473,17 +484,6 @@ def test_a_fan_who_follows_nobody_has_todays_big_games_to_call(db, redis, monkey
     now = datetime.now(timezone.utc).replace(microsecond=0)
     start, later = now + timedelta(hours=5), now + timedelta(days=3)
     pitch_games, lobby_games = {"1": start, "2": later}, {"3": start}
-
-    def made_up(system: str, sport: str, games: dict[str, datetime]) -> SimpleNamespace:
-        """A source whose schedule lists its games when each starts now, and reads one the same."""
-        return SimpleNamespace(
-            system=system, sports=(sport,), name=system, fixture_pattern=re.compile(r"\d+"), live_cadence=10, live_note=None, lag_note=None,
-            credit=lambda snap: system, budgets=lambda: (), locator=lambda fixture: {"fixture": fixture},
-            schedule=lambda first, last: [Fixture(source_id=i, title=f"Game {i}", competition="Super Lig", start_utc=at, venue=None, status="scheduled",
-                                                  team_ids=[str(HOME), str(AWAY)], locator={}, sport=sport) for i, at in games.items()],
-            match=lambda fixture: LiveGame(source_id=fixture, title="Trabzonspor vs Galatasaray", competition="Super Lig", start_utc=games[fixture],
-                                           snapshot=sm.parse_match(football_match("NS", 0, 0)), sport=sport))
-
     pitch, lobby = made_up("pitch", "football", pitch_games), made_up("lobby", "pubg", lobby_games)
     for adapter in (pitch, lobby):
         monkeypatch.setitem(ADAPTERS, adapter.system, adapter)
@@ -528,6 +528,85 @@ def test_a_fan_who_follows_nobody_has_todays_big_games_to_call(db, redis, monkey
     day = later - timedelta(hours=1)
     league.read("pitch", day)
     assert predictions.prepare(day) == [("pitch", "2")]
+
+
+def test_a_picked_big_game_nobody_follows_closes_at_its_start_as_it_moves(db, redis, monkeypatch):
+    """A big game a fan who follows nobody picked has an event nothing refreshes (BHA-392): when the league's read
+    says its start moved, it's read again (prepare), and the read moves the event (made), so it's armed, and its
+    question closes, by the new start, put back or brought forward, before the pick or after. A read the league's is
+    older than isn't undone by it, and a game a followed player is in is left to their refresh."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = now + timedelta(hours=5)
+    games = {"1": start}
+    pitch = made_up("pitch", "football", games)
+    monkeypatch.setitem(ADAPTERS, "pitch", pitch)
+    monkeypatch.setitem(KNOWN, "pitch", pitch)
+    monkeypatch.setattr(league, "sources", lambda: [pitch])
+    monkeypatch.setattr(sports.BY_KEY["football"], "notable", lambda f: Notable(60, why="Derby"))
+
+    def moves(to: datetime, reread: bool = True) -> list[tuple[str, str]]:
+        """Its source moves it, and the league's next read says so (or hasn't yet); then the worker's run."""
+        games["1"] = to
+        if reread:
+            league.read("pitch", now)
+        redis.clock += predictions.PREPARE_EVERY + 1
+        due = predictions.prepare(now)
+        for system, fixture in due:
+            match.read(system, fixture)
+            predictions.made(system, fixture)
+        db.expire_all()
+        return due
+
+    assert moves(start) == [("pitch", "1")]  # asked
+    q = db.scalars(select(Question)).one()
+    assert moves(start + timedelta(hours=1)) == [("pitch", "1")]  # put back before it's picked: its question moves
+    predictions.pick(db, "nobody", q.id, str(HOME))
+    db.commit()
+    db.expire_all()
+    event = db.get_one(Event, db.get_one(Question, q.id).event_id)
+    assert (event.start_utc, db.get_one(Question, q.id).locks_at) == (start + timedelta(hours=1),) * 2
+    assert moves(start + timedelta(hours=1)) == []  # the league agrees: not read again
+
+    # Armed, then put back three hours after it's picked: its event starts then, disarmed till it's due again, and
+    # a poll in between doesn't take its question back to the old start.
+    db.execute(text("UPDATE event SET status = 'armed'"))
+    db.commit()
+    later = start + timedelta(hours=4)
+    assert moves(later) == [("pitch", "1")]
+    assert (db.get_one(Event, event.id).start_utc, db.get_one(Event, event.id).status) == (later, "scheduled")
+    poll(event.id, sm.parse_match(football_match("NS", 0, 0)), "pitch")
+    db.expire_all()
+    assert (db.get_one(Question, q.id).starts_at, db.get_one(Question, q.id).locks_at) == (later, later)
+    predictions.sweep(db, start + timedelta(hours=1, minutes=1))  # its old start: still open
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "open"
+
+    # Brought forward, read from its match page before the league's next read: the league's older read doesn't
+    # take it back (the game's read again, and says the same).
+    sooner = start + timedelta(minutes=30)
+    games["1"] = sooner
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    db.expire_all()
+    assert (db.get_one(Event, event.id).start_utc, db.get_one(Question, q.id).locks_at) == (sooner, sooner)
+    assert moves(sooner, reread=False) == [("pitch", "1")]  # the league still says later
+    assert (db.get_one(Event, event.id).start_utc, db.get_one(Question, q.id).locks_at) == (sooner, sooner)
+    predictions.sweep(db, sooner + timedelta(minutes=1))  # its new start: closed
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "closed"
+
+    # A followed player in it: their refresh moves its start (structured.upsert_game), not a read, nor the league.
+    db.add(Player(id=1, slug="saka", name="Bukayo Saka", sport="Football"))
+    db.flush()
+    db.add_all([EventPlayer(event_id=event.id, player_id=1), Follow(fan_id="fan", player_id=1, alert_rules={})])
+    db.commit()
+    assert moves(later) == []
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    db.expire_all()
+    assert db.get_one(Event, event.id).start_utc == sooner
 
 
 def test_a_campaign_shows_its_players_games_to_call_and_a_link_previews_the_split(db, redis, monkeypatch):
