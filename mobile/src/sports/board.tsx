@@ -32,9 +32,10 @@ export function onBoard(tone: Tone, compact?: boolean): Palette {
   return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: colour.text, wash: alpha(tone.sport, 0.18), score: compact ? 40 : 52, paper: false }
 }
 
-/** On a paper card (.live-other): ink type, the clock in the page's red; a 40px score. */
+/** On a paper card (.live-other): ink type, the clock in the page's red, the followed team's row washed in its sport's
+ * colour (as on the white scoreboard); a 40px score. */
 export function onPaper(tone: Tone): Palette {
-  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: tone.ink, score: 40, paper: true }
+  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: colour.text, wash: alpha(tone.sport, 0.18), score: 40, paper: true }
 }
 
 /** On a match page's band (.match-band .match-board): everything in the ink that reads on the sport's colour,

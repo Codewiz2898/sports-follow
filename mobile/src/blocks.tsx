@@ -250,7 +250,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
         {live.event ? <Eyebrow color={colour.muted} style={{ textAlign: 'right', flexShrink: 1 }}>{live.event}</Eyebrow> : null}
       </View>
       <GameBoard live={live} compact={compact} teams={teams} lines={lines} pal={pal} />
-      {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
+      {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
       {!compact && live.moments?.length ? (
         <View style={{ gap: 8 }}>
           {live.moments.slice(0, 5).map((m, i) => (
@@ -278,7 +278,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
 
 /** The followed player's line on Today's board, in one row (lines.liveLine), and under it the newest thing
  * that happened to the fan's players in this game, which the fan missed if it came after they last looked. */
-function LiveLine({ live, playerName, latest, tone }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null; tone: Tone }) {
+function LiveLine({ live, playerName, latest }: { live: LiveStatus; playerName: string; latest?: LatestMoment | null }) {
   const { numbers, why } = liveLine(live)
   if (!numbers.length && !why && !latest) return null
   return (
