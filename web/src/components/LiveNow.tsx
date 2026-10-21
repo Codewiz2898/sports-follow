@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Card, type LiveGame, type LiveSport } from '../api'
 import { shortName } from '../format'
+import { sharedLook, useShared } from '../shared'
 import { Backdrop } from '../sports'
 import { gamesOn, moreOn } from '../today'
 import { GameBoard, PlainScore } from './Blocks'
@@ -20,39 +20,16 @@ export interface LiveAnswer { sports: LiveSport[]; loaded: boolean; failed: bool
 
 /**
  * Every game the sources have on, whoever follows it (GET /api/live, live.py), by sport, looked at again once
- * a minute while the page is in view. A look only reads what the server last read: it asks a source again at
- * most once a minute, whoever looks, so more fans looking costs no more of a source's allowance
- * (adapters/budget.py). A hidden tab doesn't look; showing it again does.
+ * a minute while the page is in view, one look for every part of the page showing it (shared.ts). A look only
+ * reads what the server last read: it asks a source again at most once a minute, whoever looks, so more fans
+ * looking costs no more of a source's allowance (adapters/budget.py). A hidden tab doesn't look; showing it
+ * again does.
  */
+const LIVE = sharedLook(() => api.live(), EVERY, SOON, 'always')
+
 export function useLiveAnswer(): LiveAnswer {
-  const [answer, setAnswer] = useState<LiveAnswer>({ sports: NONE, loaded: false, failed: false })
-  useEffect(() => {
-    let current = true
-    let timer: number | undefined
-    let latest = 0  // the newest look: an older one's answer starts no second loop
-    const look = (tries: number) => {
-      window.clearTimeout(timer)
-      if (document.hidden) return  // nobody's looking: no reads asked for; showing the tab again looks
-      const mine = ++latest
-      api.live()
-        .then((r) => {
-          if (!current || mine !== latest) return
-          setAnswer({ sports: r.sports, loaded: true, failed: false })
-          // A read was just asked for: look again in a moment, a few times, for the new scores.
-          timer = window.setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
-        })
-        .catch(() => {
-          if (!current || mine !== latest) return
-          setAnswer((a) => (a.failed ? a : { ...a, failed: true }))
-          timer = window.setTimeout(() => look(tries), EVERY)
-        })
-    }
-    const shown = () => { if (!document.hidden) look(0) }
-    document.addEventListener('visibilitychange', shown)
-    look(0)
-    return () => { current = false; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
-  }, [])
-  return answer
+  const { value, failed } = useShared(LIVE)
+  return { sports: value?.sports ?? NONE, loaded: value != null, failed }
 }
 
 /** The games on now (useLiveAnswer), none until the server answers. */
