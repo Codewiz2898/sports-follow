@@ -22,10 +22,15 @@ final class ClipPanel: NSWindowController, NSWindowDelegate {
     private let bar = NSProgressIndicator()
     private let publishButton = NSButton(title: "Publish to Slam", target: nil, action: nil)
     private var published: Publisher.Published?
+    private let onPublished: (URL, Publisher.Published) -> Void
     private let onClose: (ClipPanel) -> Void
+    var cut: URL { clip.cut }
 
-    init(clip: Clip, onClose: @escaping (ClipPanel) -> Void) {
+    init(clip: Clip, published: Publisher.Published? = nil, onPublished: @escaping (URL, Publisher.Published) -> Void = { _, _ in },
+         onClose: @escaping (ClipPanel) -> Void) {
         self.clip = clip
+        self.published = published
+        self.onPublished = onPublished
         self.onClose = onClose
         player = AVPlayer(url: clip.cut)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 620),
@@ -89,16 +94,15 @@ final class ClipPanel: NSWindowController, NSWindowDelegate {
 
     private func refresh() {
         line.stringValue = clip.moment.map(\.line).flatMap { $0.isEmpty ? nil : $0 } ?? "No match numbers on this clip"
-        if !clip.source.publishable {
-            note.stringValue = "Recorded from a browser, so it shows a broadcast, which is its organiser's: save or share it. Slam doesn't publish broadcasts yet."
+        if let refusal = clip.source.refusal {
+            note.stringValue = refusal
             publishButton.isEnabled = false
         } else if Settings.publishingKey == nil {
             note.stringValue = "To publish, add this Mac's publishing key in Publishing settings (the Slam menu)."
             publishButton.title = "Publishing settings…"
-        } else if let published {
-            note.stringValue = "Published. It's in its match's and its competition's feeds on Slam."
+        } else if published != nil {
+            note.stringValue = clip.match == nil ? "Published on Slam." : "Published. It's in its match's and its competition's feeds on Slam."
             publishButton.title = "Open on Slam"
-            _ = published
         } else {
             note.stringValue = "Publishing puts it on Slam for everyone: in its match's feed, its competition's and its players'."
             publishButton.title = "Publish to Slam"
@@ -122,8 +126,9 @@ final class ClipPanel: NSWindowController, NSWindowDelegate {
 
     @objc private func publish() {
         if let published {
-            let path = published.match.map { "/match/\($0)" } ?? ""
-            NSWorkspace.shared.open(Settings.server.appendingPathComponent(path))
+            // Its match page, which has its feed; a clip of no match opens as itself.
+            let page = published.match.map { Settings.server.appendingPathComponent("/match/\($0)") } ?? URL(string: published.video)
+            if let page { NSWorkspace.shared.open(page) }
             return
         }
         guard let key = Settings.publishingKey else {
@@ -152,6 +157,7 @@ final class ClipPanel: NSWindowController, NSWindowDelegate {
                 Log.json("published", ["id": done.id, "match": done.match ?? "", "video": done.video])
                 await MainActor.run {
                     self.published = done
+                    self.onPublished(clip.cut, done)
                     self.bar.isHidden = true
                     self.publishButton.isEnabled = true
                     self.refresh()
@@ -192,20 +198,33 @@ enum PublishingSettings {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if let url = URL(string: server.stringValue.trimmingCharacters(in: .whitespaces)), url.scheme?.hasPrefix("http") == true {
+        // The key goes with every request: https only, but for a server on this Mac.
+        if let url = URL(string: server.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+           url.scheme == "https" || (url.scheme == "http" && ["localhost", "127.0.0.1"].contains(url.host ?? "")) {
             Settings.server = url
+        } else {
+            tell("Use the server's https:// address (http only for localhost). Nothing was changed.")
+            return
         }
-        let typed = key.stringValue.trimmingCharacters(in: .whitespaces)
-        if !typed.isEmpty { Settings.publishingKey = typed }
+        let typed = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty, let problem = Settings.keep(publishingKey: typed) {
+            tell(problem)
+            return
+        }
         done()
-        guard let k = Settings.publishingKey else { return }
+        guard let k = Settings.publishingKey else {
+            tell("No publishing key is kept: paste one to publish.")
+            return
+        }
         Task {
             let result = await Publisher(server: Settings.server, key: k).check()
-            await MainActor.run {
-                let a = NSAlert()
-                a.messageText = result
-                a.runModal()
-            }
+            await MainActor.run { tell(result) }
         }
+    }
+
+    private static func tell(_ text: String) {
+        let a = NSAlert()
+        a.messageText = text
+        a.runModal()
     }
 }

@@ -36,6 +36,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var displayFrame: CGRect = .zero
     private var followTimer: Timer?
     var onStateChange: ((String) -> Void)?
+    /// What this recording is of: the apps it shows (bundle ids) and so whether its clips may be published.
+    /// Set when it's made, so a save always says what its own ring holds.
+    var apps: [String] = []
+    var source = ClipSource.other
     private(set) var outputSize = CGSize.zero
     private var latest: CVPixelBuffer?  // the newest frame, for reading the game clock on screen at save
 

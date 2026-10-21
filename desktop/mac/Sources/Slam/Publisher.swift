@@ -16,6 +16,7 @@ struct Publisher {
 
     struct Failure: LocalizedError {
         let message: String
+        var status = 0  // the server's answer, when it gave one
         var errorDescription: String? { message }
     }
 
@@ -61,7 +62,17 @@ struct Publisher {
         try await put(small.url, to: up.video_put, type: up.video_type) { sent in progress("Uploading…", 0.2 + 0.72 * sent) }
         try await put(poster, to: up.poster_put, type: up.poster_type) { _ in }
         progress("Putting it live…", 0.95)
-        let done: Published = try await call("POST", "/api/clips/\(up.id)/done", body: nil)
+        // Asked again if the answer is lost on the way: the server takes it twice.
+        var done: Published?
+        for attempt in 0..<3 where done == nil {
+            do {
+                done = try await call("POST", "/api/clips/\(up.id)/done", body: nil)
+            } catch let e as URLError where attempt < 2 {
+                _ = e
+                try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+            }
+        }
+        guard let done else { throw Failure(message: "Slam didn't confirm the clip.") }
         progress("Published", 1)
         return done
     }
@@ -72,7 +83,7 @@ struct Publisher {
             let _: Upload = try await call("POST", "/api/clips", body: Data("{}".utf8))
             return "Key works."
         } catch let f as Failure {
-            return f.message.contains("source must be") ? "Key works." : f.message
+            return f.status == 400 ? "Key works." : f.message
         } catch {
             return error.localizedDescription
         }
@@ -92,7 +103,7 @@ struct Publisher {
         guard (200..<300).contains(status) else {
             let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
             throw Failure(message: status == 401 ? "Slam didn't take the publishing key: check it in Publishing settings."
-                                                 : detail ?? "Slam answered \(status).")
+                                                 : detail ?? "Slam answered \(status).", status: status)
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -103,19 +114,21 @@ struct Publisher {
         var req = URLRequest(url: target, timeoutInterval: 120)
         req.httpMethod = "PUT"
         req.setValue(type, forHTTPHeaderField: "Content-Type")
-        var last: Error?
+        // Tried again only when it might work next time: the network, or the bucket's own trouble (5xx). A refusal
+        // (a signature or size that doesn't match, a link run out) won't.
         for attempt in 0..<3 {
+            let last = attempt == 2
             do {
                 let (_, resp) = try await URLSession.shared.upload(for: req, fromFile: file, delegate: Progress(sent: sent))
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if (200..<300).contains(status) { return }
-                last = Failure(message: "The upload was refused (\(status)).")
-            } catch {
-                last = error
+                if status < 500 || last { throw Failure(message: "The upload was refused (\(status)).", status: status) }
+            } catch let e as URLError where !last {
+                _ = e
             }
             try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
         }
-        throw last ?? Failure(message: "The upload failed.")
+        throw Failure(message: "The upload failed.")
     }
 
     private final class Progress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -146,19 +159,76 @@ struct Publisher {
         let size: CGSize
     }
 
-    /// A copy small enough to share and stream: 720p at most, H.264 (the export's own preset).
+    static let shareBitrate = 5_000_000
+
+    /// A copy small enough to share and stream: 720p at most, H.264 at 5 Mbps (an export preset caps the size
+    /// but not the bitrate: a 60 fps cut came out at 11.7 Mbps), its sound passed through as it is.
     static func shareSize(_ cut: URL) async throws -> Small {
         let asset = AVURLAsset(url: cut)
+        guard let vt = try await asset.loadTracks(withMediaType: .video).first else { throw Failure(message: "The clip has no picture.") }
+        let at = try await asset.loadTracks(withMediaType: .audio).first
+        let natural = try await vt.load(.naturalSize)
+        let fit = min(1, 1280 / natural.width, 720 / natural.height)
+        let w = Int((natural.width * fit / 2).rounded()) * 2, h = Int((natural.height * fit / 2).rounded()) * 2
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("slam-share-\(UUID().uuidString).mp4")
-        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else {
-            throw Failure(message: "Couldn't make a share-size copy.")
+
+        let reader = try AVAssetReader(asset: asset)
+        let vOut = AVAssetReaderTrackOutput(track: vt, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
+        reader.add(vOut)
+        var aOut: AVAssetReaderTrackOutput?
+        var aHint: CMFormatDescription?
+        if let at {
+            let o = AVAssetReaderTrackOutput(track: at, outputSettings: nil)  // the AAC as it is
+            reader.add(o)
+            aOut = o
+            aHint = try await at.load(.formatDescriptions).first
         }
-        try await export.export(to: out, as: .mp4)
+        let writer = try AVAssetWriter(outputURL: out, fileType: .mp4)
+        let vIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h,
+            AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: shareBitrate, AVVideoMaxKeyFrameIntervalDurationKey: 2,
+                                              AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel],
+        ])
+        vIn.expectsMediaDataInRealTime = false
+        writer.add(vIn)
+        var aIn: AVAssetWriterInput?
+        if aOut != nil {
+            let i = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: aHint)
+            i.expectsMediaDataInRealTime = false
+            writer.add(i)
+            aIn = i
+        }
+        guard reader.startReading(), writer.startWriting() else {
+            throw Failure(message: "Couldn't make a share-size copy: \((writer.error ?? reader.error)?.localizedDescription ?? "?")")
+        }
+        writer.startSession(atSourceTime: .zero)
+        let queue = DispatchQueue(label: "share.copy")
+        let group = DispatchGroup()
+        func pump(_ input: AVAssetWriterInput, _ output: AVAssetReaderTrackOutput) {
+            group.enter()
+            input.requestMediaDataWhenReady(on: queue) {
+                while input.isReadyForMoreMediaData {
+                    guard let sb = output.copyNextSampleBuffer(), input.append(sb) else {
+                        input.markAsFinished()
+                        group.leave()
+                        return
+                    }
+                }
+            }
+        }
+        pump(vIn, vOut)
+        if let aIn, let aOut { pump(aIn, aOut) }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in group.notify(queue: queue) { c.resume() } }
+        await writer.finishWriting()
+        guard writer.status == .completed, reader.status != .failed else {
+            throw Failure(message: "Couldn't make a share-size copy: \((writer.error ?? reader.error)?.localizedDescription ?? "?")")
+        }
         let small = AVURLAsset(url: out)
         let seconds = try await small.load(.duration).seconds
-        let size = try await small.loadTracks(withMediaType: .video).first?.load(.naturalSize) ?? .zero
         let bytes = (try? FileManager.default.attributesOfItem(atPath: out.path)[.size] as? Int) ?? 0
-        return Small(url: out, seconds: seconds, bytes: bytes, size: size)
+        return Small(url: out, seconds: seconds, bytes: bytes, size: CGSize(width: w, height: h))
     }
 
     /// A JPEG of one frame, at most 1280 wide.

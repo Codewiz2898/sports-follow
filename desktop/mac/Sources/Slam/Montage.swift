@@ -42,12 +42,12 @@ enum Montage {
         return try? JSONDecoder().decode(Moment.self, from: md)
     }
 
-    /// What a clip was recorded from, by its sidecar (a game's window unless it says a browser).
+    /// What a clip was recorded from, by its sidecar: unknown (not publishable) when it doesn't say.
     static func source(of clip: URL) -> ClipSource {
         let side = clip.deletingPathExtension().appendingPathExtension("json")
         guard let data = try? Data(contentsOf: side),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .gameClient }
-        return (obj["source"] as? String).flatMap(ClipSource.init(rawValue:)) ?? .gameClient
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .other }
+        return (obj["source"] as? String).flatMap(ClipSource.init(rawValue:)) ?? .other
     }
 
     /// The title a clip carries: its moment ("TY 21–18 GL · 26:00"), else "Clip n".

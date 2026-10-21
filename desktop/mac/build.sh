@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds build/Slam.app, ad-hoc signed (for Bharath's Mac only, for now: no Developer ID, no notarization).
 # Recording goes through macOS's sharing picker, which needs no Screen Recording permission, so a rebuild
-# asks for nothing again; --dota (find Dota's window without the picker) does need it.
+# asks for nothing again (the Keychain may ask once whether Slam may read its publishing key: Always Allow);
+# --dota (find Dota's window without the picker) does need the Screen Recording permission.
 set -euo pipefail
 cd "$(dirname "$0")"
 swift build -c release

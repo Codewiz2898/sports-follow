@@ -16,15 +16,17 @@ It grew from the spike in BHA-357 (branch `spike/mac-replay`).
    - the REPLAY slate and the last 5 s at half speed under cinema bars;
    - the animated end card (blue stamp or ink + Anton) with its sound.
 
-   The numbers are Slam's live data for the match (`stann.in/api/match/…`, set under **Stat strip match…**, else
-   the live Dota game), or else Dota's own top bar read off the frame.
+   The numbers are Slam's live data for the match: the one set under **Stat strip match…**, or else the live
+   Dota game on Slam, taken only when its clock agrees with the one on screen (within 90 s). Otherwise they're
+   Dota's own top bar read off the frame.
 4. **Clip ready.** The panel plays the cut. It shows its moment, the match (changeable) and a caption, with
    **Share…**, **Show in Finder** and **Publish to Slam**. It opens by itself unless the game is in front; **Recent
    clips** in the menu always has it.
-5. **Publish.** The app makes a 720p copy and a poster frame, asks Slam for upload links, and puts both straight
-   into Slam's bucket. Slam then puts the clip live in its match's, its competition's and its players' feeds
-   (server: `sports_follow/clips.py`). Clips recorded from a browser window show a broadcast, which is its
-   organiser's, so they're saved and shared but not published (BHA-369).
+5. **Publish.** The app makes a 720p copy at 5 Mbps (a 42 s, 60 fps cut is about 26 MB) and a poster frame,
+   asks Slam for upload links, and puts both straight into Slam's bucket. Slam then puts the clip live in its
+   match's, its competition's and its players' feeds (server: `sports_follow/clips.py`). Only a known game's own
+   window is published (Dota 2 for now, `ClipSource.games`, BHA-369). A browser shows a broadcast, which is
+   its organiser's, and another app might, so those clips are saved and shared only.
 
 **Make montage of today's clips** joins the last 8 s of each of today's clips, titled, with the end card, in at most
 60 s (and a 9:16 version). It opens in the same panel.
@@ -38,7 +40,9 @@ Publishing needs this Mac's key, made once on the server by an admin:
 ```
 
 Paste it into **Publishing settings…** in the menu, which keeps it in the login Keychain and checks it against
-the server. On the server, `python -m sports_follow.clips keys` lists keys and `revoke <id>` stops one.
+the server (https only, but for localhost). On the server, `python -m sports_follow.clips keys` lists keys and
+`revoke <id>` stops one. The build is ad-hoc signed, so after a rebuild macOS may ask once whether Slam may
+read its key: choose **Always Allow**.
 
 ## Build, test, run
 
@@ -46,7 +50,7 @@ Needs the Command Line Tools (Swift 6) and macOS 15.2 or later. No Xcode.
 
 ```bash
 ./build.sh                                   # build/Slam.app, ad-hoc signed, Slam's fonts inside
-swift test                                   # moments, match links, sources, what's published, a real cut
+swift test                                   # the ring, moments, match links, sources, what's published, a real cut
 open build/Slam.app                          # the picker opens: pick the game's window
 cp -R build/Slam.app ~/Applications/         # to start it from Spotlight
 ```
@@ -58,6 +62,7 @@ Developer tools, run from `.build/release/Slam` (no window, no permission):
 | `--selftest [s]` | synthetic frames and a tone through the encoders, ring, writer and the cut |
 | `--from-frames <dir> [--sample]` | a Dota `startmovie` export (jpg + wav) through it all |
 | `--panel <cut.mp4> [--browser] [--shot out.png]` | the Clip ready panel for a file; `--shot` draws it to a picture |
+| `--share-size <cut.mp4>` | the copy publishing uploads, and its size |
 | `--montage [--vertical] [clips…]` | a montage of today's clips, or of these |
 | `--strip <stann.in link \| live>` | the moment a save would read from Slam's API |
 | `--probe`, `--still`, `--ocr` | what's in a clip, one frame of it, what the top-bar reader sees |

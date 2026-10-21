@@ -22,19 +22,32 @@ import Testing
         #expect(Moment().isEmpty && Moment().headline == "Dota 2")
     }
 
-    @Test func matchLinksAndIds() {
+    @Test func matchLinks() {
         #expect(MatchFeed.parse("https://stann.in/match/pandascore_esports/1753729") == "pandascore_esports/1753729")
+        #expect(MatchFeed.parse("https://stann.in/match/pandascore_esports/1753729?s=share#clips") == "pandascore_esports/1753729")
         #expect(MatchFeed.parse("pandascore_esports/1753729") == "pandascore_esports/1753729")
-        #expect(MatchFeed.parse("1753729") == "pandascore_esports/1753729")
+        #expect(MatchFeed.parse("1753729") == nil)  // which source's id? the app doesn't name sources
         #expect(MatchFeed.parse("https://example.com/watch?v=1") == nil)
+    }
+
+    @Test func clocksCompare() {
+        #expect(MatchFeed.seconds("26:00") == 1560)
+        #expect(MatchFeed.seconds("3:06") == 186)
+        #expect(MatchFeed.seconds("draft") == nil && MatchFeed.seconds(nil) == nil)
     }
 }
 
 @Suite struct PublishingTests {
-    @Test func aBrowserWindowIsABroadcast() {
+    @Test func onlyAKnownGamesWindowIsPublishable() {
         #expect(ClipSource.of(bundleIDs: ["com.valvesoftware.dota2"]) == .gameClient)
         #expect(ClipSource.of(bundleIDs: ["com.google.Chrome"]) == .browser)
-        #expect(!ClipSource.browser.publishable && ClipSource.gameClient.publishable)
+        #expect(ClipSource.of(bundleIDs: ["com.google.Chrome.app.abcdef"]) == .browser)  // a web app
+        #expect(ClipSource.of(bundleIDs: ["com.apple.Safari.WebApp.1234"]) == .browser)
+        #expect(ClipSource.of(bundleIDs: ["com.colliderli.iina"]) == .other)  // a player might show a broadcast
+        #expect(ClipSource.of(bundleIDs: ["com.valvesoftware.dota2", "com.google.Chrome"]) == .browser)
+        #expect(ClipSource.of(bundleIDs: []) == .other)
+        #expect(ClipSource.gameClient.publishable && !ClipSource.browser.publishable && !ClipSource.other.publishable)
+        #expect(ClipSource.other.refusal != nil && ClipSource.gameClient.refusal == nil)
     }
 
     @Test func whatTheServerIsTold() throws {
@@ -50,8 +63,8 @@ import Testing
 }
 
 @Suite struct CutTests {
-    /// An 8 s clip of synthetic frames and a tone, through the encoders, the ring and the writer.
-    static func clip(seconds: Int = 8) async throws -> URL {
+    /// Synthetic frames and a tone through the encoders into a ring.
+    static func ring(seconds: Int) throws -> ReplayRing {
         let fps = 30, w = 640, h = 360
         let ring = ReplayRing(seconds: 30)
         let video = try VideoEncoder(width: w, height: h, hevc: false, bitrate: 2_000_000, fps: fps, realTime: false) { ring.appendVideo($0) }
@@ -73,10 +86,24 @@ import Testing
             }
         }
         video.finish()
-        let snap = try #require(ring.snapshot())
+        return ring
+    }
+
+    /// An 8 s clip of them, written as a save writes it.
+    static func clip(seconds: Int = 8) async throws -> URL {
+        let snap = try #require(try ring(seconds: seconds).snapshot())
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("slam-test-\(UUID().uuidString).mp4")
         _ = try await ClipWriter.write(snap, to: url)
         return url
+    }
+
+    @Test func theRingKeepsThirtyToThirtyTwoSecondsFromAKeyframe() throws {
+        let snap = try #require(try Self.ring(seconds: 40).snapshot())
+        #expect(snap.seconds >= 29.9 && snap.seconds <= 32.1)
+        #expect(snap.video.first?.isKeyframe == true)
+        let start = snap.video[0].presentationTimeStamp.seconds
+        #expect((snap.audio.first?.presentationTimeStamp.seconds ?? 0) >= start - 0.001)  // no sound before the first frame
+        #expect(snap.audio.count > 1000)  // ~30 s of AAC packets (47 a second)
     }
 
     @Test func theCutIsClipReplayAndEndCardOnOneSoundTrack() async throws {

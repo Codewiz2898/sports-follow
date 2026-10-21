@@ -26,10 +26,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private var verticalItem: NSMenuItem?
     private var montageTask: Task<Void, Never>?
     private var pickedName: String?
-    private var pickedApps: [String] = []  // bundle ids the capture shows: whether it's a browser, and whether it's in front
-    private var source = ClipSource.gameClient
     private var panels: [ClipPanel] = []
     private var recent: [ClipPanel.Clip] = []  // newest first
+    private var published: [URL: Publisher.Published] = [:]  // by cut: a clip reopened from Recent stays published
     private var endItems: [NSMenuItem] = []
     private var matchItem: NSMenuItem?
     private let recentItem: NSMenuItem = {
@@ -41,7 +40,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     init(opts: Options) {
         self.opts = opts
         edit = opts.edit
-        feed = MatchFeed(path: opts.match)
+        feed = MatchFeed(pinned: opts.match)
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -64,11 +63,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private func tryStart() {
         attempts += 1
         let r = Recorder(opts: opts)
+        r.apps = [opts.target]
+        r.source = ClipSource.of(bundleIDs: r.apps)
         r.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.setState(s) } }
         Task {
             do {
                 try await r.startWithPermission()
-                await MainActor.run { self.recorder = r }
+                await MainActor.run {
+                    self.recorder = r
+                    self.pickedName = r.apps.first
+                }
             } catch {
                 let ns = error as NSError
                 Log.json("start-failed", ["attempt": attempts, "error": error.localizedDescription,
@@ -95,37 +99,50 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         setState("Pick the game in the picker")
     }
 
+    // The picker calls these on a queue of its own: everything they touch is the main thread's.
+
     func contentSharingPicker(_ picker: SCContentSharingPicker, didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
-        let apps = filter.includedApplications.map(\.applicationName)
+        DispatchQueue.main.async { self.picked(filter) }
+    }
+
+    private func picked(_ filter: SCContentFilter) {
+        let names = filter.includedApplications.map(\.applicationName)
             + filter.includedWindows.compactMap { $0.owningApplication?.applicationName }
-        let what = Array(Set(apps)).sorted().joined(separator: ", ")
-        pickedName = what.isEmpty ? "the picked window" : what
-        pickedApps = filter.includedApplications.map(\.bundleIdentifier)
+        let what = Array(Set(names)).sorted().joined(separator: ", ")
+        let r = Recorder(opts: opts)
+        r.apps = filter.includedApplications.map(\.bundleIdentifier)
             + filter.includedWindows.compactMap { $0.owningApplication?.bundleIdentifier }
-        source = ClipSource.of(bundleIDs: pickedApps)
-        Log.json("picker", ["picked": Recorder.describe(filter.contentRect), "app": what,
+        r.source = ClipSource.of(bundleIDs: r.apps)
+        r.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.setState(s) } }
+        Log.json("picker", ["picked": Recorder.describe(filter.contentRect), "app": what, "source": r.source.rawValue,
                             "windows": filter.includedWindows.compactMap(\.title),
                             "preflight": CGPreflightScreenCaptureAccess()])
-        let r = Recorder(opts: opts)
-        r.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.setState(s) } }
+        let old = recorder
+        recorder = nil  // a save until the new one runs has nothing to save, rather than the old one's ring
         Task {
-            await recorder?.stop()
+            await old?.stop()
             do {
                 try await r.start(pickedFilter: filter)
-                await MainActor.run { self.recorder = r }
+                await MainActor.run {
+                    self.recorder = r
+                    self.pickedName = what.isEmpty ? "the picked window" : what
+                }
             } catch {
                 Log.line("picker start failed: \(error)")
+                await MainActor.run { self.setState("Couldn't start recording: \(error.localizedDescription)") }
             }
         }
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
-        Log.json("picker", ["cancelled": true])
-        setState("Picker cancelled")
+        DispatchQueue.main.async {
+            Log.json("picker", ["cancelled": true])
+            self.setState(self.recorder == nil ? "Picker cancelled" : "Still recording \(self.pickedName ?? "")")
+        }
     }
 
     func contentSharingPickerStartDidFailWithError(_ error: Error) {
-        Log.line("picker failed: \(error)")
+        DispatchQueue.main.async { Log.line("picker failed: \(error)") }
     }
 
     // MARK: saving
@@ -144,7 +161,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         let snapMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
         let url = ClipWriter.newURL(label: opts.label)
         let previous = saveChain
-        let edit = self.edit, feed = self.feed, source = self.source
+        let edit = self.edit, feed = self.feed, source = recorder.source
         let frame = recorder.latestFrame
         saves += 1
         flash("Saving…")
@@ -165,34 +182,49 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                     NSSound(named: "Tink")?.play()
                     self.flash(edit ? "Saved ✓ · cutting…" : "Saved ✓")
                 }
-                let api = await line.value
+                let read = await line.value
                 let onScreen = await screen.value
+                // The live game Slam knows of may not be the one on screen (another series, one's own game): a
+                // match found that way is taken only when its clock agrees with Dota's on screen. One set by
+                // hand always is.
+                var api = read
+                if let read, read.auto {
+                    let a = MatchFeed.seconds(read.clock), b = MatchFeed.seconds(onScreen?.clock)
+                    if a == nil || b == nil || abs(a! - b!) > 90 { api = nil }
+                }
                 // Slam's numbers when the API has the map; else what Dota's own top bar said (kills and
                 // clock, Radiant first), keeping the API's competition and series score.
                 var moment = api?.moment ?? onScreen ?? Moment()
-                if api?.moment.kills == nil, var s = onScreen {
-                    s.competition = api?.moment.competition
-                    s.series = api?.moment.series
+                if let api, api.moment.kills == nil, var s = onScreen {
+                    s.competition = api.moment.competition
+                    s.series = api.moment.series
                     moment = s
                 }
+                let match = api?.match
                 let momentJSON = (try? JSONEncoder().encode(moment)).flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? [:]
                 let side: [String: Any] = ["strip": moment.line, "moment": momentJSON, "apiLine": api?.text ?? "",
                                            "apiClock": api?.clock ?? "", "screenClock": onScreen?.clock ?? "",
-                                           "apiMs": round1(api?.ms ?? 0), "match": feed.path ?? "",
+                                           "apiMs": round1(read?.ms ?? 0), "match": match ?? "", "found": read?.match ?? "",
                                            "savedAt": ISO8601DateFormatter().string(from: tap), "source": source.rawValue]
                 Log.json("strip", side)
                 // Beside the clip, for the montage's titles.
                 if let data = try? JSONSerialization.data(withJSONObject: side, options: [.prettyPrinted, .sortedKeys]) {
                     try? data.write(to: url.deletingPathExtension().appendingPathExtension("json"))
                 }
-                guard edit else { return }
+                guard edit else {
+                    // No cut: the plain clip goes to the panel instead.
+                    let plain = ClipPanel.Clip(cut: r.url, title: "Clip \(Self.hhmm.string(from: tap))", moment: moment.isEmpty ? nil : moment,
+                                               match: match, source: source, posterAt: max(0, r.seconds - 3))
+                    await MainActor.run { self.ready(plain) }
+                    return
+                }
                 let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
                 let e = try await ClipEditor.make(from: r.url, to: cut, moment: moment)
                 Log.json("cut", ["file": cut.lastPathComponent, "seconds": round2(e.seconds),
                                  "MB": round2(Double(e.bytes) / 1_048_576), "ms": round1(e.ms),
                                  "sinceTapMs": round2(Date().timeIntervalSince(tap) * 1000)])
                 let made = ClipPanel.Clip(cut: cut, title: "Clip \(Self.hhmm.string(from: tap))", moment: moment.isEmpty ? nil : moment,
-                                          match: feed.path, source: source, posterAt: e.replayStart + 2.5)
+                                          match: match, source: source, posterAt: e.replayStart + 2.5)
                 await MainActor.run {
                     self.lastClip = cut
                     self.flash("Clip ready")
@@ -364,8 +396,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 if files.isEmpty { self.flash("Montage failed") } else {
                     NSSound(named: "Glass")?.play()
                     self.flash("Montage ✓")
-                    // A montage of any browser clip is a browser clip: it shows a broadcast.
-                    let from = clips.contains { Montage.source(of: $0) == .browser } ? ClipSource.browser : .gameClient
+                    // Publishable only when every clip was a game's own window: a browser clip makes it a broadcast,
+                    // a clip of unknown origin makes it unknown.
+                    let sources = clips.map(Montage.source(of:))
+                    let from: ClipSource = sources.allSatisfy { $0 == .gameClient } ? .gameClient : sources.contains(.browser) ? .browser : .other
                     self.ready(ClipPanel.Clip(cut: files[0], title: "Montage", moment: nil, match: nil, source: from, posterAt: 4), force: true)
                 }
             }
@@ -383,15 +417,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         recent.insert(clip, at: 0)
         recent = Array(recent.prefix(10))
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-        if force || !pickedApps.contains(front) { open(clip) }
+        if force || !(recorder?.apps ?? []).contains(front) { open(clip) }
     }
 
     private func open(_ clip: ClipPanel.Clip) {
-        if let shown = panels.first(where: { $0.window?.title == "\(clip.title) ready" }) {
+        if let shown = panels.first(where: { $0.cut == clip.cut }) {
             shown.show()
             return
         }
-        let panel = ClipPanel(clip: clip) { [weak self] closed in self?.panels.removeAll { $0 === closed } }
+        let panel = ClipPanel(clip: clip, published: published[clip.cut], onPublished: { [weak self] cut, done in self?.published[cut] = done }) { [weak self] closed in
+            self?.panels.removeAll { $0 === closed }
+        }
         panels.append(panel)
         panel.show()
     }
@@ -425,21 +461,21 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     @objc private func setMatch() {
         let alert = NSAlert()
         alert.messageText = "Match for the stat strip"
-        alert.informativeText = "Paste the stann.in match page link (or a PandaScore match id). Leave it empty to use the live Dota 2 game."
+        alert.informativeText = "Paste the match page's link from stann.in. Leave it empty to use the live Dota 2 game (taken when its clock agrees with the one on screen)."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
-        field.stringValue = feed.path.map { "https://stann.in/match/\($0)" } ?? ""
+        field.stringValue = feed.pinned.map { "\(Settings.server.absoluteString)/match/\($0)" } ?? ""
         alert.accessoryView = field
         alert.addButton(withTitle: "Use")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let text = field.stringValue.trimmingCharacters(in: .whitespaces)
-        feed.path = text.isEmpty ? nil : MatchFeed.parse(text)
+        feed.pinned = text.isEmpty ? nil : MatchFeed.parse(text)
         matchItem?.title = matchTitle()
-        Log.json("strip", ["set": feed.path ?? "live Dota game"])
+        Log.json("strip", ["set": feed.pinned ?? "live Dota game"])
     }
     private func matchTitle() -> String {
-        "Stat strip match: " + (feed.path.map { $0.replacingOccurrences(of: "pandascore_esports/", with: "#") } ?? "the live Dota 2 game") + "…"
+        "Stat strip match: " + (feed.pinned ?? "the live Dota 2 game") + "…"
     }
     @objc private func quitClicked() { quit() }
 

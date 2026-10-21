@@ -3,27 +3,35 @@ import Foundation
 /// The stat strip's words, from Slam's own match page API (the same numbers the stann.in match page shows):
 /// "YNDX 21–18 GL · YNDX +4.4k gold · 26:00". Read once per save, never polled.
 final class MatchFeed {
-    static let base = URL(string: "https://stann.in")!
-
-    /// "pandascore_esports/<id>", from --match, the menu, or the only live Dota 2 game in /api/live.
-    var path: String?
+    /// The match set by hand (--match, or the menu's Stat strip match…): used for every save until changed.
+    /// Without one, each save looks for the live Dota 2 game afresh (findLive), and the app only takes it when
+    /// its clock agrees with the one on screen (AppController.save).
+    var pinned: String?
     private(set) var title: String?
 
-    init(path: String? = nil) { self.path = path.flatMap(MatchFeed.parse) }
+    init(pinned: String? = nil) { self.pinned = pinned.flatMap(MatchFeed.parse) }
 
-    /// A stann.in match URL, "pandascore_esports/<id>", or a bare PandaScore id.
+    /// A match page's address, "<source>/<game id>", from a match page link (query and fragment ignored) or as it is.
     static func parse(_ text: String) -> String? {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = t.range(of: #"[a-z_]+/[A-Za-z0-9_.:-]+$"#, options: .regularExpression),
-           t.contains("/match/") || !t.contains("://") {
-            return String(t[r])
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.contains("://") {
+            guard let c = URLComponents(string: t), c.path.contains("/match/") else { return nil }
+            t = c.path
         }
-        if t.range(of: #"^\d+$"#, options: .regularExpression) != nil { return "pandascore_esports/\(t)" }
-        return nil
+        guard let r = t.range(of: #"[a-z0-9_]+/[A-Za-z0-9][A-Za-z0-9_.:-]*$"#, options: .regularExpression) else { return nil }
+        return String(t[r])
+    }
+
+    /// The seconds a clock like "26:00" says, for comparing the API's with the screen's.
+    static func seconds(_ clock: String?) -> Int? {
+        guard let parts = clock?.split(separator: ":"), parts.count == 2, let m = Int(parts[0]), let s = Int(parts[1]) else { return nil }
+        return m * 60 + s
     }
 
     struct Line {
         let moment: Moment
+        let match: String  // the match page it was read from
+        let auto: Bool  // found as the live game, rather than set by hand
         let fetchedAt: Date
         let ms: Double
         var text: String { moment.line }
@@ -34,8 +42,10 @@ final class MatchFeed {
     /// being played gives its teams and series score only.
     func line() async -> Line? {
         let t0 = Date()
-        if path == nil { path = await findLive() }
-        guard let path, let resp = await get("/api/match/\(path)") else { return nil }
+        let found = pinned == nil
+        var onNow: String?
+        if found { onNow = await findLive() }
+        guard let path = pinned ?? onNow, let resp = await get("/api/match/\(path)") else { return nil }
         let live = resp["live"] as? [String: Any]
         let state = live?["state"] as? [String: Any]
         // Teams: the page's (once it has map detail), else the board's (abbr, and the series score).
@@ -55,7 +65,7 @@ final class MatchFeed {
             if let a = teams[0].score, let b = teams[1].score { m.series = "\(teams[0].short) \(a)–\(b) \(teams[1].short) in maps" }
         }
         m.competition = (resp["competition"] as? String) ?? (live?["competition"] as? String)
-        let done = { Line(moment: m, fetchedAt: Date(), ms: Date().timeIntervalSince(t0) * 1000) }
+        let done = { Line(moment: m, match: path, auto: found, fetchedAt: Date(), ms: Date().timeIntervalSince(t0) * 1000) }
         guard let board = (state?["dota"] as? [String: Any])?["live"] as? [String: Any] else {
             Log.json("strip", ["match": path, "note": "no live map on the page", "is_live": live?["is_live"] ?? false])
             return m.teams == nil ? nil : done()
@@ -96,7 +106,7 @@ final class MatchFeed {
     }
 
     private func get(_ path: String) async -> [String: Any]? {
-        var req = URLRequest(url: MatchFeed.base.appendingPathComponent(path), timeoutInterval: 3)
+        var req = URLRequest(url: Settings.server.appendingPathComponent(path), timeoutInterval: 3)  // where clips go too
         req.setValue("SlamMac/1", forHTTPHeaderField: "User-Agent")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)

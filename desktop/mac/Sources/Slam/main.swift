@@ -9,6 +9,7 @@ import AVFoundation
 //   --selftest [s]     synthetic frames + tone through encoders, ring, writer and the cut
 //   --from-frames <dir> [--sample]   a Dota `startmovie` export (jpg + wav) through it all
 //   --montage [--vertical] [clips…]  --strip <link|live>  --probe <file>  --still <file> <s> <png>  --ocr <file> <s>
+//   --panel <cut> [--browser] [--shot png]  --share-size <cut>
 
 func runAsync(_ body: @escaping () async throws -> Void) -> Never {
     Task.detached {
@@ -73,11 +74,23 @@ if let i = args.firstIndex(of: "--still"), i + 3 < args.count {
 }
 
 if let m = value("--strip") {
-    // --strip <stann.in link | id>: print the stat strip's line for a match, as a save would
+    // --strip <match link | live>: print the stat strip's line for a match, as a save would
     runAsync {
-        let feed = MatchFeed(path: m == "live" ? nil : m)
+        let feed = MatchFeed(pinned: m == "live" ? nil : m)
         let line = await feed.line()
-        print(line.map { "\($0.text)   (API clock \($0.clock ?? "-"), \(Int($0.ms)) ms, match \(feed.path ?? "-"))" } ?? "no line (match \(feed.path ?? "none live"))")
+        print(line.map { "\($0.text)   (API clock \($0.clock ?? "-"), \(Int($0.ms)) ms, match \($0.match)\($0.auto ? ", found live" : ""))" }
+              ?? "no line (match \(feed.pinned ?? "none live"))")
+    }
+}
+
+if let file = value("--share-size") {
+    // --share-size <cut.mp4>: the copy publishing uploads, and how big it is
+    runAsync {
+        let t0 = Date()
+        let small = try await Publisher.shareSize(URL(fileURLWithPath: file))
+        print(String(format: "%@: %dx%d, %.1f s, %.1f MB, %.1f Mbps, made in %.1f s", small.url.lastPathComponent, Int(small.size.width),
+                     Int(small.size.height), small.seconds, Double(small.bytes) / 1_048_576, Double(small.bytes) * 8 / small.seconds / 1e6,
+                     Date().timeIntervalSince(t0)))
     }
 }
 
