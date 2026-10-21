@@ -26,6 +26,7 @@ import { CheckIcon, PlayIcon, PlusIcon, ShareIcon } from './icons'
 import { useMyFeed } from './myFeed'
 import { Face, ItemSheet, Picture } from './post'
 import { share, ShareButton } from './share'
+import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
 import { Btn, SectionHead } from './ui'
 import { WholeScreen } from './watch'
@@ -384,8 +385,9 @@ export function FromYourPlayers({ now, again = 0 }: { now: number; again?: numbe
   const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   const video = useVideo()
+  const go = useGoToPlace()
   if (!loaded || !page?.items.length) return null
-  const all = () => router.navigate({ pathname: '/feed', params: { tab: 'following' } })
+  const all = () => go('/feed', { tab: 'following' })
   return (
     <View style={{ gap: 10 }} accessibilityLabel="From your players">
       <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>All {page.count}</Text>} />
