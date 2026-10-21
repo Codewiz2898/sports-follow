@@ -42,6 +42,8 @@
    go to (a ring round a piece it can take), a king in check glowing amber (red means live here). */
 .chessboard.playable { position: relative; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
 .chessboard button.sq { border: 0; padding: 0; margin: 0; min-width: 0; color: inherit; cursor: pointer; touch-action: manipulation; }
+/* A finger drags the side to move's pieces: their squares keep a swipe (the rest of the board scrolls the page). */
+.chessboard .sq.mine { touch-action: none; }
 .chessboard button.sq:focus-visible { outline: 3px solid #141414; outline-offset: -3px; border-radius: 0; }
 .chessboard .sq.picked { box-shadow: inset 0 0 0 3px #141414; }
 .chessboard .sq.aim { background-image: radial-gradient(circle, rgba(20, 20, 20, 0.4) 17%, transparent 19%); }
@@ -52,8 +54,9 @@
 .chess-promote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; display: flex; gap: 4px; padding: 6px; border-radius: 12px; background: rgba(20, 20, 20, 0.9); }
 .chess-promote button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; background: #ece6d6; font-size: 30px; line-height: 1; cursor: pointer; }
 .chess-promote button:last-child { width: 32px; background: transparent; color: #f4f1e8; }
-/* A piece dragged with a mouse, over the page. */
+/* A piece being dragged, over the page: under a mouse, or bigger and above a finger, so it's seen. */
 .chess-ghost { position: fixed; z-index: 100; transform: translate(-50%, -50%); pointer-events: none; font-size: 34px; line-height: 1; }
+.chess-ghost.touch { font-size: 48px; transform: translate(-50%, -115%); }
 .chess-ghost.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
 .chess-ghost.b { color: #141414; }
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }

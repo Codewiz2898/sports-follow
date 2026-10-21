@@ -500,10 +500,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `web/src/sports/facts/chess.ts`).
 - **Play from here, on the fan's device.** A chess game's match page makes its board an analysis board
   where it is: the fan plays either side's legal moves from the game's position (or from any move of a
-  finished game's list), steps along their line, and Back to live returns to the game. Its bar comes from
-  Stockfish 18 (the lite single-threaded WebAssembly build, GPL-3.0, vendored in `web/public/engine/` with
-  its source, licence and checksums) in a Web Worker of the page, loaded only when a fan opens the board,
-  and kept by the service worker only once they have. Moves come from chess.js in a chunk of its own
+  finished game's list that replays), steps along their line, and Back to live returns to the game. A
+  Freestyle (Chess960) position that can still castle isn't offered: chess.js would castle it the standard way.
+  Its bar comes from Stockfish 18 (the lite single-threaded WebAssembly build, GPL-3.0, vendored in
+  `web/src/sports/engine/` with its source commit, licence and checksums) in a Web Worker of the page, each
+  position to depth 18 from a cleared hash on one thread, so every device ends on the same result (a slow phone
+  later; the lite network's, which can differ from the server's full engine). The build names its files by
+  their content under `/assets/`, a fan's browser fetches them only when they open the board, and the service
+  worker keeps them then, as it does every built asset. Moves come from chess.js in a chunk of its own
   (`web/src/sports/facts/chessLine.ts`, `chessAnalysis.tsx`). Nothing the fan plays reaches the server, so it
   never reaches an alert. The Caddyfile's Content-Security-Policy allows WebAssembly (`'wasm-unsafe-eval'`).
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
@@ -786,6 +790,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
   code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport.
+  Its look in the web app is `web/src/sports/<sport>.tsx` and its facts, `web/src/sports/facts/<sport>.ts`, and
+  whatever else of its own sits beside them under its name: chess's analysis board (`chessAnalysis.tsx`,
+  `chessEngine.ts`, `facts/chessLine.ts`) and the engine it runs in the fan's browser (`web/src/sports/engine/`,
+  with chess.js in `web/package.json`). Removing chess removes those, and the Caddyfile's `'wasm-unsafe-eval'`
+  can go with them.
 
   Sports that share their rules are a group: each esports game (Valorant, CS2, League of Legends, Dota 2,
   BGMI, Free Fire, PUBG…) is a sport of its own, with its own tile, search filter, colour and switch, and

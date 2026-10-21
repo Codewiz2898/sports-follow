@@ -33,7 +33,7 @@
 	# a fan taps play, YouTube's no-cookie player, with YouTube's IFrame Player API (its two scripts on www.youtube.com)
 	# listening to it (web/src/components/FeedPlayer.tsx: a video it won't play here); on a match page's
 	# Watch live, once tapped, Twitch's or Kick's player. Scripts from here (and those two), and WebAssembly
-	# compiled from them: a chess game's analysis board runs its engine in the fan's browser (web/public/engine/).
+	# compiled from them: a chess game's analysis board runs its engine in the fan's browser (web/src/sports/engine/).
 	# The engine's worker gets this policy with its script, so it needs 'wasm-unsafe-eval' too.
 	# No other site may put them in a frame (until there's a real domain, every *.sslip.io server is
 	# the same site, so SameSite cookies alone don't stop a sibling from framing the app).

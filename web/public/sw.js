@@ -6,9 +6,7 @@
 // served from cache while refreshed. /api/me/following and player cards: network first, the last
 // answer offline. The sports and their colours (/api/sports, /api/sports.css): from cache while
 // refreshed. Players' photos (/api/photos/): cache first, like built assets. Every other /api call and
-// every live stream passes straight through. The chess engine of a match page's analysis board
-// (/engine/, 7 MB): never fetched ahead, kept once a fan has opened one, cache first (its files' names
-// carry its version); its README and licence, opened as pages, pass through.
+// every live stream passes straight through.
 //
 // Push: moments (a goal, a fifty, a result; see sports_follow/moments.py) arrive as notifications,
 // planned by sports_follow/alerts.py. Each game is one notification (its tag): a new moment replaces
@@ -53,7 +51,6 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin === self.location.origin) {
     if (url.pathname.startsWith('/watch/')) return  // a stream's player alone (the Android app's), never the app's page
-    if (url.pathname.startsWith('/engine/')) return req.mode === 'navigate' ? undefined : event.respondWith(cacheFirst(req, FILES))
     if (req.mode === 'navigate') return event.respondWith(networkFirst(req, SHELL, '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, FILES))
     // A player's photo: its address is its content, so the copy kept is always right.

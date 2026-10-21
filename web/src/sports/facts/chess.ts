@@ -93,6 +93,23 @@ export function evalWords(ev: ChessEval): string {
   return `Engine evaluation ${evalScore(ev)}, from White's side${depth ? `, ${depth}` : ''}`
 }
 
+// Each castling right a standard FEN gives, and the king and rook it needs where they start.
+const CASTLING: Record<string, string[]> = { K: ['e1K', 'h1R'], Q: ['e1K', 'a1R'], k: ['e8k', 'h8r'], q: ['e8k', 'a8r'] }
+
+/** Whether a position plays by chess's standard rules, as a move generator knows them (chess.js, and the engine
+ * without its 960 option): every castling right its FEN gives has the king and the rook on their starting
+ * squares. A Freestyle (Chess960) game's start puts them elsewhere, or names the rook's file ("HAha"), and
+ * castles another way, which a standard generator gets wrong; once neither side can castle, it plays as
+ * chess. The live state doesn't say which a game is, so the position does. */
+export function standardCastling(fen?: string | null): boolean {
+  const [placement = '', , rights = '-'] = (fen ?? '').split(' ')
+  if (rights === '-') return true
+  if (!/^[KQkq]{1,4}$/.test(rights)) return false
+  const rows = placement.split('/').map((row) => row.split('').flatMap((c) => (/\d/.test(c) ? Array<string>(Number(c)).fill('') : [c])))
+  const at = (square: string) => rows[8 - Number(square[1])]?.['abcdefgh'.indexOf(square[0])]
+  return [...rights].every((right) => CASTLING[right].every((need) => at(need.slice(0, 2)) === need[2]))
+}
+
 /** A finished game's moves (ChessPage.moves, in pairs: "1. d4 Nf6") one by one in SAN, to replay from the
  * start: the position after the nth is the nth ply's. Null for moves that don't run from the first on (a list
  * that starts with Black's, "1... e5", or skips a number), which can't be replayed from the start. */

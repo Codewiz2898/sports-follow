@@ -1,15 +1,28 @@
 // The engine of a fan's analysis board (Play from here): Stockfish 18's lite single-threaded WebAssembly build
-// (public/engine/, its README says where it's from and its licence), in a Web Worker of the page, speaking UCI
-// over postMessage. Started only when a fan opens an analysis board, one per board, and ended when they leave
-// it. Nothing it's told or says leaves the device.
+// (engine/, its README says where it's from and its licence), in a Web Worker of the page, speaking UCI over
+// postMessage. Started only when a fan opens an analysis board, one per board, and ended when they leave it.
+// Nothing it's told or says leaves the device.
 
 import { engineLook, type EngineLook } from './facts/chessLine'
+// The build names both by their content (/assets/…-<hash>), so a new engine is new names and a fan's cached copy
+// (the service worker keeps /assets/ once fetched) is never a stale one.
+import script from './engine/stockfish-18-lite-single.js?url'
+import wasm from './engine/stockfish-18-lite-single.wasm?url'
 
-// The worker script; it fetches its .wasm from beside it, by its own name.
-const ENGINE = '/engine/stockfish-18-lite-single.js'
-// How long it looks at a position: deep enough for a fan's question, short enough for a phone's battery. Its
-// look at each depth reaches the bar as it comes.
-const LOOK = 'go depth 18 movetime 6000'
+// The worker script, told where its .wasm is: the build reads the address before a comma in its own address's
+// hash (without one, it would look beside itself under its own name, which the build's hash changes). Nothing
+// after the comma: ",worker" there would make it one of a threaded build's helpers, which starts no engine.
+const ENGINE = `${script}#${encodeURIComponent(wasm)}`
+// Its Corresponding Source, the commit that published this build (18.0.8: the repository has no version tags),
+// and the GPL as that commit has it, for the board's credit line.
+const BUILT_FROM = '93c994592dcf3b4b21052ab925e9b534df9c0918'
+export const ENGINE_SOURCE = `https://github.com/nmrugg/stockfish.js/tree/${BUILT_FROM}`
+export const ENGINE_LICENCE = `https://github.com/nmrugg/stockfish.js/blob/${BUILT_FROM}/Copying.txt`
+// How deep it looks at a position: to depth 18 and no other limit, so every device ends on the same result (one
+// thread, the hash cleared before each position: ucinewgame), a slow phone later rather than shallower. Its look
+// at each depth reaches the bar as it comes, so the fan sees one at once. This is the lite build's smaller
+// network, not the server's full engine (sports_follow/engine.py): the two can differ on the same position.
+const LOOK = 'go depth 18'
 // A build that can't start says nothing (a page that doesn't allow WebAssembly rejects a promise inside the
 // worker, which never reaches its error event): this long without a word from it while it starts, it has
 // failed. Its download's progress is a word, so a slow network isn't a failure.
@@ -48,12 +61,21 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
     on.loading(e.data.percent)
   }
   worker.postMessage({ progressPort: progress.port2 }, [progress.port2])
-  // One search at a time: a new position waits for the last search's bestmove (after a stop), so every info
-  // line between is of the position being searched.
+  // One search at a time: a new position waits for the last search's bestmove (after a stop), then for the
+  // engine to have cleared what it learnt (ucinewgame, then readyok), so every info line is of the position being
+  // searched, and no earlier line changes its result.
   let searching: { fen: string; seen: (look: EngineLook) => void } | null = null
+  let clearing = false
   let next: typeof searching = null
   const go = () => {
-    if (!ready || searching || !next) return
+    if (!ready || searching || clearing || !next) return
+    clearing = true
+    worker.postMessage('ucinewgame')
+    worker.postMessage('isready')
+  }
+  const search = () => {
+    clearing = false
+    if (!next) return
     searching = next
     next = null
     worker.postMessage(`position fen ${searching.fen}`)
@@ -68,7 +90,8 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
       window.clearTimeout(quiet)
       on.ready()
       go()
-    } else if (line.startsWith('bestmove')) {
+    } else if (line === 'readyok' && clearing) search()  // the newest position asked for, if several came meanwhile
+    else if (line.startsWith('bestmove')) {
       searching = null
       go()
     } else if (searching) {
@@ -85,7 +108,7 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
     look(fen, seen) {
       next = { fen, seen }
       if (searching) worker.postMessage('stop')
-      else go()
+      else go()  // while it clears, the readyok searches this one
     },
     quit() {
       quit = true
