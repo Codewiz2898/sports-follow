@@ -9,7 +9,8 @@ import { ClipsSection } from '../components/Clips'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
-import { Picks } from '../components/Picks'
+import { Picks, usePredictions } from '../components/Picks'
+import { InSide } from '../components/Side'
 import { useFollowToggle } from '../components/Starters'
 import { Watch } from '../components/Watch'
 import { dateTime, relative } from '../format'
@@ -163,6 +164,7 @@ export function MatchPage() {
   const watch = useFollowGame(match)
   const now = useNow()
   const [playing, setPlaying] = useState<string | null>(null)  // the stream a fan has started here (Watch), by its address
+  const calls = usePredictions(match?.predictions)  // kept here: a screen narrowed or widened moves the cards, not their picks
   useEffect(() => { setPlaying(null) }, [source, game])
   const back = <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
 
@@ -258,10 +260,13 @@ export function MatchPage() {
         </ErrorBoundary>
       )}
 
-      {/* What fans call before it starts (sports_follow/predictions.py): none for a sport that asks nothing. */}
-      <ErrorBoundary fallback={<BlockError />} resetKey={match.predictions}>
-        <Picks questions={match.predictions} />
-      </ErrorBoundary>
+      {/* What fans call before it starts (sports_follow/predictions.py): none for a sport that asks nothing. On a
+          wide screen, in the side column beside the game. */}
+      <InSide>
+        <ErrorBoundary fallback={<BlockError />} resetKey={match.predictions}>
+          <Picks {...calls} />
+        </ErrorBoundary>
+      </InSide>
 
       {(match.teams ?? []).length > 0 && (
         <ErrorBoundary fallback={<BlockError />} resetKey={match.teams}>

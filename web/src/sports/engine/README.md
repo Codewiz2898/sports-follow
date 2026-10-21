@@ -1,7 +1,9 @@
 # The chess engine of a match page's Play from here
 
-A fan's analysis board (web/src/sports/chessAnalysis.tsx) runs this engine in their browser, in a Web Worker
-(web/src/sports/chessEngine.ts): their lines never leave the device. It's chess's, as the rest of
+A fan's analysis board runs this engine on their own device, in a Web Worker: in their browser
+(web/src/sports/chessAnalysis.tsx, chessEngine.ts), and in the Android app in a hidden WebView of its own
+(mobile/src/sports/chessAnalysis.tsx, chessEngine.tsx, mobile/modules/chess-engine). Both speak to it as
+web/src/sports/facts/chessEngineCore.ts does. Their lines never leave the device. It's chess's, as the rest of
 web/src/sports/chess*: removing chess removes this folder too.
 
 - **What:** Stockfish.js 18, the lite single-threaded WebAssembly build, from the npm package `stockfish@18.0.8`
@@ -28,5 +30,16 @@ chessEngine.ts imports both files' addresses (`?url`), so the build copies them 
 named by their content. Only a fan who opens an analysis board fetches them, and the service worker keeps
 them then, as it does every built asset. The worker script is told its `.wasm`'s address in its own address's
 hash (`<script>#<wasm>`). WebAssembly needs `'wasm-unsafe-eval'` in the page's Content-Security-Policy
-(deploy/caddy/Caddyfile). Replacing the engine: new files here, their checksums above, and in chessEngine.ts
-the two `?url` imports (they name the files) and `BUILT_FROM`, the commit the source and licence links point at.
+(deploy/caddy/Caddyfile).
+
+The Android app carries these files rather than downloading them: its module's build copies the `.js`, the
+`.wasm` and `Copying.txt` from here into its assets at each build (mobile/modules/chess-engine/android/build.gradle;
+a name there with no file here stops the build), and its WebView serves that folder alone to the engine's page at
+https://appassets.androidplatform.net/engine/ (WebViewAssetLoader, which types the `.wasm` application/wasm), with
+no file access and no network. A new engine reaches phones with a new build of the app, not with its JavaScript
+alone. tests/test_credits.py holds every name the web, the module and its page give a file to one here.
+
+Replacing the engine: new files here and their checksums above; in chessEngine.ts the two `?url` imports (they
+name the files); in the Android module, the names in build.gradle's copy and in its page
+(android/src/main/assets/engine/page.js); and `BUILT_FROM` in facts/chessEngineCore.ts with `ENGINE_BUILT_FROM`
+in sports_follow/sports/chess.py (the Credits page's), the commit the source and licence links point at.

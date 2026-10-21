@@ -5,7 +5,7 @@
 // fan's lines stay on their device.
 
 import { Chess, type Move, type Square } from 'chess.js'
-import type { ChessEval } from './chess'
+import { standardCastling, type ChessEval, type ChessState } from './chess'
 
 export const PIECE_NAMES: Record<string, string> = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' }
 
@@ -36,6 +36,18 @@ export function playable(fen?: string | null): boolean {
   } catch {
     return false
   }
+}
+
+/** Where an analysis starts: the game's position when the fan opened it (`base`, with the move that led there),
+ * or a finished game's moves (SAN, from its start) at a ply of theirs. `asked` changes with each new start, the
+ * board open or not; `focus` puts the keyboard on the board (the web's, opened by its button, not from the moves). */
+export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean }
+
+/** The line an analysis starts with, or null for one that can't be played here: moves that don't replay (the
+ * Moves list offers only those that do), or a position that isn't one, or not by the standard rules. */
+export function openingLine(opening: Opening): ChessLine | null {
+  if (opening.moves) return lineOfGame(opening.moves, opening.ply ?? 0)
+  return playable(opening.base) && standardCastling(opening.base) ? lineFrom(opening.base) : null
 }
 
 /** A line from a position, with no moves yet. */
@@ -122,6 +134,28 @@ export function checked(fen: string): string | null {
 export function samePosition(a?: string | null, b?: string | null): boolean {
   const of = (fen?: string | null) => fen?.split(' ').slice(0, 2).join(' ')
   return Boolean(a && b) && of(a) === of(b)
+}
+
+/** Where along its line the board is: "After 12. Nf3", or at its start "The game's position" (the game's own,
+ * `base`) or "The starting position" (a finished game's moves, from the first). */
+export function lineWhere(line: ChessLine, base: string): string {
+  const last = line.at ? line.plies[line.at - 1] : null
+  const before = line.at > 1 ? line.plies[line.at - 2].fen : line.start
+  return last ? `After ${numbered([last.san], before)}` : samePosition(fenAt(line), base) ? "The game's position" : 'The starting position'
+}
+
+/** What the game has done since the fan began playing from `base`: "The game is over: 1–0", or "The game has
+ * moved on · move 34"; null while it's where they began. */
+export function movedOn(state: ChessState, base: string): string | null {
+  if (samePosition(state.fen, base)) return null
+  return state.result ? `The game is over: ${state.result.replace('-', '–')}` : `The game has moved on${state.move ? ` · move ${state.move}` : ''}`
+}
+
+/** A square of the analysis board as a screen reader says it: "e4, white pawn", and ", move here" where the
+ * picked piece can go. `piece` is its FEN letter (white's in capitals), or null. */
+export function squareWords(name: string, piece: string | null, aim: boolean): string {
+  const colour = piece && (piece === piece.toUpperCase() ? 'white' : 'black')
+  return [name, piece && `${colour} ${PIECE_NAMES[piece.toLowerCase()]}`, aim && 'move here'].filter(Boolean).join(', ')
 }
 
 /** A UCI engine's look at a position, from one of its info lines: how deep it looked, its score from the side

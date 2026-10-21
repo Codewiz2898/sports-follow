@@ -629,6 +629,11 @@ class Sport:
     side_by_side = False
     engine = False  # live positions are evaluated by our engine (chess)
 
+    def credits_also(self) -> list[dict[str, Any]]:
+        """Others whose work runs in the sport's own pages, for the Credits page while it's on (chess's
+        engine on the fan's device, under its analysis board)."""
+        return []
+
     def settle(self, before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         """The engine's latest evaluation of a game (engine.py) with what the sport makes of it, held against
         the one settled before (chess: the band it's in); as it comes, for a sport the engine doesn't evaluate."""

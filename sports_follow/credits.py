@@ -10,10 +10,10 @@ with its author and licence (photos.py): the licences fans may see them under al
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import engine, wiki
+from . import engine, sports, wiki
 from .adapters import ADAPTERS, KNOWN, providers
 from .agent import MODEL
 from .config import APP_NAME
@@ -78,10 +78,11 @@ PHOTO_NOTICES = [
 ]
 
 
-def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None, on: Sequence[sports.Sport] | None = None) -> dict[str, Any]:
     """The Credits page for this build: the data providers it runs, the rest it relies on, the software,
     and every player photo shown (photos.used). Each source describes its provider and what it covers
-    (adapters.base.Provider); licensed ones come first. The AI model and the news it summarises only when
+    (adapters.base.Provider); licensed ones come first; each sport that's on (`on`, by default those that run)
+    adds whose work its own pages run (Sport.credits_also). The AI model and the news it summarises only when
     the research agent runs (config.AGENT)."""
     from .config import AGENT, RESEARCH
 
@@ -123,6 +124,8 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
             "licence": "GPL-3.0",
             "licence_url": "https://www.gnu.org/licenses/gpl-3.0.html",
         })
+    for sport in sports.ENABLED if on is None else on:
+        also += sport.credits_also()
     if agent:
         also += [
             {
