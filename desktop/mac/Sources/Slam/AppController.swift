@@ -82,7 +82,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 let wait: Double = ns.code == SCStreamError.userDeclined.rawValue ? 15 : 5
                 await MainActor.run {
                     self.setState(error.localizedDescription)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.tryStart() }
+                    // Unless a window was picked from the menu meanwhile: then that's the recording.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) { if self.recorder == nil { self.tryStart() } }
                 }
             }
         }
