@@ -78,10 +78,10 @@ def feature() -> Path:
             raise FileNotFoundError(f"{path}: run `npm install` in mobile/ first")
 
     # Row 1: the badge and the name, as the header pairs them (.brand: the badge 1.2 times the type's size).
-    name_font = ImageFont.truetype(str(FREDOKA), 168)
     mark = badge(200)
-    name_w = name_font.getlength(NAME)
     gap = 28
+    name_font = fitted(FREDOKA, NAME, 168, width - 120 - mark.width - gap)  # a longer name, smaller
+    name_w = name_font.getlength(NAME)
     row_w = mark.width + gap + name_w
     x = (width - row_w) / 2
     top = 64

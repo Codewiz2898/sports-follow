@@ -1,7 +1,7 @@
 # Store listing
 
-What to paste into Play Console, **Grow users → Store presence → Main store listing**. The name is
-`sports_follow/app.json`'s; the rest is the site's copy (`web/index.html`'s description, the pages' words),
+What to paste into Play Console, **Grow users → Store presence → Main store listing**. The name starts with
+`sports_follow/app.json`'s (below); the rest is the site's copy (`web/index.html`'s description, the pages' words),
 in its voice: short, plain sentences, no claims the app doesn't keep.
 
 ## App details

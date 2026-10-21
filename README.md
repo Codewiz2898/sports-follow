@@ -794,7 +794,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   plain prebuild keeps the old Firebase setup); afterwards the package id can't change. The domain is a
   setting of its own: the server's `DOMAIN` (`deploy/compose.yaml`) and the mail addresses in
   `deploy/settings.env`, and in the app `SITE` in `app.config.ts`, `src/api.ts`'s default and the Kotlin
-  module's (`Settings.kt`), which the same test keeps in step. Internal names keep the old ones, as
+  module's (`Settings.kt`), which the same test keeps in step. Play's listing writes the name out on purpose,
+  as a store name that says what the app is: rename it in `mobile/store/listing.md` (30 characters at most) and
+  `closed-testing.md`'s message, and draw the feature graphic again (`mobile/store/make_graphics.py`, which
+  reads `app.json`). Internal names keep the old ones, as
   `sports_follow` does: the notifications module (`mobile/modules/stann-notifications`, `io.stann.notifications`,
   its `stann_*` resources) and the app's own storage keys (`stann.*`), which no fan sees.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with

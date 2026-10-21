@@ -26,6 +26,7 @@ const RELEASE_ON_DEBUG_KEY = /(release \{\n(?:\s*\/\/.*\n)*\s+)signingConfig sig
 module.exports = (config) =>
   withAppBuildGradle(config, (mod) => {
     let gradle = mod.modResults.contents
+    if (gradle.includes('STANN_UPLOAD_KEYSTORE')) throw new Error('with-upload-key: android/ has the upload key under its old variables; prebuild with --clean')
     if (!gradle.includes('SPORTS_FOLLOW_UPLOAD_KEYSTORE')) {
       if (!DEBUG_SIGNING.test(gradle)) throw new Error('with-upload-key: no signingConfigs.debug in android/app/build.gradle; Expo\'s template changed')
       if (!RELEASE_ON_DEBUG_KEY.test(gradle)) throw new Error('with-upload-key: the release build type is not on signingConfigs.debug; Expo\'s template changed')
