@@ -373,7 +373,8 @@ def test_live_now_keeps_the_big_tournaments_series_biggest_tier_first(monkeypatc
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or running)
     games = ps.PandascoreEsports().live_now()
     assert asked == ["/matches/running"]  # still the one request
-    # S, then the two A's in PandaScore's order, then B; C, D, unranked and untiered series aren't the big games.
+    # S, then the two A's in PandaScore's order, then B; the C gives way to the bigger ones on in its game, and
+    # D, unranked and untiered series never show.
     assert [(g.source_id, g.tier) for g in games] == [("5", 3), ("2", 2), ("6", 2), ("4", 1)]
     assert games[0].competition == "Worlds Stage 2 2026"
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: [on(3, "ESEA Advanced", "d"), on(7, "Streamers League", "unranked")])
