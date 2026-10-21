@@ -1,8 +1,8 @@
 // One game's match page, the web's MatchPage.tsx: a band of its sport's colour edge to edge with the way back and
 // Follow (the game by itself, with its bell: its level, "Mute this game"), where the game is and its competition,
 // the board in the sport's ink, or the title and when it starts; a finished game's verdict big. Then where to watch
-// it, while it's on or about to be (Twitch, Kick and YouTube played over the whole screen, others in their platform's
-// app or the browser). Then the fan's
+// it, while it's on or about to be (Twitch, Kick and YouTube played in the page, others in their platform's app or
+// the browser). Then the fan's
 // players in it with their lines, what its sport shows under the board (its part: a timeline, a scorecard, maps
 // or moves), its key events, the moments found for the players followed in it, and both sides' players to
 // follow. Looked at again while the screen is in front (as the web's while its tab is in view).

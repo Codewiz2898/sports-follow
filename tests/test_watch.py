@@ -1,7 +1,7 @@
 """Where a game can be watched (watch.py): each stream named by the platform its address is on, with what the
 app's own player plays where it has one, and in the order a fan wants them. The site's /watch page, which the
-Android app shows, is one of the app's own players alone, playing only what's of its shape, and may hold that
-player's frame and nothing else."""
+Android app plays in its match page, is one of the app's own players alone, playing only what's of its shape, and
+may hold that player's frame and nothing else."""
 
 from __future__ import annotations
 
@@ -136,3 +136,15 @@ def test_the_web_app_makes_each_players_address_as_the_watch_page_does_and_the_s
     policy = re.search(r'header @app Content-Security-Policy "([^"]+)"', (ROOT / "deploy" / "caddy" / "Caddyfile").read_text())
     framed = re.search(r"frame-src ([^;]+);", policy[1] if policy else "")
     assert framed and {p.origin for p in watch.PLAYERS.values()} <= set(framed[1].split())
+
+
+def test_the_web_plays_a_stream_in_the_page_at_any_width_and_its_players_own_full_screen_makes_it_bigger(api):
+    # Bharath, 21 Oct (BHA-387): a phone's column plays it in the page too, though that's under Twitch's stated
+    # 400×300, and nothing is drawn over the whole page instead. The /watch page's player has no full screen of its
+    # own: the app's Expand is the way to a bigger one, as the WebView's own would turn the screen upright.
+    web = (ROOT / "web" / "src" / "components" / "Watch.tsx").read_text()
+    played = re.findall(r"<iframe [^>]*/>", web)
+    assert len(played) == 1 and " allowFullScreen " in played[0] and "fullscreen" in re.findall(r'allow="([^"]*)"', played[0])[0]
+    assert "createPortal" not in web
+    page = api.call("GET", "/watch/twitch/riotgames").text
+    assert "allowfullscreen" not in page.lower() and "fullscreen" not in re.findall(r'allow="([^"]*)"', page)[0]
