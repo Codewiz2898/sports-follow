@@ -47,9 +47,20 @@ SPORTS_YAARI = "UCjFw-0Vdfy2KW78NClGECXw"  # a small channel the list left out
     ("Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts", "FIDE", (), "Gukesh beats Magnus!"),
     ("  Haaland   and Anderson on City's 3-0 win  ", "Sky Sports Premier League", (), "Haaland and Anderson on City's 3-0 win"),
     ("🔥🔥🔥", "Someone", (), "🔥🔥🔥"),  # nothing left: as it came
+    # The channel's name comes off the end, never a part that holds more, nor one word of it alone.
+    ("Liverpool 1 - 2 Man City", "Man City", (), "Liverpool 1 - 2 Man City"),
+    ("Arsenal 2 - 1 Chelsea", "Chelsea", (), "Arsenal 2 - 1 Chelsea"),
+    ("Highlights: Arsenal - Chelsea", "Chelsea FC", (), "Highlights: Arsenal - Chelsea"),
+    ("The final over - ICC Men's T20 World Cup 2024", "ICC", (), "The final over - ICC Men's T20 World Cup 2024"),
+    ("Djokovic vs Alcaraz | Final | Wimbledon 2024", "Wimbledon", (), "Djokovic vs Alcaraz · Final · Wimbledon 2024"),
+    ("Kohli's 50 | Sky Sports", "Sky Sports Cricket", (), "Kohli's 50"),  # the start of its name
+    ("Sinner returns to world #1", "Tennis TV", (), "Sinner returns to world #1"),  # a number, not a hashtag
+    ("Wow?! What a finish", "ICC", (), "Wow? What a finish"),  # a question stays one
+    # A kept phrase only whole: "Test" is cricket's, "New" alone isn't a name.
+    ("MI VS CSK: ROHIT SHARMA ON THE NEW BALL IN THE TEST", "Star Sports", ("Rohit Sharma",), "MI vs CSK: Rohit Sharma on the new ball in the Test"),
 ])  # fmt: skip
 def test_a_title_is_tidied_as_its_served(title, channel, keep, shown):
-    assert titles.tidy(title, channel, (*keep, *CRICKET.title_words)) == shown
+    assert titles.tidy(title, channel, CRICKET.title_words, keep) == shown
 
 
 def test_only_a_title_mostly_in_capitals_is_shouting():
@@ -138,7 +149,7 @@ def test_a_videos_picture_is_the_biggest_youtube_has_for_it():
 # ---------------------------------------------------------------- against the database
 
 
-def made_player(db, name: str, sport: str = "cricket", followers: int = 0, served: bool = True) -> int:
+def made_player(db, name: str, sport: str = "cricket", followers: int = 0, served: bool = True, source: str = "youtube") -> int:
     """A player with a card, followed by this many others, and a row the Feed serves when served."""
     p = Player(slug=name.lower().replace(" ", "-"), name=name, sport=sport, teams=[])
     db.add(p)
@@ -147,7 +158,7 @@ def made_player(db, name: str, sport: str = "cricket", followers: int = 0, serve
     for n in range(followers):
         db.add(Follow(fan_id=f"other-{name}-{n}", player_id=p.id, alert_rules={}))
     if served:
-        db.add(FeedCandidate(player_id=p.id, source="youtube", external_id=f"v{p.id:010d}", url=f"https://www.youtube.com/watch?v=v{p.id:010d}",
+        db.add(FeedCandidate(player_id=p.id, source=source, external_id=f"v{p.id:010d}", url=f"https://www.youtube.com/watch?v=v{p.id:010d}",
                              candidate={"sport": sport, "channel_id": ICC}, features={}, verdict={}, score=0.5, fetched_at=NOW, checked_at=NOW))  # fmt: skip
     db.commit()
     return p.id
@@ -164,13 +175,15 @@ def test_for_yous_others_are_the_fans_sports_first_then_a_big_moment_today_then_
     hundred = made_player(db, "Abhishek Sharma", followers=1)
     keeper = made_player(db, "Kylian Mbappe", sport="football", followers=20)
     made_player(db, "Nobody Serves", followers=50, served=False)  # nothing to serve: never mixed in
+    made_player(db, "Only Stories", followers=60, source="publisher_rss")  # stories only: For you takes others' videos alone
     db.add(Moment(key="h", player_id=hundred, kind="hundred", level="key", priority=90, title="Abhishek's hundred", url="/", created_at=NOW - timedelta(hours=3)))
     db.add(Moment(key="o", player_id=quiet, kind="fifty", level="key", priority=70, title="Mandhana's fifty", url="/", created_at=NOW - timedelta(hours=3)))  # not big enough
     db.commit()
     follow(db, "fan", mine)
-    assert feed.others(db, [mine], NOW) == [hundred, star, quiet, keeper]  # cricket first; the hundred today first of those
-    assert feed.others(db, [], NOW) == [hundred, keeper, star, quiet, mine]  # following nobody: every sport alike
-    assert feed.others(db, [mine], NOW + timedelta(days=2))[0] == star  # the hundred's day is over
+    # Cricket first, the hundred today first of those; each with its tier (For you serves a tier before the next).
+    assert list(feed.others(db, [mine], NOW).items()) == [(hundred, 0), (star, 1), (quiet, 1), (keeper, 3)]
+    assert list(feed.others(db, [], NOW).items()) == [(hundred, 0), (keeper, 1), (star, 1), (quiet, 1), (mine, 1)]  # following nobody: every sport alike
+    assert list(feed.others(db, [mine], NOW + timedelta(days=2)))[0] == star  # the hundred's day is over
 
 
 @needs_db
@@ -186,7 +199,8 @@ def test_for_you_mixes_in_other_players_videos_says_whose_and_pages_while_follow
         y: [Candidate(item("y0", 2), score=0.6), Candidate(item("ynews", 1, kind="news"), score=0.99)],  # an other's news never comes
     }  # fmt: skip
     monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
-    monkeypatch.setattr(feed, "others", lambda db, followed, now: [p for p in (x, y, a) if p not in followed])
+    # Magnus's tier before Gukesh's (the fan's sport, say): his video leads theirs though Gukesh's is newer and better.
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {p: t for p, t in ((y, 0), (x, 1), (a, 0)) if p not in followed})
     follow(db, "fan", a, b)
 
     mine = feed.page(db, "fan", now=NOW, limit=50)
@@ -194,7 +208,7 @@ def test_for_you_mixes_in_other_players_videos_says_whose_and_pages_while_follow
     mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
     assert mixed.tab == "for_you" and mixed.layout in feed.LAYOUTS
     assert [(e.item.title, e.following) for e in mixed.items] == [
-        ("a0", True), ("b0", True), ("a1", True), ("x0", False), ("y0", False),
+        ("a0", True), ("b0", True), ("a1", True), ("y0", False), ("x0", False),
         ("b1", True), ("a2", True), ("a3", True), ("x1", False), ("x2", False),
     ]
     assert [c.id for c in mixed.players] == [c.id for c in mine.players]  # the circles are the fan's own
@@ -213,7 +227,7 @@ def test_for_you_mixes_in_other_players_videos_says_whose_and_pages_while_follow
 def test_a_fan_who_follows_nobody_gets_for_you_all_from_the_top_players_and_following_empty(db, monkeypatch):  # noqa: F811
     x = made_player(db, "Gukesh D", sport="chess", served=False)
     monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {x: [Candidate(item("x0"), score=0.5), Candidate(item("x1", 2), score=0.4, channel="c")]} if x in ids else {})
-    monkeypatch.setattr(feed, "others", lambda db, followed, now: [x])
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {x: 3})
     assert feed.page(db, "new-fan", now=NOW, tab=feed.FOR_YOU).items[0].following is False
     assert [e.item.title for e in feed.page(db, "new-fan", now=NOW, tab=feed.FOR_YOU).items] == ["x0", "x1"]
     assert feed.page(db, "new-fan", now=NOW).items == []
@@ -221,7 +235,7 @@ def test_a_fan_who_follows_nobody_gets_for_you_all_from_the_top_players_and_foll
 
 @needs_db
 def test_the_route_takes_the_tab_and_refuses_one_that_isnt(db, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(feed, "others", lambda db, followed, now: [])
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {})
     assert server.my_feed_items(server.Response(), tab="for_you", fan="nobody", db=db).tab == "for_you"
     with pytest.raises(server.HTTPException) as refused:
         server.my_feed_items(server.Response(), tab="all", fan="nobody", db=db)

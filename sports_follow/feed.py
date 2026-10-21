@@ -263,7 +263,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, pic
     evergreen = not pinned and rank.evergreen(features, published, now)
     faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
     channel_name = str(kept.get("channel") or source)
-    title = titles.tidy(str(kept.get("title") or ""), channel_name, (*names, *sports.of(str(kept.get("sport") or "")).title_words))
+    title = titles.tidy(str(kept.get("title") or ""), channel_name, sports.of(str(kept.get("sport") or "")).title_words, names)
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=title or "A video", url=r.url,
         source=channel_name, published_at=str(kept.get("published") or "") or None,
@@ -444,12 +444,14 @@ def layout() -> str:
     return chosen if chosen in LAYOUTS else FEED_LAYOUT if FEED_LAYOUT in LAYOUTS else LAYOUTS[0]
 
 
-def others(db: Session, followed: Sequence[int], now: datetime) -> list[int]:
-    """The players For you mixes in for a fan who follows these, OTHERS at most: of the players the Feed serves
-    something of, in a sport that runs, those the fan doesn't follow; the fan's sports first (every sport alike for
-    one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of BIG_MOMENT or more,
-    not taken back), then the most followed on the app."""
-    served = select(FeedCandidate.player_id).where(FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden")).distinct().subquery()
+def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int]:
+    """The players For you mixes in for a fan who follows these, OTHERS at most, each with its tier, in order: of the
+    players the Feed serves a video of, in a sport that runs, those the fan doesn't follow; the fan's sports first
+    (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
+    BIG_MOMENT or more, not taken back), then the most followed on the app. The tier is the first two of those
+    (0: the fan's sport with a big moment, up to 3: neither): For you serves a tier's videos before the next's."""
+    served = (select(FeedCandidate.player_id).where(FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"),
+                                                    FeedCandidate.source.in_(list(VIDEOS))).distinct().subquery())  # fmt: skip
     rows = db.execute(select(Player.id, Player.sport, func.count(Follow.id)).join(served, served.c.player_id == Player.id)
                       .outerjoin(Follow, Follow.player_id == Player.id).group_by(Player.id, Player.sport)).all()  # fmt: skip
     mine = set(followed)
@@ -457,9 +459,8 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> list[int]:
     taken_back = select(Moment.corrects).where(Moment.corrects.is_not(None))
     big = set(db.scalars(select(Moment.player_id).where(Moment.level == "key", Moment.priority >= BIG_MOMENT, Moment.created_at >= now - BIG_FOR,
                                                         Moment.created_at <= now, Moment.kind.not_in(rank.NOT_A_HEAD), Moment.id.not_in(taken_back))))  # fmt: skip
-    pool = [(pid, sport, n) for pid, sport, n in rows if pid not in mine and sports.on(sport)]
-    pool.sort(key=lambda r: (bool(theirs) and sports.family(r[1]) not in theirs, r[0] not in big, -r[2], r[0]))
-    return [pid for pid, _, _ in pool[:OTHERS]]
+    pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -n, pid) for pid, sport, n in rows if pid not in mine and sports.on(sport)]
+    return {pid: tier for tier, _, pid in sorted(pool)[:OTHERS]}
 
 
 def _mix(mine: list[Any], theirs: list[Any]) -> list[Any]:
@@ -485,7 +486,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
     the picked player when there is one; then: the order as a page read at now had it, without what came in since.
     mix: For you, the videos of others() mixed in (_mix), each entry saying it isn't a followed player's."""
     ids = list(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan).order_by(Follow.created_at)))
-    strangers = others(db, ids, now) if mix else []
+    strangers = others(db, ids, now) if mix else {}
     if not ids and not strangers:
         return [], []
     everyone = [*ids, *strangers]
@@ -520,7 +521,12 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
                 continue
             (mine if pid in followed else theirs)[_day(c, now, tz)].append((pid, c))
     seen: set[str] = set()
-    ordered = _mix(_in_turns(mine, player, seen), _in_turns(theirs, None, seen)) if strangers else _in_turns(mine, player, seen)
+    if strangers:
+        # Others a tier at a time (others: the fan's sports first, then a big moment today), each by day and in turns.
+        tiered = [_in_turns({d: [(pid, c) for pid, c in theirs[d] if strangers[pid] == tier] for d in DAYS}, None, seen) for tier in sorted(set(strangers.values()))]
+        ordered = _mix(_in_turns(mine, player, seen), [x for t in tiered for x in t])
+    else:
+        ordered = _in_turns(mine, player, seen)
     entries: list[tuple[Entry, int | None, bool]] = []
     counts: dict[int, int] = {}
     newest: dict[int, datetime] = {}

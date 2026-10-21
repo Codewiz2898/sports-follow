@@ -243,3 +243,21 @@ def test_every_stream_keeps_a_video_only_from_a_channel_the_players_sport_lists(
     [asked] = [r for r in world.asked if r.url.path == "/youtube/v3/videos"]
     assert asked.url.params["id"] == "listedvid01"
     assert counts(measured, "sports_follow.feed.refused") == {("cricket", stream, "off_list"): 1}
+
+
+def test_reading_a_stored_video_again_learns_its_thumbnail_sizes_and_the_feed_serves_the_biggest(world):
+    from sports_follow import feed
+
+    kohli = player("Virat Kohli")
+    with db_module.session() as s:  # stored before the sizes were kept (BHA-349): served with hqdefault
+        s.add(FeedCandidate(player_id=kohli, source="youtube", external_id="oldrow00001", url="https://www.youtube.com/watch?v=oldrow00001",
+                            candidate={"title": "Kohli's hundred", "channel_id": CHANNEL, "sport": "cricket", "details": {"status": {"embeddable": True}}},
+                            features={"views": 10}, verdict={"about_player": "subject"}, score=0.5, fetched_at=NOW, checked_at=NOW))  # fmt: skip
+    world.videos["oldrow00001"] = video("oldrow00001", thumbs=("default", "high", "maxres"))
+    with db_module.session() as s:
+        assert feed.judged(s, [kohli], NOW)[kohli][0].item.picture == "https://i.ytimg.com/vi/oldrow00001/hqdefault.jpg"
+    assert candidates._again(SOURCE, ["oldrow00001"], NOW)["read"] == 1  # pyright: ignore[reportPrivateUsage]
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate))
+        assert row is not None and row.candidate["details"] == {"status": {"embeddable": True}, "snippet": {"thumbnails": ["default", "high", "maxres"]}}
+        assert feed.judged(s, [kohli], NOW)[kohli][0].item.picture == "https://i.ytimg.com/vi/oldrow00001/maxresdefault.jpg"

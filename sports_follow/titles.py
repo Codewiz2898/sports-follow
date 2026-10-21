@@ -36,11 +36,11 @@ _EMOJI = re.compile(
     "\U000e0000-\U000e007f"  # tags (a subdivision's flag)
     "]+"
 )
-_TRAILING_TAGS = re.compile(r"(?:[\s|,.\-–—]*#[^\W_][\w]*)+[\s|,.\-–—]*$")
+_TRAILING_TAGS = re.compile(r"(?:[\s|,.\-–—]*#[^\W\d_]\w*)+[\s|,.\-–—]*$")  # not "#1": world #1 is words
 _TAG_MARK = re.compile(r"#(?=[^\W\d_])")  # a hashtag in the middle: its word stays
 _SEPARATOR = re.compile(r"\s+(?:[|｜]|[-–—](?=\s))\s*")
 _BAR = re.compile(r"\s*[|｜]\s*")
-_PUNCT_RUN = re.compile(r"[.!?]*([!?])[.!?]*|\.{4,}")
+_PUNCT_RUN = re.compile(r"[.!?]*[!?][.!?]*|\.{4,}")
 _SPACE_BEFORE = re.compile(r"\s+([,.!?:;])")
 _SPACES = re.compile(r"\s+")
 _ENDS = re.compile(r"^[\s|｜:\-–—,;]+|[\s|｜:\-–—,;]+$")
@@ -50,20 +50,22 @@ SHOUTED = 0.6  # of a title's words of two letters or more, this many in capital
 MIN_WORDS = 3  # a title of fewer words of two letters or more is never taken for shouting ("IND v AUS")
 
 
-def tidy(title: str, channel: str | None = None, keep: Iterable[str] = ()) -> str:
+def tidy(title: str, channel: str | None = None, keep: Iterable[str] = (), names: Iterable[str] = ()) -> str:
     """The title as the Feed shows it (see the module's docstring). channel: its channel's name, which comes off its
-    end; keep: names written as they are when it's put in sentence case (a player's, their sport's title_words)."""
+    end; keep: words written as they are when it's put in sentence case (its sport's title_words); names: people's
+    names, kept as written whole and word by word ("Iyer" of "Shreyas Iyer")."""
     raw = (title or "").strip()
     text = _EMOJI.sub(" ", raw)
     text = _TRAILING_TAGS.sub("", text)
     text = _TAG_MARK.sub("", text)
     text = _without_channel(text, channel)
-    text = _PUNCT_RUN.sub(lambda m: m.group(1) or "...", text)
+    text = _PUNCT_RUN.sub(lambda m: "?" if "?" in m.group(0) else "!" if "!" in m.group(0) else "...", text)  # a question stays one
     text = _SPACE_BEFORE.sub(r"\1", _SPACES.sub(" ", text))
     text = _ENDS.sub("", text).strip()
     # Each part between the bars that are left is read alone: "FODEN HAT-TRICK! | Man City 5-1 AEK" shouts in its
     # first part only. The bars become the dots the app's own lines use.
-    parts = [sentence_case(p, keep) if shouted(p) else p for p in _BAR.split(text)]
+    keep, names = tuple(keep), tuple(names)
+    parts = [sentence_case(p, keep, names) if shouted(p) else p for p in _BAR.split(text)]
     return " · ".join(p for p in parts if p) or raw
 
 
@@ -76,26 +78,30 @@ def shouted(text: str) -> bool:
     return loud / len(words) >= SHOUTED
 
 
-def sentence_case(text: str, keep: Iterable[str] = ()) -> str:
+def sentence_case(text: str, keep: Iterable[str] = (), names: Iterable[str] = ()) -> str:
     """A shouted title in sentence case: lower case, then each sentence's (and quote's) first letter capitalised,
-    then each name kept as it's written ("IPL", "Shreyas Iyer", and each word of a name: "Iyer's"), and "I"."""
+    then each word kept as it's written ("IPL", "New Zealand"), each person's name ("Shreyas Iyer", and each word of
+    it: "Iyer's"), and "I". A kept phrase is kept only whole: "New" alone stays lower case."""
     out = text.lower()
-    names = {n.strip() for n in keep if n and n.strip()}
-    # Each word of a name of two words or more, too ("Kohli" of "Virat Kohli"), when it's a name's own (three letters up).
-    names |= {w for n in list(names) if " " in n for w in n.split() if len(w) >= 3 and w[:1].isupper()}
-    for name in sorted(names, key=len, reverse=True):
+    people = {n.strip() for n in names if n and n.strip()}
+    # Each word of a person's name of two words or more, too ("Kohli" of "Virat Kohli"), three letters up.
+    every = {k.strip() for k in keep if k and k.strip()} | people | {w for n in people if " " in n for w in n.split() if len(w) >= 3 and w[:1].isupper()}
+    for name in sorted(every, key=len, reverse=True):
         out = re.sub(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", lambda _m, name=name: name, out)
     out = re.sub(r"(?<![\w'’])i(?=$|[\s'’,.!?:;])", "I", out)
     return _SENTENCE.sub(lambda m: m.group(1) + m.group(2).upper(), out)
 
 
 def _without_channel(text: str, channel: str | None) -> str:
-    """The title without its channel's name after a bar or a dash at its end, nor empty bars at its end."""
+    """The title without its channel's name after a bar or a dash at its end, nor empty bars at its end: the name
+    itself, or two of its words or more from its start or end ("Sky Sports" of "Sky Sports Premier League"). Never one
+    word of it alone, nor a part that holds more than the name: "Arsenal 2 - 1 Chelsea" from Chelsea keeps its score."""
     parts = _SEPARATOR.split(text)
-    mine = _plain(channel or "")
+    mine = _words(channel or "")
     while len(parts) > 1:
-        last = _plain(parts[-1])
-        if not last or (mine and len(last) >= 3 and (last == mine or last in mine or mine in last)):
+        last = _words(parts[-1])
+        n = len(last)
+        if not last or (mine and (last == mine or (n >= 2 and (mine[:n] == last or mine[-n:] == last)))):
             parts.pop()
             continue
         break
@@ -106,5 +112,5 @@ def _without_channel(text: str, channel: str | None) -> str:
     return "".join(p + sep for p, sep in zip(parts, [*kept, ""]))
 
 
-def _plain(text: str) -> str:
-    return re.sub(r"[\W_]+", "", text).lower()
+def _words(text: str) -> list[str]:
+    return re.sub(r"[\W_]+", " ", text).lower().split()

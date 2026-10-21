@@ -137,8 +137,13 @@ export function FeedPage() {
     return (
       <>
         <Reels entries={items} now={now} tab={tab} onTab={showTab} follows={follows} onMore={setOpen} onNear={more}
-          footer={!page ? <span className="spinner" /> : items.length === 0 ? empty : page.cursor ? <span className="spinner" /> : done} />
-        {(followError || (error && page)) && <div className="error-box reels-error" role="alert">{followError ?? error}</div>}
+          footer={error ? (
+            <div className="stack" style={{ gap: 12, alignItems: 'center', textAlign: 'center' }}>
+              <span className="eyebrow">{error}</span>
+              {page && <button type="button" className="btn" onClick={more}>Try again</button>}
+            </div>
+          ) : !page ? <span className="spinner" /> : items.length === 0 ? empty : page.cursor ? <span className="spinner" /> : done} />
+        {followError && <div className="error-box reels-error" role="alert">{followError}</div>}
         {sheet}
       </>
     )
