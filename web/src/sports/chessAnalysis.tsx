@@ -71,7 +71,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
   const ours = useRef<HTMLOListElement>(null)
   const dragged = useRef(false)  // a drag just played (or dropped): the click it ends with isn't a tap
   const refocus = useRef(false)  // the keyboard was on what's gone (a promotion's pieces): back to the board
-  const outside = useRef(false)  // a press that began outside the box (on the backdrop): its click closes
+  const outside = useRef(false)  // a press that began on the backdrop (outside the dialog): its click closes
   // Its keys (shortcuts, below), heard wherever the keyboard is while it's open: a tapped button that goes leaves
   // it on the page's body, under the dialog.
   const heard = useRef<(e: globalThis.KeyboardEvent) => void>(() => {})
@@ -129,10 +129,23 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
     window.addEventListener('keydown', on)
     return () => window.removeEventListener('keydown', on)
   }, [])
-  // The move the board is at, kept in sight in the list.
+  // The move the board is at, kept in sight in the list: the list scrolls, not the dialog, so the board stays put.
   useEffect(() => {
-    ours.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const list = ours.current
+    const item = list?.querySelector<HTMLElement>('[aria-current="true"]')
+    if (!list || !item) return
+    const top = item.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop
+    if (top < list.scrollTop || top + item.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top - (list.clientHeight - item.offsetHeight) / 2
   }, [line?.at, line?.plies.length])
+
+  // A press on the backdrop: the dialog's own event, outside its box (not its scrollbar, nor a full screen's
+  // space under its content).
+  const onBackdrop = (e: { target: EventTarget; clientX: number; clientY: number }) => {
+    const d = dialog.current
+    if (!d || e.target !== d) return false
+    const r = d.getBoundingClientRect()
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom
+  }
 
   // The engine's lines at this position, best first, in SAN, each with its score from White's side.
   const shown = useMemo(() => {
@@ -143,7 +156,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
 
   if (!line || !fen) {
     return createPortal(
-      <dialog ref={dialog} className="chess-study narrow" data-sport={facts.key} aria-label="Analysis board" onCancel={(e) => { e.preventDefault(); leave() }}>
+      <dialog ref={dialog} className="chess-study narrow" data-sport={facts.key} aria-label="Analysis board" onCancel={(e) => { e.preventDefault(); leave() }} onClose={leave}>
         <div className="chess-study-box stack" role="status">
           <span className="title">This position can't be played from here</span>
           <button type="button" className="btn small primary" style={{ alignSelf: 'flex-start' }} onClick={leave}>Back to the game</button>
@@ -284,8 +297,9 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
         else if (picked) setPicked(null)
         else leave()
       }}
-      onPointerDown={(e) => { outside.current = e.target === dialog.current }}
-      onClick={(e) => { if (e.target === dialog.current && outside.current) leave() }}
+      onClose={leave}
+      onPointerDown={(e) => { outside.current = onBackdrop(e) }}
+      onClick={(e) => { if (outside.current && onBackdrop(e)) leave() }}
     >
       <div className="chess-study-box">
         <div className="row chess-study-head">
@@ -376,7 +390,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
                   {engineOn && (
                     <button type="button" className="btn small toggle" aria-pressed={arrowOn} onClick={() => setArrowOn((a) => !a)}>Arrow</button>
                   )}
-                  <button type="button" className="btn small toggle" aria-pressed={engineOn} onClick={() => setEngineOn((o) => !o)}>{engineOn ? 'On' : 'Off'}</button>
+                  <button type="button" className="btn small toggle" aria-label="Engine" aria-pressed={engineOn} onClick={() => setEngineOn((o) => !o)}>{engineOn ? 'On' : 'Off'}</button>
                 </span>
               </span>
               {engineWords && <span className="small muted">{engineWords}</span>}

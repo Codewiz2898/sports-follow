@@ -67,13 +67,17 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
   const [side, setSide] = useState<ChessColour | null>(null)
   const [opening, setOpening] = useState<Opening | null>(null)
   const play = useRef<HTMLButtonElement>(null)
+  const back = useRef<HTMLElement | null>(null)  // where the keyboard was when the analysis board opened
   // Play from here: the match page's board, of a position that plays by the standard rules (not a Freestyle
   // game's before its castling).
   const playable = Boolean(explore && state.fen && standardCastling(state.fen))
   useEffect(() => {
     if (!playable || !state.fen) return
     const base = state.fen
-    const asked = (ask: Ask) => setOpening((o) => ({ base, last: state.last_move, moves: ask.moves, ply: ask.ply, asked: (o?.asked ?? 0) + 1 }))
+    const asked = (ask: Ask) => {
+      back.current = document.activeElement instanceof HTMLElement ? document.activeElement : null  // the move tapped
+      setOpening((o) => ({ base, last: state.last_move, moves: ask.moves, ply: ask.ply, asked: (o?.asked ?? 0) + 1 }))
+    }
     listening.add(asked)
     return () => { listening.delete(asked) }
   }, [playable, state.fen, state.last_move])
@@ -82,9 +86,10 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
   // The live evaluation while the game's on: once it's over, the last one isn't what the result says (a draw
   // agreed at +3.0).
   const ev = state.result ? null : state.eval
+  // Closed: the keyboard back where it was, the move tapped in the Moves list or Play from here.
   const leave = () => {
     setOpening(null)
-    window.requestAnimationFrame(() => play.current?.focus())
+    window.requestAnimationFrame(() => (back.current?.isConnected ? back.current : play.current)?.focus())
   }
   const player = (s: ChessSide, colour: 'white' | 'black', area?: string) => (
     <div className={`row${area ? ` ${area}` : ''}`} style={{ gap: 12 }}>
@@ -139,7 +144,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
           {player(bottom, bottomColour, 'chess-bottom')}
           {(playable || depth) && (
             <div className="chess-under row">
-              {playable && <button ref={play} type="button" className="btn small" onClick={() => setOpening({ base: state.fen ?? '', last: state.last_move, asked: 1, focus: true })}>Play from here</button>}
+              {playable && <button ref={play} type="button" className="btn small" onClick={() => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, asked: 1, focus: true }) }}>Play from here</button>}
               {depth}
               {opening && (
                 <ErrorBoundary fallback={<BoardFailed />} resetKey={opening}>
