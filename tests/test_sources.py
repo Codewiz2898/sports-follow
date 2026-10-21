@@ -118,6 +118,9 @@ def test_no_shared_module_names_a_source():
         # The platforms the Feed's judge knows (curate.Source, Literal["youtube", "x", …]) are where shares are, not sources.
         platforms = [n for n in ast.walk(tree) if isinstance(n, ast.Subscript) and getattr(n.value, "id", None) == "Literal"]
         skip |= {id(n) for p in platforms for n in ast.walk(p)}
+        # So are the platforms a game's broadcasts are on (watch.PLATFORMS' Platform("YouTube", …)): where it's watched.
+        streamed = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Platform"]
+        skip |= {id(n) for p in streamed for n in ast.walk(p)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
             if isinstance(node, ast.ImportFrom) and path in shared and node.level == 1:

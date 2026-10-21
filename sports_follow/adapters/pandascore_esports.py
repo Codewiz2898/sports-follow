@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from .. import bus, naming, sports
 from . import budget, dota, opendota, pandascore
-from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam
+from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam, Stream
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -155,6 +155,17 @@ def _start(m: dict[str, Any], status: str) -> datetime | None:
     return _time(m.get(first) or m.get(then))
 
 
+def _streams(m: dict[str, Any]) -> list[Stream]:
+    """Where the series can be watched (its streams_list), in PandaScore's order: each stream's own page
+    ("https://www.twitch.tv/riotgames"), not PandaScore's player for it, as the app makes its own (watch.py)."""
+    out = []
+    for s in m.get("streams_list") or []:
+        url = (s.get("raw_url") or "").strip() if isinstance(s, dict) else ""
+        if url:
+            out.append(Stream(url=url, language=(s.get("language") or "").strip().lower(), official=bool(s.get("official")), main=bool(s.get("main"))))
+    return out
+
+
 # ---------------------------------------------------------------- parsers (pure)
 
 
@@ -188,6 +199,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             detail=" · ".join(x for x in (_stage(m), _format(m)) if x) or None,
             result=result,
             sport=GAMES.get((m.get("videogame") or {}).get("slug") or "", ""),
+            streams=_streams(m),
         ))
     return out
 
@@ -656,7 +668,8 @@ class PandascoreEsports(Adapter):
 
     def match(self, source_id: str) -> LiveGame | None:
         """One series by its id, whoever follows it, for its match page: map by map, and inside a Dota 2 map what
-        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request; a
+        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows); where it's streamed
+        (its fixture's streams). One request; a
         Dota 2 series on now or just over costs what a live poll's does besides (_dota): its two teams' rosters
         (kept a day) and OpenDota's live games, pro matches and each finished map, most of them kept a while."""
         if not self._on():
@@ -676,7 +689,7 @@ class PandascoreEsports(Adapter):
         partial = snap.status == "final" and not whole and (ended is None or datetime.now(timezone.utc) - ended < timedelta(seconds=DOTA_WAIT))
         return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names,
                         league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0), sport=f.sport,
-                        partial=partial)
+                        partial=partial, streams=f.streams)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its

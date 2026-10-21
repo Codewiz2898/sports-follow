@@ -1,6 +1,7 @@
 // One game's match page, the web's MatchPage.tsx: a band of its sport's colour edge to edge with the way back and
 // Follow (the game by itself, with its bell: its level, "Mute this game"), where the game is and its competition,
-// the board in the sport's ink, or the title and when it starts; a finished game's verdict big. Then the fan's
+// the board in the sport's ink, or the title and when it starts; a finished game's verdict big. Then where to watch
+// it, while it's on or about to be (each stream opens in its platform's app or the browser). Then the fan's
 // players in it with their lines, what its sport shows under the board (its part: a timeline, a scorecard, maps
 // or moves), its key events, the moments found for the players followed in it, and both sides' players to
 // follow. Looked at again while the screen is in front (as the web's while its tab is in view).
@@ -11,7 +12,7 @@ import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { gameLevelText, LEVELS } from '../../../../../web/src/alerts'
 import { dateTime, relative } from '../../../../../web/src/format'
-import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn } from '../../../../../web/src/match'
+import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn, watchable } from '../../../../../web/src/match'
 import { useActivity } from '../../../activity'
 import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../../../api'
 import { Avatar, b as blocks, GameBoard, PlainScore, StatGrid } from '../../../blocks'
@@ -26,6 +27,7 @@ import { colour, font, num, t } from '../../../theme'
 import { FollowPills } from '../../../today/live'
 import { useFollowToggle } from '../../../today/starters'
 import { breakable, Btn, Card, Dsp, ErrorBoundary, ErrorBox, Eyebrow, ListCard, LiveBadge, Notice, Pill, SectionHead, Spinner } from '../../../ui'
+import { Watch } from '../../../watch'
 
 /**
  * A game's match page from the server (GET /api/match/<source>/<game id>), looked at again while the screen is
@@ -184,6 +186,7 @@ export default function MatchScreen() {
   const board = boardOf(match)
   const soon = startsIn(match, now)
   const events = keyEvents(match)
+  const streams = watchable(match, now)
   const yours = match.yours ?? []
   const { state, followed } = watch
   const head = followHead(match, state)
@@ -245,6 +248,13 @@ export default function MatchScreen() {
       {watch.error ? <ErrorBox>{watch.error}</ErrorBox> : null}
       {head.note ? <Text style={[t.small, t.muted]}>{head.note}</Text> : null}
       {failed ? <Notice><Text style={[t.small, { flex: 1 }]}>Couldn't update this game: {failed}</Text></Notice> : null}
+
+      {/* Where to watch it, while it's on or about to be (sports_follow/watch.py). */}
+      {streams.length > 0 ? (
+        <ErrorBoundary resetKey={match.streams}>
+          <Watch streams={streams} tone={tone} />
+        </ErrorBoundary>
+      ) : null}
 
       {(match.teams ?? []).length > 0 ? (
         <ErrorBoundary resetKey={match.teams}>

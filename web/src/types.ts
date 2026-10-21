@@ -455,6 +455,20 @@ export interface Match {
   refreshing: boolean  // a newer read is on its way: look again in a moment
   follow?: MatchFollowState
   predictions?: Prediction[]  // what fans call before it starts (sports_follow/predictions.py); a server before them sends none
+  streams?: MatchStream[]  // where it can be watched, in the order to offer them (sports_follow/watch.py); a server before them sends none
+}
+
+/** One broadcast of a game (sports_follow/watch.py): its page, the platform it's on and the language it's called in,
+ * whether the event's organiser runs it (and it's their main one), and, where the app plays it inside the page,
+ * which of its players and what that plays: "twitch" and a channel, "youtube" and a video. */
+export interface MatchStream {
+  url: string
+  platform: string  // "Twitch", "Kick"
+  language: string  // "en"; "" where its source doesn't say
+  language_name: string  // "English"
+  official: boolean
+  main: boolean
+  embed: { player: string; id: string } | null
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.

@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import controls, sports
 from ..config import SOURCES
-from .base import Absence, Adapter, AdapterError, Article, Fixture, Line, LiveGame, LiveSearch, NewsSource, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Upload, VideoFacts, VideoSource
+from .base import Absence, Adapter, AdapterError, Article, Fixture, Line, LiveGame, LiveSearch, NewsSource, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Stream, Upload, VideoFacts, VideoSource
 from .espn_basketball import EspnBasketball
 from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
@@ -173,6 +173,6 @@ def source_name(system: str) -> str:
 
 __all__ = [
     "ADAPTERS", "ALL", "KNOWN", "NEWS", "VIDEOS", "Absence", "Adapter", "AdapterError", "Article", "Fixture", "Line", "LiveGame", "LiveSearch", "NewsSource", "PlayerRef",
-    "Provider", "SourceTeam", "Roster", "Rostered", "SearchResult", "Snapshot", "Upload", "VideoFacts", "VideoSource", "feed_source", "for_sport", "news", "pick",
+    "Provider", "SourceTeam", "Roster", "Rostered", "SearchResult", "Snapshot", "Stream", "Upload", "VideoFacts", "VideoSource", "feed_source", "for_sport", "news", "pick",
     "providers", "serving", "source_name", "videos",
 ]
