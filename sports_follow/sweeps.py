@@ -1,23 +1,27 @@
 """The feed's sweeps (BHA-336): searches for videos about a followed player that no moment asked for. A trusted
 channel's feed holds only its latest fifteen uploads (candidates.py), and a moment's search needs a big moment our
-sources fire (searches.py), so a player who's had neither this week has nothing to watch. Two searches find them
-some, from any channel, on the video sources that can search (searches.searching), once a day (curator.sweep; a
+sources fire (searches.py), so a player who's had neither this week has nothing to watch, and one who has still
+has the month's best unseen. Three searches find them some, from any channel, on the video sources that can search (searches.searching), once a day (curator.sweep; a
 second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week
   (feedstats.covered), searched for by their name and their sport's words (Sport.video_words), for videos of the
   last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES in any 24 hours; one
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
+- The month sweep: every followed player, gaps or not, for videos of the last MONTH_DAYS, most watched first, for
+  the feed's "This month" (feed.py). Each player at most once in MONTH_EVERY, up to FEED_MONTH_SEARCHES in any 24
+  hours, the longest unswept first (never, first), the most followed of those: when the cap binds it gets round
+  everyone before anyone's searched again.
 - The famous sweep: each followed player's most watched videos ever, with no date limit, for "The ones everyone's
   seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
   more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
   first), the most followed of those. When the cap binds it gets round everyone before anyone's swept again.
 
-What either finds goes the way a moment search's does: kept where it names the player and passes the hard filters
+What each finds goes the way a moment search's does: kept where it names the player and passes the hard filters
 (candidates.keep), unless it's stored for them already (counted as already_stored: units spent for nothing), then
 judged and ranked with the rest (curator.rank_new). Each search a source answered is a row (FeedSweep) with what it
 found and kept, and each candidate it kept names it, which says what it served (report). In the feed's funnel each
-is a stream of its own, "gap" and "famous".
+is a stream of its own, "gap", "month" and "famous". They run in that order, as far as there's room.
 
 Moment searches come first: sweeps stop while less than KEEP_SHARE of a source's tightest window is left, twice what
 moment searches leave. With no source that can search running (no key), nothing runs.
@@ -37,16 +41,18 @@ from sqlalchemy.orm import Session
 
 from . import candidates, db, feedstats, metrics, searches, shutdown, sports
 from .adapters import AdapterError, VideoSource, budget
-from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES
+from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MONTH_SEARCHES
 from .models import FeedCandidate, FeedSweep, Follow, Player
 from .sports.base import words
 
 log = logging.getLogger("sports_follow.sweeps")
 
-GAP, FAMOUS = "gap", "famous"  # their streams (metrics.STREAMS)
+GAP, MONTH, FAMOUS = "gap", "month", "famous"  # their streams (metrics.STREAMS)
 GAP_DAYS = timedelta(days=14)  # a gap search looks for videos published this recently
 GAP_EVERY = timedelta(hours=20)  # a player's gap search runs once a day: the sweep is daily, and may run a little early
 GAP_BACKOFF = timedelta(days=3)  # after a gap search that kept nothing, the player's next waits this long
+MONTH_DAYS = timedelta(days=30)  # the month sweep looks for videos published this recently
+MONTH_EVERY = timedelta(days=7) - timedelta(hours=4)  # a player's month search runs once a week: a run a little early still counts
 FAMOUS_EVERY = timedelta(days=30)  # a player's most watched videos are searched for again no sooner than this
 # The caps' windows, rolling, an hour short: a daily run that starts a moment earlier than yesterday's doesn't count
 # yesterday's against today's cap.
@@ -57,11 +63,12 @@ _EVER = datetime.min.replace(tzinfo=timezone.utc)  # never swept: first among th
 
 
 def run(now: datetime | None = None) -> dict[str, int]:
-    """The day's gap searches, then the famous sweep's, within their caps, keeping what they find. Returns what it did."""
+    """The day's gap searches, then the month sweep's, then the famous sweep's, within their caps, keeping what they
+    find. Returns what it did."""
     now = now or datetime.now(timezone.utc)
-    counts = {"gap searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
+    counts = {"gap searched": 0, "month searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
     sources = searches.searching()
-    if not sources or FEED_GAP_SEARCHES + FEED_FAMOUS_SEARCHES <= 0:
+    if not sources or FEED_GAP_SEARCHES + FEED_MONTH_SEARCHES + FEED_FAMOUS_SEARCHES <= 0:
         return counts
     with db.session() as session:
         session.execute(delete(FeedSweep).where(FeedSweep.ran_at < now - KEEP_FOR))
@@ -69,12 +76,13 @@ def run(now: datetime | None = None) -> dict[str, int]:
         if not players:
             return counts
         followers: dict[int, int] = {pid: n for pid, n in session.execute(select(Follow.player_id, func.count()).group_by(Follow.player_id))}
-        gaps, famous = gap_due(session, players, followers, now), famous_due(session, players, followers, now)
+        gaps, month = gap_due(session, players, followers, now), month_due(session, players, followers, now)
+        famous = famous_due(session, players, followers, now)
     names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
     for p in players:
         if p.sport not in names:
             names[p.sport] = candidates.phrases([q for q in players if q.sport == p.sport])
-    if _sweep(GAP, gaps, now - GAP_DAYS, now, sources, names, counts):
+    if _sweep(GAP, gaps, now - GAP_DAYS, now, sources, names, counts) and _sweep(MONTH, month, now - MONTH_DAYS, now, sources, names, counts):
         _sweep(FAMOUS, famous, None, now, sources, names, counts)
     metrics.feed("kept", counts["kept"])
     metrics.feed("refused", counts["refused"])
@@ -111,6 +119,23 @@ def gap_due(session: Session, players: list[candidates.Followed], followers: dic
     return _ranked(due, followers, {pid: at for pid, (at, _) in last.items()})[:left]
 
 
+def _last(session: Session, stream: str) -> dict[int, datetime]:
+    """Each player's latest sweep of this stream."""
+    return {pid: at for pid, at in session.execute(select(FeedSweep.player_id, func.max(FeedSweep.ran_at)).where(FeedSweep.stream == stream)
+                                                   .group_by(FeedSweep.player_id))}  # fmt: skip
+
+
+def month_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime) -> list[candidates.Followed]:
+    """The players the month sweep is for now, in order: every one not searched for in the last MONTH_EVERY, as
+    many as FEED_MONTH_SEARCHES leaves in the last DAY."""
+    left = FEED_MONTH_SEARCHES - _since(session, MONTH, now - DAY)
+    if left <= 0:
+        return []
+    last = _last(session, MONTH)
+    due = [p for p in players if p.player_id not in last or last[p.player_id] <= now - MONTH_EVERY]
+    return _rotated(due, followers, last)[:left]
+
+
 def famous_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime) -> list[candidates.Followed]:
     """The players the famous sweep is for now, in order: those not swept in the last FAMOUS_EVERY, as many as
     FEED_FAMOUS_SEARCHES leaves in the last WEEK, and no more than its seventh does in the last DAY."""
@@ -118,8 +143,7 @@ def famous_due(session: Session, players: list[candidates.Followed], followers: 
     left = min(FEED_FAMOUS_SEARCHES - _since(session, FAMOUS, now - WEEK), per_day - _since(session, FAMOUS, now - DAY))
     if left <= 0:
         return []
-    last: dict[int, datetime] = {pid: at for pid, at in session.execute(select(FeedSweep.player_id, func.max(FeedSweep.ran_at))
-                                                                       .where(FeedSweep.stream == FAMOUS).group_by(FeedSweep.player_id))}  # fmt: skip
+    last = _last(session, FAMOUS)
     due = [p for p in players if p.player_id not in last or last[p.player_id] <= now - FAMOUS_EVERY]
     return _rotated(due, followers, last)[:left]
 

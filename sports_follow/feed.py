@@ -44,7 +44,9 @@ VERDICTS = ("not_interested", "not_about_player", "report")
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
+MONTH = timedelta(days=30)
 THIS_WEEK = "This week"
+THIS_MONTH = "This month"  # 8 to 30 days old
 EARLIER = "Earlier"
 HALF_LIFE = timedelta(days=3)  # a video's score halves over this, so last week's best gives way to today's
 PER_MOMENT = 2  # videos on a page around one moment: the best two of the many edits of one goal
@@ -80,7 +82,7 @@ class Item(BaseModel):
 
 
 class Group(BaseModel):
-    head: str  # the moment's title, or "This week" / "Earlier"
+    head: str  # the moment's title, or "This week" / "This month" / "Earlier"
     moment: bool  # around a moment of the player's: the line opens its game
     when: datetime | None = None
     match: str | None = None  # the game's page in the app ("/match/<source>/<id>"), when the moment had one
@@ -352,15 +354,20 @@ def _ranked(candidates: Iterable[Candidate]) -> list[Candidate]:
 
 
 def _arrange(candidates: list[Candidate], moments: dict[int, Moment], now: datetime) -> list[Group]:
-    """A group per moment, the latest first, then This week and Earlier."""
+    """A group per moment, the latest first, then This week, This month (8 to 30 days old) and Earlier (older, or
+    undated). A pinned item is at the top of This week however old."""
     around: dict[int, list[Candidate]] = {}
     week: list[Candidate] = []
+    month: list[Candidate] = []
     earlier: list[Candidate] = []
     for c in candidates:
+        at = _when(c.item.published_at)
         if c.moment_id in moments:
             around.setdefault(c.moment_id, []).append(c)
-        elif c.pinned or ((at := _when(c.item.published_at)) and now - at <= WEEK):
+        elif c.pinned or (at and now - at <= WEEK):
             week.append(c)
+        elif at and now - at <= MONTH:
+            month.append(c)
         else:
             earlier.append(c)
     groups = []
@@ -368,7 +375,7 @@ def _arrange(candidates: list[Candidate], moments: dict[int, Moment], now: datet
         m = moments[moment_id]
         match = m.url if m.url.startswith("/match/") else None
         groups.append(Group(head=m.title, moment=True, when=m.created_at, match=match, items=[c.item for c in _ranked(around[moment_id])]))
-    for head, these in ((THIS_WEEK, week), (EARLIER, earlier)):
+    for head, these in ((THIS_WEEK, week), (THIS_MONTH, month), (EARLIER, earlier)):
         if these:
             groups.append(Group(head=head, moment=False, items=[c.item for c in _ranked(these)]))
     return groups

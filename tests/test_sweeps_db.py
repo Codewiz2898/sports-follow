@@ -1,5 +1,6 @@
 """The feed's sweeps against Postgres (sweeps.py): a gap search for each followed player with nothing to watch this
-week, the most followed first under the day's cap, once a day and less often while it keeps nothing; the famous
+week, the most followed first under the day's cap, once a day and less often while it keeps nothing; the month
+sweep's for every followed player, weekly, under its own cap, keeping only what the gap search hadn't; the famous
 sweep's search with no date limit, each player at most monthly, spread over the week under its own cap; what's
 stored already isn't kept again; and each search is recorded with what it found, kept and serves. Skipped without a
 throwaway database at alembic head (tests/test_corrections_db.py says how to make one)."""
@@ -70,8 +71,9 @@ def swept() -> list[tuple]:
                                             .order_by(FeedSweep.id)).all()]
 
 
-def only(monkeypatch, gap: int, famous: int) -> None:
+def only(monkeypatch, gap: int, famous: int, month: int = 0) -> None:
     monkeypatch.setattr(sweeps, "FEED_GAP_SEARCHES", gap)
+    monkeypatch.setattr(sweeps, "FEED_MONTH_SEARCHES", month)
     monkeypatch.setattr(sweeps, "FEED_FAMOUS_SEARCHES", famous)
 
 
@@ -149,7 +151,7 @@ def test_no_room_left_in_the_days_quota_holds_the_sweeps(world, monkeypatch):
     only(monkeypatch, gap=20, famous=35)
     player("Shreyas Iyer")
     budget.take(youtube.BUDGET, cost=4000)  # 5,000 of the 9,000 spendable left: a search would leave less than half
-    assert sweeps.run(NOW) == {"gap searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
+    assert sweeps.run(NOW) == {"gap searched": 0, "month searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
     assert searched(world) == [] and swept() == []
 
 
@@ -161,6 +163,56 @@ def test_a_removed_player_takes_their_sweeps(world, monkeypatch):
     with db_module.session() as s:
         s.execute(delete(Player).where(Player.id == iyer))
     assert swept() == []
+
+
+# ---------------------------------------------------------------- the month sweep
+
+
+def test_every_followed_player_gets_a_month_search_after_the_gap_searches_keeping_only_whats_new(world, monkeypatch):
+    only(monkeypatch, gap=20, famous=0, month=15)
+    iyer = player("Shreyas Iyer", followers=4)
+    kohli = player("Virat Kohli", followers=9)
+    served(kohli, "kohlirecent")  # covered this week: no gap search, but the month sweep's
+    world.found["Shreyas Iyer cricket"] = [hit("iyerknock01", "Shreyas Iyer 90 vs Australia"), hit("iyerknock02", "Shreyas Iyer's catch")]
+    world.found["Virat Kohli cricket"] = [hit("kohlimonth1", "Virat Kohli's month in the nets")]
+    world.videos.update({v: video(v) for v in ("iyerknock01", "iyerknock02", "kohlimonth1")})
+    done = sweeps.run(NOW)
+    gap, month = ((NOW - d).strftime("%Y-%m-%dT%H:%M:%SZ") for d in (sweeps.GAP_DAYS, sweeps.MONTH_DAYS))
+    assert searched(world) == [("Shreyas Iyer cricket", gap), ("Virat Kohli cricket", month), ("Shreyas Iyer cricket", month)]  # gaps first
+    assert (done["gap searched"], done["month searched"], done["kept"]) == (1, 2, 3)
+    # Iyer's month search found what his gap search had just stored: found, not kept again.
+    assert [(p, s, found, kept) for p, s, _, _, found, kept in swept()] == [(iyer, "gap", 2, 2), (kohli, "month", 1, 1), (iyer, "month", 2, 0)]
+    with db_module.session() as s:
+        streams = {vid: stream for vid, stream in s.execute(select(FeedCandidate.external_id, FeedCandidate.candidate["stream"].astext))}
+    assert streams == {"iyerknock01": "gap", "iyerknock02": "gap", "kohlimonth1": "month", "kohlirecent": None}
+
+
+def test_the_month_sweep_runs_each_player_weekly_under_its_days_cap_getting_round_everyone(world, monkeypatch):
+    only(monkeypatch, gap=0, famous=0, month=2)
+    a, b, c = player("Alpha One", followers=5), player("Bravo Two", followers=3), player("Charlie Three", followers=1)
+    sweeps.run(NOW)
+    assert [p for p, *_ in swept()] == [a, b]  # the cap: the most followed first
+    sweeps.run(NOW + timedelta(hours=2))
+    assert len(swept()) == 2  # the day's spent
+    sweeps.run(NOW + DAY)
+    assert [p for p, *_ in swept()] == [a, b, c]  # Alpha and Bravo were searched this week: Charlie, alone
+    for day in range(2, 7):
+        sweeps.run(NOW + day * DAY)
+    assert len(swept()) == 3  # nobody twice in a week
+    sweeps.run(NOW + 7 * DAY - timedelta(seconds=1))  # a run a moment earlier than last week's still counts
+    assert [p for p, *_ in swept()] == [a, b, c, a, b]
+    sweeps.run(NOW + 8 * DAY)
+    assert [p for p, *_ in swept()] == [a, b, c, a, b, c]
+
+
+def test_no_room_after_the_gap_searches_holds_the_month_sweep(world, monkeypatch):
+    from sports_follow.adapters import budget, youtube
+
+    only(monkeypatch, gap=20, famous=35, month=15)
+    player("Shreyas Iyer")
+    budget.take(youtube.BUDGET, cost=3900)  # room for one search before less than half the day is left
+    done = sweeps.run(NOW)
+    assert (done["gap searched"], done["month searched"], done["famous searched"]) == (1, 0, 0)
 
 
 # ---------------------------------------------------------------- the famous sweep

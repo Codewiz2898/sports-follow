@@ -36,7 +36,7 @@ def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811
 
 def test_without_a_key_nothing_is_swept(monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
-    assert sweeps.run(NOW) == {"gap searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
+    assert sweeps.run(NOW) == {"gap searched": 0, "month searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
 
 
 def test_a_sweeps_rows_are_counted_as_its_own_stream():
@@ -44,7 +44,8 @@ def test_a_sweeps_rows_are_counted_as_its_own_stream():
     assert rank.stream("youtube", {"swept": 5, "stream": "famous"}) == "famous"
     assert rank.stream("youtube", {"searched_for": 9}) == "search" and rank.stream("youtube", {}) == "channels"
     assert rank.stream("youtube", {"stream": "made-up"}) == "channels"
-    assert {"gap", "famous"} <= set(metrics.STREAMS)
+    assert rank.stream("youtube", {"swept": 6, "stream": "month"}) == "month"
+    assert {"gap", "month", "famous"} <= set(metrics.STREAMS)
 
 
 def test_what_a_sweep_finds_stored_already_counts_as_spent_for_nothing(measured):  # noqa: F811
@@ -63,13 +64,16 @@ def test_sweeps_leave_half_the_day_to_moment_searches_and_the_rest(fake):  # noq
 
 
 def test_the_default_caps_fit_the_days_quota_with_the_moment_searches():
-    """A day's worst: 40 moment searches, 20 gap searches and the famous sweep's 5 are 6,500 units, each with a
-    videos.list of its results (65 more), under the 9,000 spendable less the channel poll's and the weekly check's
-    worst (2,000 together, test_moment_search)."""
+    """Moment searches stop at a quarter of the day left, sweeps at half: a day's 40 moment searches (4,040 units with
+    their videos.list reads) fit under the 9,000 spendable less the channel poll's and the weekly check's worst
+    (2,000 together, test_moment_search) and the quarter kept; the three sweeps' caps together (20 gap, 14 month, 5
+    famous: 3,939 units) fit in the half that's theirs, so a cap, not the gate, is what stops them on a quiet day."""
     from sports_follow import config
 
-    searches_a_day = config.FEED_MOMENT_SEARCHES + config.FEED_GAP_SEARCHES + math.ceil(config.FEED_FAMOUS_SEARCHES / 7)
-    assert searches_a_day * (youtube.SEARCH_COST + 1) <= youtube.PER_DAY - youtube.MARGIN - 2000
+    spendable = youtube.PER_DAY - youtube.MARGIN
+    assert config.FEED_MOMENT_SEARCHES * (youtube.SEARCH_COST + 1) <= spendable - 2000 - searches.KEEP_SHARE * youtube.PER_DAY
+    swept_a_day = config.FEED_GAP_SEARCHES + config.FEED_MONTH_SEARCHES + math.ceil(config.FEED_FAMOUS_SEARCHES / 7)
+    assert swept_a_day * (youtube.SEARCH_COST + 1) <= spendable - sweeps.KEEP_SHARE * youtube.PER_DAY
     assert sweeps.KEEP_SHARE > searches.KEEP_SHARE  # moment searches go on after sweeps stop
 
 

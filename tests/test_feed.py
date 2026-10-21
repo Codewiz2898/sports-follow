@@ -1,6 +1,6 @@
 """A player's Feed (feed.py, BHA-299): until the pipeline is wired in, the card's news as news items with ids
 that stay put; once the judge keeps videos and posts, each grouped around the moment it's about, then This
-week and Earlier, the famous ones apart; what a fan hides leaves their feed at once and nobody else's; Today's
+week, This month and Earlier, the famous ones apart; what a fan hides leaves their feed at once and nobody else's; Today's
 rail takes a followed player's top video or post and never news. The made-up videos and posts here stand for
 the judge's rows. The rows themselves need Postgres (ON CONFLICT, cascades), so those tests run against a
 throwaway database at alembic head and are skipped without one (see tests/test_players.py for setting it up).
@@ -63,10 +63,21 @@ def test_the_cards_news_become_news_items_with_ids_from_their_address():
     assert feed.item_id("https://example.com/g4") == feed.item_id("https://example.com/g4") and len(first.id) == 16
 
 
-def test_news_is_this_week_and_earlier_newest_first():
+def test_news_is_this_week_this_month_and_earlier_newest_first():
     groups = feed._arrange(feed._news(CARD), {}, NOW)  # pyright: ignore[reportPrivateUsage]
     assert [(g.head, g.moment, [i.title for i in g.items]) for g in groups] == [
-        ("This week", False, ["Game 4 annotated"]), ("Earlier", False, ["The match so far", "Undated"])]
+        ("This week", False, ["Game 4 annotated"]), ("This month", False, ["The match so far"]), ("Earlier", False, ["Undated"])]
+
+
+def test_this_month_is_eight_to_thirty_days_old_and_a_pin_stays_in_this_week():
+    eight = Candidate(video("https://youtu.be/8", "Eight days on", days_ago=8))
+    thirty = Candidate(video("https://youtu.be/30", "A month on", days_ago=29.9))
+    older = Candidate(video("https://youtu.be/31", "Over a month on", days_ago=31))
+    pinned = Candidate(video("https://youtu.be/p", "Pinned, from spring", days_ago=200), pinned=True)
+    seven = Candidate(video("https://youtu.be/7", "Six days on", days_ago=6.9))
+    groups = feed._arrange([eight, thirty, older, pinned, seven], {}, NOW)  # pyright: ignore[reportPrivateUsage]
+    assert [(g.head, [i.title for i in g.items]) for g in groups] == [
+        ("This week", ["Six days on", "Pinned, from spring"]), ("This month", ["Eight days on", "A month on"]), ("Earlier", ["Over a month on"])]
 
 
 def test_videos_around_a_moment_come_first_and_the_judges_score_leads_within_a_group():
@@ -130,7 +141,7 @@ def player(db, slug: str, card: dict | None = None) -> int:
 def test_a_feed_is_the_news_until_the_pipeline_and_hiding_drops_an_item_for_that_fan_only(db):
     gukesh = player(db, "gukesh")
     shown = server.player_feed(gukesh, server.Response(), "fan", db)
-    assert shown.count == 3 and [g.head for g in shown.groups] == ["This week", "Earlier"]
+    assert shown.count == 3 and [g.head for g in shown.groups] == ["This week", "This month", "Earlier"]
     assert shown.evergreen == []
     first = shown.groups[0].items[0]
 
@@ -181,7 +192,7 @@ def test_judged_videos_and_posts_join_the_news_and_todays_rail_takes_the_top_one
         db.commit()
 
     shown = server.player_feed(gukesh, server.Response(), "fan", db)
-    assert [(g.head, [i.kind for i in g.items]) for g in shown.groups] == [("Gukesh wins game 4", ["video", "post"]), ("This week", ["news"]), ("Earlier", ["news", "news"])]
+    assert [(g.head, [i.kind for i in g.items]) for g in shown.groups] == [("Gukesh wins game 4", ["video", "post"]), ("This week", ["news"]), ("This month", ["news"]), ("Earlier", ["news"])]
     assert shown.groups[0].match == "/match/lichess/abc123"
     assert [i.title for i in shown.evergreen] == ["The 2024 title: the final moments"] and shown.count == 6
 

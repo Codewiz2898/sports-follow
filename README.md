@@ -45,7 +45,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 │    followed players' big moments (searches.py, capped a day) ──▶ feed_candidates,
                                 │    then the judge reads what's new and rank.py scores it (no source, the model only)
                                 ├─ sweep, daily: a search for each followed player with nothing to watch this week,
-                                │    and for a few players' most watched ever (sweeps.py, capped) ──▶ feed_candidates
+                                │    each player's month weekly, a few players' most watched ever (sweeps.py, capped) ──▶ feed_candidates
                                 └─ check_videos, daily: stored videos not read for a week, dropped once gone
                                          │
                                        adapters/ ──▶ YouTube feeds and Data API v3 (the feed's videos)
@@ -315,7 +315,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   fans, creators and the player share about them, judged before a fan sees it. Three layers: L0 fetches
   candidates from the sources into `feed_candidates`, L1 (the judge) keeps the ones really about the player with
   a one-line reason, and L2, at serve time in the API, takes out what this fan hid and groups the rest around
-  the player's moments, then This week and Earlier, the famous ones apart. `GET /api/players/<id>/feed` reads
+  the player's moments, then This week, This month (8 to 30 days old) and Earlier, the famous ones apart. `GET /api/players/<id>/feed` reads
   rows only, never a model or a source, and is empty rather than slow. `feed.judged` reads the rows the curator
   scored (below) as videos beside the card's news: each one's score halves every three days (an evergreen one
   keeps its own), a page holds one video from each channel and two around each moment, and older ones still
@@ -511,7 +511,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   rolling, so YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
   which stays the channel poll's and the weekly check's. The ranking keeps a searched video's moment while it
   stands, rather than the biggest one near it. Off without the key.
-- **Players with nothing to watch are searched for, and so are their most watched** (`sports_follow/sweeps.py`,
+- **Players with nothing to watch are searched for, and so are their month's and their most watched** (`sports_follow/sweeps.py`,
   BHA-336): a channel's feed holds only its latest 15 uploads and most games fire no big moment, so a followed
   player can go a week with nothing. Once a day (08:15 UTC, just after YouTube's quota day starts; again at 20:15, which only does what a missed morning
   run didn't) the curator runs a
@@ -520,6 +520,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
   them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20, 2,000 units); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
+  **month sweep** (BHA-340): every followed player, gaps or not, for videos of the last 30 days, most viewed first,
+  for the feed's "This month"; each player at most once a week, up to `SPORTS_FOLLOW_FEED_MONTH_SEARCHES` in any 24
+  hours (14, 1,400 units), the longest unswept first and the most followed of those. Then the
   **famous sweep**: each followed player's most watched videos ever (no date limit), for "The ones everyone's seen",
   each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` in any 7 days (35) and a seventh of that a
   day (5, 500 units), the longest unswept first and the most followed of those, so a cap that binds gets round
@@ -527,14 +530,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the ranking; what's stored already isn't kept again, and counts as `already_stored`). Each search is a
   `feed_sweep` row with what it found and kept, and each kept candidate names its sweep, so
   `python -m sports_follow.curator sweeps` lists the last week's with what each serves (`--run` runs the day's
-  first). In the feed's funnel they're the `gap` and `famous` streams. Moment searches come first: sweeps stop while
-  less than half the day's units is left. At 19 followed players (17 uncovered) a day costs at most 17 gap
-  searches, fewer once the 3-day wait kicks in, plus the famous sweep's 500 units on its first 4 days and about 60
-  a day averaged over the month after: under 2,300 units on the heaviest day. At 500 the caps bind: 2,525 units a
-  day at most (20 gap and 5 famous searches, each with a `videos.list` read of its results), and the famous sweep
-  gets round each player every 14 weeks rather than monthly. With the moment searches' 4,000 that's 6,525 of the
-  9,000 spendable, but sweeps get only what moment searches leave: after a day of 40 moment searches (and the poll
-  and the check) less than half the window is left, and that day's sweeps don't run. Off without the key.
+  first). In the feed's funnel they're the `gap`, `month` and `famous` streams. Moment searches come first: sweeps
+  stop while less than half the day's units is left, so together they never spend more than 4,000. At 19 followed
+  players (17 uncovered) the heaviest day is the first: 17 gap, 14 month and 5 famous searches, about 3,650 units
+  with their `videos.list` reads; after that the month sweep is about 3 a day and the famous one under 1 (each
+  player weekly and monthly), so a day is about 2,000 units while 17 still have gaps, less as they're covered or
+  wait out the 3 days. At 500 the caps bind: 39 searches, 3,939 units a day at most; the month sweep gets round each
+  player every 5 weeks rather than weekly, the famous one every 14 weeks rather than monthly. With the moment
+  searches' 4,000 that's more than the 9,000 spendable less the poll's, but sweeps get only what moment searches
+  leave: after a day of 40 moment searches less than half the window is left, and that day's sweeps don't run. Off
+  without the key.
 - **News comes from publishers' own feeds** (`sports_follow/news.py`, `sports_follow/adapters/publisher_rss.py`,
   BHA-325), into the same pipeline as videos. Every 20 minutes the curator reads each RSS or Atom feed a running sport
   lists (`Sport.news_feeds`), through the source cache (a feed at most every 15 minutes) and conditionally (the ETag
@@ -821,6 +826,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; 100 YouTube units each); the biggest moments first; `0` turns them off |
 | `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; 100 YouTube units each; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_MONTH_SEARCHES` | `14` | month-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last 30 days, each player at most weekly, the longest unswept first; 100 YouTube units each; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
