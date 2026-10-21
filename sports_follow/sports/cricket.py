@@ -332,7 +332,7 @@ class Cricket(Sport):
         if status != "final":
             return None
         teams = [t for t in state.get("teams") or [] if isinstance(t, dict) and t.get("id")]
-        marked = [t for t in teams if str(t.get("winner")).lower() == "true"]  # ESPN's summaries say "true", Sportmonks' True
+        marked = [t for t in teams if t.get("winner") is True]
         if len(marked) == 1:
             return str(marked[0]["id"])
         summary = str(state.get("summary") or "")

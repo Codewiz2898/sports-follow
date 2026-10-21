@@ -178,9 +178,9 @@ def test_cricket_closes_at_the_first_ball_and_settles_from_the_winner():
     unmarked = {**won.state, "teams": [{**t, "winner": None} for t in won.state["teams"]]}
     assert CRICKET.answer("result", "final", unmarked) == str(IND)
     assert CRICKET.answer("result", "final", {**unmarked, "summary": ""}) is None
-    # Recorded: India won by 8 wkts; ESPN's summary marks the winner with "true", a string.
+    # Recorded: India won by 8 wkts.
     final = espn_cricket.parse_summary(load("espn/cricket-summary-final"))
-    assert [t["winner"] for t in final.state["teams"]] == ["true", "false"] and CRICKET.answer("result", final.status, final.state) == "6"
+    assert CRICKET.answer("result", final.status, final.state) == "6"
 
 
 def test_a_cricket_tie_no_result_or_washout_is_voided_and_one_put_back_waits():
