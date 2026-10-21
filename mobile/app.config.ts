@@ -93,6 +93,8 @@ export default (): ExpoConfig => ({
     'expo-router',
     // A release build signed with the Play upload key when the build has it (store/release-build.md).
     './plugins/with-upload-key',
+    // The engine of a chess board's Play from here, the website's own files, inside the app (src/sports/chessEngine.tsx).
+    './plugins/with-chess-engine',
     // The badge on paper while the first screen waits for the sports (catalog.tsx).
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
     // The status bar's mark for a notification is the badge in white (badge-96), tinted the app's blue. A push on
