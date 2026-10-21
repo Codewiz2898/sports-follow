@@ -1,26 +1,29 @@
 // The fan's Feed in the two layouts the server picks between, the web's components/FeedLayouts.tsx (BHA-349; GET
 // /api/me/feed/items' `layout` and /api/config's `feed_layout`, which the admin panel changes live): edge to edge
 // (the S2Edge board), full-width posts down the page; and full screen (the S5Reels board), one item a screen, paging
-// from one to the next. A video is YouTube's biggest thumbnail until it's tapped, and only then does it play, in the
-// app's own player over the whole screen (watch.tsx's, as Watch live's: the site's /watch/youtube/<id>), upright with
-// Expand for a wide one and upright over the whole screen for an upright one (a Short: framed upright here too,
-// BHA-358), where the web's plays in the picture's place. Each card names its channel under whose it is. Items of players the fan doesn't follow (For you's) offer Follow, which works
-// where it is. "…" (More) opens "Why this is here". Also Today's "From your players" (the web's components/Feed.tsx),
+// from one to the next. A video is YouTube's biggest thumbnail until it plays, in the picture's place, as the web's
+// does: YouTube's player in a WebView on the site's address (InlineVideo), the tab bar where it was. It starts when
+// tapped, with its sound, or by itself (BHA-359), muted, once more than half of it is on screen, as the fan's
+// autoplay setting allows (autoplay.ts); one at a time, and it stops once it's off the screen, the Feed's left or the
+// app's behind another. An upright video (a Short) is framed and plays upright (BHA-358), clear of whatever is beside
+// it, as YouTube's rules want nothing over its player. Each card names its channel under whose it is. Items of
+// players the fan doesn't follow (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here". Also Today's "From your players" (the web's components/Feed.tsx),
 // in the edge layout's cards.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Image } from 'expo-image'
-import { router } from 'expo-router'
+import { router, useIsFocused } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { AppState, FlatList, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
+import { ActivityIndicator, AppState, FlatList, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewabilityConfigCallbackPairs, type ViewToken } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
-import { watchPage } from '../../web/src/endpoints'
-import { channelOf, duration, statsLine, upright } from '../../web/src/feed'
+import { WebView } from 'react-native-webview'
+import { channelOf, duration, openLabel, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
 import { useTone } from './catalog'
+import { useAutoplay } from './autoplay'
 import { useFollowing } from './following'
 import { CheckIcon, PlayIcon, PlusIcon, ShareIcon } from './icons'
 import { useMyFeed } from './myFeed'
@@ -29,7 +32,7 @@ import { share, ShareButton } from './share'
 import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
 import { Btn, SectionHead } from './ui'
-import { WholeScreen } from './watch'
+import { useInFront } from './watch'
 
 const open = (url?: string | null) => {
   const href = safeHref(url)
@@ -97,20 +100,103 @@ export function useFollows(): { follows: Follows; error: string | null } {
   return { follows, error }
 }
 
-/** A video played on tap: `play` it, and `player`, the app's player over the whole screen while one plays (put
- * it anywhere on the screen). A video without a YouTube id, or a player that won't load, opens where it was posted. */
-export function useVideo(): { play: (item: FeedItem) => void; player: ReactNode } {
-  const [playing, setPlaying] = useState<FeedItem | null>(null)
+/** The one Feed video playing: which item, whether it started by itself (muted), and whether the fan has touched it
+ * since (`kept`: perhaps turned its sound on with YouTube's button, which nothing outside the player can see). */
+export interface Playing { id: string; muted: boolean; kept?: boolean }
+
+/** Which of a list's videos plays (one at a time). `play` starts one with its sound (a tap). While `on` (the screen in
+ * front, the app too) and `auto` (a list that autoplays, and the fan's setting allows it now), the topmost video more
+ * than half on screen starts by itself, muted, unless one the fan started or touched (`keep`) is still playing; a
+ * video goes once none of it is on screen. `pairs` is what the list watches its items with (FlatList's
+ * viewabilityConfigCallbackPairs), and `playing` what it draws again on (extraData); a list that isn't watched
+ * (Today's cards, `auto` false) keeps what plays till the screen goes. */
+export function usePlaying(on: boolean, auto = true): { playing: Playing | null; play: (item: FeedItem) => void; keep: () => void; pairs: ViewabilityConfigCallbackPairs } {
+  const [playing, setPlaying] = useState<Playing | null>(null)
+  const allowed = useAutoplay(auto)
+  const starts = useRef(false)
+  starts.current = on && auto && allowed
+  const top = useRef<string | null>(null) // the topmost video more than half on screen
+  const seen = useRef<ReadonlySet<string>>(new Set()) // every item any of which is on screen
+  const watched = useRef(auto)
+  watched.current = auto
+  const settle = useCallback(() => setPlaying((was) => {
+    const now = was && (!watched.current || seen.current.has(was.id)) ? was : null
+    // The 60% watch waits 250ms to say, the 1% one doesn't: one just gone off screen isn't started again meanwhile.
+    const next = top.current && seen.current.has(top.current) ? top.current : null
+    if (starts.current && next && (!now || (now.muted && !now.kept)) && now?.id !== next) return { id: next, muted: true }
+    return now
+  }), [])
+  useEffect(() => { if (on) settle(); else setPlaying(null) }, [on, allowed, settle])
   const play = useCallback((item: FeedItem) => {
-    if (item.video?.youtube_id) setPlaying(item)
+    if (item.video?.youtube_id) setPlaying({ id: item.id, muted: false })
     else open(item.url)?.()
   }, [])
-  const id = playing?.video?.youtube_id
-  const player = playing && id ? (
-    <WholeScreen page={API_URL + watchPage({ player: 'youtube', id })} platform="YouTube" shape={upright(playing) ? 'upright' : 'wide'}
-      onOut={open(playing.url)} onClose={() => setPlaying(null)} />
-  ) : null
-  return { play, player }
+  const keep = useCallback(() => setPlaying((was) => (was && was.muted && !was.kept ? { ...was, kept: true } : was)), [])
+  const pairs = useRef<ViewabilityConfigCallbackPairs>([
+    { viewabilityConfig: { itemVisiblePercentThreshold: 60, minimumViewTime: 250 }, onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<FeedEntry>[] }) => {
+      top.current = viewableItems.find((v) => v.isViewable && v.item?.item.kind === 'video' && v.item.item.video?.youtube_id)?.item?.item.id ?? null
+      settle()
+    } },
+    { viewabilityConfig: { itemVisiblePercentThreshold: 1 }, onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<FeedEntry>[] }) => {
+      seen.current = new Set(viewableItems.filter((v) => v.isViewable && v.item).map((v) => (v.item as FeedEntry).item.id))
+      settle()
+    } },
+  ]).current
+  return { playing, play, keep, pairs }
+}
+
+const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/** YouTube's no-cookie player playing a Feed video where its picture was: a WebView of a page with the player alone,
+ * on the site's address (YouTube's embeds want a site around them, as the web's are), muted when it started by
+ * itself. YouTube's own buttons do the rest: the sound, pausing, its full screen (upright, as the phone is held). A
+ * link out of it opens in the YouTube app or the browser. One that won't load says so, with the way to the video. */
+function InlineVideo({ item, muted, onTouch }: { item: FeedItem; muted: boolean; onTouch?: () => void }) {
+  const [failed, setFailed] = useState(false)
+  const site = `${API_URL}/`
+  const id = item.video?.youtube_id ?? ''
+  const html = useMemo(() => '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body>'
+    + `<iframe src="${escape(youtubeEmbed(id, muted))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
+    + '</body></html>', [id, muted, item.title])
+  const leave = (url: string) => { open(url)?.() }
+  const down = useRef<number | null>(null) // where a touch began: one that ends where it began is a tap, not a scroll
+  if (failed) {
+    return (
+      <View style={v.cover}>
+        <Text style={[t.small, { color: '#FFFFFF' }]}>Couldn't load the player.</Text>
+        <Btn kind="link" label={openLabel(item)} colours={{ fg: '#FFFFFF' }} onPress={() => leave(item.url)} />
+      </View>
+    )
+  }
+  return (
+    // The whole of its frame, whatever that centres (the play button it replaces). A tap on it is the fan's: it stays
+    // playing as they scroll on (they may have turned its sound on).
+    <View style={StyleSheet.absoluteFill} onTouchStart={(ev) => { down.current = ev.nativeEvent.pageY }}
+      onTouchEnd={(ev) => { if (down.current != null && Math.abs(ev.nativeEvent.pageY - down.current) < 12) onTouch?.(); down.current = null }}>
+    <WebView
+      source={{ html, baseUrl: site }}
+      style={v.web}
+      containerStyle={v.web}
+      originWhitelist={['*']}
+      onShouldStartLoadWithRequest={(r) => {
+        if (!r.isTopFrame || r.url === site || r.url.startsWith('about:') || r.url.startsWith('data:')) return true
+        leave(r.url)
+        return false
+      }}
+      onOpenWindow={(e) => leave(e.nativeEvent.targetUrl)}
+      mediaPlaybackRequiresUserAction={false} // it plays at once: a tap asked for it, or it's muted
+      allowsInlineMediaPlayback
+      allowsFullscreenVideo
+      setBuiltInZoomControls={false}
+      overScrollMode="never"
+      startInLoadingState
+      renderLoading={() => <View style={v.cover}><ActivityIndicator color="#FFFFFF" /></View>}
+      renderError={() => <View style={v.cover}><Text style={[t.small, { color: '#FFFFFF' }]}>Couldn't load the player.</Text></View>}
+      onRenderProcessGone={() => setFailed(true)} // its process was ended (memory): said, rather than blank
+    />
+    </View>
+  )
 }
 
 /** For you and Following: which of the fan's Feed shows. Under the page's title on paper, or over the full screen's
@@ -138,9 +224,9 @@ export function FeedTabs({ tab, onTab, onInk }: { tab: FeedTabKey; onTab: (tab: 
 /** One post edge to edge (.epost): who it's about (photo ringed in their sport's colour, name and under it the
  * channel, Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video
  * upright in the middle of a 4:5 one), the title, and "views · when". `boxed`: a rounded card inside the page's
- * margins (Today's), else the screen's full width. */
-export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
-  entry: FeedEntry; now: number; follows?: Follows; boxed?: boolean; onPlay: (item: FeedItem) => void; onMore: () => void
+ * margins (Today's), else the screen's full width. `playing`: its video plays in the picture's place. */
+export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, onMore }: {
+  entry: FeedEntry; now: number; follows?: Follows; boxed?: boolean; playing?: Playing | null; onPlay: (item: FeedItem) => void; onKeep?: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const tone = useTone(who.sport)
@@ -157,8 +243,12 @@ export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
     // An upright one (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly.
-    const still = picture ? <Picture src={picture} onGone={gone} /> : null
-    media = (
+    const still = playing ? <InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
+    media = playing ? (
+      <View style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
+        {upright(item) ? <View style={e.tall}>{still}</View> : still}
+      </View>
+    ) : (
       <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`}
         style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
         {upright(item) ? <View style={e.tall}>{still}</View> : still}
@@ -239,9 +329,9 @@ export function EdgeSheetExtras({ entry, onGo }: { entry: FeedEntry; onGo: () =>
  * Following over the top. The next page loads three screens from the end (onNear), and `footer` is a last screen of
  * its own (the spinner, the end, why it's empty). A new tab, or the Feed read again from the top (`read`), starts
  * from its top. */
-export function Reels({ entries, now, tab, read, onTab, follows, onPlay, onMore, onNear, footer }: {
+export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore, onNear, footer }: {
   entries: FeedEntry[]; now: number; tab: FeedTabKey; read: string | null; onTab: (tab: FeedTabKey) => void; follows: Follows
-  onPlay: (item: FeedItem) => void; onMore: (entry: FeedEntry) => void; onNear?: () => void; footer?: ReactElement | null
+  videos: ReturnType<typeof usePlaying>; onMore: (entry: FeedEntry) => void; onNear?: () => void; footer?: ReactElement | null
 }) {
   const insets = useSafeAreaInsets()
   const [height, setHeight] = useState(0)
@@ -256,7 +346,12 @@ export function Reels({ entries, now, tab, read, onTab, follows, onPlay, onMore,
           ref={list}
           data={entries}
           keyExtractor={(x) => x.item.id}
-          renderItem={({ item: x }) => <Reel entry={x} now={now} height={height} follows={follows} onPlay={onPlay} onMore={() => onMore(x)} />}
+          renderItem={({ item: x }) => (
+            <Reel entry={x} now={now} height={height} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
+              onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} />
+          )}
+          extraData={videos.playing}
+          viewabilityConfigCallbackPairs={videos.pairs}
           // One screen a fling, a flick enough: Android's own snapping scroll (pagingEnabled alone wants half a screen dragged).
           snapToInterval={height}
           snapToAlignment="start"
@@ -282,8 +377,8 @@ export function Reels({ entries, now, tab, read, onTab, follows, onPlay, onMore,
 
 /** One screen (.reel): the picture on a blurred, darkened copy of itself, a little above the middle; who and what
  * at the foot; Follow (for a player the fan doesn't follow), Share and More down the right. */
-function Reel({ entry, now, height, follows, onPlay, onMore }: {
-  entry: FeedEntry; now: number; height: number; follows: Follows; onPlay: (item: FeedItem) => void; onMore: () => void
+function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: {
+  entry: FeedEntry; now: number; height: number; follows: Follows; playing: Playing | null; onPlay: (item: FeedItem) => void; onKeep: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const tone = useTone(who.sport)
@@ -300,14 +395,17 @@ function Reel({ entry, now, height, follows, onPlay, onMore }: {
   // The frame's middle a little above the screen's (top: 42%, translateY(-58%)); higher on a short phone, clear of the buttons.
   const short = height < 700
   const top = Math.max(insets.top + 56, height * (short ? 0.34 : 0.42) - (width * 9 / 16) * 0.58)
-  // An upright video (a Short): 9:16 from under the tabs down, as wide as that allows, who and what over its foot
-  // (it plays in the player over the whole screen, never here).
+  // An upright video (a Short): 9:16 under the tabs, its foot above who and what (three lines of title at most: 310
+  // above the screen's foot) and 70 clear each side, so nothing of the app's sits over YouTube's player while it
+  // plays here (.reel-frame.upright).
   const tall = upright(item)
-  const tallHeight = Math.min(height - insets.top - 56 - 16, (width * 16) / 9)
-  const place = tall ? { top: insets.top + 56, left: (width - (tallHeight * 9) / 16) / 2, right: undefined, width: (tallHeight * 9) / 16, height: tallHeight, aspectRatio: undefined } : { top }
+  const tallHeight = Math.max(0, Math.min(height - 374 - insets.top - insets.bottom, ((width - 140) * 16) / 9))
+  const place = tall ? { top: insets.top + 64, left: (width - (tallHeight * 9) / 16) / 2, right: undefined, width: (tallHeight * 9) / 16, height: tallHeight, aspectRatio: undefined } : { top }
 
   let frame: ReactNode
-  if (item.kind === 'video' && id) {
+  if (item.kind === 'video' && id && playing) {
+    frame = <View style={[r.frame, place]}><InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /></View>
+  } else if (item.kind === 'video' && id) {
     frame = (
       <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, place]}>
         {picture ? <Picture src={picture} onGone={gone} /> : null}
@@ -384,7 +482,10 @@ export function FromYourPlayers({ now, again = 0 }: { now: number; again?: numbe
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
-  const video = useVideo()
+  // Its videos play in their cards on a tap, never by themselves (it isn't the Feed), and stop once Today's left.
+  const focused = useIsFocused()
+  const front = useInFront()
+  const videos = usePlaying(focused && front, false)
   const go = useGoToPlace()
   if (!loaded || !page?.items.length) return null
   const all = () => go('/feed', { tab: 'following' })
@@ -392,16 +493,20 @@ export function FromYourPlayers({ now, again = 0 }: { now: number; again?: numbe
     <View style={{ gap: 10 }} accessibilityLabel="From your players">
       <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>All {page.count}</Text>} />
       <View style={{ gap: 12 }}>
-        {page.items.map((x) => <EdgePost key={x.item.id} entry={x} now={now} boxed onPlay={video.play} onMore={() => setOpened(x)} />)}
+        {page.items.map((x) => <EdgePost key={x.item.id} entry={x} now={now} boxed playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onMore={() => setOpened(x)} />)}
       </View>
       <Btn label={`All ${page.count} in your Feed`} onPress={all} style={{ height: 52 }} />
       <ItemSheet item={opened?.item ?? null} name={opened?.player.name ?? ''} onClose={() => setOpened(null)} onHide={(_, verdict) => (opened ? hide(opened, verdict) : Promise.resolve())}>
         {opened ? <EdgeSheetExtras entry={opened} onGo={() => setOpened(null)} /> : null}
       </ItemSheet>
-      {video.player}
     </View>
   )
 }
+
+const v = StyleSheet.create({
+  web: { flex: 1, backgroundColor: '#000000' },
+  cover: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#000000' },
+})
 
 const f = StyleSheet.create({
   tabs: { flexDirection: 'row', gap: 20, marginHorizontal: -GUTTER, marginTop: -6, paddingHorizontal: GUTTER, borderBottomWidth: 1, borderBottomColor: colour.line },

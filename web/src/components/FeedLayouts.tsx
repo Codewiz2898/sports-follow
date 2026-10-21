@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
-import { channelOf, duration, statsLine, upright } from '../feed'
+import { channelOf, duration, statsLine, upright, youtubeEmbed } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
@@ -50,7 +50,7 @@ function Still({ src, className, onGone }: { src: string; className?: string; on
 /** YouTube's no-cookie player, playing, in the picture's place. */
 function Player({ id, title }: { id: string; title: string }) {
   return (
-    <iframe src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1`} title={title}
+    <iframe src={youtubeEmbed(id)} title={title}
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
   )
 }

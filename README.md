@@ -386,7 +386,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Share and More down the right). A video taller than it's wide (a Short: `video.upright`, from the player part
   videos.list gives with `maxWidth`, `VideoSource.upright`) is framed 9:16, in the middle of a 4:5 band edge to edge
   and on a player's Feed, and full screen between the tabs and what's at its foot, so nothing sits over YouTube's
-  player (BHA-358); the Android app plays it upright over the whole screen. It's
+  player (BHA-358). The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
+  on the site's address (`feedLayouts.tsx` InlineVideo), the tab bar where it was; and by itself as it comes on
+  screen (BHA-359): muted, one at a time, the reel on screen or the topmost post more than half in view, stopping
+  once it's off the screen or the Feed's left. Always by default; the Account page has On Wi-Fi and Off
+  (`mobile/src/autoplay.ts`, kept on the phone); a tap on one playing keeps it as the fan scrolls on. It's
   `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
   Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
   escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,

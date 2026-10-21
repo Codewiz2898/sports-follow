@@ -106,8 +106,9 @@ function useTurned(sideways: boolean) {
     : ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)), [])
 }
 
-/** Whether the app is in front: a player behind it would play on, as a WebView isn't paused with the app. */
-function useInFront() {
+/** Whether the app is in front: a player behind it would play on, as a WebView isn't paused with the app. The Feed's
+ * inline player stops by it too (feedLayouts.tsx). */
+export function useInFront() {
   const [front, setFront] = useState(AppState.currentState !== 'background')
   useEffect(() => {
     const seen = AppState.addEventListener('change', (state) => setFront(state !== 'background'))
@@ -118,9 +119,8 @@ function useInFront() {
 
 /** How the player opens (BHA-358). `sideways`: turned, and kept so, for a player that won't play narrower than a
  * phone held upright is (Twitch's 400×300). `wide`: upright, the video across the screen in the middle, with Expand
- * to turn it sideways and Collapse (or Back) to turn it upright again. `upright`: a video taller than it's wide (a
- * Short), upright over the whole screen. */
-export type PlayerShape = 'sideways' | 'wide' | 'upright'
+ * to turn it sideways and Collapse (or Back) to turn it upright again. */
+export type PlayerShape = 'sideways' | 'wide'
 
 /**
  * The player over the whole screen, never under anything of the app's: × (and Expand or Collapse) sit in a bar
@@ -128,8 +128,8 @@ export type PlayerShape = 'sideways' | 'wide' | 'upright'
  * screen, so it's never smaller than its platform allows. × closes it, and Back too (or turns an expanded one upright
  * again). Only its own page loads here: a link out of the player (its "Watch on Twitch") opens in the platform's app or
  * the browser. While the app is behind another, the player goes, and comes back (live again) when it's in front. A
- * page that doesn't load, or that the server refuses, says so, with the way to the platform. The Feed's videos play in
- * it too (feedLayouts.tsx), wide or upright as each is.
+ * page that doesn't load, or that the server refuses, says so, with the way to the platform. (The Feed's videos play in
+ * their cards instead: feedLayouts.tsx.)
  */
 export function WholeScreen({ page, platform, shape = 'sideways', onOut, onClose }: {
   page: string; platform: string; shape?: PlayerShape; onOut?: () => void; onClose: () => void
@@ -167,8 +167,8 @@ export function WholeScreen({ page, platform, shape = 'sideways', onOut, onClose
       <View style={turned ? [s.whole, { paddingTop: insets.top, paddingBottom: insets.bottom, paddingLeft: insets.left }]
         : [s.upright, { paddingTop: insets.top, paddingBottom: insets.bottom }]} accessibilityViewIsModal>
         {turned ? null : <View style={s.bar}>{closer}{turner}</View>}
-        <View style={turned || shape === 'upright' ? s.web : s.stage}>
-          <View style={turned || shape === 'upright' ? s.web : s.wide}>
+        <View style={turned ? s.web : s.stage}>
+          <View style={turned ? s.web : s.wide}>
             {refused ? <View style={s.web}>{failed()}</View> : front ? (
               <WebView
                 source={{ uri: page }}
