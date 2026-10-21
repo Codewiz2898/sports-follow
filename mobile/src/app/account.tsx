@@ -1,11 +1,13 @@
 // Account, the web's AccountPage.tsx: signing in with a code by email, and once signed in, who, signing out
-// and deleting the account. (Google sign-in comes when the app has a Google client of its own.)
+// and deleting the account. (Google sign-in comes when the app has a Google client of its own.) And, for everyone,
+// whether the Feed's videos start by themselves (autoplay.ts; this phone's choice, so not kept with the account).
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
 import { useAccount } from '../account'
+import { AUTOPLAY, setAutoplay, useAutoplaySetting } from '../autoplay'
 import { ApiError, api, type Account } from '../api'
 import { Empty } from '../blocks'
 import { colour, dsp, font, t } from '../theme'
@@ -18,8 +20,30 @@ export default function AccountScreen() {
     <Page>
       <BackHead title="Account" />
       {me === null ? <Empty><Spinner /></Empty> : me.signed_in ? <SignedIn account={me} /> : <SignIn />}
+      <Videos />
       <Text onPress={() => router.push('/privacy')} style={[t.tiny, t.muted, t.link]}>What we keep, and why</Text>
     </Page>
+  )
+}
+
+/** Whether the Feed's videos play by themselves as they come on screen, muted: Always (the default), On Wi-Fi, Off. */
+function Videos() {
+  const autoplay = useAutoplaySetting()
+  return (
+    <Section title="Videos">
+      <Card pad style={{ gap: 12 }}>
+        <View style={{ gap: 4 }}>
+          <Text style={t.title}>Play videos as you scroll</Text>
+          <Text style={[t.small, t.muted]}>In your Feed, the video on screen starts by itself, muted. A tap on it turns the sound on.</Text>
+        </View>
+        <View style={s.choices} accessibilityRole="radiogroup" accessibilityLabel="Play videos as you scroll">
+          {AUTOPLAY.map(([key, label]) => (
+            <Btn key={key} small kind={autoplay === key ? 'primary' : 'outline'} label={label} accessibilityLabel={`${label}${autoplay === key ? ', chosen' : ''}`}
+              onPress={() => setAutoplay(key)} />
+          ))}
+        </View>
+      </Card>
+    </Section>
   )
 }
 
@@ -211,4 +235,5 @@ const s = StyleSheet.create({
   field: { height: 54, paddingHorizontal: 16, borderRadius: 16, borderWidth: 2, borderColor: colour.text, backgroundColor: colour.surface, fontFamily: font[600], fontSize: 17, color: colour.text },
   code: { height: 64, fontFamily: font.display, fontSize: 36, letterSpacing: 11, textAlign: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 })

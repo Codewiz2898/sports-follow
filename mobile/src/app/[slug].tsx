@@ -22,6 +22,7 @@ import { Page } from '../page'
 import { usePush } from '../push'
 import { colour, font, RADIUS_CARD, t } from '../theme'
 import { useLive } from '../today/live'
+import { useGoToPlace } from '../tabbar'
 import { PickTile, useFollowToggle } from '../today/starters'
 import { alpha, Btn, Card as Surface, Dsp, ErrorBox, NotFound, Pill, Spinner } from '../ui'
 
@@ -64,6 +65,7 @@ function CampaignView({ c, reload }: { c: Campaign; reload: () => Promise<void> 
   const following = useFollowing()
   const follow = useFollowToggle()
   const live = useLive()
+  const go = useGoToPlace()
   const tone = toneOf(sports, c.sport)
   const games = schedule(c, now, here())
   const next = games.find((g) => g.next)
@@ -77,7 +79,7 @@ function CampaignView({ c, reload }: { c: Campaign; reload: () => Promise<void> 
         <View style={[s.band, { backgroundColor: tone.sport, paddingTop: insets.top + 14 }]}>
           <Backdrop sport={tone.key} seed={c.slug} colour={tone.on} opacity={0.16} />
           <View style={s.bar}>
-            <Pressable accessibilityRole="link" accessibilityLabel={`${APP}, Today`} hitSlop={8} onPress={() => router.navigate('/')}>
+            <Pressable accessibilityRole="link" accessibilityLabel={`${APP}, Today`} hitSlop={8} onPress={() => go('/')}>
               <Text style={[s.brand, { color: tone.on }]}>{APP}</Text>
             </Pressable>
             {left ? <Pill label={`In ${left}`} bg={tone.on} color={tone.sport} /> : null}
@@ -294,7 +296,7 @@ function AlertsPrompt() {
 const s = StyleSheet.create({
   band: { overflow: 'hidden', gap: 14, marginHorizontal: -16, paddingHorizontal: 16, paddingBottom: 22, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
   bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 36 },
-  brand: { fontFamily: font.logo, fontSize: 26, lineHeight: 30, letterSpacing: -0.26 },
+  brand: { fontFamily: font.logo, fontSize: 26, lineHeight: 30, letterSpacing: -0.26, textTransform: 'lowercase' }, // as the logo writes the name
   line: { fontFamily: font[700], fontSize: 16, lineHeight: 22.4 },
   next: { paddingTop: 12, borderTopWidth: 2, fontFamily: font[700], fontSize: 15, lineHeight: 21.75 },
   section: { gap: 10 },

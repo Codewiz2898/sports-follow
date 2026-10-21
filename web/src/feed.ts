@@ -142,6 +142,46 @@ export function fromLine(item: FeedItem, now: number): string {
   return [from, ago(item.published_at, now, true)].filter(Boolean).join(' · ')
 }
 
+/** Feed v2's line under a post (FeedLayouts.tsx, the app's feedLayouts.tsx): "channel · 81K views · 2d", where a video
+ * is from, how watched and when, a story's outlet and when; `withLength` puts the video's length after the channel
+ * (full screen, where the picture has no chip). */
+export function sourceLine(item: FeedItem, now: number, withLength = false): string {
+  const length = withLength ? duration(item.video?.duration) : ''
+  return [item.source, length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
+}
+
+/** The channel a video's from or the outlet a story with a picture is from, as the card's header names it
+ * (BHA-358). None for a post (its source is a person, named in its own line) or a story without a picture (its
+ * outlet heads the headline drawn in the picture's place). */
+export function channelOf(item: FeedItem): string | null {
+  const named = item.kind === 'video' || (item.kind === 'news' && Boolean(item.picture))
+  return named && item.source ? item.source : null
+}
+
+/** sourceLine without the channel, for a card whose header names it: "81K views · 2d", or with the video's length
+ * first ("4:12 · 81K views · 2d"). */
+export function statsLine(item: FeedItem, now: number, withLength = false): string {
+  const length = withLength ? duration(item.video?.duration) : ''
+  return [length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
+}
+
+/** YouTube's no-cookie player for a Feed video, playing at once: the web's in the picture's place, the app's inline in
+ * a WebView on the site's address. `muted` for one that starts by itself (autoplay; YouTube's own button turns the sound
+ * on), as browsers and YouTube's rules allow only that. `origin`: the page's own, for one YouTube's IFrame Player API
+ * listens to (its errors: refusedHere). (BHA-354: the server will say how to play each video.) */
+export function youtubeEmbed(id: string, muted = false, origin?: string): string {
+  const api = origin ? `&enablejsapi=1&origin=${encodeURIComponent(origin)}` : ''
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}${api}`
+}
+
+/** Whether an error of YouTube's IFrame Player API means the video won't play in any player of ours (BHA-380), so the
+ * app says so, offers YouTube, and tells the server (feedUnplayable), which stops serving it: 100, gone or private;
+ * 101 and 150, its owner keeps it off other sites (a Content ID claim's, which YouTube's Data API doesn't say). */
+export const refusedHere = (code: unknown): boolean => code === 100 || code === 101 || code === 150
+
+/** Whether a video is taller than it's wide (a Short): framed and played upright. */
+export const upright = (item: FeedItem): boolean => item.kind === 'video' && item.video?.upright === true
+
 /** What a card's link at the bottom says: a story "Read at <outlet>", a post "Open on <platform>", a video "Watch at <channel>". */
 export function openLabel(item: FeedItem): string {
   if (item.kind === 'post') return `Open on ${item.post?.platform ?? 'the post'}`

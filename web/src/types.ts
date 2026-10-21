@@ -63,6 +63,9 @@ export interface LiveStatus {
   // Set when the score comes from a structured source rather than the research agent.
   event_id?: number
   match?: string | null  // its match page's address after /match/: "<source>/<game id>" (sports_follow/match.py)
+  // The game it's one fixture of, where a game has several (a chess board is one of each player's): the same
+  // under each, so Today shows it once; none where the event is the game (structured.game_key).
+  game_key?: string | null
   competition?: string | null
   headline?: string | null
   state?: LiveState
@@ -100,6 +103,7 @@ export interface RecentResult {
   source_url?: string | null
   event_id?: number | null
   match?: string | null  // its match page's address after /match/, where a source has the game
+  game_key?: string | null  // the game it's one fixture of, as a live game's (LiveStatus)
   scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
 }
 
@@ -295,7 +299,8 @@ export interface FeedItem {
   // The card's picture, an https address loaded as served: a video's thumbnail, a story's image from the publisher's
   // feed. None: a story's headline on the sport's colour; a post is words only.
   picture?: string | null
-  video?: { youtube_id: string; duration: number | null; views: number | null } | null
+  // upright: taller than it's wide (a Short), framed and played upright; missing from a server before BHA-358: wide.
+  video?: { youtube_id: string; duration: number | null; views: number | null; upright?: boolean } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
 
@@ -313,14 +318,22 @@ export interface FeedCircle extends FeedWho { count: number; newest: string | nu
 
 /** An item of the fan's Feed, under its day ("Today", "Yesterday", "This week", "This month", "Earlier"), with the
  * moment it's about when it is one (`match`: its game in the app). */
-export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null }
+export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null; following: boolean }
+
+/** The fan's Feed's tabs: For you mixes in videos of players they don't follow (each entry's `following` says);
+ * Following is their players alone. */
+export type FeedTabKey = 'for_you' | 'following'
+
+/** How the apps draw the fan's Feed, as the server says (feed.layout, the admin panel's live setting): posts edge to
+ * edge, or one video a screen. */
+export type FeedLayout = 'edge' | 'full'
 
 /**
  * A page of the fan's Feed (GET /api/me/feed/items?cursor=&player=&limit=&tz=, sports_follow/feed.py `page`):
  * every followed player's items by day, players taking turns. `cursor` asks for the next page (null: the last);
  * `count` is every item (of the player picked); `newest` when the newest of anyone's came in (the tab's dot).
  */
-export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[] }
+export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[]; tab: FeedTabKey; layout: FeedLayout }
 
 /** What a fan can say about an item from its "…" sheet. */
 export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
@@ -347,7 +360,7 @@ export interface Account { signed_in: true; email: string; google: boolean; crea
 export type Me = Account | { signed_in: false; reason?: 'signed_out' }
 /** What this server offers (GET /api/config). */
 // research: false when the server runs without the research agent: pages come from live sources alone.
-export interface ServerConfig { name: string; model: string; research?: boolean; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
+export interface ServerConfig { name: string; model: string; research?: boolean; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string; feed_layout?: FeedLayout }
 
 /** A player offered to a new fan, and why (starters.py): pinned by the operator, playing (live, started by
  * the clock, or soon), among the most followed, or among the best known with a game soon. */
@@ -590,3 +603,32 @@ export interface LeagueInvite { code: string; name: string; members: number; by:
 
 /** The predictions numbers on the admin panel's Users tab. */
 export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
+
+/**
+ * A short video published from the Mac app (the server's clips.py, GET /api/clips): a moment of a game, cut
+ * with its replay and end card. `match` is its match page's address ("<source>/<game id>"), none for a fan's
+ * own game; `line` is the moment in a line ("TY 21–18 GL · 26:00 · Game 2"); `published` is when it went live.
+ */
+export interface Clip {
+  id: string
+  video: string
+  poster: string
+  seconds: number
+  width: number
+  height: number
+  caption: string
+  line: string
+  match: string | null
+  sport: string | null
+  competition: string | null
+  game_title: string
+  players: number[]
+  published: string | null
+}
+
+/** Which clips: a game's (its feed), a competition's (the tournament feed), a player's, or everyone's. */
+export interface ClipsOf {
+  match?: string
+  competition?: string
+  player?: number
+}

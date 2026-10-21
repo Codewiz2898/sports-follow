@@ -627,8 +627,8 @@ class Sport:
 
     def board(self, state: dict[str, Any]) -> str:
         """The game as its board tells it apart, where one game is under several fixtures (a chess board is one of
-        each player's): an id they share, so its questions are one set whichever address asks. "" where the
-        fixture is the game."""
+        each player's): an id they share, so its questions are one set whichever address asks, and Today shows it
+        once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
@@ -674,11 +674,16 @@ class Sport:
 
     # ---- the feed (curator.py): videos about its players
 
-    # Channels it trusts for videos about its players (fan edits, analysis, interviews), by their ids where they
-    # post: a video source takes those of the shape its own channel ids have (VideoSource.channel_pattern). Each
-    # channel's new uploads that name a followed player of the sport are kept for the feed; a sport that's off
-    # has none read. Every id is a real one that answers (README.md, "Adding or removing").
+    # The only channels its players' videos come from, by their ids where they post: official ones (leagues,
+    # federations, clubs, broadcasters, tournaments) and a few top creators. A video source takes those of the shape
+    # its own channel ids have (VideoSource.channel_pattern). Each channel's new uploads that name a followed player
+    # of the sport are kept for the feed, and what a search finds is kept only from these (candidates.keep); stored
+    # rows from any other channel aren't served (rank.rescore). A sport that's off has none read. Every id is a real
+    # one that answers (README.md, "Adding or removing").
     video_channels: tuple[str, ...] = ()
+    # Words a video's title keeps as they're written when the Feed puts a shouted title in sentence case (titles.py):
+    # its competitions', bodies' and teams' short names, as fans write them ("IPL", "T20I", "UEFA", "US Open").
+    title_words: tuple[str, ...] = ()
     # Publishers' feeds (RSS or Atom) it reads for stories about its players (news.py), each with the publisher's
     # name as a story credits it: a news source takes those of the shape its feed addresses have
     # (NewsSource.feed_pattern). Each feed's new stories that name a followed player of the sport are kept for the

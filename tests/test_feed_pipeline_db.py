@@ -13,19 +13,19 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, literal_column, select, text
+from sqlalchemy import create_engine, literal_column, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import admin, candidates, controls, curate, curator, db as db_module, feed, rank
 from sports_follow.adapters import youtube
 from sports_follow.models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerAlias, PlayerCard
-from tests.test_feed_fetch import Fake, video as yt_video
+from tests.test_feed_fetch import Fake, listing, video as yt_video
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)  # the Feed serves as of now
-EDITS, TALKS, STATS, OTHER = ("UC" + c * 22 for c in "efgh")  # made-up channels; the first three are listed
+EDITS, TALKS, STATS, OTHER, COACH = ("UC" + c * 22 for c in "efghi")  # made-up channels; all but OTHER are listed
 NEWS = {"player": {"name": "Asha Verma"}, "news": [{"headline": "Verma named captain", "url": "https://example.com/captain", "source": "Daily Wicket",
                                                     "published": (NOW - timedelta(days=2)).isoformat(), "summary": ""}]}  # fmt: skip
 
@@ -37,7 +37,8 @@ def made(monkeypatch):
         c.execute(text("TRUNCATE feed_candidates, feed_feedback, follow, moment, player_card, player_alias, player RESTART IDENTITY CASCADE"))
     maker = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(db_module, "SessionLocal", maker)
-    monkeypatch.setattr(rank, "listed_channels", lambda: {EDITS, TALKS, STATS})
+    monkeypatch.setattr(rank, "listed_channels", lambda: {EDITS, TALKS, STATS, COACH})
+    listing(monkeypatch, EDITS, TALKS, STATS, COACH)
     yield maker
     engine.dispose()
 
@@ -71,7 +72,7 @@ def stored(player_id: int, vid: str, title: str, channel: str, hours_ago: float,
     with db_module.session() as s:
         row = FeedCandidate(
             player_id=player_id, source="youtube", external_id=vid, url=f"https://www.youtube.com/watch?v={vid}",
-            candidate={"title": title, "description": "", "channel": f"Channel {channel[2]}", "channel_id": channel, "published": published.isoformat(),
+            candidate={"title": title, "description": "", "channel": f"Channel {channel[2]}", "channel_id": channel, "published": published.isoformat(), "sport": "cricket",
                        "details": {"status": {"embeddable": True}}},
             features={"views": reads[-1]["views"], "likes": reads[-1]["likes"], "seconds": 420, "reads": reads},
             fetched_at=first, checked_at=NOW - timedelta(hours=6), judged_at=NOW if verdict else None,
@@ -118,7 +119,7 @@ def test_the_curator_judges_whats_new_scores_what_passes_and_ties_it_to_its_mome
     stored(pid, "promo000001", "Asha Verma's bat, 20% off", TALKS, 7)
     stored(pid, "namesake001", "Asha Verma the singer", STATS, 6)
     stored(pid, "slowmodel01", "Verma on the hundred", OTHER, 5)
-    stored(pid, "older000001", "Verma's last season", OTHER, 24 * 5, verdict=said(reason="Judged long ago."))
+    stored(pid, "older000001", "Verma's last season", COACH, 24 * 5, verdict=said(reason="Judged long ago."))
     asked: list[curate.Candidate] = []
 
     def judge_many(cands):
@@ -182,8 +183,8 @@ def test_the_feed_serves_scored_videos_beside_the_news_one_a_channel_two_a_momen
     stored(pid, "talk0000001", "Verma talks through the hundred", TALKS, 57, verdict=said(kind="interview_or_analysis", by="official", reason="Her own words after the hundred."))
     stored(pid, "stat0000001", "The hundred in numbers", STATS, 56, verdict=said(interest=0.3))  # a third about the moment: left out
     stored(pid, "edit0000002", "Verma's fielding", EDITS, 4, views=(10, 10), likes=(1, 1), verdict=said(interest=0.05))  # the first's channel: one a page
-    stored(pid, "tips0000001", "Verma's batting, explained", OTHER, 10, verdict=said(kind="interview_or_analysis", interest=0.6, reason="A coach breaks down her stance."))
-    stored(pid, "classic0001", "The catch everyone remembers", OTHER, 24 * 60, views=(900_000, 980_000), likes=(20_000, 22_000), verdict=said(reason="Her catch from 2024."))
+    stored(pid, "tips0000001", "Verma's batting, explained", COACH, 10, verdict=said(kind="interview_or_analysis", interest=0.6, reason="A coach breaks down her stance."))
+    stored(pid, "classic0001", "The catch everyone remembers", COACH, 24 * 60, views=(900_000, 980_000), likes=(20_000, 22_000), verdict=said(reason="Her catch from 2024."))
     stored(pid, "sponsor0001", "Verma's new bat", TALKS, 3, verdict=said(sponsored=True))
     rank.rescore()
 
@@ -215,7 +216,7 @@ def test_the_feed_serves_scored_videos_beside_the_news_one_a_channel_two_a_momen
     s = made()
     shares = feed.shares_for(s, "fan")
     s.close()
-    assert [(x.player_id, x.item.kind, x.item.title) for x in shares] == [(pid, "video", "Verma talks through the hundred")]  # tips are from a channel no sport lists: half the trust
+    assert [(x.player_id, x.item.kind, x.item.title) for x in shares] == [(pid, "video", "Verma's batting, explained")]  # fresher than the talk, as strong
 
 
 def test_a_videos_score_fades_with_age_so_todays_good_one_leads_last_weeks_best(made):
@@ -260,7 +261,7 @@ def test_if_the_videos_cant_be_read_a_feed_is_the_news_alone(made, monkeypatch):
 
 def test_a_pinned_video_leads_however_old_and_never_among_the_evergreen(made):
     pid = asha()
-    old = stored(pid, "classic0001", "The catch everyone remembers", OTHER, 24 * 40, views=(900_000, 980_000), likes=(20_000, 22_000), verdict=said())
+    old = stored(pid, "classic0001", "The catch everyone remembers", COACH, 24 * 40, views=(900_000, 980_000), likes=(20_000, 22_000), verdict=said())
     stored(pid, "new00000001", "Today's good one", TALKS, 3, verdict=said(interest=1.0))
     rank.rescore()
     assert [i.title for i in page(made, player_id=pid).evergreen] == ["The catch everyone remembers"]
@@ -354,9 +355,90 @@ def test_the_admin_feed_page_lists_candidates_with_their_verdicts_and_every_chan
         with pytest.raises(ValueError):
             admin.feed_page(s, "secret")
         channels = {c["channel_id"]: c for c in everything["channels"]}
-        assert set(channels) == {EDITS, TALKS, STATS, OTHER}
+        assert set(channels) == {EDITS, TALKS, STATS, OTHER, COACH}
         assert (channels[EDITS]["listed"], channels[EDITS]["effective"], channels[EDITS]["candidates"], channels[EDITS]["served"]) == (True, 1.0, 1, 1)
         assert (channels[OTHER]["listed"], channels[OTHER]["default"]) == (False, rank.UNLISTED)
         assert channels[STATS]["candidates"] == 0 and channels[STATS]["name"] == ""
     finally:
         s.close()
+
+
+def test_a_stored_video_from_a_channel_the_sport_no_longer_lists_stops_being_served_but_an_admins_approval_stands(made):
+    pid = asha()
+    kept = stored(pid, "listed00001", "Verma's hundred", EDITS, 5, verdict=said())
+    dropped = stored(pid, "unlisted001", "VERMA'S HUNDRED 🔥", OTHER, 4, verdict=said())
+    with db_module.session() as s:  # served before the list was cut (BHA-349)
+        s.execute(update(FeedCandidate).values(score=0.5))
+    assert rank.rescore(NOW)["served"] == 1
+    got = rows()
+    assert got["listed00001"].score and got["unlisted001"].score is None
+    assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma's hundred"]
+    admin.review_candidate(dropped, "approved")
+    assert rows()["unlisted001"].score is not None and rows()["listed00001"].id == kept
+
+
+# ---------------------------------------------------------------- a video that won't play inside the app (BHA-380)
+
+
+def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_saying_it_again_changes_nothing(made):
+    """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): the app's
+    player said so, so no fan is served it again, and the admin panel says why. An admin approving or pinning it
+    says it plays, and stands over any app that says otherwise later."""
+    pid = asha()
+    with db_module.session() as s:
+        p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
+        s.add(p)
+        s.flush()
+        s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
+        other = p.id
+    blocked = stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    pinned = stored(pid, "pinned00001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    admin.review_candidate(pinned, "pinned")
+    videos = lambda: {i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
+    s = made()
+    try:
+        assert feed.unplayable(s, pid, item, NOW) is True
+        assert feed.unplayable(s, pid, item) is False  # already: nothing changes
+        assert feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=pinned00001")) is False  # an admin vouched for it
+        with pytest.raises(ValueError):
+            feed.unplayable(s, pid, "not an id")
+        with pytest.raises(LookupError):
+            feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=nobody00000"))
+        s.commit()
+    finally:
+        s.close()
+    marks = {(r.player_id, r.external_id): r.unplayable_at for r in all_rows()}
+    assert marks == {(pid, "blocked0001"): NOW, (other, "blocked0001"): NOW, (pid, "pinned00001"): None}  # every player's row of it
+    rank.rescore()
+    assert videos() == {"Verma talks through the hundred"}
+    s = made()
+    try:
+        assert feed.judged(s, [other]) == {}
+        marked = next(c for c in admin.feed_page(s)["candidates"] if c["id"] == blocked)
+        assert not marked["served"] and marked["unplayable_at"] == NOW.isoformat()
+        assert blocked not in {c["id"] for c in admin.feed_page(s, "served")["candidates"]}
+        assert blocked in {c["id"] for c in admin.feed_page(s, "held")["candidates"]}
+    finally:
+        s.close()
+    # It does play after all: an admin approving it (or pinning it) says so, for every row of it, and an app saying
+    # otherwise later doesn't take it away again.
+    admin.review_candidate(blocked, "approved")
+    rank.rescore()
+    assert all(r.unplayable_at is None for r in all_rows())
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    s = made()
+    try:
+        assert feed.unplayable(s, other, item) is False
+        s.commit()
+    finally:
+        s.close()
+    assert all(r.unplayable_at is None for r in all_rows())
+
+
+def all_rows() -> list[FeedCandidate]:
+    with db_module.session() as s:
+        return list(s.scalars(select(FeedCandidate)))

@@ -10,8 +10,9 @@ A candidate row keeps three things apart, so any of them can be worked out again
 
 Only a share about the player is served. A verdict that says it only mentions them, that it isn't about them,
 that it's paid for, or that names any risk is kept (for the admin panel, for channel trust and for the judge's
-tuning) but never served: its score stays NULL. An admin's word on a row
-(review) stands over the judge's: approved or pinned serves it, hidden never does.
+tuning) but never served: its score stays NULL. So is a video from a channel its player's sport doesn't list
+(candidates.on_list: official channels and a few top creators, BHA-349), a row stored before the list was cut. An
+admin's word on a row (review) stands over the judge's and the list: approved or pinned serves it, hidden never does.
 
 The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
@@ -51,10 +52,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select, update
+from sqlalchemy import not_, select, update
 from sqlalchemy.orm import Session
 
-from . import controls, curate, db, metrics, naming, news, shutdown, sports
+from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
 from .accounts import FAN_PREFIX
 from .adapters import NEWS, feed_source
 from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard
@@ -430,7 +431,7 @@ def rescore(now: datetime | None = None, channel: str | None = None, row: int | 
             if r.review in ("approved", "pinned"):
                 # The admin's word on this one item stands over their word on its channel: served, if hidden there.
                 value = worth(how_far or UNLISTED) + (PIN if r.review == "pinned" else 0.0)
-            elif r.review != "hidden" and passes(r.verdict) and how_far > 0:
+            elif r.review != "hidden" and passes(r.verdict) and how_far > 0 and (r.id in outlets or is_story(r.source) or candidates.on_list(str((r.candidate or {}).get("sport") or ""), cid)):
                 value = worth(how_far)
             values[r.id] = value
         # Of each story's group, only the best is served, but those an admin approved or pinned.
@@ -517,12 +518,18 @@ def cards(now: datetime | None = None) -> dict[str, int]:
 
 def review(session: Session, row_id: int, said: str | None) -> bool:
     """An admin's word on a row (REVIEWS, or None to take it back); False for no such row. Its score follows
-    at the row's next rescore, which the caller runs."""
+    at the row's next rescore, which the caller runs. Approving or pinning one a fan's app said won't play inside
+    it (feed.unplayable) says it does: every row of the video is served again."""
     if said is not None and said not in REVIEWS:
         raise ValueError(f"not a review: {said!r}")
-    return bool(session.execute(update(FeedCandidate).where(FeedCandidate.id == row_id).values(review=said).returning(FeedCandidate.id)).first())
+    found = session.execute(update(FeedCandidate).where(FeedCandidate.id == row_id).values(review=said)
+                            .returning(FeedCandidate.source, FeedCandidate.external_id)).first()  # fmt: skip
+    if found is not None and said in ("approved", "pinned"):
+        session.execute(update(FeedCandidate).where(FeedCandidate.source == found.source, FeedCandidate.external_id == found.external_id,
+                                                    FeedCandidate.unplayable_at.is_not(None)).values(unplayable_at=None))  # fmt: skip
+    return found is not None
 
 
 def unserved() -> Any:
-    """The SQL condition for a row the Feed never shows."""
-    return or_(FeedCandidate.score.is_(None), FeedCandidate.review == "hidden")
+    """The SQL condition for a row the Feed never shows (FeedCandidate.served's opposite)."""
+    return not_(FeedCandidate.served())

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { relative } from '../format'
-import { admin, type FeedCandidateRow, type FeedChannel, type FeedShow, type Review } from './api'
+import { admin, type AdminFeedLayout, type FeedCandidateRow, type FeedChannel, type FeedLayoutView, type FeedShow, type Review } from './api'
 import { Note, count, useFailure } from './shared'
 
 const SHOWS: [FeedShow, string][] = [['all', 'All'], ['served', 'Served'], ['held', 'Held back'], ['unjudged', 'Unjudged'], ['reviewed', 'Reviewed']]
 const REVIEWS: [Review, string][] = [['approved', 'Approve'], ['hidden', 'Hide'], ['pinned', 'Pin']]
 const TRUSTS: [string, string][] = [['', 'Default'], ['1', 'High'], ['0.7', 'Some'], ['0.4', 'Low'], ['0', 'Hidden']]
+const LAYOUTS: [AdminFeedLayout, string][] = [['edge', 'Edge to edge'], ['full', 'Full screen']]
 
 /** The Feed's judge at work (sports_follow/rank.py): what the curator found about each player, newest first, with the
  * verdict, the score and the reason fans read; approve, hide or pin each one over the judge. And how far each video
@@ -15,6 +16,7 @@ export function FeedTab() {
   const [show, setShow] = useState<FeedShow>('all')
   const [rows, setRows] = useState<FeedCandidateRow[] | null>(null)
   const [channels, setChannels] = useState<FeedChannel[]>([])
+  const [layout, setLayout] = useState<FeedLayoutView | null>(null)
   const [totals, setTotals] = useState<Record<string, number>>({})
   const [next, setNext] = useState<number | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -23,6 +25,7 @@ export function FeedTab() {
   const load = useCallback((offset = 0) => admin.feed(show, offset).then((r) => {
     setRows((old) => (offset ? [...(old ?? []), ...r.candidates] : r.candidates))
     setChannels(r.channels)
+    setLayout(r.layout)
     setTotals(r.totals)
     setNext(r.next)
   }, (e) => setError(failed(e))), [show, failed])
@@ -53,13 +56,44 @@ export function FeedTab() {
     }
   }
 
+  const draw = async (to: AdminFeedLayout | null) => {
+    setBusy('layout')
+    setError(null)
+    try {
+      setLayout((await admin.feedLayout(to)).layout)
+    } catch (e) {
+      setError(failed(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <section className="section" aria-label="Feed">
+      {layout && (
+        <div className="card card-pad stack feed-admin-layout" style={{ gap: 10 }} aria-label="Feed layout">
+          <span className="eyebrow">How the apps draw the Feed tab</span>
+          <div className="segmented" role="radiogroup" aria-label="Feed layout">
+            {LAYOUTS.map(([key, label]) => (
+              <button key={key} type="button" role="radio" aria-checked={layout.layout === key} disabled={busy === 'layout'}
+                onClick={() => { if (layout.layout !== key) void draw(key) }}>{label}</button>
+            ))}
+          </div>
+          <span className="tiny muted">
+            {layout.set ? `Set here. The server's setting is ${layout.default === 'full' ? 'full screen' : 'edge to edge'}. ` : `The server's setting (SPORTS_FOLLOW_FEED_LAYOUT). `}
+            A change reaches the web app and the Android app within seconds, at their next page of the Feed: no deploy.
+          </span>
+          {layout.set && <button type="button" className="btn link" style={{ alignSelf: 'flex-start' }} disabled={busy === 'layout'} onClick={() => { void draw(null) }}>Back to the server's setting</button>}
+        </div>
+      )}
       <Note>
-        Every video the curator found about a followed player, with what the judge said. A video is served when it's about the player, isn't
-        paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said. Pinned ones go to the
-        top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. Signed-in
-        fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is.
+        Every video the curator found about a followed player, with what the judge said. A video is served when it's from a channel its sport
+        lists (official ones and a few top creators), about the player, isn't paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said. Pinned ones go to the
+        top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. A channel no sport lists
+        serves nothing whatever its trust: only a video of it you approve or pin. Signed-in
+        fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is. A video a fan's app said
+        won't play in the app (its owner keeps it off other sites) is held back for everyone: approve or pin it if it does play (pressing a
+        pressed Approve or Pin takes it back instead), and no app's word holds it back again while you have.
       </Note>
       <div className="stat-grid" aria-label="Candidates">
         <div className="stat"><span className="dsp num">{count(totals.all ?? 0)}</span><span className="tiny">Candidates</span></div>
@@ -141,6 +175,7 @@ function Verdict({ row }: { row: FeedCandidateRow }) {
     <>
       <div className="row" style={{ justifyContent: 'flex-start', flexWrap: 'wrap', gap: 6 }}>
         <span className={`pill ${row.served ? 'ink' : 'soft'}`}>{row.served ? `Served · ${row.score?.toFixed(2)}` : 'Held back'}</span>
+        {row.unplayable_at && <span className="pill danger">Won't play in the app · {relative(row.unplayable_at)}</span>}
         <span className={`pill ${v.about_player === 'no' ? 'danger' : 'soft'}`}>{v.about_player === 'subject' ? 'About them' : v.about_player === 'mention' ? 'Mentions them' : 'Not about them'}</span>
         <span className="pill soft">{v.kind.replace(/_/g, ' ')}</span>
         <span className="pill soft">by {v.by.replace(/_/g, ' ')}</span>

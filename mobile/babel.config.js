@@ -1,4 +1,4 @@
-// Expo's own preset, plus the web build's one define (web/vite.config.ts): __APP_NAME__ becomes stann's name from
+// Expo's own preset, plus the web build's one define (web/vite.config.ts): __APP_NAME__ becomes the app's name from
 // sports_follow/app.json, the one place it's written, so the shared modules that read it (web/src/app.ts, through
 // predictions.ts and share.ts) work in the app too. Without it the app stops on its first screen.
 

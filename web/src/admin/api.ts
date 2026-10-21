@@ -116,6 +116,7 @@ export interface FeedCandidateRow {
   score: number | null
   review: Review | null
   moment_id: number | null
+  unplayable_at: string | null // when a fan's app said it won't play inside it (approving or pinning it says it does)
   served: boolean
 }
 /** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */
@@ -145,7 +146,11 @@ export interface FeedPage {
   next: number | null
   totals: Record<string, number>
   channels: FeedChannel[]
+  layout: FeedLayoutView
 }
+/** How the apps draw the fan's Feed (sports_follow/feed.py `layout`): now, the server's setting, and the panel's word (null: none). */
+export type AdminFeedLayout = 'edge' | 'full'
+export interface FeedLayoutView { layout: AdminFeedLayout; default: string; set: AdminFeedLayout | null; choices: AdminFeedLayout[] }
 
 const at = (path: string) => `/api/admin/${path}`
 
@@ -165,6 +170,7 @@ export const admin = {
   review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
   channelTrust: (channel: string, trust: number | null) =>
     request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
+  feedLayout: (layout: AdminFeedLayout | null) => request<{ layout: FeedLayoutView }>(at('feed/layout'), json('PUT', { layout })),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),

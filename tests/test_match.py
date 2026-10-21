@@ -317,7 +317,7 @@ def test_a_reads_detail_shows_under_a_followed_players_newer_card(db, redis, sou
     db.commit()
     page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
     assert page["live"]["clock"] == "Map 2 · 3:10"  # the card's board: newer than the read
-    assert page["page"]["detail"] == {"maps": maps} and page["page"]["teams"] == teams
+    assert page["page"]["detail"] == {"maps": maps, "live": None} and page["page"]["teams"] == teams
 
 
 def card(minute: int) -> dict:

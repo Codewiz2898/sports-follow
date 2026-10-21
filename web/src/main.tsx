@@ -20,6 +20,7 @@ import { FeedPage } from './pages/FeedPage'
 import { FollowingPage } from './pages/FollowingPage'
 import { LivePage } from './pages/LivePage'
 import { MatchPage } from './pages/MatchPage'
+import { ClipPage, ClipsPage } from './pages/ClipsPage'
 import { TeamPage } from './pages/TeamPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
@@ -219,6 +220,9 @@ function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/match/:source/:game" element={<MatchPage />} />
+            {/* Two words or more, so the Android app (which opens one-word addresses) leaves them to the browser. */}
+            <Route path="/competition/:name/clips" element={<ClipsPage />} />
+            <Route path="/clip/:id" element={<ClipPage />} />
             <Route path="/team/:id" element={<TeamPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />

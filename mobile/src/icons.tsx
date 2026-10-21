@@ -28,6 +28,9 @@ export const UserIcon = icon(<><Circle cx="12" cy="8" r="4" /><Path d="M4 21a8 8
 export const BellIcon = icon(<Path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" />)
 export const CloseIcon = icon(<Path d="M6 6l12 12M18 6 6 18" />, 2.6)
 export const OutIcon = icon(<Path d="M7 17 17 7M8 7h9v9" />)
+// The player's Expand and Collapse (watch.tsx): corners out to the screen's, and back in.
+export const ExpandIcon = icon(<Path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />)
+export const CollapseIcon = icon(<Path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />)
 export const FeedIcon = icon(<><Path d="M7 3h10a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" /><Path d="M4 13h16M8 17h5" /></>)
 /** Play, filled (a video's play button, Watch live's). */
 export function PlayIcon({ size = 22, color = colour.text }: { size?: number; color?: string }) {

@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sports_follow import moments, naming, structured
+from sports_follow import moments, naming, sports, structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer, lichess_chess, liquipedia, opendota, pandascore, pubg, sportmonks
 from sports_follow.adapters.base import AdapterError, Fixture
 from sports_follow.sports import football
@@ -140,6 +140,26 @@ def test_cricket_final_scorecard_gives_the_players_line():
     line = snap.lines[KOHLI]
     assert line.headline == "139* (88)"
     assert {s["label"]: s["value"] for s in line.stats} == {"Runs": "139*", "Balls": "88", "4s": "10", "6s": "9", "Strike rate": "158.0"}
+
+
+def test_cricket_winner_is_a_real_bool_on_every_board():
+    # The summary feed says "true" and "false" (the day feed True and False), and "false" read as a win:
+    # West Indies' fans were told "West Indies won by 8 wkts (50b rem) v India" (BHA-355).
+    data = load("cricket-summary-final")
+    snap = espn_cricket.parse_summary(data)
+    assert [(t["name"], t["winner"]) for t in snap.state["teams"]] == [("India", True), ("West Indies", False)]
+    cricket = sports.get("cricket")
+    india, west_indies = "6", "4"
+    assert cricket.side_final(snap.state, snap.score_label, snap.clock_label, west_indies) == "West Indies lost by 8 wkts (50b rem) v India"
+    assert cricket.side_final(snap.state, snap.score_label, snap.clock_label, india) == "India won by 8 wkts (50b rem) v West Indies"
+    odi = next(f for f in espn_cricket.parse_day(load("cricket-day-20260927")) if f.source_id == "1529227")
+    assert [(t["name"], t["winner"]) for t in odi.result["teams"]] == [("India", True), ("West Indies", False)]
+    # A feed that doesn't say is None, and the summary's words decide.
+    for c in data["header"]["competitions"][0]["competitors"]:
+        del c["winner"]
+    snap = espn_cricket.parse_summary(data)
+    assert [t["winner"] for t in snap.state["teams"]] == [None, None]
+    assert cricket.side_final(snap.state, snap.score_label, snap.clock_label, west_indies) == "West Indies lost by 8 wkts (50b rem) v India"
 
 
 def test_cricket_lines_cover_the_side_that_batted_first():

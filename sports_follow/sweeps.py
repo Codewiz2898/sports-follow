@@ -1,7 +1,7 @@
 """The feed's sweeps (BHA-336): searches for videos about a followed player that no moment asked for. A trusted
 channel's feed holds only its latest fifteen uploads (candidates.py), and a moment's search needs a big moment our
 sources fire (searches.py), so a player who's had neither this week has nothing to watch, and one who has still
-has the season's best unseen. Three searches find them some, from any channel, on the video sources that can search (searches.searching), once a day (curator.sweep; a
+has the season's best unseen. Three searches find them some, kept only from the channels their sport lists (candidates.on_list), on the video sources that can search (searches.searching), once a day (curator.sweep; a
 second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week

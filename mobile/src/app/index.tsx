@@ -28,7 +28,7 @@ import { PlayersStrip } from '../today/strip'
 import { ThisWeek, useWeek, Wire } from '../today/week'
 import { Btn, Eyebrow, Notice } from '../ui'
 import { Page } from '../page'
-import { FromYourPlayers } from '../post'
+import { FromYourPlayers } from '../feedLayouts'
 import { useWelcomed } from '../welcome'
 import { LoadFailed } from '../today/load'
 
@@ -48,7 +48,7 @@ function Head({ now }: { now: number }) {
         <Eyebrow>{today}</Eyebrow>
         <View accessibilityRole="header" accessibilityLabel={NAME} style={{ flexDirection: 'row', alignItems: 'center', gap: size * 0.18 }}>
           <Image source={require('../../../web/public/icons/mark-192.png')} style={{ width: size * 0.95, height: size * 0.95 }} />
-          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text }}>{NAME}</Text>
+          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text, textTransform: 'lowercase' }}>{NAME}</Text>
         </View>
       </View>
       <View style={{ flexDirection: 'row', gap: 8, paddingBottom: 4 }}>

@@ -287,7 +287,7 @@ export default function MatchScreen() {
 
       {Part ? (
         <ErrorBoundary resetKey={match.page}>
-          <Part page={match.page as never} live={live} />
+          <Part page={match.page as never} live={live} yours={yours.map((p) => p.name)} tone={tone} />
         </ErrorBoundary>
       ) : null}
       {events.length > 0 ? (

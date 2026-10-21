@@ -499,15 +499,46 @@ save, a red card, a missed penalty. Transfers and injuries reported by clubs or 
 "done deal" or "sources" from aggregator accounts before a club confirms are rumours. Full-match or full-half \
 uploads are restreams; extended highlights from a league or broadcaster are official."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UC6c1z7bA__85CIWZ_jpCK-Q",  # ESPN FC: analysis, debate
-        "UCjXIw1GlwaY1IzpW_jN9iCQ",  # The Overlap: interviews
-        "UCXzrxvm0Jqq1OpSZQhT6lEQ",  # Statman Dave: tactical analysis
-        "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
-        "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
+        "UCG5qGWdu8nIRZqJ_GgDwQ-w",  # Premier League
+        "UCTv-XvfzLX3i4IGWAm4sbmA",  # LaLiga
+        "UC6UL29enLNe4mqwTfAyeNuw",  # Bundesliga
+        "UCBJeMCIeLQos7wacox4hmLQ",  # Serie A
+        "UCQsH5XtIc9hONE1BQjucM0g",  # Ligue 1
+        "UCyGa1YEx9ST66rYrJTGIKOw",  # UEFA
+        "UCpcTrCXblq78GZrTUTLWeBw",  # FIFA
+        "UCNAf1k0yIjyGu3k9BwAg3lg",  # Sky Sports Premier League
+        "UCZ7wY7MRDSygp63HIEfdQZA",  # Sky Sports Football
+        "UC4i_9WvfPRTuRWEaWyfKuFw",  # TNT Sports Football
+        "UCET00YnetHT7tOpu12v8jxg",  # CBS Sports Golazo
+        "UC6c1z7bA__85CIWZ_jpCK-Q",  # ESPN FC
+        "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL
+        "UCDVYQ4Zhbm3S2dlz7P1GBDg",  # NFL: footballers crossing over
+        "UCWV3obpZVGgJ3j9FVhEjF2Q",  # Real Madrid
+        "UC14UlmYlSNiQCBe9Eookf_A",  # FC Barcelona
+        "UCkzCjdRMrW2vXLx8mvPVLdQ",  # Man City
+        "UC9LQwHZoucFT94I2h6JOcjw",  # Liverpool FC
+        "UC6yW44UGJJBvYTlfC7CRg2Q",  # Manchester United
+        "UCpryVRk_VDudG8SHXgWcG0w",  # Arsenal
+        "UCU2PacFf99vhb3hNiYDmxww",  # Chelsea
+        "UCt9a_qP9CqHCNwilf-iULag",  # Paris Saint-Germain
+        "UCZkcxFIsqW5htimoUQKA0iA",  # FC Bayern
+        "UCLzKhsxrExAC6yAdtZ-BOWw",  # Juventus
+        "UCjXIw1GlwaY1IzpW_jN9iCQ",  # The Overlap: interviews (1.8M subscribers)
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "UEFA", "FIFA", "UCL", "UEL", "EPL", "VAR", "MLS", "PSG", "FC", "AFC", "CF", "LaLiga",
+        "Premier League", "Champions League", "Europa League", "Ballon d'Or", "World Cup", "Real Madrid",
+        "Barcelona", "Barça", "City", "Man City", "Manchester City", "Manchester United", "Man United", "Man Utd",
+        "Liverpool", "Arsenal", "Chelsea", "Tottenham", "Spurs", "Bayern", "Juventus", "Milan", "Atlético",
+        "Dortmund", "Newcastle", "Aston Villa", "Saudi Pro League", "Al Nassr", "Inter Miami", "Bundesliga",
+        "Serie A", "Ligue 1", "Copa América", "Euro", "England", "France", "Spain", "Portugal", "Brazil",
+        "Argentina", "Germany", "Norway", "India")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.theguardian.com/football/rss": "The Guardian",

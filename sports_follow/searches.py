@@ -1,6 +1,7 @@
-"""The feed's moment searches (L0, BHA-303): fans' videos of a followed player's big moment, from any channel. Fans
-post edits of a hundred or a brace within hours of it, mostly on channels no sport lists (candidates.py polls only
-those), so each big moment is searched for on the video sources that can search (VideoSource.search_cost).
+"""The feed's moment searches (L0, BHA-303): videos of a followed player's big moment. A channel's feed holds only its
+latest uploads (candidates.py), so each big moment is searched for on the video sources that can search
+(VideoSource.search_cost); what a search finds is kept only from a channel the player's sport lists, official ones and
+a few top creators (candidates.on_list, BHA-349).
 
 Which moments, and in which words, is the sport's to say (Sport.search_words): "hundred Lord's", "brace Liverpool vs
 Everton", "wins game 4", after the player's name as fans write it (candidates.search_name). A followed player's key moment the sport has words for is queued

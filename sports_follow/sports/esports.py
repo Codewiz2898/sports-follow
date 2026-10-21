@@ -308,8 +308,9 @@ class Esports(Sport):
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
         Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
         won each of its matches. A series whose source told the page more about each finished map (the
-        state's "page_detail": a Dota 2 map's gold by minute, how it went, every player and the draft) has
-        that too, by map, with the two teams it names by id and their short names."""
+        state's "page_detail": a Dota 2 map's gold by minute, how it went, every player and the draft, and the
+        map being played: its gold line so far, its buildings and heroes) has that too, with the two teams it
+        names by id and their short names."""
         if state.get("kind") == "battle_royale":
             teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
             return {
@@ -328,9 +329,9 @@ class Esports(Sport):
         if not maps:
             return {}
         told = state.get("page_detail") or {}
-        if not told.get("maps") or len(told.get("teams") or []) != 2:
+        if not (told.get("maps") or told.get("live")) or len(told.get("teams") or []) != 2:
             return {"maps": maps}
-        return {"maps": maps, "teams": told["teams"], "detail": {"maps": told["maps"]}}
+        return {"maps": maps, "teams": told["teams"], "detail": {"maps": told.get("maps") or [], "live": told.get("live")}}
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
@@ -481,16 +482,30 @@ moment: a clutch, an ace or pentakill, a team wipe, a chicken dinner. Roster mov
 sponsor's peripheral or energy drink held up in a clip is a promo. Full VOD re-uploads of a broadcast are \
 restreams; a player's own stream highlights aren't."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its pros, every game's (each feed answered,
-    # 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UCfeeUuW7edMxF3M_cyxGT8Q",  # Thooorin: CS2 and League interviews, history
-        "UCXbsUubmNPK8XJFbkmlMcMg",  # HLTV: CS2 interviews, news
-        "UC9k--dE_UE0Faxzgb_DDkYQ",  # BLAST Premier: CS2 interviews, features
-        "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
-        "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
+        "UCENNtCRTPTdH_IGXs42LuHQ",  # Esports World Cup
+        "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports
+        "UCA1d3HFGFUmkKr2JIUA5Vlw",  # VALORANT Champions Tour
+        "UC9k--dE_UE0Faxzgb_DDkYQ",  # BLAST Premier
+        "UCPq2ETz4aAGo2Z-8JisDPIA",  # ESL Counter-Strike
+        "UC5jpxDZx4yoBo324pMQ91Ww",  # PGL
+        "UCXbsUubmNPK8XJFbkmlMcMg",  # HLTV
+        "UCTQKT5QqO3h7y32G8VzuySQ",  # Dota 2: Valve's, The International
+        "UCaYLBJfw6d8XqmNlL204lNg",  # ESL Dota 2
+        "UCugG6-k5QGbq_iDEPAnG4NQ",  # KRAFTON INDIA ESPORTS: BGMI
+        "UCmeeY9kzNswUpbYyJntb3Aw",  # PUBG MOBILE Esports
+        "UCuLq0ME8tqK6pzCm9rpkwjQ",  # Red Bull Gaming
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "VALORANT", "Valorant", "VCT", "LoL", "League of Legends", "CS2", "CS:GO", "Counter-Strike",
+        "Dota 2", "Dota", "BGMI", "MVP", "LCK", "LPL", "LEC", "LCS", "EWC", "TI", "IEM", "ESL", "BLAST",
+        "HLTV", "PGL", "Masters", "Worlds", "NAVI", "G2", "T1", "FNATIC", "Sentinels", "Team Liquid",
+        "Gen.G", "Vitality", "FaZe", "MOUZ", "Paper Rex", "PRX")
     news_feeds = {  # for every game, as the channels are: HLTV is Counter-Strike's, VLR.gg Valorant's
         "https://www.dexerto.com/feed/category/esports/": "Dexerto",
         "https://www.hltv.org/rss/news": "HLTV",

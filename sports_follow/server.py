@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
+from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -422,10 +422,12 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
     """What this server offers the app: its name, the model and whether it researches players no source has
-    (config.RESEARCH), the ways to sign in, who to write to about privacy."""
+    (config.RESEARCH), the ways to sign in, who to write to about privacy, and how to draw the fan's Feed
+    (feed.layout: "edge" or "full", which the admin panel changes live; each page of the Feed says it too)."""
     from .config import RESEARCH
 
-    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(),
+            "contact_email": CONTACT_EMAIL, "feed_layout": feed.layout()}
 
 
 @app.get("/api/sports")
@@ -1502,6 +1504,94 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
         await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
 
 
+# ---------------------------------------------------------------- clips (clips.py)
+
+
+def publisher(request: Request, db: Session = Depends(get_db)) -> ClipKey:
+    """The publishing key a request carries (Authorization: Bearer slam_pk_…): the Mac recorder, for an admin."""
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    key = clips.key_from(db, token) if token else None
+    if key is None:
+        raise HTTPException(401, "Send a publishing key: Authorization: Bearer slam_pk_…")
+    return key
+
+
+@app.post("/api/clips")
+def publish_clip(body: dict[str, Any] = Body(...), key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Start publishing a clip: its row, and URLs to put its video and poster frame at, signed for a few minutes.
+    Refused (400/403/404) for a source that mayn't be published, a clip too long or big, or an unknown game."""
+    try:
+        up = clips.create(db, key, body)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+    return {"id": up.clip.slug, "video_put": up.video_put, "poster_put": up.poster_put, "video_type": clips.VIDEO_TYPE,
+            "poster_type": clips.POSTER_TYPE, "expires_in": clipstore.SIGNED_FOR}
+
+
+@app.post("/api/clips/{slug}/done")
+def clip_uploaded(slug: str, key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The uploader put both files: checked, and the clip goes live (its public form back); else 422, the clip
+    failed and its files gone, to start again."""
+    try:
+        clip = clips.finish(db, key, slug)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+    if clip.status != "live":
+        raise HTTPException(422, "The files didn't arrive, or are too big: start the upload again.")
+    return clips.public(clip, clips.store())
+
+
+@app.delete("/api/clips/{slug}", status_code=204)
+def unpublish_clip(slug: str, key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> None:
+    """Its uploader takes a clip down: files deleted."""
+    try:
+        clips.remove(db, slug, key)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+
+
+@app.get("/api/clips")
+def clips_list(match: str | None = None, competition: str | None = None, player: int | None = None, before: str | None = None,
+               db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Live clips, newest first: a game's (?match=<its match page's address>, its game feed), a competition's
+    (?competition=…, the tournament feed), a player's (?player=…), or everyone's. ?before= (a clip's
+    `published`) pages back."""
+    since = None
+    if before:
+        try:
+            since = datetime.fromisoformat(before.replace(" ", "+"))  # a "+" sent unencoded arrives as a space
+        except ValueError:
+            since = None
+        if since is None or since.tzinfo is None:
+            raise HTTPException(400, "before must be a clip's published time, with its zone.")
+    return {"clips": clips.listed(db, match_=match, competition=competition, player=player, before=since)}
+
+
+@app.get("/api/clips/{slug}")
+def clip_page(slug: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    clip = clips.one(db, slug)
+    if clip is None:
+        raise HTTPException(404, "No such clip.")
+    return clip
+
+
+@app.post("/api/clips/{slug}/report")
+def report_clip(slug: str, body: dict[str, Any] = Body(default={}), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A fan says a clip shouldn't be up: once each, flagging it for the admin panel."""
+    hidden = clips.report(db, slug, fan, str(body.get("reason") or ""))
+    if hidden is None:
+        raise HTTPException(404, "No such clip.")
+    db.commit()
+    return {"reported": True}
+
+
 # ---------------------------------------------------------------- the admin panel (admin.py)
 
 admin_log = logging.getLogger("sports_follow.admin")
@@ -1527,6 +1617,54 @@ async def require_admin(request: Request) -> admin.Keys:
 
 
 AdminOnly = [Depends(require_admin)]
+
+
+@app.get("/api/admin/clips", dependencies=AdminOnly)
+def admin_clips(status: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Clips, whatever their status, newest first, with their reports; and the publishing keys."""
+    return {"clips": clips.for_admin(db, status), "keys": clips.keys(db), "set_up": clipstore.STORE is not None}
+
+
+@app.post("/api/admin/clips/{slug}", dependencies=AdminOnly)
+def admin_clip(slug: str, body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Hide a clip ({"hidden": true}), or put a hidden one back ({"hidden": false}; its reports start again)."""
+    hidden = _switch(body, "hidden")
+    clip = clips.set_hidden(db, slug, hidden)
+    if clip is None:
+        raise HTTPException(404, "No live or hidden clip by that id.")
+    db.commit()
+    admin_log.info("admin: clip %s %s", slug, "hidden" if hidden else "shown")
+    return {"id": slug, "status": clip.status}
+
+
+@app.delete("/api/admin/clips/{slug}", status_code=204, dependencies=AdminOnly)
+def admin_remove_clip(slug: str, db: Session = Depends(get_db)) -> None:
+    """Take a clip down for good: its files deleted."""
+    try:
+        found = clips.remove(db, slug)
+    except clips.Refused as refused:
+        raise HTTPException(refused.status, refused.message)
+    if not found:
+        raise HTTPException(404, "No such clip.")
+    db.commit()
+    admin_log.info("admin: clip %s removed", slug)
+
+
+@app.post("/api/admin/clip-keys", dependencies=AdminOnly)
+def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A new publishing key for the Mac app: shown this once."""
+    row, token = clips.new_key(db, str(body.get("name") or ""))
+    db.commit()
+    admin_log.info("admin: publishing key %s made for %r", row.id, row.name)
+    return {"id": row.id, "name": row.name, "key": token}
+
+
+@app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
+def admin_revoke_clip_key(key_id: int, db: Session = Depends(get_db)) -> None:
+    if not clips.revoke(db, key_id):
+        raise HTTPException(404, "No such key, or revoked already.")
+    db.commit()
+    admin_log.info("admin: publishing key %s revoked", key_id)
 
 
 def _switch(body: dict, field: str) -> bool:
@@ -1660,6 +1798,18 @@ def admin_feed(show: Annotated[str, Query(max_length=20)] = "all", offset: Annot
         return admin.feed_page(db, show, offset)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+
+
+@app.put("/api/admin/feed/layout", dependencies=AdminOnly)
+def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
+    """How the apps draw the fan's Feed ({"layout": "edge" | "full" | null}; null: the server's setting), live in
+    every process within a few seconds: no deploy. Before /api/admin/feed/{row_id}, which would take "layout" for a row."""
+    try:
+        admin.set_feed_layout(body.get("layout"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed layout %s", body.get("layout") or "back to the server's")
+    return {"layout": admin.layout_view()}
 
 
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
@@ -2034,6 +2184,38 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
     return {"item_id": item_id, "hidden": True}
 
 
+@app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
+async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it
+    (feed.unplayable). It leaves every fan's Feed; the app opens it on its site instead, and an admin approving or
+    pinning it brings it back. Saying it again changes nothing. A fan says so only so many times an hour, and an
+    address and everyone together mark only so many videos: past either, a 429. Only a mark counts against the
+    address's and everyone's, so junk ids and a video said of again don't use up what a real one needs."""
+    refused = "That's a lot of videos that won't play for one hour. Try again later."
+    redis = state["redis"]
+    mine = f"feed:unplayable:fan:{fan}"
+    used = await redis.incr(mine)
+    await redis.expire(mine, 3600, nx=True)  # the hour's end, set once
+    if used > feed.UNPLAYABLE_PER_FAN:
+        raise HTTPException(429, refused)
+    address = client_address(request)
+    shared = [("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)] + ([(f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS)] if address else [])
+    for key, limit in shared:
+        if int(await redis.get(key) or 0) >= limit:
+            raise HTTPException(429, refused)
+    try:
+        marked = await in_db(feed.unplayable, player_id, item_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if marked:
+        for key, _ in shared:
+            await redis.incr(key)
+            await redis.expire(key, 3600, nx=True)
+    return {"item_id": item_id, "unplayable": True, "marked": marked}
+
+
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
     """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab
@@ -2049,14 +2231,17 @@ def my_feed_items(
     player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
     tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
+    tab: Annotated[str, Query(max_length=20)] = feed.FOLLOWING,
     fan: str = Depends(fan_id),
     db: Session = Depends(get_db),
 ) -> feed.Page:
     """The fan's Feed (feed.page): every followed player's videos, posts and news, by day where the fan is (tz:
-    minutes east of UTC), players taking turns; ?player=<id> for one of them; ?cursor= for the next page. Read from
-    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's dot)."""
+    minutes east of UTC), players taking turns; ?tab=for_you mixes in videos of players they don't follow (the default,
+    following, is theirs alone); ?player=<id> for one of them; ?cursor= for the next page (of the same tab). Read from
+    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's
+    dot). Each page says how the apps draw it (layout)."""
     try:
-        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz)
+        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz, tab=tab)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})

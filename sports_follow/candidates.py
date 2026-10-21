@@ -215,6 +215,12 @@ def channels(source: VideoSource) -> dict[str, set[str]]:
     return out
 
 
+def on_list(sport: str, channel_id: str) -> bool:
+    """Whether a video of this channel may be kept for a player of this sport: the sport lists it (Sport.video_channels,
+    official channels and a few top creators). A sport no module knows lists none."""
+    return bool(channel_id) and channel_id in sports.of(sport).video_channels
+
+
 def refused(facts: VideoFacts | None, country: str = FEED_COUNTRY) -> str | None:
     """Why the feed doesn't keep a video (a hard filter), or None to keep it."""
     if (why := gone(facts, country)) or facts is None:
@@ -333,20 +339,31 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
 
 
 def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
-    """Store what's new of what was found: a video already kept for someone else is kept for this player too,
-    as it is; the rest are asked about (a request per 50, with no transaction open meanwhile) and kept if no
-    hard filter refuses them. stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
-    counts = {"kept": 0, "refused": 0}
+    """Store what's new of what was found from a channel the player's sport lists (on_list; the rest are counted
+    off_list and dropped): a video already kept for someone else is kept for this player too, as it is; the rest
+    are asked about (a request per 50, with no transaction open meanwhile) and kept if no hard filter refuses them.
+    stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
+    counts = {"kept": 0, "refused": 0, "off_list": 0}
+    # Only from the channels the player's sport lists, whichever stream found it: the rest are dropped before
+    # YouTube is asked about them.
+    off = [f for f in found if not on_list(f.sport, f.upload.channel_id)]
+    if off:
+        found = [f for f in found if on_list(f.sport, f.upload.channel_id)]
+        counts["off_list"] = len(off)
+        metrics.feed_refused(stream, [(f.sport, "off_list") for f in off])
     ids = sorted({f.upload.video_id for f in found})
     if not ids:
         return counts
     stored: dict[str, dict[str, Any]] = {}
     have: set[tuple[int, str]] = set()
     with db.session() as session:
-        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
-                               .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))
-        for pid, vid, url, kept, numbers in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}})
+        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
+                                      FeedCandidate.unplayable_at)
+                               .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
+        for pid, vid, url, kept, numbers, unplayable in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable})
+            if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
+                stored[vid]["unplayable_at"] = unplayable
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -366,7 +383,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 continue
             if vid in stored:
                 same = stored[vid]
-                values = {"url": same["url"], "features": same["features"],
+                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"],
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {},
                                         "paid": same["candidate"].get("paid") is True}}
             else:
@@ -393,7 +410,7 @@ def poll(now: datetime | None = None) -> dict[str, int]:
     """Read every running video source's channels once, and keep what's new; then read again what was kept a
     day ago (second_reads). Returns what it did."""
     now = now or datetime.now(timezone.utc)
-    totals = {"channels": 0, "unread": 0, "found": 0, "kept": 0, "refused": 0, "dropped": 0, "read_again": 0}
+    totals = {"channels": 0, "unread": 0, "found": 0, "kept": 0, "refused": 0, "off_list": 0, "dropped": 0, "read_again": 0}
     with db.session() as session:
         players = followed(session)
     for source in videos():
@@ -463,6 +480,15 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 log.info("feed: %s dropped %d stored video(s): %s", source.system, len(dead), ", ".join(f"{v} ({w})" for v, w in sorted(dead.items())))
             for row in session.scalars(select(FeedCandidate).where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_([v for v in part if v not in dead]))):
                 row.features = read_again(row.features or {}, facts[row.external_id], now)
+                details = (row.candidate or {}).get("details") or {}
+                sizes = (facts[row.external_id].raw.get("snippet") or {}).get("thumbnails")
+                if sizes is not None and (details.get("snippet") or {}).get("thumbnails") != sizes:  # the picture's sizes (VideoSource.picture)
+                    snippet = {**(details.get("snippet") or {}), "thumbnails": sizes}
+                    details = {**details, "snippet": snippet}
+                    row.candidate = {**(row.candidate or {}), "details": details}
+                shape = facts[row.external_id].raw.get("player")
+                if shape is not None and details.get("player") != shape:  # its shape (VideoSource.upright), for a video kept before it was asked
+                    row.candidate = {**(row.candidate or {}), "details": {**details, "player": shape}}
                 paid = facts[row.external_id].paid
                 if (row.candidate or {}).get("paid") is not paid:
                     row.candidate = {**(row.candidate or {}), "paid": paid}

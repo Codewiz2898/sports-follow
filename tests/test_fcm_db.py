@@ -86,7 +86,7 @@ def goal(db, detail: str, body: str) -> list[int]:
 def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, monkeypatch):  # noqa: F811
     browser = []
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: browser.append((payload["tag"], payload["title"], topic, set(payload))))
-    monkeypatch.setattr(notify, "SITE_URL", "https://stann.example")
+    monkeypatch.setattr(notify, "SITE_URL", "https://sports-follow.example")
     assert register(db, "fan-a") == {"ok": True, "timezone": "Asia/Kolkata", "quiet_start": None, "quiet_end": None}
     db.add(PushSubscription(fan_id="fan-a", endpoint=BROWSER, p256dh="k", auth="a"))
     # The game as its last poll had it, and Salah's card with his photo.
@@ -107,7 +107,7 @@ def test_a_planned_moment_reaches_the_android_app_and_the_browser(db, fake_fcm, 
         # Its scorecard: the game as its last poll had it, in football's colours, and the moment's word over its line.
         "sport": "football", "colour": "#12c46c", "ink": "#0b1a10", "league": "Africa Cup of Nations", "match": "",
         "sides": '[["EGY","1"],["RSA","0"]]', "status": "23'", "live": "1",
-        "word": "Goal", "line": "Mohamed Salah puts Egypt ahead", "story": "", "photo": "https://stann.example/api/photos/0123.jpg",
+        "word": "Goal", "line": "Mohamed Salah puts Egypt ahead", "story": "", "photo": "https://sports-follow.example/api/photos/0123.jpg",
     }
     assert sent["android"] == {"priority": "high", "ttl": "900s", "collapse_key": "e1"}
     # The same push by Web Push, no bigger than it was.

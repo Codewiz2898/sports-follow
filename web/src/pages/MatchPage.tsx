@@ -5,6 +5,7 @@ import { LEVELS } from '../alerts'
 import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../api'
 import { useNow } from '../clock'
 import { Avatar, GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
+import { ClipsSection } from '../components/Clips'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
@@ -234,9 +235,10 @@ export function MatchPage() {
         </div>
         {board && (
           <div className="match-board">
-            {/* A state in a shape this app doesn't know shows as the plain score. */}
+            {/* A state in a shape this app doesn't know shows as the plain score. The board's live block names no
+                player of the fan's: their lines in the game do (a chess board from their side). */}
             <ErrorBoundary fallback={<PlainScore live={board} />} resetKey={board}>
-              <GameBoard live={board} />
+              <GameBoard live={board} lines={yours.map((p) => p.stats)} />
             </ErrorBoundary>
           </div>
         )}
@@ -307,6 +309,9 @@ export function MatchPage() {
           </ul>
         </section>
       )}
+
+      {/* The game feed: clips of it, published from the Mac app. */}
+      <ClipsSection of={{ match: `${source}/${game}` }} showGame={false} />
 
       {match.moments.length > 0 && (
         <section className="section" aria-label="Moments">

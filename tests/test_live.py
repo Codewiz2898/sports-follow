@@ -80,8 +80,8 @@ def athlete(qid: str, sport: str, name: str, ids: dict, **extra) -> dict:
             "country": None, "teams": [], "league": None, "title": None, "ids": ids, "image": None, "sitelinks": 1, "current": True, **extra}
 
 
-def test_a_games_players_come_on_stann_first_then_best_known_then_the_sources_order(db, redis, sources):
-    # On stann and followed by two fans; two stars the registry knows by the source's id, and one by name only;
+def test_a_games_players_come_on_the_app_first_then_best_known_then_the_sources_order(db, redis, sources):
+    # On the app and followed by two fans; two stars the registry knows by the source's id, and one by name only;
     # two it doesn't know.
     db.add(Player(id=5, slug="kane", name="Harry Kane", sport="Football"))
     db.flush()
@@ -103,7 +103,7 @@ def test_a_games_players_come_on_stann_first_then_best_known_then_the_sources_or
     assert football["key"] == "football" and [g["title"] for g in football["games"]] == ["Bayern vs Leipzig", "Quiet vs Small"]  # the followed player's game first
     game = football["games"][0]
     assert game["live"]["score"] == "Bayern 2 – 1 Leipzig" and game["live"]["is_live"] is True and game["key"] == "pitch:100"
-    # Kane is on stann (and this fan follows him); then the registry's best known, by the source's id or by name; PLAYERS of them.
+    # Kane is on the app (and this fan follows him); then the registry's best known, by the source's id or by name; PLAYERS of them.
     assert [(p["name"], p["player_id"], p["following"]) for p in game["players"]] == [
         ("Harry Kane", 5, True), ("Jamal Musiala", None, False), ("Thomas Muller", None, False), ("Leroy Sane", None, False)]
     assert (game["players"][1]["system"], game["players"][1]["athlete_id"]) == ("pitch", "7")  # followed by the source's id

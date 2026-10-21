@@ -67,11 +67,19 @@ def _fullmove(fen: str | None) -> int | None:
 
 
 def _score(ev: dict[str, Any], side: int) -> str:
-    """An evaluation from the player's side: "+3.6", "mate in 4", "facing mate in 4"."""
+    """An evaluation from the player's side: "+3.6", "0.0", "+12" (past ten pawns, whole ones), "mate in 4",
+    "facing mate in 4". Halves round away from zero, counted in whole centipawns as the app's evaluation bar
+    counts them (evalScore in web/src/sports/facts/chess.ts), so the two agree: a float's own rounding made
+    -1.35 "-1.4" but 1.25 "+1.2"."""
     if ev.get("mate") is not None:
         mate = ev["mate"] * side
         return f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
-    return f"{(ev.get('cp') or 0) * side / 100:+.1f}"
+    cp = int(ev.get("cp") or 0) * side
+    tenths = (abs(cp) + 5) // 10
+    if not tenths:
+        return "0.0"
+    pawns = str((tenths + 5) // 10) if tenths >= 100 else f"{tenths // 10}.{tenths % 10}"
+    return f"{'-' if cp < 0 else '+'}{pawns}"
 
 
 def _points(result: str) -> tuple[float, float] | None:
@@ -286,18 +294,25 @@ time-scramble finish. Long videos are normal here: game analysis and a player's 
 more and are interview_or_analysis, not restreams; a copied official broadcast is a restream. Cheating claims \
 without a ruling from FIDE or the platform are misinformation."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UCQHX6ViZmPsWiYSFAyS0a3Q",  # GothamChess: game analysis
-        "UCL5YbN5WLFD8dLIegT5QAbA",  # agadmator's Chess Channel: game analysis
-        "UCIsEhwBMPkRHsEgqYAPQHsA",  # ChessBase India: interviews, features
-        "UC5kS0l76kC0xOzMPtOmSFGw",  # Chess.com: features, interviews
-        "UCM-ONC2bCHytG2mYtKDmIeA",  # Saint Louis Chess Club: commentary, interviews
-        "UChDxbOUQRXEZ1zdI14Zyx9w",  # Chess Vibes: game analysis
-        "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE: interviews, features
-        "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: commentary on his own games and others'
+        "UC9B47GnzCRFHTT1BIBWvStQ",  # FIDE
+        "UC5kS0l76kC0xOzMPtOmSFGw",  # Chess.com
+        "UCIsEhwBMPkRHsEgqYAPQHsA",  # ChessBase India
+        "UCM-ONC2bCHytG2mYtKDmIeA",  # Saint Louis Chess Club
+        "UCX_tAmRRY4yniFKRMZ4h1hg",  # Norway Chess
+        "UCENNtCRTPTdH_IGXs42LuHQ",  # Esports World Cup: its chess
+        "UCQHX6ViZmPsWiYSFAyS0a3Q",  # GothamChess: game analysis (8M subscribers)
+        "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: his games and others' (3M subscribers)
+        "UCL5YbN5WLFD8dLIegT5QAbA",  # agadmator's Chess Channel: game analysis (1.3M subscribers)
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "FIDE", "GM", "IM", "WGM", "FM", "Chess.com", "Norway Chess", "Tata Steel",
+        "Olympiad", "Grand Swiss", "Freestyle", "Hikaru", "Magnus", "India", "Norway")
     news_feeds = {
         "https://www.chess.com/rss/news": "Chess.com",
         "https://en.chessbase.com/feed": "ChessBase",

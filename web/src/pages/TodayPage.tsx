@@ -4,7 +4,7 @@ import { useActivity } from '../activity'
 import type { FollowedMatch, League } from '../api'
 import { APP_NAME } from '../app'
 import { useNow } from '../clock'
-import { ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
+import { BoardLink, ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { FromYourPlayers } from '../components/Feed'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
@@ -53,7 +53,7 @@ function SaveNudge() {
 
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions
- * stann covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
+ * the app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
  * taking turns. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
 function BigGames({ league, now }: { league: League | null; now: number }) {
@@ -100,10 +100,10 @@ function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
   return (
     <>
       {matches.map((m) => m.live && (
-        <Link key={m.event_id} to={`/match/${m.match}`} className="stack" style={{ gap: 8 }}>
+        <BoardLink key={m.event_id} to={`/match/${m.match}`} label={`${m.title}: the match`}>
           <LiveScoreboard live={m.live} playerName="" sport={m.sport} compact seed={`event:${m.event_id}`} />
           <span className="tiny muted" style={{ fontWeight: 700 }}>{m.held ? 'Following this game · alerts paused for now' : 'Following this game'}</span>
-        </Link>
+        </BoardLink>
       ))}
     </>
   )
@@ -115,10 +115,10 @@ function TeamsLive({ games }: { games: TeamGame[] }) {
   return (
     <>
       {games.map((g) => (
-        <Link key={g.key} to={g.live.match ? `/match/${g.live.match}` : `/team/${g.team_id}`} className="stack" style={{ gap: 8 }}>
+        <BoardLink key={g.key} to={g.live.match ? `/match/${g.live.match}` : `/team/${g.team_id}`} label={g.live.match ? `${g.live.event || g.names.join(' and ')}: the match` : g.names.join(' and ')}>
           <LiveScoreboard live={g.live} playerName="" sport={g.sport} teams={g.names} compact seed={g.key} />
           <span className="tiny muted" style={{ fontWeight: 700 }}>Following {g.names.join(' and ')}</span>
-        </Link>
+        </BoardLink>
       ))}
     </>
   )
@@ -206,10 +206,11 @@ export function TodayPage() {
 
       {/* Each opens its match page; a live score the research agent read names no game, and opens the player's page. */}
       {games.map(([key, group]) => (
-        <Link key={group[0].player_id} to={group[0].live.match ? `/match/${group[0].live.match}` : `/player/${group[0].player_id}`} className="stack" style={{ gap: 8 }}>
-          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} compact seed={key} latest={latestIn(alerts, group, seen)} />
+        <BoardLink key={group[0].player_id} to={group[0].live.match ? `/match/${group[0].live.match}` : `/player/${group[0].player_id}`}
+          label={group[0].live.match ? `${group[0].live.event || group[0].player.name}: the match` : group[0].player.name}>
+          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} lines={group.map((c) => c.live.player_stats)} compact seed={key} latest={latestIn(alerts, group, seen)} />
           {group.length > 1 && <span className="tiny muted" style={{ fontWeight: 700 }}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</span>}
-        </Link>
+        </BoardLink>
       ))}
       {/* Then the games they follow by themselves, nobody of theirs in them. */}
       <ErrorBoundary fallback={<BlockError />} resetKey={followed}>

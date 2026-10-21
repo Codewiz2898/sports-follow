@@ -1,7 +1,7 @@
-"""Draw the app icon: stann's fan badge, a blue scalloped pin with a white "s", on the app's paper ground.
+"""Draw the app icon: the app's fan badge, a blue scalloped pin with a white "s", on the app's paper ground.
 
-The "s" is Fredoka's, the logo's typeface (the header pairs the badge with "stann" in it, styles.css
-.brand). Writes public/icons/*.svg, public/favicon.svg and the PNG sizes Android, Chrome and iOS ask for,
+The "s" is Fredoka's, the logo's typeface (the header pairs the badge with the name in it, in lower case,
+styles.css .brand). Writes public/icons/*.svg, public/favicon.svg and the PNG sizes Android, Chrome and iOS ask for,
 from one geometry, with no image library (a tiny anti-aliased rasterizer and PNG writer). Run from web/:
 
     python3 scripts/make_icons.py
@@ -18,7 +18,7 @@ from pathlib import Path
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 OUT = PUBLIC / "icons"
 PAPER = (0xF3, 0xF3, 0xEF)
-BLUE = (0x1F, 0x5B, 0xEF)  # stann's own blue, fixed whatever colours the sports wear
+BLUE = (0x1F, 0x5B, 0xEF)  # the app's own blue, fixed whatever colours the sports wear
 WHITE = (0xFF, 0xFF, 0xFF)
 
 # Fredoka's "s" at weight 600 (SIL Open Font License 1.1, (c) The Fredoka Project Authors), in font units

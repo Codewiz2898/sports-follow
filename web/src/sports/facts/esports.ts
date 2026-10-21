@@ -28,7 +28,7 @@ export interface EsportsPage {
   standings?: StandingRow[]
   games?: { n: number; map?: string | null; winner?: string | null }[]
   teams?: PageTeam[] // the series' two teams, by the ids the detail names them by
-  detail?: { maps: MapDetail[] } | null
+  detail?: { maps: MapDetail[]; live?: LiveDetail | null } | null
 }
 
 // What a source told the page about each finished map (the server's dota.map_detail, for Dota 2): how it went
@@ -53,10 +53,45 @@ export interface MapDetail {
   draft?: DraftTurn[]
 }
 
-/** A map's lead by minute from one team's side: up is theirs. */
-export function leadOf(map: MapDetail, team: string): number[] {
-  const lead = map.lead?.by_minute ?? []
-  return map.lead?.team === team ? lead : lead.map((v) => -v)
+// The map being played, as its source told the page (the server's dota.live_detail): its lead so far from
+// stann's own readings, which towers and barracks stand in each lane, and all ten heroes.
+export type Reading = [number, number] // [seconds into the map, the lead]
+export interface LaneBuildings { towers: boolean[]; barracks: boolean[] } // T1, T2, T3; melee, ranged: standing
+export interface LiveHero { id?: string | null; name: string; team: string; as: string }
+export interface LiveDetail {
+  n: number
+  lead?: { team: string; what: string; readings: Reading[] } | null
+  buildings?: Record<string, Record<string, LaneBuildings>> | null // team id -> lane (top, mid, bot)
+  heroes?: LiveHero[]
+}
+export const LANES = ['top', 'mid', 'bot'] as const
+
+/** A finished map's lead, a reading a minute, from one team's side: up is theirs. */
+export function leadOf(map: MapDetail, team: string): Reading[] {
+  const sign = map.lead?.team === team ? 1 : -1
+  return (map.lead?.by_minute ?? []).map((v, i) => [i * 60, sign * v])
+}
+
+/** The map being played's lead so far, from one team's side. */
+export function liveLeadOf(live: LiveDetail, team: string): Reading[] {
+  const sign = live.lead?.team === team ? 1 : -1
+  return (live.lead?.readings ?? []).map(([t, v]) => [t, sign * v])
+}
+
+/** How many of a side's towers stand, of nine (T4s aside). */
+export function towersLeft(lanes: Record<string, LaneBuildings> | undefined): number {
+  return LANES.reduce((n, lane) => n + (lanes?.[lane]?.towers ?? []).filter(Boolean).length, 0)
+}
+
+/** A lane in words, for a screen reader: "Top: Spirit lost their T1; Yandex have every building". */
+export function laneWords(lane: string, sides: { short: string; lanes?: Record<string, LaneBuildings> }[]): string {
+  const side = ({ short, lanes }: { short: string; lanes?: Record<string, LaneBuildings> }) => {
+    const b = lanes?.[lane]
+    if (!b) return `${short} not known`
+    const lost = [...b.towers.map((up, i) => (up ? null : `T${i + 1}`)), b.barracks[0] ? null : 'melee barracks', b.barracks[1] ? null : 'ranged barracks'].filter(Boolean)
+    return lost.length ? `${short} lost their ${lost.join(', ')}` : `${short} have every building`
+  }
+  return `${lane[0].toUpperCase()}${lane.slice(1)}: ${sides.map(side).join('; ')}`
 }
 
 /** "4.4k", "850". */
@@ -64,15 +99,68 @@ export function amount(n: number): string {
   return Math.abs(n) >= 1000 ? `${(Math.abs(n) / 1000).toFixed(1)}k` : String(Math.abs(n))
 }
 
-/** Points along a lead line in a w×h box (x from pad to w-pad, zero across the middle), scaled to its
- * biggest lead (at least `floor`), with where each minute and amount falls. */
-export function leadLine(values: number[], w: number, h: number, pad = 10, floor = 2000) {
-  const top = Math.max(floor, ...values.map((v) => Math.abs(v)))
+/** Who leads, in a few words: "Yandex +4.4k", "Level". */
+export function leader(v: number, [a, b]: PageTeam[]): string {
+  return Math.round(v) === 0 ? 'Level' : `${v > 0 ? a.short : b.short} +${amount(v)}`
+}
+
+/** A lead line in words, for a screen reader: when each side was up most, and who leads at the last reading. */
+export function leadSummary(readings: Reading[], teams: PageTeam[]): string {
+  const [a, b] = teams
+  const most = (sign: number) => readings.reduce((best, [, v], i) => (sign * v > sign * readings[best][1] ? i : best), 0)
+  const [up, down] = [readings[most(1)], readings[most(-1)]]
+  return [
+    up[1] > 0 ? `${a.short} up most, ${amount(up[1])}, at minute ${Math.round(up[0] / 60)}` : `${a.short} never ahead`,
+    down[1] < 0 ? `${b.short} up most, ${amount(down[1])}, at minute ${Math.round(down[0] / 60)}` : `${b.short} never ahead`,
+    `at the last reading ${leader(readings[readings.length - 1][1], teams)}`,
+  ].join('; ')
+}
+
+/** The reading nearest a time into the map (where a pointer is on a lead line). */
+export function nearest(readings: Reading[], t: number): number {
+  return readings.reduce((best, [rt], i) => (Math.abs(rt - t) < Math.abs(readings[best][0] - t) ? i : best), 0)
+}
+
+/** The series' one scale for its maps' small lead lines, so they compare: the biggest lead in any map, at least 2k. */
+export function sparkTop(maps: MapDetail[]): number {
+  return Math.max(2000, ...maps.flatMap((m) => (m.lead?.by_minute ?? []).map((v) => Math.abs(v))))
+}
+
+/** The map being played's part, while the board says that map is still on (a read can be a minute behind a
+ * map's end), for a series whose two teams the page names. */
+export function liveNow(page: EsportsPage, board: DotaLiveMap | null | undefined, live: boolean): LiveDetail | null {
+  const now = page.detail?.live
+  return page.teams?.length === 2 && live && board && now && board.n === now.n ? now : null
+}
+
+/** One side on the board of the map being played, by its team id. */
+export function boardSide(board: DotaLiveMap, id: string): DotaLiveMap['radiant'] {
+  return board.radiant.id === id ? board.radiant : board.dire
+}
+
+/** The board's gold lead in the map being played: "Spirit up 4.4k gold", or under a thousand "Level on gold". */
+export function liveGold(board: DotaLiveMap, teams: PageTeam[]): string {
+  return board.gold_lead.amount >= 1000 ? `${teams.find((t) => t.id === board.gold_lead.id)?.short ?? ''} up ${amount(board.gold_lead.amount)} gold` : 'Level on gold'
+}
+
+/** Points along a lead line in a w×h box (x from pad to w-pad, from the map's start to its last reading;
+ * zero across the middle), scaled to its biggest lead (at least `floor`), with where each time and amount
+ * falls, and the lead at any time between readings. */
+export function leadLine(readings: Reading[], w: number, h: number, pad = 10, floor = 2000) {
+  const top = Math.max(floor, ...readings.map(([, v]) => Math.abs(v)))
+  const end = Math.max(1, readings[readings.length - 1]?.[0] ?? 1)
   const mid = h / 2
   const half = mid - pad
-  const x = (minute: number) => pad + (values.length > 1 ? (minute * (w - 2 * pad)) / (values.length - 1) : 0)
+  const x = (t: number) => pad + (Math.max(0, t) * (w - 2 * pad)) / end
   const y = (v: number) => mid - (v / top) * half
-  return { x, y, mid, top, points: values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ') }
+  const at = (t: number) => {
+    const i = readings.findIndex(([rt]) => rt >= t)
+    if (i === -1) return readings[readings.length - 1]?.[1] ?? 0 // past the last reading (a map's last part minute)
+    if (i === 0) return readings[0][1]
+    const [[t0, v0], [t1, v1]] = [readings[i - 1], readings[i]]
+    return v0 + ((v1 - v0) * (t - t0)) / Math.max(1, t1 - t0)
+  }
+  return { x, y, at, mid, top, end, points: readings.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(' ') }
 }
 
 /** The series' best player so far, over the maps whose players are in: the most kills, then the fewest
@@ -155,6 +243,18 @@ export function acrossMaps(maps: MapDetail[], name: string): { maps: { n: number
 export function isYours(name: string, yours: string[] | undefined): boolean {
   const n = name.trim().toLowerCase()
   return !!n && (yours ?? []).some((y) => y.trim().toLowerCase() === n)
+}
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Whether a line ("Aegis to Yatoro") names one of the fan's players, as a whole word. */
+export function namesYours(text: string, yours: string[] | undefined): boolean {
+  return (yours ?? []).map((y) => y.trim()).filter(Boolean).some((y) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(y)}($|[^\\p{L}\\p{N}_])`, 'iu').test(text))
+}
+
+/** The fan's players in the series' maps, each once, as they first appear. */
+export function followedIn(maps: MapDetail[], yours: string[] | undefined): string[] {
+  return [...new Set(maps.flatMap((m) => (m.players ?? []).map((p) => p.name)))].filter((n) => isYours(n, yours))
 }
 
 /** Who won each of a lobby's matches so far, in a line: "M1 (Erangel): GodLike · M2: Soul"; "" before any. */

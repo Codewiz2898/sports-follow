@@ -24,7 +24,7 @@ import logging
 import os
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .. import bus, naming, sports
 from . import budget, dota, opendota, pandascore
@@ -592,6 +592,21 @@ class PandascoreEsports(Adapter):
         except Exception:  # Redis down: no memory, the fallback still works
             return {}
 
+    @staticmethod
+    def _lead_line(game: dict[str, Any]) -> list[list[int]]:
+        """The live map's gold line so far, with this reading (dota.add_reading), kept in Redis for the worker
+        and the API alike: each one that reads the live list adds to it."""
+        key = f"dota:lead:{game.get('match_id')}"
+        try:
+            r = bus.sync_redis()
+            line = json.loads(cast(str | None, r.get(key)) or "[]")
+            updated = dota.add_reading(line, game.get("game_time"), game.get("radiant_lead"))
+            if updated is not line:
+                r.set(key, json.dumps(updated), ex=86400)
+            return updated
+        except Exception:  # Redis down: no line, the rest still shows
+            return []
+
     def _dota(self, m: dict[str, Any], snap: Snapshot, detail: bool = False) -> bool:
         """A Dota 2 series on now (or just over) gains what OpenDota knows inside its maps: the map being
         played, and each finished map's numbers for both rosters' players. Anything OpenDota can't say
@@ -599,8 +614,10 @@ class PandascoreEsports(Adapter):
         finished map's numbers are missing (OpenDota down, or the map not parsed yet).
 
         With detail (the match page's own read, not a poll, whose every state is stored and sent to each
-        card), each finished map's part of the page as well (dota.map_detail), as the state's "page_detail": the
-        same OpenDota matches, so no more requests but the item names, kept a week."""
+        card), each finished map's part of the page as well (dota.map_detail), and the live map's (its gold
+        line so far, buildings and ten heroes: dota.live_detail), as the state's "page_detail": the same
+        OpenDota matches and live list, so no more requests but the item names, kept a week. Every read of a
+        live map adds to its gold line, a poll's too."""
         if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
             return True
         teams = snap.state.get("teams") or []
@@ -633,12 +650,14 @@ class PandascoreEsports(Adapter):
                     if part:
                         parts.append(part)
             live = dota.live_map(game, teams, players, heroes, len(finished) + 1) if game else None
+            line = self._lead_line(game) if game else []
+            now = dota.live_detail(game, teams, players, names, heroes, len(finished) + 1, line) if game and detail else None
         except AdapterError as exc:
             log.info("dota %s: no OpenDota data: %s", m.get("id"), exc)
             return False
         snap.state["dota"] = {"maps": maps, "live": live}
-        if parts:
-            snap.state["page_detail"] = {"teams": [{"id": t["id"], "name": t["name"], "short": dota.short(t["name"])} for t in teams], "maps": parts}
+        if parts or now:
+            snap.state["page_detail"] = {"teams": [{"id": t["id"], "name": t["name"], "short": dota.short(t["name"])} for t in teams], "maps": parts, "live": now}
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"

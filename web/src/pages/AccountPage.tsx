@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { Link, useSearchParams } from 'react-router-dom'
 import { afterSignIn, useAccount } from '../account'
 import { ApiError, api, type Account } from '../api'
+import { AUTOPLAY, setAutoplay, useAutoplaySetting } from '../autoplay'
 import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
 
-/** Signing in (a code by email), and once signed in: who, signing out, deleting the account. */
+/** Signing in (a code by email), and once signed in: who, signing out, deleting the account. And, for everyone,
+ * whether the Feed's videos start by themselves (autoplay.ts; this browser's choice, so not kept with the account). */
 export function AccountPage() {
   const { me } = useAccount()
   const [params, setParams] = useSearchParams()
@@ -19,8 +21,30 @@ export function AccountPage() {
         <h1 className="dsp page-title">Account</h1>
       </div>
       {me === null ? <div className="card empty small"><span className="spinner" /></div> : me.signed_in ? <SignedIn account={me} /> : <SignIn failed={failed} />}
+      <Videos />
       <Link to="/privacy" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>What we keep, and why</Link>
     </>
+  )
+}
+
+/** Whether the Feed's videos play by themselves as they come on screen, muted: Always (the default), On Wi-Fi, Off. */
+function Videos() {
+  const autoplay = useAutoplaySetting()
+  return (
+    <section className="section" aria-label="Videos">
+      <SectionHead title="Videos" />
+      <div className="card card-pad stack" style={{ gap: 12 }}>
+        <span className="stack" style={{ gap: 4 }}>
+          <span className="title" id="autoplay-label">Play videos as you scroll</span>
+          <span className="small muted">In your Feed, the video on screen starts by itself, muted. Never while your browser is saving data.</span>
+        </span>
+        <div className="segmented" role="radiogroup" aria-labelledby="autoplay-label">
+          {AUTOPLAY.map(([key, label]) => (
+            <button key={key} type="button" role="radio" aria-checked={autoplay === key} onClick={() => setAutoplay(key)}>{label}</button>
+          ))}
+        </div>
+      </div>
+    </section>
   )
 }
 

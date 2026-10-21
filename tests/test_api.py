@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -1439,3 +1439,37 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
         assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
     assert len(kept()) == 1
+
+
+def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
+    """A fan's app says a Feed video's player refused it (feed.unplayable, BHA-380): it leaves everyone's Feed, so a
+    fan says so only so many times an hour, and an address and everyone together mark only so many videos. Junk ids
+    and a video said of again count against the fan alone."""
+    marked: set[str] = set()
+
+    def unplayable(db, player_id, item):
+        if item == "not-an-item":
+            raise ValueError("No such item.")
+        if item == "0" * 16:
+            raise LookupError("That video isn't in this player's feed.")
+        new = item not in marked
+        marked.add(item)
+        return new
+
+    def say(item: str, fan: str = "fan") -> httpx.Response:
+        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=PUBLIC)
+
+    monkeypatch.setattr(feed, "unplayable", unplayable)
+    first = say("0123456789abcdef")
+    assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": True}
+    assert say("0123456789abcdef").json()["marked"] is False
+    assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404
+    for _ in range(feed.UNPLAYABLE_PER_FAN - 4):
+        assert say("0123456789abcdef").status_code == 200
+    assert say("0123456789abcdef").status_code == 429  # the fan's hour
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one mark
+    # Other fans on the same network, until the address has marked as many videos as an address may.
+    for n in range(feed.UNPLAYABLE_PER_ADDRESS - 1):
+        assert say(f"{n + 1:016x}", fan=f"fan-{n}").json()["marked"] is True
+    assert say(f"{999:016x}", fan="new-fan").status_code == 429
+    assert len(marked) == feed.UNPLAYABLE_PER_ADDRESS

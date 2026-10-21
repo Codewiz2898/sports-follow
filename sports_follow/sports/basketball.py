@@ -149,13 +149,21 @@ A milestone: a career high, a 40 or 50-point game, a triple-double, a scoring la
 championship. A match moment: a dunk, a block, a buzzer-beater, a clutch shot. Trade talk before a team \
 announces it is rumour. Full-game uploads are restreams."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UC3HPbvB6f58X_7SMIp6OPYw",  # Thinking Basketball: analysis
-        "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
-        "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
+        "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA
+        "UCVSSpcmZD2PwPBqb8yKQKBA",  # NBA on ESPN
+        "UCiWLfSweyRNmLpgEHekhoAg",  # ESPN
+        "UCqQo7ewe87aYAe7ub5UqXMw",  # House of Highlights
+        "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis (2.6M subscribers)
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "NBA", "WNBA", "MVP", "NBA Finals", "All-Star", "Lakers", "Warriors", "Celtics", "Knicks",
+        "Bucks", "Nuggets", "Mavericks", "Spurs", "76ers", "Sixers", "Suns", "Bulls", "LeBron")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",

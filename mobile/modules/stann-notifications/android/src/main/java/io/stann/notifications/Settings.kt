@@ -8,7 +8,7 @@ import android.content.Context
  *  and stopped games (src/push.ts, ActionReceiver) and sends no card the phone would throw away; these catch any
  *  that come. The colours are the phone's alone. */
 internal object Settings {
-  private const val DEFAULT_API = "https://stann.in"
+  private const val DEFAULT_API = "https://stann.in" // TODO(BHA-348): the new domain, as app.config.ts's SITE
   private const val STOPPED_KEPT = 30 // the newest games stopped; older ones are long over (the server keeps as many)
 
   private fun prefs(c: Context) = c.getSharedPreferences("io.stann.notifications", Context.MODE_PRIVATE)
