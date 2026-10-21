@@ -6,8 +6,9 @@ What's asked is each sport's (Sport.asks, read off a game's board): a chess game
 match's winner, each map of a team esports series. A question belongs to the game, whichever of its fixtures shows
 it (a chess board is one of each player's: Sport.board tells the game apart), and is made the first time its board
 is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
-or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made). It closes as the game, or its map, starts (a first
-question's start time closes it too, should a poll be late: sweep), and a pick after that is refused.
+or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made). It closes as the game,
+or its map, starts (a first question's start time closes it too, should a poll be late: sweep), and a pick after that
+is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
@@ -180,8 +181,10 @@ def _read(db: Session, system: str, fixture: str, game: dict[str, Any], keys: li
 def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     """The games coming up within AHEAD, in a sport that asks, with no questions yet: those of fans' players, teams
     and followed games, and Today's big games (league.coming), whoever follows them, so a fan who follows nobody can
-    call those too. The reads to ask for (worker.prepare_questions), whose boards make them (made). A game is asked
-    for at most every PREPARE_EVERY, PREPARE_MOST a run, soonest first."""
+    call those too; and a big game whose start the league's read has moved since its questions were made, while
+    nothing polls them (moved, for an event's), so they move with it. The reads to ask for (worker.prepare_questions),
+    whose boards make them, or move them (made). A game is asked for at most every PREPARE_EVERY, PREPARE_MOST a
+    run, soonest first."""
     from . import match  # the match page's reads (match reads Live now, which reads search, which reads the pipeline)
 
     now = now or _now()
@@ -191,8 +194,14 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     with session() as db:
         theirs = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(_fans_events()), Event.status.in_(PRE_START), Event.start_utc.is_not(None),
                                                                                  Event.start_utc > now, Event.start_utc <= now + AHEAD, ~asked)).all()
-        made_for = {k for keys in db.scalars(select(Question.keys).where(Question.keys.has_any(array([key for _, key, _ in big])))) for k in keys or []} if big else set()
-    games = {key: (start, key, sport) for start, key, sport in [*theirs, *(b for b in big if b[1] not in made_for)]}  # a fan's game that's a big one, once
+        made = db.execute(select(Question.keys, Question.starts_at, Question.status, Question.event_id)
+                          .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
+    unpolled: dict[str, set[datetime | None]] = {}  # each big game asked of: the starts of its open questions nothing polls
+    for keys, starts_at, status, event_id in made:
+        for key in keys or []:
+            unpolled.setdefault(key, set()).update([starts_at] if status == OPEN and event_id is None else [])
+    due = [game for game in big if game[1] not in unpolled or unpolled[game[1]] - {game[0]}]
+    games = {key: (start, key, sport) for start, key, sport in [*theirs, *due]}  # a fan's game that's a big one, once
     out: list[tuple[str, str]] = []
     redis = bus.sync_redis()
     for _, key, sport in sorted(games.values()):

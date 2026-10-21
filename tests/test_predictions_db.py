@@ -468,21 +468,23 @@ def test_a_fan_who_follows_nobody_has_todays_big_games_to_call(db, redis, monkey
     """Today's big games coming up within AHEAD (league.coming), in a sport that asks, are read ahead for their
     questions though nobody follows anyone in them, and Today's calls list those, under the address their cards
     have: so a big game's card says "Call it" to a fan who follows nobody. One further off waits for its day, one
-    asked already isn't read again, and a sport that asks nothing (a lobby) isn't read."""
+    asked already isn't read again unless the league says its start moved, and a sport that asks nothing (a lobby)
+    isn't read. A pick gives its game an event to be polled by."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
     start, later = now + timedelta(hours=5), now + timedelta(days=3)
+    pitch_games, lobby_games = {"1": start, "2": later}, {"3": start}
 
-    def listed(source_id: str, at: datetime, sport: str) -> Fixture:
-        return Fixture(source_id=source_id, title=f"Game {source_id}", competition="Super Lig", start_utc=at, venue=None, status="scheduled", team_ids=[str(HOME), str(AWAY)], locator={}, sport=sport)
+    def made_up(system: str, sport: str, games: dict[str, datetime]) -> SimpleNamespace:
+        """A source whose schedule lists its games when each starts now, and reads one the same."""
+        return SimpleNamespace(
+            system=system, sports=(sport,), name=system, fixture_pattern=re.compile(r"\d+"), live_cadence=10, live_note=None, lag_note=None,
+            credit=lambda snap: system, budgets=lambda: (), locator=lambda fixture: {"fixture": fixture},
+            schedule=lambda first, last: [Fixture(source_id=i, title=f"Game {i}", competition="Super Lig", start_utc=at, venue=None, status="scheduled",
+                                                  team_ids=[str(HOME), str(AWAY)], locator={}, sport=sport) for i, at in games.items()],
+            match=lambda fixture: LiveGame(source_id=fixture, title="Trabzonspor vs Galatasaray", competition="Super Lig", start_utc=games[fixture],
+                                           snapshot=sm.parse_match(football_match("NS", 0, 0)), sport=sport))
 
-    def made_up(system: str, sport: str, games: list[Fixture]) -> SimpleNamespace:
-        return SimpleNamespace(system=system, sports=(sport,), name=system, fixture_pattern=re.compile(r"\d+"), live_cadence=10, live_note=None, lag_note=None,
-                               credit=lambda snap: system, budgets=lambda: (), locator=lambda fixture: {"fixture": fixture}, schedule=lambda first, last: games,
-                               match=lambda fixture: LiveGame(source_id=fixture, title="Trabzonspor vs Galatasaray", competition="Super Lig", start_utc=start,
-                                                              snapshot=sm.parse_match(football_match("NS", 0, 0)), sport=sport))
-
-    pitch = made_up("pitch", "football", [listed("1", start, "football"), listed("2", later, "football")])
-    lobby = made_up("lobby", "pubg", [listed("3", start, "pubg")])
+    pitch, lobby = made_up("pitch", "football", pitch_games), made_up("lobby", "pubg", lobby_games)
     for adapter in (pitch, lobby):
         monkeypatch.setitem(ADAPTERS, adapter.system, adapter)
         monkeypatch.setitem(KNOWN, adapter.system, adapter)
@@ -502,6 +504,26 @@ def test_a_fan_who_follows_nobody_has_todays_big_games_to_call(db, redis, monkey
     [open_] = predictions.today(db, "nobody")["open"]
     card = next(g for g in league.offer(db, now)[0]["coming"]["games"] if g["key"] == "pitch:1")
     assert (open_["id"], open_["mine"], open_["match"]) == (q.id, None, card["match"])  # the card's address: web/src/predictions.ts callNote
+
+    # Put back two hours, as the league's next read says: read again, so its question closes at the new start.
+    pitch_games["1"] = start + timedelta(hours=2)
+    league.read("pitch", now)
+    assert predictions.prepare(now) == [("pitch", "1")]
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    db.expire_all()
+    assert (db.get_one(Question, q.id).starts_at, db.get_one(Question, q.id).locks_at) == (start + timedelta(hours=2),) * 2
+    redis.clock += predictions.PREPARE_EVERY + 1
+    assert predictions.prepare(now) == []  # moved now
+
+    # The fan who follows nobody calls it: its game gets an event, which the poller follows from now on.
+    predictions.pick(db, "nobody", q.id, str(HOME))
+    db.commit()
+    db.expire_all()
+    event = db.get_one(Event, db.get_one(Question, q.id).event_id)
+    assert (event.key, (event.live_binding or {}).get("adapter"), event.start_utc) == ("pitch:1", "pitch", start + timedelta(hours=2))
+    assert predictions.today(db, "nobody")["open"][0]["mine"] == str(HOME)
+
     # Sunday's game, once its day comes (the league read again by then), is read for its own.
     day = later - timedelta(hours=1)
     league.read("pitch", day)
