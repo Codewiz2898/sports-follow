@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, type Clip } from '../api'
 import { ClipCard, CLIPS_PAGE, useClips } from '../components/Clips'
 import { BackIcon } from '../components/Icons'
 
 /**
- * Clips (/clips): everyone's, newest first, or a competition's (/clips?competition=…), its tournament feed.
- * Older ones a page at a time.
+ * A competition's clips (/competition/<name>/clips): its tournament feed, newest first, older ones a page at a time.
  */
 export function ClipsPage() {
-  const [params] = useSearchParams()
-  const competition = params.get('competition') ?? undefined
+  const competition = useParams().name ?? ''
   const first = useClips({ competition })
   const [older, setOlder] = useState<Clip[]>([])
   const [more, setMore] = useState<'idle' | 'asking' | 'none'>('idle')
@@ -37,9 +35,9 @@ export function ClipsPage() {
     <>
       <div className="row" style={{ justifyContent: 'flex-start', gap: 14 }}>
         <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
-        <h1 className="dsp page-title">{competition ?? 'Clips'}</h1>
+        <h1 className="dsp page-title">{competition}</h1>
       </div>
-      {competition && <p className="small muted">Clips of {competition}, newest first.</p>}
+      <p className="small muted">Clips of {competition}, newest first.</p>
       {first === null && <p className="small muted">Looking for clips…</p>}
       {first !== null && clips.length === 0 && <p className="small muted">No clips here yet.</p>}
       <div className="clip-list">
@@ -71,7 +69,9 @@ export function ClipPage() {
   return (
     <>
       <div className="row" style={{ justifyContent: 'flex-start', gap: 14 }}>
-        <Link to="/clips" className="btn icon" aria-label="All clips"><BackIcon width={20} height={20} /></Link>
+        <Link to={clip?.match ? `/match/${clip.match}` : '/'} className="btn icon" aria-label={clip?.match ? 'Back to the game' : 'Back to Today'}>
+          <BackIcon width={20} height={20} />
+        </Link>
         <h1 className="dsp page-title">Clip</h1>
       </div>
       {failed && <p className="small muted">{failed}</p>}

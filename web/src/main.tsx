@@ -220,7 +220,8 @@ function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
             <Route path="/match/:source/:game" element={<MatchPage />} />
-            <Route path="/clips" element={<ClipsPage />} />
+            {/* Two words or more, so the Android app (which opens one-word addresses) leaves them to the browser. */}
+            <Route path="/competition/:name/clips" element={<ClipsPage />} />
             <Route path="/clip/:id" element={<ClipPage />} />
             <Route path="/team/:id" element={<TeamPage />} />
             <Route path="/athlete/:system/:id" element={<AthletePage />} />

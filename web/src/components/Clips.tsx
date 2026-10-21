@@ -31,7 +31,7 @@ export function useClips(of: ClipsOf): Clip[] | null {
 export const CLIPS_PAGE = 30
 
 /** The competition's clips page: its tournament feed. */
-export const competitionClips = (competition: string) => `/clips?competition=${encodeURIComponent(competition)}`
+export const competitionClips = (competition: string) => `/competition/${encodeURIComponent(competition)}/clips`
 
 /**
  * One clip: the video (it loads when played), what it shows, its game and competition, when it went up, and

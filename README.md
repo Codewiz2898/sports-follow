@@ -373,7 +373,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   below, and "All N in your Feed".
 - **Clips on the web** (BHA-367, `web/src/components/Clips.tsx`, `web/src/pages/ClipsPage.tsx`): clips published
   from the Mac app (the clips API, `GET /api/clips`) in a game's feed (a Clips section on its match page), a
-  player's (on their page), and a competition's tournament feed (`/clips?competition=…`, older ones a page at a time);
+  player's (on their page), and a competition's tournament feed (`/competition/<name>/clips`, older ones a page at a time;
+  two words or more, so the Android app, which opens one-word addresses, leaves it to the browser);
   a shared clip opens on its own page (`/clip/<id>`). Each card plays the clip where it is (it loads when played),
   with its moment as a block of its sport's colour, its game and competition, Share and Report (a report flags it
   for the admin panel). A section with no clips isn't shown, nor is one the API can't answer.
