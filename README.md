@@ -9,7 +9,9 @@ yesterday and a row of every game in the next two weeks, each scrolling sideways
 games of the competitions the sources cover that none of your players are in, outlined too, the sports
 taking turns so one sport's busy week doesn't fill the row, and the big games coming up soonest first (a
 fan who follows nobody sees only those, "Big results", "Big games coming up", and "Live now" to pick
-players from). The Following page has a tile for each player in their sport's colour.
+players from). The Following page has a tile for each player in their sport's colour. On a desktop the page runs
+the width of the window; from 1400px a column on its right, beside every page, lists the scores on now and the games
+starting soon (`web/src/components/Side.tsx`), and a match page's "Call it" stands at its top, beside the game.
 
 ## How it's built
 
@@ -289,9 +291,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The split shows to a fan once they've picked and at least 20 have, as shares only while it's open (counts, or
   fewer picks, would tell them a friend's pick), and to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
   already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
-  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page, on
-  Today (a rail of the fan's games to call and how their calls went: `GET /api/me/predictions`) and on a campaign
-  page (its players' games); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
+  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
+  game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
+  column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
+  (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
   to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
   The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
   picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
