@@ -10,6 +10,9 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
   after changing them (or adding a route, which App Links read), `npx expo prebuild --platform android` first;
   with `--clean` after the package id or the Firebase file changes, which a plain prebuild only adds to.
 - **Routes are files** in `src/app/` (Expo Router); everything else lives beside them in `src/`.
+- **Google Play lives in `store/`**: the listing, data safety answers, graphics (`make_graphics.py`) and the
+  signed-build recipe. `plugins/with-upload-key.js` signs a release build with the upload key when the
+  environment names it; `versionCode` is `app.config.ts`'s, raised for every upload.
 - **It looks like the site.** Each page and block here is the twin of one in `web/src` (its comment names
   it); a change to the site's look is made in both. Values come from `web/src/styles.css` (`theme.ts`).
   Android draws a skewed Text upright, so the site's leaning display type (`.dsp`) is a font here
