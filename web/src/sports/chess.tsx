@@ -93,13 +93,13 @@ function useReplay(page: ChessPage | undefined, state: ChessState): string[] | n
 }
 
 /** The game's moves beside its match page's board, in the board's colours: each, once they replay, opening the
- * analysis board after it (`open`), and the last (where the board is) marked; while they don't, the pairs as
- * words. Its opening and how it ended, or of a mini-match the game's number, over them. Kept scrolled to the
+ * analysis board after it (`open`), and the last (where the board is) marked; while they don't (or chess.js is
+ * on its way), the pairs as words, and those added since as the board gave them (a Freestyle game's: "d6d7"). Its opening and how it ended, or of a mini-match the game's number, over them. Kept scrolled to the
  * newest as moves come, unless the fan has scrolled back. */
 function MovesPanel({ page, sans, open }: { page: ChessPage; sans: string[] | null; open: (moves: string[], ply: number) => void }) {
   const list = useRef<HTMLOListElement>(null)
   const pinned = useRef(true)  // at the newest: false once the fan scrolls back, true again at the end
-  const count = sans?.length ?? page.moves?.length ?? 0
+  const count = sans?.length ?? (page.moves?.length ?? 0) + (page.more?.length ?? 0)
   useEffect(() => {
     if (pinned.current && list.current) list.current.scrollTop = list.current.scrollHeight
   }, [count, sans])
@@ -127,7 +127,7 @@ function MovesPanel({ page, sans, open }: { page: ChessPage; sans: string[] | nu
               <button type="button" className="chess-move" aria-current={i + 1 === sans.length} aria-label={`Play on from ${said}`} title={`Play on from ${said}`} onClick={() => open(sans, i + 1)}>{san}</button>
             </li>
           )
-        }) : (page.moves ?? []).map((m, i) => <li key={i}>{m}</li>)}
+        }) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
       </ol>
     </div>
   )
