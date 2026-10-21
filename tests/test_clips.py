@@ -30,6 +30,8 @@ def test_bucket_put_url_is_path_style_and_signs_the_type():
     assert parts.netloc == "acct.r2.cloudflarestorage.com"
     assert parts.path == "/slam-clips/clips/abc.mp4"
     assert q["X-Amz-SignedHeaders"] == ["content-type;host"]  # a PUT of anything but video/mp4 fails
+    sized = parse_qs(urlsplit(store.put_url("clips/abc.mp4", "video/mp4", 1000)).query)
+    assert sized["X-Amz-SignedHeaders"] == ["content-length;content-type;host"]  # nor of another size
     assert q["X-Amz-Expires"] == [str(clipstore.SIGNED_FOR)]
     assert store.public_url("clips/abc.mp4") == "https://clips.example/clips/abc.mp4"
 

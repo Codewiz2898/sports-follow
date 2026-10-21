@@ -260,8 +260,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
   live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
   is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
-  (`POST /api/clips/<id>/report`); five reports hide it until an admin puts it back or takes it down
-  (`/api/admin/clips`). Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
+  (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
+  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
 - **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
   leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming

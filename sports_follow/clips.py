@@ -10,7 +10,8 @@ Publishing, by a publishing key's holder (admins, for now):
 
 What may be published depends on what it was recorded from (RIGHTS): a game's own window, or a file of one's
 own game, yes; a browser window (a stream, which is the broadcaster's production) is kept on the device while
-the app posts clips itself. Fans report clips; enough reports hide one until an admin looks.
+the app posts clips itself. Fans report clips, once each: reports flag a clip for the admin panel, which hides
+or removes it. They never hide one by themselves, as an anonymous fan is just a request without a cookie.
 
 Keys are made, listed and revoked here:
 
@@ -29,11 +30,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, literal, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import clipstore, match
+from . import clipstore, match, sports
 from .adapters import KNOWN
 from .models import Clip, ClipKey, ClipReport, Player
 
@@ -41,7 +43,6 @@ MAX_SECONDS = 70.0  # a 30 s clip with its half-speed replay and end card is ~44
 MAX_BYTES = 80 * 1024 * 1024
 MAX_POSTER = 2 * 1024 * 1024
 MAX_PLAYERS = 20
-HIDE_AT = 5  # fans' reports that hide a clip until an admin looks
 PAGE = 30
 # What may be published, by what it was recorded from (BHA-369). A stream is its broadcaster's production:
 # while the app's own admins post clips, those stay on the device.
@@ -175,7 +176,8 @@ def create(db: Session, key: ClipKey, body: dict[str, Any], now: datetime | None
                 created_at=now or datetime.now(timezone.utc))
     db.add(clip)
     db.flush()
-    return Upload(clip, bucket.put_url(video_key(clip.slug), VIDEO_TYPE), bucket.put_url(poster_key(clip.slug), POSTER_TYPE))
+    # The video's URL is signed for the size it said, so a bigger file can't be put in its place.
+    return Upload(clip, bucket.put_url(video_key(clip.slug), VIDEO_TYPE, size), bucket.put_url(poster_key(clip.slug), POSTER_TYPE))
 
 
 def _own(db: Session, key: ClipKey, slug: str) -> Clip:
@@ -190,6 +192,8 @@ def finish(db: Session, key: ClipKey, slug: str, now: datetime | None = None) ->
     files gone."""
     bucket = store()
     clip = _own(db, key, slug)
+    if clip.status == "live":
+        return clip  # told twice (an answer lost on the way): it's up
     if clip.status != "uploading":
         raise Refused(409, f"This clip is {clip.status}.")
     video = bucket.size(video_key(slug))
@@ -219,7 +223,7 @@ def remove(db: Session, slug: str, key: ClipKey | None = None) -> bool:
 
 
 def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
-    """An admin hides a clip, or puts a hidden one back (its reports start again)."""
+    """An admin hides a clip, or puts a hidden one back (its reports cleared)."""
     clip = db.scalar(select(Clip).where(Clip.slug == slug))
     if clip is None or clip.status not in ("live", "hidden"):
         return None
@@ -231,7 +235,8 @@ def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
 
 
 def report(db: Session, slug: str, fan: str, reason: str = "") -> bool | None:
-    """A fan's report, once each: whether the clip is hidden now; None for no live clip."""
+    """A fan's report, once each, flagging the clip for the admin panel: whether it counted (False when this
+    fan had reported it); None for no live clip."""
     clip = db.scalar(select(Clip).where(Clip.slug == slug, Clip.status == "live"))
     if clip is None:
         return None
@@ -241,11 +246,24 @@ def report(db: Session, slug: str, fan: str, reason: str = "") -> bool | None:
     except IntegrityError:
         return False  # reported already
     db.execute(update(Clip).where(Clip.id == clip.id).values(reports=Clip.reports + 1))
-    db.refresh(clip)
-    if clip.reports >= HIDE_AT:
-        clip.status = "hidden"
-        return True
-    return False
+    return True
+
+
+def merge(db: Session, anon: str, fan: str) -> None:
+    """A device's anonymous fan signing in (accounts.adopt): its reports become the account's, one each."""
+    moved = insert(ClipReport).from_select(["clip_id", "fan_id", "reason", "created_at"],
+                                           select(ClipReport.clip_id, literal(fan), ClipReport.reason, ClipReport.created_at).where(ClipReport.fan_id == anon))
+    db.execute(moved.on_conflict_do_nothing())
+    db.execute(delete(ClipReport).where(ClipReport.fan_id == anon))
+
+
+def forget_players(db: Session, gone: list[int]) -> None:
+    """Players removed (players.remove): off every clip that showed them (a clip's tags are ids in a list,
+    which no foreign key takes with the player)."""
+    if not gone:
+        return
+    for clip in db.scalars(select(Clip).where(or_(*[Clip.players.contains([g]) for g in gone]))):
+        clip.players = [p for p in clip.players if p not in gone]
 
 
 # ---------------------------------------------------------------- reading
@@ -292,7 +310,7 @@ def listed(db: Session, *, match_: str | None = None, competition: str | None = 
     bucket = clipstore.STORE
     if bucket is None:
         return []
-    q = select(Clip).where(Clip.status == "live")
+    q = select(Clip).where(Clip.status == "live", _sport_on(db))
     if match_ is not None:
         q = q.where(Clip.match == match_)
     if competition is not None:
@@ -307,18 +325,29 @@ def listed(db: Session, *, match_: str | None = None, competition: str | None = 
 
 def one(db: Session, slug: str) -> dict[str, Any] | None:
     bucket = clipstore.STORE
-    clip = db.scalar(select(Clip).where(Clip.slug == slug, Clip.status == "live"))
+    clip = db.scalar(select(Clip).where(Clip.slug == slug, Clip.status == "live", _sport_on(db)))
     return public(clip, bucket) if clip is not None and bucket is not None else None
 
 
+def _sport_on(db: Session):
+    """Clips of a sport turned off aren't shown (a fan's own game, of no match, always is)."""
+    keys = [k for k in db.scalars(select(Clip.sport).where(Clip.sport.is_not(None)).distinct()) if sports.on(k)]
+    return or_(Clip.sport.is_(None), Clip.sport.in_(keys))
+
+
 def for_admin(db: Session, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-    """Clips for the admin panel, newest first, whatever their status, with their reports."""
+    """Clips for the admin panel, newest first, whatever their status (or "reported": the live ones fans
+    reported, the most first), with their reports."""
     bucket = clipstore.STORE
     q = select(Clip, ClipKey.name).outerjoin(ClipKey, ClipKey.id == Clip.key_id)
-    if status:
+    order = [Clip.created_at.desc()]
+    if status == "reported":  # live clips fans reported, the most reported first
+        q = q.where(Clip.status == "live", Clip.reports > 0)
+        order = [Clip.reports.desc(), *order]
+    elif status:
         q = q.where(Clip.status == status)
     out = []
-    for clip, by in db.execute(q.order_by(Clip.created_at.desc()).limit(limit)):
+    for clip, by in db.execute(q.order_by(*order).limit(limit)):
         item = public(clip, bucket) if bucket is not None else {"id": clip.slug, "line": line(clip.moment or {})}
         out.append({**item, "status": clip.status, "reports": clip.reports, "source": clip.source,
                     "by": by, "created": clip.created_at.isoformat()})

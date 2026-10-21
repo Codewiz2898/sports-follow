@@ -31,7 +31,7 @@ SIGNED_FOR = 15 * 60  # seconds an upload URL works
 
 
 class Store(Protocol):
-    def put_url(self, key: str, content_type: str) -> str: ...
+    def put_url(self, key: str, content_type: str, length: int | None = None) -> str: ...
     def size(self, key: str) -> int | None: ...
     def delete(self, key: str) -> None: ...
     def public_url(self, key: str) -> str: ...
@@ -92,8 +92,12 @@ class BucketStore:
         return presign(method, self.host, f"/{self.bucket}/{key}", access_key=self.access_key, secret=self.secret,
                        region=self.region, expires=expires, now=datetime.now(timezone.utc), headers=headers)
 
-    def put_url(self, key: str, content_type: str) -> str:
-        return self._url("PUT", key, {"content-type": content_type})
+    def put_url(self, key: str, content_type: str, length: int | None = None) -> str:
+        """Signed for its type, and its exact size when given: the PUT must send both as they are."""
+        headers = {"content-type": content_type}
+        if length is not None:
+            headers["content-length"] = str(length)
+        return self._url("PUT", key, headers)
 
     def size(self, key: str) -> int | None:
         """The object's size in bytes, or None when it isn't there."""
@@ -119,8 +123,8 @@ class MemoryStore:
         self.objects: dict[str, bytes] = {}
         self.public_base = public_base
 
-    def put_url(self, key: str, content_type: str) -> str:
-        return f"https://bucket.test/{key}?signed-for={quote(content_type)}"
+    def put_url(self, key: str, content_type: str, length: int | None = None) -> str:
+        return f"https://bucket.test/{key}?signed-for={quote(content_type)}" + (f"&length={length}" if length is not None else "")
 
     def put(self, key: str, data: bytes) -> None:
         self.objects[key] = data

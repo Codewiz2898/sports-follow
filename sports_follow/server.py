@@ -1566,9 +1566,11 @@ def clips_list(match: str | None = None, competition: str | None = None, player:
     since = None
     if before:
         try:
-            since = datetime.fromisoformat(before)
+            since = datetime.fromisoformat(before.replace(" ", "+"))  # a "+" sent unencoded arrives as a space
         except ValueError:
-            raise HTTPException(400, "before must be a clip's published time.")
+            since = None
+        if since is None or since.tzinfo is None:
+            raise HTTPException(400, "before must be a clip's published time, with its zone.")
     return {"clips": clips.listed(db, match_=match, competition=competition, player=player, before=since)}
 
 
@@ -1582,7 +1584,7 @@ def clip_page(slug: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @app.post("/api/clips/{slug}/report")
 def report_clip(slug: str, body: dict[str, Any] = Body(default={}), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """A fan says a clip shouldn't be up: once each; enough reports hide it until an admin looks."""
+    """A fan says a clip shouldn't be up: once each, flagging it for the admin panel."""
     hidden = clips.report(db, slug, fan, str(body.get("reason") or ""))
     if hidden is None:
         raise HTTPException(404, "No such clip.")
