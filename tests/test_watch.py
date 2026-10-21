@@ -9,6 +9,7 @@ import base64
 import hashlib
 import re
 from html import unescape
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,8 @@ from sports_follow import watch
 from sports_follow.adapters import Stream
 
 from .test_api import api  # noqa: F401  (the fixture)
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def raw(url: str, language: str = "", official: bool = False, main: bool = False) -> dict:
@@ -120,3 +123,16 @@ def test_every_stream_the_app_plays_has_a_watch_page_and_a_host_that_isnt_one_no
     assert set(watch.PLAYERS) == {"twitch", "kick", "youtube"}
     assert watch.page("twitch", "riotgames", 'stann.in"><script>') is None and watch.page("twitch", "riotgames", "") is None
     assert frames(watch.page("twitch", "riotgames", "10.0.2.2")[0]) == ["https://player.twitch.tv/?channel=riotgames&parent=10.0.2.2&autoplay=true"]
+
+
+def test_the_web_app_makes_each_players_address_as_the_watch_page_does_and_the_site_may_frame_it():
+    # The web app frames a player itself (components/Watch.tsx's playerUrl), the site's CSP allowing its host.
+    web = (ROOT / "web" / "src" / "components" / "Watch.tsx").read_text()
+    made = dict(re.findall(r"embed\.player === '(\w+)'\) return `([^`]+)`", web))
+    assert set(made) == set(watch.PLAYERS)
+    for name, plays in (("twitch", "riotgames"), ("kick", "cct_cs2"), ("youtube", "dQw4w9WgXcQ")):
+        address = made[name].replace("${id}", plays).replace("${encodeURIComponent(window.location.hostname)}", "stann.in")
+        assert address == watch.PLAYERS[name].address(plays, "stann.in"), name
+    policy = re.search(r'header @app Content-Security-Policy "([^"]+)"', (ROOT / "deploy" / "caddy" / "Caddyfile").read_text())
+    framed = re.search(r"frame-src ([^;]+);", policy[1] if policy else "")
+    assert framed and {p.origin for p in watch.PLAYERS.values()} <= set(framed[1].split())

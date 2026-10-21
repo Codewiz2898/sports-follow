@@ -221,8 +221,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   id of another shape than its player plays, is a 404), in a WebView that keeps to that page: a link out of the
   player opens in the platform's app or the browser. That page brings its own Content-Security-Policy, stricter
   than the site's (no script of its own, its one style by its hash, only its player's frame), which the Caddyfile
-  leaves it. A platform is one entry in `watch.PLATFORMS`, and its player (what it plays, its address) one
-  `watch.Player`.
+  leaves it. A platform is one entry in `watch.PLATFORMS`, with its player (what it plays, its address) as a
+  `watch.Player`; the web app makes the same address itself (`components/Watch.tsx`'s `playerUrl`), and the
+  Caddyfile's `frame-src` names each player's host, which `tests/test_watch.py` keeps in step.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
   (`match_follow`: the fan, the game's event, their level, and when it lapsed); following a game nobody

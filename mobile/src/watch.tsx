@@ -152,7 +152,7 @@ function WholeScreen({ page, platform, onOut, onClose }: { page: string; platfor
             }}
             onOpenWindow={(e) => leave(e.nativeEvent.targetUrl)}
             mediaPlaybackRequiresUserAction={false} // it plays at once: the tap that opened it asked for that
-            allowsFullscreenVideo
+            // No full screen of the player's own: it fills the screen already, and the WebView's would turn it upright.
             allowsInlineMediaPlayback
             setBuiltInZoomControls={false}
             overScrollMode="never"
