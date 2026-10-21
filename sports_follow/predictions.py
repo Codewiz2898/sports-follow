@@ -13,11 +13,12 @@ is refused.
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
 until its questions settle, armed by its start: a followed player's or team's refresh moves that, as for any game
-they're in, and a read of the game moves it for one nobody follows anyone in (made; a big game is read again when
-the league's read says it moved: prepare). Each poll settles what its board answers (polled): a right pick scores
-100 less the share (%) of fans who picked the same, at least FLOOR, so a call few made is worth more; a wrong one 0.
-A question its game won't answer (a map the series didn't need) is voided, its picks unscored; one still unanswered
-STALE past its start is voided too (sweep). A result the source takes back settles again.
+they're in, and a read of the game moves it for one nobody follows anyone in (made), read every PREPARE_EVERY in the
+day before it, and a big game also when the league's read says it moved (prepare). Each poll settles what its board
+answers (polled): a right pick scores 100 less the share (%) of fans who picked the same, at least FLOOR, so a call
+few made is worth more; a wrong one 0. A question its game won't answer (a map the series didn't need) is voided, its
+picks unscored; one still unanswered STALE past its start is voided too (sweep). A result the source takes back
+settles again.
 
 Fans see how everyone split once they've picked, or once the question's closed; friends' picks in a league once
 it's closed. A league's table is its members' points on the questions settled since it was made.
@@ -184,10 +185,11 @@ def _read(db: Session, system: str, fixture: str, game: dict[str, Any], keys: li
 def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     """The games coming up within AHEAD, in a sport that asks, with no questions yet: those of fans' players, teams
     and followed games, and Today's big games (league.coming), whoever follows them, so a fan who follows nobody can
-    call those too; and a big game whose start the league's read has moved since its questions were made, or since
-    a pick gave them an event no followed refresh moves (moved, for those), so they and its event move with it. The
-    reads to ask for (worker.prepare_questions), whose boards make them, or move them (made). A game is asked for at
-    most every PREPARE_EVERY, PREPARE_MOST a run, soonest first."""
+    call those too. And the games only a read of says when they start, so their questions and the event they're
+    polled by move with it (made; moved, for a refresh's): one a pick waits on that no followed refresh moves, while
+    it's within AHEAD, and a big game whose start the league's read has moved since its questions were made, or
+    since a pick gave them such an event (one brought forward from further off). The reads to ask for
+    (worker.prepare_questions). A game is asked for at most every PREPARE_EVERY, PREPARE_MOST a run, soonest first."""
     from . import match  # the match page's reads (match reads Live now, which reads search, which reads the pipeline)
 
     now = now or _now()
@@ -197,12 +199,17 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     with session() as db:
         theirs = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(_fans_events()), Event.status.in_(PRE_START), Event.start_utc.is_not(None),
                                                                                  Event.start_utc > now, Event.start_utc <= now + AHEAD, ~asked)).all()
+        # A game a pick waits on that nothing refreshes (a game picked from its card or its match page): only a read
+        # of it says it's moved, so it's read every PREPARE_EVERY in the AHEAD before it, a dozen reads at most.
+        picked = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(watched()), Event.status.in_(TO_COME), Event.id.not_in(_refreshed()),
+                                                                                 Event.start_utc > now, Event.start_utc <= now + AHEAD)).all()
         unrefreshed = and_(Event.id == Question.event_id, Event.status.in_(TO_COME), Event.id.not_in(_refreshed()))
         made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc).outerjoin(Event, unrefreshed)
                           .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
     # Each big game asked of: the starts held here that only a read of it moves (made). Its open questions' while
     # nothing polls them; once a pick gives them an event to be polled by (pick), that event's while it's still to
-    # start, unless a followed player's or team's refresh moves it (structured.upsert_game).
+    # start and no followed player's or team's refresh moves it (structured.upsert_game), which is read anyway in
+    # the AHEAD before that start (picked).
     held: dict[str, set[datetime | None]] = {}
     for keys, status, starts_at, event_id, ours, event_start in made:
         start = ([starts_at] if status == OPEN else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
@@ -211,7 +218,7 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     # A start the league's read and the game's own disagree on (an older league read) is read again every
     # PREPARE_EVERY till the league's next read: a few reads a game at most, in the refresh lane.
     due = [game for game in big if game[1] not in held or held[game[1]] - {game[0]}]
-    games = {key: (start, key, sport) for start, key, sport in [*theirs, *due]}  # a fan's game that's a big one, once
+    games = {key: (start, key, sport) for start, key, sport in [*theirs, *picked, *due]}  # a fan's game that's a big one, once
     out: list[tuple[str, str]] = []
     redis = bus.sync_redis()
     for _, key, sport in sorted(games.values()):
@@ -254,8 +261,10 @@ def _rescheduled(db: Session, keys: list[str], game: dict[str, Any]) -> None:
     status = game.get("status")
     start = datetime.fromisoformat(game["start_utc"]) if game.get("start_utc") else None
     if start is None or status not in TO_COME:
-        return  # a read with no start doesn't take away one known
-    for event in db.scalars(select(Event).where(Event.key.in_(keys), Event.status.in_(TO_COME), Event.start_utc.is_distinct_from(start), Event.id.not_in(_refreshed()))):
+        return  # under way or over, the poller's; and a read with no start doesn't take away one known
+    postponed = Event.status == "postponed"
+    changed = or_(Event.start_utc.is_distinct_from(start), postponed if status == "scheduled" else ~postponed)  # a postponement often keeps its date
+    for event in db.scalars(select(Event).where(Event.key.in_(keys), Event.status.in_(TO_COME), changed, Event.id.not_in(_refreshed()))):
         structured.reschedule(db, event, start, status)
 
 
@@ -479,7 +488,8 @@ def for_players(db: Session, fan: str | None, player_ids: list[int], now: dateti
 
 
 def _refreshed() -> Any:
-    """The events a followed player's or team's refresh brings up to date, their start too (structured.upsert_game)."""
+    """The events a followed player's or team's refresh brings up to date, their start too (structured.upsert_game):
+    those a followed player or team is in, whether or not their sport or source runs just now."""
     players = select(EventPlayer.event_id).join(Follow, Follow.player_id == EventPlayer.player_id)
     teams = select(EventTeam.event_id).join(TeamFollow, TeamFollow.team_id == EventTeam.team_id)
     return union(players, teams)
