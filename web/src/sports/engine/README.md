@@ -28,5 +28,5 @@ chessEngine.ts imports both files' addresses (`?url`), so the build copies them 
 named by their content. Only a fan who opens an analysis board fetches them, and the service worker keeps
 them then, as it does every built asset. The worker script is told its `.wasm`'s address in its own address's
 hash (`<script>#<wasm>`). WebAssembly needs `'wasm-unsafe-eval'` in the page's Content-Security-Policy
-(deploy/caddy/Caddyfile). Replacing the engine: new files here, their checksums above, and the source and
-licence links in chessAnalysis.tsx.
+(deploy/caddy/Caddyfile). Replacing the engine: new files here, their checksums above, and in chessEngine.ts
+the two `?url` imports (they name the files) and `BUILT_FROM`, the commit the source and licence links point at.

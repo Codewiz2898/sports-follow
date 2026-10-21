@@ -27,6 +27,10 @@ const LOOK = 'go depth 18'
 // worker, which never reaches its error event): this long without a word from it while it starts, it has
 // failed. Its download's progress is a word, so a slow network isn't a failure.
 const QUIET = 15_000
+// Once it answers, it answers a stop or an isready at once (it acts on a stop mid-search): this long without the
+// bestmove or readyok it owes, it has wedged, and the board says so rather than look forever. A search left to
+// run isn't timed: a slow phone may take seconds to reach its depth.
+const OWED = 5_000
 
 export interface Engine {
   /** Look at a position (a FEN), each look at it, deeper as it goes, to `seen`; a new position stops the last. */
@@ -41,10 +45,12 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
   const worker = new Worker(ENGINE)
   let ready = false
   let quit = false
+  let owed = 0
   const fail = () => {
     if (quit) return
     quit = true
     window.clearTimeout(quiet)
+    window.clearTimeout(owed)
     worker.terminate()
     on.failed()
   }
@@ -52,6 +58,10 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
   const heard = () => {
     window.clearTimeout(quiet)
     if (!ready) quiet = window.setTimeout(fail, QUIET)
+  }
+  const owe = () => {
+    window.clearTimeout(owed)
+    owed = window.setTimeout(fail, OWED)
   }
   // The build reports its download on a port of ours, if it's given one.
   const progress = new MessageChannel()
@@ -72,9 +82,11 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
     clearing = true
     worker.postMessage('ucinewgame')
     worker.postMessage('isready')
+    owe()
   }
   const search = () => {
     clearing = false
+    window.clearTimeout(owed)
     if (!next) return
     searching = next
     next = null
@@ -92,6 +104,7 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
       go()
     } else if (line === 'readyok' && clearing) search()  // the newest position asked for, if several came meanwhile
     else if (line.startsWith('bestmove')) {
+      window.clearTimeout(owed)
       searching = null
       go()
     } else if (searching) {
@@ -107,12 +120,15 @@ export function startEngine(on: { loading: (share: number) => void; ready: () =>
   return {
     look(fen, seen) {
       next = { fen, seen }
-      if (searching) worker.postMessage('stop')
-      else go()  // while it clears, the readyok searches this one
+      if (searching) {
+        worker.postMessage('stop')
+        owe()
+      } else go()  // while it clears, the readyok searches this one
     },
     quit() {
       quit = true
       window.clearTimeout(quiet)
+      window.clearTimeout(owed)
       worker.terminate()
       progress.port1.close()
     },
