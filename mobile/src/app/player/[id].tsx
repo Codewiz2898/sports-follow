@@ -209,7 +209,7 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
           </View>
         </>
       ) : retired ? null : next ? (
-        <NextCard event={next} sport={p.sport}><RefreshButton card={card} colour={colour.bg} /></NextCard>
+        <NextCard event={next} sport={p.sport}><RefreshButton card={card} /></NextCard>
       ) : card.live.available === false ? (
         <Surface pad style={{ gap: 4 }}>
           <Text style={t.title}>No live scores for {sportName} yet</Text>

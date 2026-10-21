@@ -131,44 +131,45 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
   )
 }
 
-/** One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's teams and players in
- * it, or saying they follow the game itself (`sport`: its sport, with no players). It opens the game's match page
- * (the line-ups as they come, both sides' players), else the first player's page. */
+/** One of the fan's games still to come, on Today: a block of its sport's colour, as their results are (a big game
+ * none of theirs are in, LeagueComingCard, is outlined), with the countdown big once it's less than a day away
+ * (else the day), then the game and a chip naming the fan's teams and players in it, or saying they follow the
+ * game itself (`sport`: its sport, with no players). It opens the game's match page (the line-ups as they come,
+ * both sides' players), else the first player's page. */
 export function ComingCard({ event, players, seed, sport, teams = [], fill }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[] } & RailCard) {
   const now = useNow()
   const tone = useTone(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Pressable onPress={openMatch(event.match, players[0] ? `/player/${players[0].player_id}` : undefined)} style={[b.coming, fill && { width: undefined }]}>
-      <Backdrop sport={tone.key} seed={seed} colour={tone.ink} />
-      <Eyebrow color={colour.inkMuted} lines={1}>{eyebrow}</Eyebrow>
-      <Dsp size={44} color={tone.ink}>{big}</Dsp>
+    <Pressable onPress={openMatch(event.match, players[0] ? `/player/${players[0].player_id}` : undefined)} style={[b.coming, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
+      <Backdrop sport={tone.key} seed={seed} colour={tone.on} />
+      <Eyebrow color={tone.onSoft} lines={1}>{eyebrow}</Eyebrow>
+      <Dsp size={44} color={tone.on}>{big}</Dsp>
       <View style={{ gap: 6 }}>
-        <Text style={[b.resultLine, { color: colour.bg }]} numberOfLines={2}>{event.title}</Text>
-        <Pill small label={[...teams, ...players.map((c) => shortName(c.player.name))].join(' · ') || 'Following this game'} bg={tone.sport} color={tone.on} />
+        <Text style={[b.resultLine, { color: tone.on }]} numberOfLines={2}>{event.title}</Text>
+        <Pill small label={[...teams, ...players.map((c) => shortName(c.player.name))].join(' · ') || 'Following this game'} bg={tone.on} color={tone.sport} />
       </View>
     </Pressable>
   )
 }
 
-/** A player's next game, on their page: an ink card, the countdown in their sport's colour. `children` sit at
- * its foot beside when and where it is (the page's refresh button). */
+/** A player's next game, on their page: a white card under their band, tagged in their sport's colour, the countdown
+ * big. `children` sit at its foot beside when and where it is (the page's refresh button). */
 export function NextCard({ event, sport, children }: { event: UpcomingEvent; sport?: string | null; children?: ReactNode }) {
   const tone = useTone(sport)
   const left = countdown(event.start_utc, useNow())
   return (
     <View style={b.next}>
       <View style={b.row}>
-        <Eyebrow color={tone.ink}>Next game</Eyebrow>
-        {event.competition ? <Text style={[t.tiny, { fontFamily: font[700], color: colour.inkMuted, textAlign: 'right', flexShrink: 1 }]}>{event.competition}</Text> : null}
+        <Pill small label="Next game" bg={tone.sport} color={tone.on} />
+        {event.competition ? <Text style={[t.tiny, { fontFamily: font[700], color: colour.muted, textAlign: 'right', flexShrink: 1 }]}>{event.competition}</Text> : null}
       </View>
       <View style={[b.row, { alignItems: 'flex-end' }]}>
-        <Text style={[t.title, { fontSize: 20, lineHeight: 26, color: colour.bg, flexShrink: 1 }]}>{event.title}</Text>
-        {left ? <Dsp size={44} color={tone.ink}>{left}</Dsp> : null}
+        <Text style={[t.title, { fontSize: 20, lineHeight: 26, color: colour.text, flexShrink: 1 }]}>{event.title}</Text>
+        {left ? <Dsp size={44} color={colour.text}>{left}</Dsp> : null}
       </View>
-      <View style={[b.row, { paddingTop: 12, borderTopWidth: 1, borderTopColor: colour.inkLine, flexWrap: 'wrap' }]}>
-        <Text style={[t.small, { fontFamily: font[700], color: colour.bg, flexShrink: 1 }]}>{[event.start_utc ? dateTime(event.start_utc) : 'Date to be confirmed', event.venue].filter(Boolean).join(' · ')}</Text>
+      <View style={[b.row, { paddingTop: 12, borderTopWidth: 1, borderTopColor: colour.line, flexWrap: 'wrap' }]}>
+        <Text style={[t.small, { fontFamily: font[700], color: colour.text, flexShrink: 1 }]}>{[event.start_utc ? dateTime(event.start_utc) : 'Date to be confirmed', event.venue].filter(Boolean).join(' · ')}</Text>
         {children}
       </View>
     </View>
@@ -535,8 +536,8 @@ export const b = StyleSheet.create({
   resultHero: { width: 322, minHeight: 356, padding: 18, borderRadius: 26 },
   resultLine: { fontSize: 13, lineHeight: 17, fontFamily: font[700] },
   heroFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingTop: 10, borderTopWidth: 2 },
-  coming: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, width: 204, minHeight: 176, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE, backgroundColor: colour.text },
-  next: { gap: 14, padding: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.text },
+  coming: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, width: 204, minHeight: 176, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE },  // its sport's colour (ComingCard)
+  next: { gap: 14, padding: 18, borderRadius: RADIUS_CARD, backgroundColor: colour.surface },
   tile: { justifyContent: 'space-between', gap: 8, minHeight: 116, padding: 14, borderRadius: RADIUS_TILE },
   tileSport: { fontFamily: font[800], fontSize: 10, letterSpacing: 0.9, textTransform: 'uppercase', paddingRight: 60 },
   tileStatus: { fontFamily: font[800], fontSize: 12, lineHeight: 15.6 },
