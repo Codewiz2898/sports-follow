@@ -42,7 +42,7 @@ internal object Cards {
   const val ID = 1 // each notification is told apart by its tag, which the server gives it
   private const val LOG = "StannNotifications"
   private const val STALE = 20 * 60 * 1000L // a live card nobody updates for this long goes by itself (the server resends every 10)
-  private val BLUE = Color.parseColor("#1f5bef") // stann's own, for a push with no sport (a test)
+  private val BLUE = Color.parseColor("#1f5bef") // the app's own, for a push with no sport (a test)
   private val INK = Color.parseColor("#0d0d0d") // the app's text colour (web/src/styles.css --text)
   private val SHORT = Regex("\\d{1,3}") // a score the board can put side by side: "2", "104"
 
@@ -250,7 +250,7 @@ internal object Cards {
 
   /** A notification's colours: its sport's block and the words on it (Sport.colour's "sport" and "on"), or, with
    *  sport colours off on this phone (Alerts' Settings), every sport's block in the app's ink, white on it, and
-   *  the icon in stann's blue: quieter beside other apps' notifications. */
+   *  the icon in the app's blue: quieter beside other apps' notifications. */
   private class Look(d: Map<String, String>, private val own: Boolean) {
     val colour = if (own) colour(d["colour"], BLUE) else INK
     val ink = if (own) colour(d["ink"], Color.WHITE) else Color.WHITE
@@ -379,11 +379,11 @@ internal object Cards {
   private fun icon(c: Context): Int =
     c.resources.getIdentifier("notification_icon", "drawable", c.packageName).takeIf { it != 0 } ?: c.applicationInfo.icon
 
-  /** Opens the app at one of its pages ("/player/7", "/match/espn/401"), by its own link (stann://), saying
-   *  which notification was tapped (n=) so the app can count the open. */
+  /** Opens the app at one of its pages ("/player/7", "/match/espn/401"), by its own link (app.config.ts's scheme),
+   *  saying which notification was tapped (n=) so the app can count the open. */
   private fun open(c: Context, path: String, notification: String?): PendingIntent {
     val query = notification?.takeIf { it.isNotBlank() && it != "0" }?.let { (if ('?' in path) "&" else "?") + "n=$it" }.orEmpty()
-    val uri = Uri.parse("stann://" + path.trimStart('/') + query)
+    val uri = Uri.parse("slam://" + path.trimStart('/') + query)
     val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(c.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     return PendingIntent.getActivity(c, uri.toString().hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }

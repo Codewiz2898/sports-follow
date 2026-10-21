@@ -10,6 +10,7 @@ import type { PushSettings, SportCatalog } from '../../web/src/types'
 
 export type * from '../../web/src/types'
 
+// TODO(BHA-348): the new domain once it's bought (app.config.ts's SITE; tests/test_app_name.py keeps them in step).
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://stann.in').replace(/\/$/, '')
 
 /** A refusal from the API: its message for the fan, and the HTTP status (0: the server couldn't be reached). */

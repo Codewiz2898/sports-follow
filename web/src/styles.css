@@ -84,8 +84,8 @@ p { margin: 0; }
   .tabbar { display: none; }
 }
 
-/* The logo: the fan badge (the app icon's mark) and "stann" in Fredoka. */
-.brand { align-self: flex-start; display: flex; align-items: center; gap: 10px; font-family: var(--logo); font-weight: 600; font-size: 30px; line-height: 1; letter-spacing: -0.01em; }
+/* The logo: the fan badge (the app icon's mark) and the name in Fredoka, in lower case like the badge's "s". */
+.brand { align-self: flex-start; display: flex; align-items: center; gap: 10px; font-family: var(--logo); font-weight: 600; font-size: 30px; line-height: 1; letter-spacing: -0.01em; text-transform: lowercase; }
 .brand img { width: 36px; height: 36px; }
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: 12px; font-weight: 700; color: var(--muted); }
@@ -417,7 +417,7 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .campaign-band > :not(.backdrop) { position: relative; }
 .campaign-band .backdrop { color: var(--on-sport); opacity: 0.16; --bd-size: 1.6; }
 .campaign-band .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; }
-.campaign-brand { font-family: var(--logo); font-weight: 600; font-size: 26px; line-height: 1; letter-spacing: -0.01em; }
+.campaign-brand { font-family: var(--logo); font-weight: 600; font-size: 26px; line-height: 1; letter-spacing: -0.01em; text-transform: lowercase; }
 .pill.on-sport { background: var(--on-sport); color: var(--sport); }
 .campaign-title { font-size: clamp(54px, 16vw, 84px); overflow-wrap: anywhere; padding-right: 0.08em; }
 .campaign-lines { display: flex; flex-direction: column; gap: 6px; max-width: 42ch; font-size: 16px; font-weight: 700; line-height: 1.4; }

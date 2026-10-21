@@ -780,13 +780,22 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `tests/fixtures/curate_*.jsonl` are 41 made-up ones across cricket, football, chess and esports, among them a
   channel's own boilerplate (subscribe and membership calls, socials, its own merch, academy, app or podcast, a
   sponsor's link under a video about something else), which isn't sponsorship, beside real sponsorship.
-- **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("stann"). The API
-  reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, and
-  `GET /api/config`), the web build fills it into the page title, the manifest, the service worker and
-  the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `mobile/app.config.ts` gives it to the
-  Android app, whose code reads it from Expo's config; `mobile/babel.config.js` fills it into the shared
-  `web/src/app.ts` the app loads, as Vite does. `tests/test_app_name.py` fails if any of them writes the
-  name out itself, or if the app loads shared code that reads something only Vite fills in.
+- **Renaming the app** is one line: `sports_follow/app.json` holds the name fans see ("Slam"). The API
+  reads it (`config.APP_NAME`: its error messages, the sign-in email, the Credits notice, link previews and
+  their pictures, and `GET /api/config`), the web build fills it into the page title, the manifest, the
+  service worker and the app's code (`web/vite.config.ts`, `web/src/app.ts`), and `mobile/app.config.ts`
+  gives it to the Android app, whose code reads it from Expo's config; `mobile/babel.config.js` fills it
+  into the shared `web/src/app.ts` the app loads, as Vite does. The logo writes it in lower case, as the
+  badge's "s" (`.brand` in `web/src/styles.css`, the share picture's band in `share.py`, and the app's Today
+  head and campaign page). `tests/test_app_name.py` fails if any of them writes the name out itself, or if
+  the app loads shared code that reads something only Vite fills in. Before the first Play upload, the
+  Android app's package id and its own link's scheme go with the name (`mobile/app.config.ts`; the Kotlin
+  module says the scheme again, in `Cards.kt`); afterwards the package id can't change. The domain is a
+  setting of its own: the server's `DOMAIN` (`deploy/compose.yaml`) and the mail addresses in
+  `deploy/settings.env`, and in the app `SITE` in `app.config.ts`, `src/api.ts`'s default and the Kotlin
+  module's (`Settings.kt`), which the same test keeps in step. Internal names keep the old ones, as
+  `sports_follow` does: the notifications module (`mobile/modules/stann-notifications`, `io.stann.notifications`,
+  its `stann_*` resources) and the app's own storage keys (`stann.*`), which no fan sees.
 - CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
   Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
   database and `alembic check`; the web app's type-check and build; and the Android app's type-check
@@ -922,9 +931,9 @@ One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 
 ## Android app
 
-`mobile/` is the Android app (package `io.stann.app`): React Native with Expo, in TypeScript like the web
-app. It looks like the site on a phone, page for page: each of the web app's pages and blocks has its
-React Native twin in `mobile/src`, drawn from `web/src/styles.css`'s values (`mobile/src/theme.ts`), with
+`mobile/` is the Android app (package `io.slam.app`; `io.stann.app` before the rename to Slam): React
+Native with Expo, in TypeScript like the web app. It looks like the site on a phone, page for page: each
+of the web app's pages and blocks has its React Native twin in `mobile/src`, drawn from `web/src/styles.css`'s values (`mobile/src/theme.ts`), with
 the same fonts, icons and line art. The display type leans as the site's does, but Android won't skew text,
 so the lean is in the letters: `mobile/assets/fonts/AntonSlanted.ttf`, a copy of Anton that
 `mobile/scripts/slant_font.py` makes (run it again only if Anton changes). It asks the same API (stann.in,
@@ -962,13 +971,13 @@ which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/pl
 campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
 app's "Not found"; typed into Chrome, it stays there. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
-certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.stann.app` and
+certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.slam.app` and
 `SPORTS_FOLLOW_ANDROID_CERT_SHA256` with the upload key's and Play App Signing's fingerprints, comma
 separated (BHA-25), never the debug key's, which anyone can sign with. A build signed with the debug key
 (`npm run android`) gets the links when they're turned on by hand on the phone: the app's Android settings,
 Open by default, Add link, stann.in; or over USB,
-`adb shell pm set-app-links-user-selection --user cur --package io.stann.app true stann.in`.
-`adb shell pm get-app-links io.stann.app` says whether Android verified the site.
+`adb shell pm set-app-links-user-selection --user cur --package io.slam.app true stann.in`.
+`adb shell pm get-app-links io.slam.app` says whether Android verified the site.
 
 Needs JDK 17 and the Android SDK (platform 36, an emulator or a phone with USB debugging):
 
@@ -999,7 +1008,7 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
   with its token (the newest 30 games each, kept on the phone too, so a card already on its way isn't shown).
 
 With Sport colours off in Alerts' Settings, the app draws both in the app's ink, white on it, with the icon in
-stann's blue (a Live Update, which Android draws itself, has a blue bar): quieter beside other apps'
+the app's blue (a Live Update, which Android draws itself, has a blue bar): quieter beside other apps'
 notifications. That's the phone's own choice, which the server never hears.
 
 The drawing is the app's own Expo module, `mobile/modules/stann-notifications` (Kotlin): it takes every FCM
@@ -1014,15 +1023,17 @@ Settings turns them on and off for the phone, with its quiet hours and a test al
 they're on, it registers its FCM token with the API (`POST /api/push/fcm`, with its timezone, quiet
 hours and `live_cards`) at every start, after a sign-in or out, whenever FCM replaces the token, and when
 its quiet hours or Live scores change; a tap opens the
-player's page, or for a game followed by itself, its match page, by the app's own link (`stann://player/7?n=31`,
+player's page, or for a game followed by itself, its match page, by the app's own link (`slam://player/7?n=31`,
 n the notification, which the app counts as opened). Without the Firebase project's files there are no notifications and nothing else changes. To turn them
 on, once:
 
 1. In the [Firebase console](https://console.firebase.google.com), make a project and add an Android app
-   with the package `io.stann.app`.
+   with the package `io.slam.app` (the project is `stann-300ed`, which had `io.stann.app` before the rename).
 2. **The app:** download its `google-services.json` to `mobile/google-services.json` (gitignored; or set
-   `GOOGLE_SERVICES_JSON` to its path), then build again with `npm run android`. It's not a secret, but it
-   stays out of the repo with the project it names.
+   `GOOGLE_SERVICES_JSON` to its path, `~/.config/sports-follow/google-services.json` on Bharath's Mac), then
+   build again with `npm run android`. It's not a secret, but it stays out of the repo with the project it
+   names. A file with no app for the package in it (one downloaded before the rename) builds without
+   notifications, with a warning: download it again once the app is added, and it names both.
 3. **The server:** under Project settings, Service accounts, generate a private key and save it as
    `~/.config/sports-follow/fcm-service-account.json` (`chmod 600`; `SPORTS_FOLLOW_FCM_KEY_FILE` names
    another file). Restart the API and the worker: `GET /api/push` answers `"fcm": true`. For the server,
@@ -1030,7 +1041,7 @@ on, once:
 4. In the app, follow a player and allow notifications. Their next moment arrives as a notification.
 
 `android/` still holds the earlier route, a Trusted Web Activity around the site; it goes once the
-native app is on Play (BHA-39). `/.well-known/assetlinks.json` names one package: set to `io.stann.app`, it's
+native app is on Play (BHA-39). `/.well-known/assetlinks.json` names one package: set to `io.slam.app`, it's
 the native app's, and the TWA loses its full screen.
 
 ## Design

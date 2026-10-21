@@ -7,7 +7,7 @@ import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo,
 
 export interface Section { key: string; title: string; items: SearchResult[] }
 
-/** The order results are shown (and arrowed through) in; `app`, the app's name ("On stann"). */
+/** The order results are shown (and arrowed through) in; `app`, the app's name ("On Slam"). */
 export function sections(data: SearchResponse, app: string): Section[] {
   const { results } = data
   if (data.namesakes > 1) {

@@ -59,7 +59,7 @@ class Picture:
     def digest(self) -> str:
         """A few characters that change whenever the picture would: its address carries them, so a preview
         cached by its address is drawn again once the score moves."""
-        return hashlib.blake2b(repr(self).encode(), digest_size=5).hexdigest()
+        return hashlib.blake2b(repr((APP_NAME, self)).encode(), digest_size=5).hexdigest()  # the band says the name
 
 
 @dataclass(frozen=True)
@@ -414,7 +414,7 @@ def _draw(picture: Picture) -> bytes:
         bottom = _slanted(img, PAD, bottom, line, font, name, picture.ink) - _gap(font)
 
     draw.rectangle((0, HEIGHT - BAND, WIDTH, HEIGHT), fill=PAPER)
-    draw.text((PAD, HEIGHT - BAND / 2), APP_NAME, font=_font("fredoka", 60), fill=BRAND, anchor="lm")
+    draw.text((PAD, HEIGHT - BAND / 2), APP_NAME.lower(), font=_font("fredoka", 60), fill=BRAND, anchor="lm")  # as the logo writes it
     draw.text((WIDTH - PAD, HEIGHT - BAND / 2), TAGLINE, font=_font("manrope", 28), fill=INK, anchor="rm")
 
     out = io.BytesIO()

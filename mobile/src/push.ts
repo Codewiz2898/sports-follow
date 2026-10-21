@@ -150,7 +150,7 @@ export function useNotificationsArriving(arrived: () => void): void {
 const counted = new Set<number>()
 
 /** Counts a tapped notification as opened. The app draws them itself, and a tap opens the app's own link to the
- * page (stann://player/7?n=31), which Expo Router follows; n is the notification. */
+ * page (slam://player/7?n=31), which Expo Router follows; n is the notification. */
 export function useNotificationTaps(): void {
   useEffect(() => {
     const heard = (url: string | null) => {

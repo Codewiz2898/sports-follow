@@ -48,7 +48,7 @@ function Head({ now }: { now: number }) {
         <Eyebrow>{today}</Eyebrow>
         <View accessibilityRole="header" accessibilityLabel={NAME} style={{ flexDirection: 'row', alignItems: 'center', gap: size * 0.18 }}>
           <Image source={require('../../../web/public/icons/mark-192.png')} style={{ width: size * 0.95, height: size * 0.95 }} />
-          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text }}>{NAME}</Text>
+          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text, textTransform: 'lowercase' }}>{NAME}</Text>
         </View>
       </View>
       <View style={{ flexDirection: 'row', gap: 8, paddingBottom: 4 }}>
