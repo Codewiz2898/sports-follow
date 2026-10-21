@@ -48,7 +48,11 @@ FEEDS = "https://www.youtube.com/feeds/"
 KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_YOUTUBE_KEY_FILE", Path.home() / ".config" / "sports-follow" / "youtube-key"))
 PER_DAY = 10_000  # units; each request this module sends costs 1, but a search
 SEARCH_COST = 100  # units a search.list costs, whatever it finds
-SEARCH_RESULTS = 25  # videos a search lists (50 at most, for the same units): the most watched of them
+SEARCH_RESULTS = 50  # videos a search lists, the most watched of them: the most it may, for the same units
+# What every search leaves out (search.list's q takes a NOT, "-"): the Shorts tagged so. Most watched first, a
+# search's results are mostly Shorts, and those under a minute are refused (candidates.MIN_SECONDS); its
+# videoDuration can't help, as "short" is anything under four minutes, where 1-4 minute highlight clips are too.
+NOT_SHORTS = "-#shorts"
 # Never spent: a day counted in UTC isn't YouTube's (Pacific), and another process may count a moment late.
 MARGIN = 1_000
 # Not "youtube" alone: that's also a platform players have accounts on (curate.py), not only this source.
@@ -312,9 +316,10 @@ class YouTube(VideoSource):
 
     def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:
         """search.list (100 units, never cached): videos published after then (or ever, for None), most viewed
-        first, that may be embedded and played off YouTube (syndicated), as a viewer in this country is shown them."""
+        first, that may be embedded and played off YouTube (syndicated), as a viewer in this country is shown them,
+        but for the Shorts tagged #shorts (NOT_SHORTS)."""
         params = {
-            "part": "snippet", "type": "video", "q": query, "order": "viewCount", "maxResults": str(SEARCH_RESULTS),
+            "part": "snippet", "type": "video", "q": f"{query} {NOT_SHORTS}", "order": "viewCount", "maxResults": str(SEARCH_RESULTS),
             "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": country,
         }  # fmt: skip
         if after is not None:

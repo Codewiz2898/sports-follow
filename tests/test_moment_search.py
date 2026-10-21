@@ -27,8 +27,13 @@ def hit(vid: str, title: str, description: str = "", channel: str = CHANNEL) -> 
     }  # fmt: skip
 
 
+def asked_for(request: httpx.Request) -> str:
+    """What a search asked for, without what every search leaves out (youtube.NOT_SHORTS)."""
+    return request.url.params["q"].removesuffix(f" {youtube.NOT_SHORTS}")
+
+
 class Searching(Fake):
-    """YouTube, made up, with search.list: what each query finds."""
+    """YouTube, made up, with search.list: what each query finds, but for what its NOT leaves out."""
 
     def __init__(self):
         super().__init__()
@@ -37,7 +42,10 @@ class Searching(Fake):
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/youtube/v3/search" and not self.error:
             self.asked.append(request)
-            return httpx.Response(200, json={"kind": "youtube#searchListResponse", "items": self.found.get(request.url.params["q"], [])})
+            items = self.found.get(asked_for(request), [])
+            if request.url.params["q"].endswith(f" {youtube.NOT_SHORTS}"):  # as YouTube's NOT does: what's tagged #shorts, left out
+                items = [i for i in items if "#shorts" not in " ".join(str((i.get("snippet") or {}).get(k) or "") for k in ("title", "description")).lower()]
+            return httpx.Response(200, json={"kind": "youtube#searchListResponse", "items": items})
         return super().__call__(request)
 
 
@@ -97,7 +105,7 @@ def test_a_search_asks_for_embeddable_syndicated_videos_since_the_moment_by_view
     assert up.published == datetime(2026, 10, 19, 15, tzinfo=timezone.utc) and up.thumbnail
     [request] = fake.asked
     params = dict(request.url.params)
-    assert params == {"part": "snippet", "type": "video", "q": "Virat Kohli century Lord's", "order": "viewCount", "maxResults": "25",
+    assert params == {"part": "snippet", "type": "video", "q": "Virat Kohli century Lord's -#shorts", "order": "viewCount", "maxResults": "50",
                       "publishedAfter": "2026-10-19T11:30:00Z", "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": "IN"}
 
 
