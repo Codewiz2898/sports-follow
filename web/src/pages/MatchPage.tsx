@@ -161,6 +161,8 @@ export function MatchPage() {
   const follow = useFollowToggle()
   const watch = useFollowGame(match)
   const now = useNow()
+  const [playing, setPlaying] = useState<string | null>(null)  // the stream a fan has started here (Watch), by its address
+  useEffect(() => { setPlaying(null) }, [source, game])
   const back = <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
 
   if (!match) {
@@ -174,7 +176,9 @@ export function MatchPage() {
   const board = boardOf(match)
   const soon = startsIn(match, now)
   const events = keyEvents(match)
+  // Where to watch it: while it's on or about to be, and while a fan's player is on though it's been called over.
   const streams = watchable(match, now)
+  const watching = streams.length > 0 ? streams : playing ? match.streams ?? [] : []
   const yours = match.yours ?? []
   const { state, followed } = watch
   const head = followHead(match, state)
@@ -245,9 +249,9 @@ export function MatchPage() {
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
 
       {/* Where to watch it, while it's on or about to be (sports_follow/watch.py). */}
-      {streams.length > 0 && (
+      {watching.length > 0 && (
         <ErrorBoundary fallback={<BlockError />} resetKey={match.streams}>
-          <Watch streams={streams} title={match.title ?? ''} sport={key} />
+          <Watch streams={watching} title={match.title ?? ''} sport={key} playing={playing} onPlay={setPlaying} />
         </ErrorBoundary>
       )}
 

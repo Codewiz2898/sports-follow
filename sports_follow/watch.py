@@ -7,9 +7,9 @@ order a fan wants them: the organiser's main broadcasts first, then those in Eng
 organiser's before others', each as the source listed it.
 
 Where the app can play a platform's broadcast inside the page, a stream says which of its players (`embed.player`)
-and what that plays (`embed.id`: a Twitch channel, a YouTube video). The app makes the player's address itself, as
-only it knows the page's host, which Twitch's player must be told. Every other is a link: "Watch on Kick". A
-platform is one entry in PLATFORMS; an address on none is named by its host.
+and what that plays (`embed.id`: a Twitch or Kick channel, a YouTube video). The app makes the player's address
+itself, as only it knows the page's host, which Twitch's player must be told. Every other is a link: "Watch on
+Douyu". A platform is one entry in PLATFORMS; an address on none is named by its host.
 """
 
 from __future__ import annotations
@@ -23,26 +23,27 @@ from .adapters import Stream
 
 SHOWN = 8  # the most of a game's streams a page lists: a world final has dozens of co-streams
 
-TWITCH_CHANNEL = re.compile(r"[A-Za-z0-9_]{1,25}")
-# Twitch's own pages, at an address a channel's could have.
-TWITCH_PAGES = {"directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet", "drops"}
 YOUTUBE_VIDEO = re.compile(r"[A-Za-z0-9_-]{11}")
+Play = Callable[[str, list[str], dict[str, list[str]]], str | None]  # (host, path, query) -> what the player plays
 
 
-def _twitch(path: list[str], query: dict[str, list[str]]) -> str | None:
-    """A Twitch channel's page ("twitch.tv/riotgames") -> its channel; any other page, none."""
-    return path[0] if len(path) == 1 and TWITCH_CHANNEL.fullmatch(path[0]) and path[0].lower() not in TWITCH_PAGES else None
+def _channel(name: re.Pattern[str], pages: set[str]) -> Play:
+    """A platform whose player plays a channel by its name, from the channel's page ("twitch.tv/riotgames"): not one
+    of the platform's own pages (pages), nor any page deeper than a channel's ("twitch.tv/riotgames/videos")."""
+    def play(host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
+        return path[0] if len(path) == 1 and name.fullmatch(path[0]) and path[0].lower() not in pages else None
+    return play
 
 
-def _youtube(path: list[str], query: dict[str, list[str]]) -> str | None:
-    """A YouTube video's page ("watch?v=…", "youtu.be/…", "/live/…") -> the video; a channel's ("/@lolesports/live"),
-    which names no video, none."""
+def _youtube(host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
+    """A YouTube video's page ("watch?v=…", "/live/…", "youtu.be/…") -> the video; a channel's ("/@lolesports/live",
+    or an old one by its name, "youtube.com/OGNEsports1"), which names no video, none."""
     if path == ["watch"]:
         found = (query.get("v") or [""])[0]
     elif len(path) == 2 and path[0] in ("live", "embed", "shorts"):
         found = path[1]
-    elif len(path) == 1 and not path[0].startswith("@"):
-        found = path[0]  # youtu.be/<video>
+    elif len(path) == 1 and (host == "youtu.be" or host.endswith(".youtu.be")):
+        found = path[0]
     else:
         return None
     return found if YOUTUBE_VIDEO.fullmatch(found) else None
@@ -53,14 +54,16 @@ class Platform:
     name: str  # "Twitch", as a fan knows it
     hosts: tuple[str, ...]  # its sites, a subdomain of any as well ("www.twitch.tv", "m.twitch.tv")
     player: str = ""  # the app's own player for its broadcasts inside the page ("twitch"); "" for a link only
-    # What that player plays, from a stream's address split into its path and query; None where it can't (a link).
-    play: Callable[[list[str], dict[str, list[str]]], str | None] | None = None
+    # What that player plays, from a stream's address (its host, path and query); None where it can't (a link).
+    play: Play | None = None
 
 
 PLATFORMS = (
-    Platform("Twitch", ("twitch.tv",), "twitch", _twitch),
+    Platform("Twitch", ("twitch.tv",), "twitch", _channel(re.compile(r"[A-Za-z0-9_]{1,25}"), {
+        "directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet", "drops"})),
     Platform("YouTube", ("youtube.com", "youtu.be"), "youtube", _youtube),
-    Platform("Kick", ("kick.com",)),
+    Platform("Kick", ("kick.com",), "kick", _channel(re.compile(r"[A-Za-z0-9_-]{1,40}"), {
+        "browse", "categories", "category", "following", "search", "video", "clips", "dashboard", "settings", "terms-of-service", "privacy-policy"})),
     Platform("Bilibili", ("bilibili.com",)),
     Platform("SOOP", ("sooplive.co.kr", "afreecatv.com")),
     Platform("Huya", ("huya.com",)),
@@ -115,7 +118,7 @@ def offer(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         parts = urlsplit(s.url)
         host = parts.hostname or ""
         found = platform(host)
-        play = found.play([p for p in parts.path.split("/") if p], parse_qs(parts.query)) if found and found.play else None
+        play = found.play(host.lower(), [p for p in parts.path.split("/") if p], parse_qs(parts.query)) if found and found.play else None
         out.append({
             "url": s.url,
             "platform": found.name if found else host.removeprefix("www."),

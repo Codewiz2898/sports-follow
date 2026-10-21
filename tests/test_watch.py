@@ -12,18 +12,19 @@ def raw(url: str, language: str = "", official: bool = False, main: bool = False
     return {"url": url, "language": language, "official": official, "main": main}
 
 
-def test_each_stream_is_named_by_its_platform_and_twitch_and_youtube_play_in_the_page():
+def test_each_stream_is_named_by_its_platform_and_twitch_kick_and_youtube_play_in_the_page():
     twitch, kick, video, channel, other = watch.offer([
         raw("https://www.twitch.tv/riotgames", "en", True, True), raw("https://kick.com/cct_cs2", "en", True, True),
         raw("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "en", True, True), raw("https://www.youtube.com/@lolesports/live", "en", True, True),
-        raw("https://www.nimo.tv/esports", "en", True, True),
+        raw("https://www.douyu.com/9441366?dyshid=0-ac10", "en", True, True),
     ])
     assert twitch == {"url": "https://www.twitch.tv/riotgames", "platform": "Twitch", "language": "en", "language_name": "English", "official": True, "main": True,
                       "embed": {"player": "twitch", "id": "riotgames"}}
-    assert (kick["platform"], kick["embed"]) == ("Kick", None)  # a link: "Watch on Kick"
+    assert (kick["platform"], kick["embed"]) == ("Kick", {"player": "kick", "id": "cct_cs2"})
     assert (video["platform"], video["embed"]) == ("YouTube", {"player": "youtube", "id": "dQw4w9WgXcQ"})
     assert (channel["platform"], channel["embed"]) == ("YouTube", None)  # a channel's live page names no video to play
-    assert (other["platform"], other["embed"]) == ("nimo.tv", None)  # a platform it doesn't know: by its host
+    assert (other["platform"], other["embed"]) == ("Douyu", None)  # a link: "Watch on Douyu"
+    assert watch.offer([raw("https://www.nimo.tv/esports")])[0]["platform"] == "nimo.tv"  # a platform it doesn't know: by its host
 
 
 def test_only_a_channels_own_page_or_a_videos_plays_in_the_page():
@@ -35,6 +36,8 @@ def test_only_a_channels_own_page_or_a_videos_plays_in_the_page():
     assert embed("https://youtu.be/dQw4w9WgXcQ") == {"player": "youtube", "id": "dQw4w9WgXcQ"}
     assert embed("https://www.youtube.com/live/dQw4w9WgXcQ?si=x") == {"player": "youtube", "id": "dQw4w9WgXcQ"}
     assert embed("https://www.youtube.com/watch?v=short") is None
+    assert embed("https://www.youtube.com/OGNEsports1") is None  # an old channel address, as long as a video id
+    assert embed("https://kick.com/browse") is None and embed("https://kick.com/fiesta_cs/videos") is None
     assert embed("https://evil-twitch.tv/riotgames") is None  # twitch.tv's, not a lookalike's
     assert watch.offer([raw("https://evil-twitch.tv/riotgames")])[0]["platform"] == "evil-twitch.tv"
 

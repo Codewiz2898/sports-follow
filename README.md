@@ -209,11 +209,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   organiser runs it and whether it's their main one; PandaScore's `streams_list` for esports series), and
   the game's read keeps them. The page's `streams` name each one's platform from its address and come in
   order: the organiser's main broadcasts, then those in English, then the rest. While the game is on, or
-  within half an hour of its start, the web app plays a Twitch channel inside the page once it's tapped
-  (`player.twitch.tv`, told the page's host), as it does a YouTube video (youtube-nocookie.com), and gives a
-  "Watch on Kick" link for any other platform. Twitch's player must be at least 400×300, so where the
-  column is narrower (a phone) Twitch is a link too. The Android app has a "Watch on …" button that opens
-  the stream in its own app or the browser. A platform is one entry in `watch.PLATFORMS`.
+  within half an hour of its start, the web app plays a Twitch or Kick channel inside the page once it's
+  tapped (`player.twitch.tv`, told the page's host; `player.kick.com`), as it does a YouTube video
+  (youtube-nocookie.com), with "Open on Twitch" beside it; any other platform is a "Watch on Douyu" link.
+  Twitch's player must be at least 400×300, so where the column is narrower (a phone) it opens over the
+  whole screen instead, sideways while the phone is held upright. A player a fan has started stays while the
+  page is open, though the game is called over before the broadcast, which runs behind, has shown the end.
+  The Android app has a "Watch on …" button that opens the stream in its own app or the browser. A
+  platform is one entry in `watch.PLATFORMS`.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
   (`match_follow`: the fan, the game's event, their level, and when it lapsed); following a game nobody
@@ -339,7 +342,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
   account when they sign in, and goes with the player or the account. A video is YouTube's thumbnail behind a
   play button; the player, from youtube-nocookie.com, loads only once it's tapped (the Caddyfile's
-  Content-Security-Policy allows those two hosts, and player.twitch.tv for a match page's Watch live). In the dev server, `?feed-sample` on a player's page or
+  Content-Security-Policy allows those two hosts, and player.twitch.tv and player.kick.com for a match page's Watch live). In the dev server, `?feed-sample` on a player's page or
   Today shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
   all three (`mobile/src/feed.tsx`), where a tapped video opens in the YouTube app (or the browser without it)
   rather than playing inside the page; `EXPO_PUBLIC_FEED_SAMPLE=1` on Metro shows the same made-up items.
