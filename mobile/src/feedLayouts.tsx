@@ -18,7 +18,7 @@ import { ActivityIndicator, AppState, FlatList, Linking, Pressable, StyleSheet, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import { WebView } from 'react-native-webview'
-import { channelOf, duration, openLabel, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
+import { channelOf, duration, openLabel, refusedHere, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
@@ -146,25 +146,42 @@ export function usePlaying(on: boolean, auto = true): { playing: Playing | null;
 }
 
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+// YouTube's IFrame Player API over the page's player: its errors come to the app (onMessage), as {"error": code}.
+const LISTEN = '<script>function onYouTubeIframeAPIReady(){new YT.Player("v",{events:{onError:function(e){'
+  + 'window.ReactNativeWebView.postMessage(JSON.stringify({error:e.data}))}}})}</script>'
+  + '<script src="https://www.youtube.com/iframe_api"></script>'
+const told = new Set<string>() // the videos this app has told the server won't play here, once each
 
 /** YouTube's no-cookie player playing a Feed video where its picture was: a WebView of a page with the player alone,
  * on the site's address (YouTube's embeds want a site around them, as the web's are), muted when it started by
  * itself. YouTube's own buttons do the rest: the sound, pausing, its full screen (upright, as the phone is held). A
- * link out of it opens in the YouTube app or the browser. One that won't load says so, with the way to the video. */
-function InlineVideo({ item, muted, onTouch }: { item: FeedItem; muted: boolean; onTouch?: () => void }) {
-  const [failed, setFailed] = useState(false)
+ * link out of it opens in the YouTube app or the browser. One that won't load says so, with the way to the video; one
+ * YouTube won't play here (its owner keeps it off other sites: refusedHere) says that, and the server is told, once,
+ * so no fan's Feed serves it again (BHA-380). */
+function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playerId: number; muted: boolean; onTouch?: () => void }) {
+  const [failed, setFailed] = useState<'load' | 'refused' | null>(null)
   const site = `${API_URL}/`
   const id = item.video?.youtube_id ?? ''
   const html = useMemo(() => '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
     + '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body>'
-    + `<iframe src="${escape(youtubeEmbed(id, muted))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
-    + '</body></html>', [id, muted, item.title])
+    + `<iframe id="v" src="${escape(youtubeEmbed(id, muted, API_URL))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
+    + LISTEN + '</body></html>', [id, muted, item.title])
   const leave = (url: string) => { open(url)?.() }
   const down = useRef<number | null>(null) // where a touch began: one that ends where it began is a tap, not a scroll
+  const heard = (data: string) => {
+    let code: unknown
+    try { code = (JSON.parse(data) as { error?: unknown }).error } catch { return }
+    if (code === undefined) return
+    if (!refusedHere(code)) { setFailed('load'); return }
+    setFailed('refused')
+    if (told.has(item.id)) return
+    told.add(item.id)
+    api.feedUnplayable(playerId, item.id).catch(() => { told.delete(item.id) }) // said again the next time it's played
+  }
   if (failed) {
     return (
       <View style={v.cover}>
-        <Text style={[t.small, { color: '#FFFFFF' }]}>Couldn't load the player.</Text>
+        <Text style={[t.small, { color: '#FFFFFF' }]}>{failed === 'refused' ? 'This one plays only on YouTube.' : "Couldn't load the player."}</Text>
         <Btn kind="link" label={openLabel(item)} colours={{ fg: '#FFFFFF' }} onPress={() => leave(item.url)} />
       </View>
     )
@@ -193,7 +210,8 @@ function InlineVideo({ item, muted, onTouch }: { item: FeedItem; muted: boolean;
       startInLoadingState
       renderLoading={() => <View style={v.cover}><ActivityIndicator color="#FFFFFF" /></View>}
       renderError={() => <View style={v.cover}><Text style={[t.small, { color: '#FFFFFF' }]}>Couldn't load the player.</Text></View>}
-      onRenderProcessGone={() => setFailed(true)} // its process was ended (memory): said, rather than blank
+      onMessage={(e) => heard(e.nativeEvent.data)}
+      onRenderProcessGone={() => setFailed('load')} // its process was ended (memory): said, rather than blank
     />
     </View>
   )
@@ -243,7 +261,7 @@ export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, 
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
     // An upright one (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly.
-    const still = playing ? <InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
+    const still = playing ? <InlineVideo item={item} playerId={who.id} muted={playing.muted} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
     media = playing ? (
       <View style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
         {upright(item) ? <View style={e.tall}>{still}</View> : still}
@@ -404,7 +422,7 @@ function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: 
 
   let frame: ReactNode
   if (item.kind === 'video' && id && playing) {
-    frame = <View style={[r.frame, place]}><InlineVideo item={item} muted={playing.muted} onTouch={onKeep} /></View>
+    frame = <View style={[r.frame, place]}><InlineVideo item={item} playerId={who.id} muted={playing.muted} onTouch={onKeep} /></View>
   } else if (item.kind === 'video' && id) {
     frame = (
       <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, place]}>

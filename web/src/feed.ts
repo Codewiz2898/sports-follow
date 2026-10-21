@@ -167,10 +167,17 @@ export function statsLine(item: FeedItem, now: number, withLength = false): stri
 
 /** YouTube's no-cookie player for a Feed video, playing at once: the web's in the picture's place, the app's inline in
  * a WebView on the site's address. `muted` for one that starts by itself (autoplay; YouTube's own button turns the sound
- * on), as browsers and YouTube's rules allow only that. (BHA-354: the server will say how to play each video.) */
-export function youtubeEmbed(id: string, muted = false): string {
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}`
+ * on), as browsers and YouTube's rules allow only that. `origin`: the page's own, for one YouTube's IFrame Player API
+ * listens to (its errors: refusedHere). (BHA-354: the server will say how to play each video.) */
+export function youtubeEmbed(id: string, muted = false, origin?: string): string {
+  const api = origin ? `&enablejsapi=1&origin=${encodeURIComponent(origin)}` : ''
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}${api}`
 }
+
+/** Whether an error of YouTube's IFrame Player API means the video won't play in any player of ours (BHA-380), so the
+ * app says so, offers YouTube, and tells the server (feedUnplayable), which stops serving it: 100, gone or private;
+ * 101 and 150, its owner keeps it off other sites (a Content ID claim's, which YouTube's Data API doesn't say). */
+export const refusedHere = (code: unknown): boolean => code === 100 || code === 101 || code === 150
 
 /** Whether a video is taller than it's wide (a Short): framed and played upright. */
 export const upright = (item: FeedItem): boolean => item.kind === 'video' && item.video?.upright === true
