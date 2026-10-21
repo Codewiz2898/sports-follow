@@ -28,4 +28,8 @@ export const UserIcon = icon(<><Circle cx="12" cy="8" r="4" /><Path d="M4 21a8 8
 export const BellIcon = icon(<Path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0" />)
 export const CloseIcon = icon(<Path d="M6 6l12 12M18 6 6 18" />, 2.6)
 export const OutIcon = icon(<Path d="M7 17 17 7M8 7h9v9" />)
+/** Play, filled (a video's play button, Watch live's). */
+export function PlayIcon({ size = 22, color = colour.text }: { size?: number; color?: string }) {
+  return <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
+}
 export const ShareIcon = icon(<><Circle cx="18" cy="5" r="2.6" /><Circle cx="6" cy="12" r="2.6" /><Circle cx="18" cy="19" r="2.6" /><Path d="m8.4 13.3 7.2 4.3M15.6 6.4l-7.2 4.3" /></>)

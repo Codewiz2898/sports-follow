@@ -1,10 +1,21 @@
 """Where a game can be watched (watch.py): each stream named by the platform its address is on, with what the
-app's own player plays where it has one, and in the order a fan wants them."""
+app's own player plays where it has one, and in the order a fan wants them. The site's /watch page, which the
+Android app shows, is one of the app's own players alone, playing only what's of its shape, and may hold that
+player's frame and nothing else."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
+from html import unescape
+
+import pytest
+
 from sports_follow import watch
 from sports_follow.adapters import Stream
+
+from .test_api import api  # noqa: F401  (the fixture)
 
 
 def raw(url: str, language: str = "", official: bool = False, main: bool = False) -> dict:
@@ -61,3 +72,51 @@ def test_a_page_lists_each_web_address_once_and_no_more_than_it_shows():
 
 def test_a_language_by_its_name():
     assert [watch.language(c) for c in ("en", "pt-BR", "RU", "xx", "")] == ["English", "Portuguese", "Russian", "XX", ""]
+
+
+# ---------------------------------------------------------------- the /watch page (the Android app's player)
+
+
+def frames(page: str) -> list[str]:
+    return [unescape(src) for src in re.findall(r'<iframe src="([^"]*)"', page)]
+
+
+def test_the_watch_page_is_the_streams_player_alone_told_the_pages_own_host(api):
+    got = api.call("GET", "/watch/twitch/riotgames")
+    assert got.status_code == 200 and got.headers["content-type"].startswith("text/html")
+    assert frames(got.text) == ["https://player.twitch.tv/?channel=riotgames&parent=test&autoplay=true"]  # Twitch's parent: this page's host
+    assert got.headers["x-robots-tag"] == "noindex, nofollow" and got.headers["cache-control"] == "public, max-age=3600"
+    assert frames(api.call("GET", "/watch/kick/cct_cs2").text) == ["https://player.kick.com/cct_cs2?autoplay=true"]
+    assert frames(api.call("GET", "/watch/youtube/dQw4w9WgXcQ").text) == ["https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0&playsinline=1"]
+
+
+def test_the_watch_page_may_hold_its_players_frame_and_nothing_else(api):
+    for player, plays, origin in (("twitch", "riotgames", "https://player.twitch.tv"), ("kick", "cct_cs2", "https://player.kick.com"),
+                                  ("youtube", "dQw4w9WgXcQ", "https://www.youtube-nocookie.com")):
+        got = api.call("GET", f"/watch/{player}/{plays}")
+        policy = dict(d.strip().split(" ", 1) for d in got.headers["content-security-policy"].split(";"))
+        style = re.findall(r"<style>(.*?)</style>", got.text)
+        assert len(style) == 1 and "<script" not in got.text and " style=" not in got.text  # nothing to run, one style
+        assert policy == {
+            "default-src": "'none'", "style-src": f"'sha256-{base64.b64encode(hashlib.sha256(style[0].encode()).digest()).decode()}'",
+            "frame-src": origin, "base-uri": "'none'", "form-action": "'none'", "frame-ancestors": "'none'",
+        }
+
+
+@pytest.mark.parametrize("path", [
+    "/watch/vimeo/riotgames", "/watch/Twitch/riotgames", "/watch/embed/riotgames",  # only a player the app has, by its name
+    "/watch/twitch/riot.games", "/watch/twitch/" + "a" * 26, "/watch/youtube/short", "/watch/youtube/dQw4w9WgXcQx",  # only what it plays
+    "/watch/kick/a%22%20onload%3D%22x", "/watch/twitch/%3Cscript%3E", "/watch/youtube/dQw4w9WgXc%00",
+])
+def test_a_player_the_app_doesnt_have_or_what_isnt_of_its_shape_is_a_404(api, path):
+    got = api.call("GET", path)
+    assert got.status_code == 404 and got.json() == {"detail": "Not Found"}
+
+
+def test_every_stream_the_app_plays_has_a_watch_page_and_a_host_that_isnt_one_none():
+    offered = watch.offer([raw(u) for u in ("https://www.twitch.tv/riotgames", "https://m.twitch.tv/Gaules", "https://kick.com/united21_en",
+                                            "https://youtu.be/dQw4w9WgXcQ", "https://www.youtube.com/live/abcDEF_-123")])
+    assert all(s["embed"] and watch.page(s["embed"]["player"], s["embed"]["id"], "stann.in") for s in offered)
+    assert set(watch.PLAYERS) == {"twitch", "kick", "youtube"}
+    assert watch.page("twitch", "riotgames", 'stann.in"><script>') is None and watch.page("twitch", "riotgames", "") is None
+    assert frames(watch.page("twitch", "riotgames", "10.0.2.2")[0]) == ["https://player.twitch.tv/?channel=riotgames&parent=10.0.2.2&autoplay=true"]
