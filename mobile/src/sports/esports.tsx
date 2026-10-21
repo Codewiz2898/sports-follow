@@ -286,7 +286,7 @@ function LiveMap({ live, board, teams, yours, tone }: { live: LiveDetail; board?
   )
 }
 
-/** A turn of the draft on its side: a pick in ink (the fan's player's in the sport's colour) with who played it,
+/** A turn of the draft on its side: a pick ringed in ink on paper (the fan's player's in the sport's colour) with who played it,
  * or a ban struck through, with how that hero went for the other side earlier in the series. */
 function Turn({ turn, note, right, yours, tone }: { turn: DraftTurn; note: string | null; right?: boolean; yours?: string[]; tone: Tone }) {
   if (!turn.pick) {
@@ -298,9 +298,9 @@ function Turn({ turn, note, right, yours, tone }: { turn: DraftTurn; note: strin
     )
   }
   const mine = isYours(turn.player ?? '', yours)
-  const ink = mine ? tone.on : colour.surface
+  const ink = mine ? tone.on : colour.text
   return (
-    <View style={[s.pick, { backgroundColor: mine ? tone.sport : colour.text }, right && { alignItems: 'flex-end' }]}>
+    <View style={[s.pick, mine ? { backgroundColor: tone.sport } : s.pickRing, right && { alignItems: 'flex-end' }]}>
       <Dsp size={18} color={ink} style={right ? { textAlign: 'right' } : null}>{turn.hero}</Dsp>
       <Text style={[t.tiny, { color: ink }, right && { textAlign: 'right' }]}>{turn.player}{mine ? ' · you follow' : ''}</Text>
     </View>
@@ -420,17 +420,17 @@ function MapView({ maps, map, teams, yours, tone }: { maps: MapDetail[]; map: Ma
 }
 
 /** A player's hero and line in each map, a tile a map, as many to a row as fit at 68 or more wide, fewer tiles
- * than that sharing the row (.across, the web's auto-fit grid); the maps their side took in ink. */
-function Across({ maps }: { maps: ReturnType<typeof acrossMaps>['maps'] }) {
+ * than that sharing the row (.across, the web's auto-fit grid); the maps their side took in its sport's colour. */
+function Across({ maps, tone }: { maps: ReturnType<typeof acrossMaps>['maps']; tone: Tone }) {
   const [width, setWidth] = useState(0)
   const per = Math.max(1, Math.min(maps.length, Math.floor((width + 6) / (68 + 6))))
   const tile = width ? (width - 6 * (per - 1)) / per - 0.5 : 68 // a hair under, so rounding to pixels can't wrap the last
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       {maps.map((m) => {
-        const ink = m.won ? colour.surface : colour.text
+        const ink = m.won ? tone.on : colour.text
         return (
-          <View key={m.n} style={[s.acrossTile, { width: tile, backgroundColor: m.won ? colour.text : colour.bg }]}>
+          <View key={m.n} style={[s.acrossTile, { width: tile, backgroundColor: m.won ? tone.sport : colour.bg }]}>
             <Text style={[t.tiny, { color: ink, textAlign: 'center' }]}>Map {m.n}{m.won ? ' · won' : ''}</Text>
             <Text style={[t.small, { fontFamily: font[800], color: ink, textAlign: 'center' }]}>{m.as}</Text>
             <Text style={[num(14), { color: ink }]}>{m.line}</Text>
@@ -454,12 +454,12 @@ function SeriesDetail({ maps, teams, yours, live, tone }: { maps: MapDetail[]; t
       {best ? (
         <View style={s.best}>
           <View style={{ flexShrink: 1 }}>
-            <Eyebrow color={tone.ink}>{live ? 'Best so far' : 'Best of the series'}</Eyebrow>
-            <Dsp size={26} color={colour.surface}>{best.name}</Dsp>
+            <Eyebrow>{live ? 'Best so far' : 'Best of the series'}</Eyebrow>
+            <Dsp size={26} color={colour.text}>{best.name}</Dsp>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[num(24), { color: colour.surface }]}>{best.kda}</Text>
-            <Text style={[t.tiny, { color: colour.surface }]}>over {best.maps} map{best.maps === 1 ? '' : 's'}{best.gpm ? ` · ${best.gpm} GPM` : ''}</Text>
+            <Text style={[num(24), { color: colour.text }]}>{best.kda}</Text>
+            <Text style={[t.tiny, { color: colour.text }]}>over {best.maps} map{best.maps === 1 ? '' : 's'}{best.gpm ? ` · ${best.gpm} GPM` : ''}</Text>
           </View>
         </View>
       ) : null}
@@ -491,7 +491,7 @@ function SeriesDetail({ maps, teams, yours, live, tone }: { maps: MapDetail[]; t
                   </View>
                 ) : null}
               </View>
-              <Across maps={across.maps} />
+              <Across maps={across.maps} tone={tone} />
               {across.note ? <Text style={[t.small, t.muted]}>{across.note}</Text> : null}
             </Card>
           </MatchSection>
@@ -637,8 +637,9 @@ const s = StyleSheet.create({
   order: { width: 30, textAlign: 'center', color: colour.muted },
   side: { flex: 1, minWidth: 0 },
   ban: { fontFamily: font[500], fontSize: 14, lineHeight: 19, color: colour.muted, textDecorationLine: 'line-through' },
-  pick: { alignSelf: 'stretch', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 12 },
-  best: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 18, backgroundColor: colour.text },
+  pick: { alignSelf: 'stretch', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 12, borderWidth: 2, borderColor: 'transparent' },  // every pick the same size, ringed or not
+  pickRing: { backgroundColor: colour.bg, borderColor: colour.text },  // a pick of no one the fan follows, ringed in ink (.draft .pick)
+  best: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 18, backgroundColor: colour.surface },
   tabsLine: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, backgroundColor: colour.line }, // under the picked tab's own
   tab: { height: 44, justifyContent: 'center', borderBottomWidth: 3, borderBottomColor: 'transparent' },
   tabOn: { borderBottomColor: colour.text },
