@@ -304,7 +304,7 @@ def on_boards(db: Session, rows: Sequence[Moment], polled: bool = False) -> list
     """Moments as the planner sees them (as_items), each with its game's fixtures where a game is under several
     (structured.boards: a chess board is one of each player's), and a player's there with the player here whose side
     tells it (Item.voice), from its stored id in the source. With `polled`, a voice is kept only where that player's
-    own fixture of the game is being polled (structured.polled_lately), so their side will say it: else both sides
+    own fixture of the game is being polled (structured.told_lately), so their side will say it: else both sides
     do, twice beating never. Looked up only for such games."""
     from . import structured  # an event's board (structured sends through here)
 
@@ -312,7 +312,7 @@ def on_boards(db: Session, rows: Sequence[Moment], polled: bool = False) -> list
     found = structured.boards(db, {i.event_id for i in items})
     if not found:
         return items
-    lately = structured.polled_lately(e for f in found.values() for e in f.events.values()) if polled else set()
+    lately = structured.told_lately(e for f in found.values() for e in f.events.values()) if polled else set()
     out = []
     for m, i in zip(rows, items):
         board = found.get(i.event_id or 0)

@@ -104,8 +104,14 @@ def polls(monkeypatch):
 
 
 def quiet(redis: Store, event_id: int) -> None:
-    """A side's fixture not polled for three minutes: inside a poll gap, but past TELLS_WITHIN (it stalled)."""
-    redis.set(f"polled_at:{event_id}", str(int(time.time()) - structured.TELLS_WITHIN - 60))
+    """A side's fixture whose last poll to commit was three minutes ago: inside a poll gap, but stalled."""
+    redis.set(f"told_at:{event_id}", str(int(time.time()) - 180))
+
+
+def test_a_side_speaks_for_the_other_only_while_its_next_poll_still_finds_the_moment():
+    # A fixture that told its side TELLS_WITHIN ago may stall up to three of its source's rounds more and still find the
+    # moment against the poll before (a gap past POLL_GAP starts a new baseline, which finds none).
+    assert structured.TELLS_WITHIN <= structured.POLL_GAP - 3 * SOURCE.live_cadence
 
 
 def poll(event_id: int, snap: Snapshot, band: int | None = None, move: int = 40) -> None:
@@ -207,10 +213,12 @@ def test_a_fan_of_both_players_has_one_live_card_for_their_board(db, polls, fake
     monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None: livecards.send(event_id, kind, made, board))  # at once
 
     def cards() -> dict[str, list[tuple[str, list[str]]]]:
+        """Each fan's live cards, by event and whom they name, and ends ("end", the card it takes down)."""
         out: dict[str, list[tuple[str, list[str]]]] = {}
         for m in fake_fcm.sent:
-            if m["data"].get("type") == "live":
-                out.setdefault(m["token"].split(":")[0], []).append((m["data"]["event_id"], json.loads(m["data"]["players"])))
+            if m["data"].get("type") in ("live", "end"):
+                said = json.loads(m["data"]["players"]) if m["data"]["type"] == "live" else [m["data"]["tag"]]
+                out.setdefault(m["token"].split(":")[0], []).append((m["data"]["event_id"] if m["data"]["type"] == "live" else "end", said))
         fake_fcm.sent.clear()
         return out
 
@@ -228,12 +236,87 @@ def test_a_fan_of_both_players_has_one_live_card_for_their_board(db, polls, fake
     again(polls.redis)
     poll(2, side(2, status="*", ongoing=True), band=0, move=41)
     assert cards() == {"lazavik": [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])], "both": [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])]}
+    # Polled again, Carlsen's sends theirs once more, and Lazavik's takes its own down from their phone: one card.
+    again(polls.redis)
+    poll(1, side(1, status="*", ongoing=True), band=0, move=42)
+    poll(2, side(2, status="*", ongoing=True), band=0, move=42)
+    sent = cards()
+    assert sent["both"] == [("1", ["Denis Lazavik · Black vs Magnus Carlsen", "Magnus Carlsen · White vs Denis Lazavik"]), ("end", ["live-e2"])]
+    assert sent["lazavik"] == [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])]
     # Muted from the other side's push, the game sends them no card at all.
     server.mute(2, "both", db)
     again(polls.redis)
-    poll(2, side(2, status="*", ongoing=True), band=2, move=42)
-    poll(1, side(1, status="*", ongoing=True), band=2, move=42)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=43)
+    poll(1, side(1, status="*", ongoing=True), band=2, move=43)
     assert set(cards()) == {"lazavik", "carlsen"}
+
+
+def test_with_redis_unreadable_each_side_tells_its_own(db, polls, fake_fcm, monkeypatch):  # noqa: F811
+    # Nothing says whether the other side's fixture is polling: each side sends its own words and its own card.
+    phones(db)
+    phones(db, "fcm")
+    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None: livecards.send(event_id, kind, made, board))  # at once
+    for event_id in (1, 2):
+        poll(event_id, side(event_id, status="*"))
+    polls.pushed.clear()
+
+    def unreadable(keys: list[str]) -> list:
+        raise ConnectionError("Redis went away")
+
+    monkeypatch.setattr(polls.redis, "mget", unreadable)
+    fake_fcm.sent.clear()
+    for event_id in (2, 1):
+        poll(event_id, side(event_id, status="*", ongoing=True), band=0)
+    assert {m["data"]["event_id"] for m in fake_fcm.sent if m["token"].startswith("both:") and m["data"].get("type") == "live"} == {"1", "2"}
+    polls.pushed.clear()
+    poll(2, side(2, status="*", ongoing=True), band=2, move=41)
+    poll(1, side(1, status="*", ongoing=True), band=2, move=41)
+    assert heard(polls.pushed)["both"] == ["Denis Lazavik is in trouble", "Magnus Carlsen is winning"]
+
+
+def test_a_crashing_fixture_doesnt_speak_for_its_side(db, polls, monkeypatch):
+    # Carlsen's fixture keeps failing before its poll commits (it's still polled, so it looks polled): it finds
+    # nothing, so Lazavik's side says what Carlsen's would have.
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, side(event_id, status="*"))
+        poll(event_id, side(event_id, status="*", ongoing=True), band=0)
+    polls.pushed.clear()
+    quiet(polls.redis, 1)  # its last poll to commit
+    record = notify.record
+
+    def failing(db_, player_id, event_id, found, url=None):
+        if event_id == 1:
+            raise RuntimeError("the database went away")
+        return record(db_, player_id, event_id, found, url)
+
+    monkeypatch.setattr(notify, "record", failing)
+    with pytest.raises(RuntimeError):
+        poll(1, side(1, status="*", ongoing=True), band=2, move=41)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=41)
+    assert heard(polls.pushed) == {"lazavik": ["Denis Lazavik is in trouble"], "both": ["Denis Lazavik is in trouble"]}
+
+
+@pytest.mark.parametrize("starts", ["delayed", "unknown"])
+def test_a_board_is_one_game_though_its_fixtures_starts_differ_or_are_unknown(db, polls, starts):
+    # A round put back: one player's fixtures refresh has read its new start, the other's not yet. Or a round with no
+    # start at all. The board's two fixtures still are one game, by the players on it.
+    if starts == "delayed":
+        db.execute(text("UPDATE event SET start_utc = start_utc + interval '3 hours' WHERE id = 2"))
+    else:
+        db.execute(text("UPDATE event SET start_utc = NULL"))
+    db.commit()
+    phones(db)
+    for event_id in (2, 1):
+        poll(event_id, side(event_id, status="*"))
+    for event_id in (2, 1):
+        poll(event_id, side(event_id, status="*", ongoing=True), band=0)
+    for event_id in (2, 1):
+        poll(event_id, side(event_id, status="*", ongoing=True), band=2, move=41)
+    tags = {tag for fan, _, tag, _ in polls.pushed}
+    assert heard(polls.pushed)["both"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning"] and tags == {"e1"}
+    server.mute(2, "both", db)
+    assert sorted(db.scalars(select(NotificationMute.event_id).where(NotificationMute.fan_id == "both"))) == [1, 2]
 
 
 def again(redis: Store) -> None:

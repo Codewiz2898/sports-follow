@@ -211,6 +211,10 @@ def test_both_sides_of_a_chess_board_name_the_side_that_tells_its_moments():
         if fide == LAZAVIK:
             assert [title for title, _ in told] == ["Denis Lazavik is playing", "Denis Lazavik: Lost with Black vs Magnus Carlsen", "Denis Lazavik is in trouble",
                                                      "Turnaround: Denis Lazavik is winning", "Denis Lazavik's advantage is gone"]
+    # Each side words a swing's play the same (its band from White's side, its move), so the two are told as one.
+    on = {fide: board(status="*", ongoing=True, fide=fide) for fide in names}
+    [a], [b] = (detect("Chess", names[fide], fide, seen(fide, on[fide], 0), seen(fide, on[fide], 2)) for fide in names)
+    assert a.detail == b.detail == "w2m40"
     # Before the pairing's out there's no board: only its player says it.
     assert detect("Chess", "Magnus Carlsen", CARLSEN, Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Round 5")))[0].voice == ""
 

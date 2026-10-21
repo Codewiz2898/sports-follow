@@ -195,7 +195,9 @@ class Chess(Sport):
         opponent = stat(now.line, "Opponent")
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         mine, theirs, _ = _sides(now)
-        return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30,
+        # Its band from White's side and its move: the same from either side of the board, so each side's word for a
+        # swing is told as one play (alerts.voiced_by).
+        return [Found("swing", level, title, body, f"w{got['band']}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30,
                       voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:

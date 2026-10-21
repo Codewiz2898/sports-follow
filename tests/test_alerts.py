@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan
+from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan, voiced_by
 
 NOW = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
 KOHLI, ROHIT = 1, 2
@@ -167,6 +167,13 @@ def test_a_fan_of_both_players_on_a_board_hears_each_moment_once_from_the_side_i
     starts = [side(3, CARLSEN, "Magnus Carlsen is playing", CARLSEN, kind="start"), side(4, LAZAVIK, "Denis Lazavik is playing", CARLSEN, kind="start")]
     finals = [side(5, LAZAVIK, "Denis Lazavik: Lost with Black vs Magnus Carlsen", CARLSEN, kind="final"), side(6, CARLSEN, "Magnus Carlsen: Won with White vs Denis Lazavik", CARLSEN, kind="final")]
     assert [[q.title for q in plan([m], both, set(), [], NOW)] for m in [*starts, *finals]] == [["Magnus Carlsen is playing"], [], [], ["Magnus Carlsen: Won with White vs Denis Lazavik"]]
+
+
+def test_the_alerts_list_takes_a_boards_moment_for_the_other_sides_only_on_the_same_play():
+    trouble = replace(side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), detail="w2m41")
+    winning = replace(side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN), detail="w2m41")
+    assert voiced_by(trouble, winning) and not voiced_by(winning, trouble)  # the side it went toward keeps its own
+    assert not voiced_by(trouble, replace(winning, id=3, detail="w2m47"))  # another swing a few moves later: both stay
 
 
 def test_a_board_under_two_fixtures_is_one_notification_with_one_story():

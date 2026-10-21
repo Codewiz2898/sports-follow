@@ -197,8 +197,9 @@ def voiced(item: Item, levels: dict[int, str]) -> bool:
 
 def voiced_by(item: Item, other: Item) -> bool:
     """Whether a player's moment is `other` told from the other side of its board: `other` is the moment of the player
-    whose side tells it (voiced), of the same game and kind, found within PLAY_WINDOW of it."""
-    return (item.voice is not None and item.voice != item.player_id and other.player_id == item.voice and other.kind == item.kind
+    whose side tells it (voiced), of the same game, kind and play (its detail, which a sport words the same from either
+    side: a chess swing's band from White's and move), found within PLAY_WINDOW of it."""
+    return (item.voice is not None and item.voice != item.player_id and other.player_id == item.voice and other.kind == item.kind and other.detail == item.detail
             and other.event_id in item.fixtures and abs(item.created_at - other.created_at) <= PLAY_WINDOW)
 
 
