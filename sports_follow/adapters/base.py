@@ -89,6 +89,11 @@ class Fixture:
     sport: str = ""
     # Where it can be watched, where the source lists its broadcasts, in the source's order.
     streams: list[Stream] = field(default_factory=list)
+    # The game it's one fixture of, where one game is under several (a chess board is one of each player's): the
+    # id its board will tell it apart by (Sport.board), the same under each, known before there's a board to read
+    # (a chess round once it's paired), so Coming up shows the game once (structured.board_key). "" where the
+    # fixture is the game, or the source doesn't know it yet.
+    board: str = ""
 
 
 @dataclass

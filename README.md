@@ -721,7 +721,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and who won a finished game over its board (`verdict`: "Arsenal won", "India won by 57 runs"), what fans may call
   before a game and how its board answers it (`predicts`, `asks`, `closed`, `answer`, and `board` where one game is
   under several fixtures: a chess game's result, each map of an esports series; predictions.py; Today's cards say the
-  game by `board` too, so a chess board two of a fan's players are on is one card), how an Android
+  game by `board` too, so a chess board two of a fan's players are on is one card, and in Coming up by the id a source
+  puts on its fixtures before there's a board to read, `Fixture.board`: Lichess's once a round is paired), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's

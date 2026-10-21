@@ -91,6 +91,7 @@ export interface UpcomingEvent {
   status?: 'scheduled' | 'armed' | 'live' | 'postponed' | 'final'
   event_id?: number
   match?: string | null  // its match page's address after /match/, where a source has the game
+  game_key?: string | null  // the game it's one fixture of, as a live game's (LiveStatus): a chess board once it's paired
 }
 
 export interface RecentResult {
