@@ -97,9 +97,14 @@ function per(seconds: number): string {
   return SPANS.find(([s]) => s === seconds)?.[1] ?? `every ${seconds} s`
 }
 
+// "America/Los_Angeles" as "Los Angeles".
+function zoneName(zone: string): string {
+  return zone.split('/').pop()?.replaceAll('_', ' ') ?? zone
+}
+
 function summary(limits: Limits): string {
   if (!limits.windows.length) return 'No published limit: counted, never refused.'
-  const windows = limits.windows.map((w) => `${count(w.requests)} ${per(w.seconds)}${w.margin ? ` (margin ${count(w.margin)})` : ''}`).join(', ')
+  const windows = limits.windows.map((w) => `${count(w.requests)} ${per(w.seconds)}${w.zone ? ` from midnight ${zoneName(w.zone)} time` : ''}${w.margin ? ` (margin ${count(w.margin)})` : ''}`).join(', ')
   const reserve = limits.reserve ? ` · ${count(limits.reserve)} kept for live games and fans` : ''
   const fans = limits.fan != null ? ` · fans at most ${count(limits.fan)} ${per(limits.windows[0].seconds)}` : ''
   return `${windows}${reserve}${fans} · a ${limits.pause} s pause after a 429`

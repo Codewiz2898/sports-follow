@@ -180,7 +180,7 @@ def test_no_room_left_in_the_days_quota_holds_the_sweeps(world, monkeypatch):
 
     only(monkeypatch, gap=20, famous=35)
     player("Shreyas Iyer")
-    budget.take(youtube.BUDGET, cost=2400)  # 6,600 of the 9,000 spendable left: a search would eat into the moment searches' share
+    budget.take(youtube.SEARCH_BUDGET, cost=55)  # 40 of the 95 spendable searches left: the moment searches' cap
     assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
     assert searched(world) == [] and swept() == []
 
@@ -280,7 +280,7 @@ def test_no_room_after_the_gap_searches_holds_the_wide_sweep(world, monkeypatch)
     only(monkeypatch, gap=20, famous=35, wide=14)
     player("Shreyas Iyer")
     player("Virat Kohli")
-    budget.take(youtube.BUDGET, cost=2340)  # 6,660 left: room for one search before the moment searches' share
+    budget.take(youtube.SEARCH_BUDGET, cost=54)  # 41 left: room for one search before the moment searches' cap
     done = sweeps.run(NOW)
     assert (done["gap searched"], done["wide searched"], done["famous searched"]) == (1, 0, 0)
 

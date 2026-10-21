@@ -24,7 +24,8 @@ export interface AdminSource {
   budgets: string[]
 }
 
-export interface Window { seconds: number; requests: number; margin: number }
+/** zone: the time zone its windows start in, where the source's day isn't UTC's (its source's, never the panel's to set). */
+export interface Window { seconds: number; requests: number; margin: number; zone?: string | null }
 /** What a source may spend: its allowance a window, a margin never spent, a reserve kept for live games and fans, the fans' share, the pause after a 429. */
 export interface Limits { windows: Window[]; reserve: number; fan: number | null; pause: number }
 export interface Standing {

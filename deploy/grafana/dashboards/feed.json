@@ -1391,7 +1391,7 @@
     {
       "type": "stat",
       "title": "Units spent",
-      "description": "What the searches spent of YouTube's daily units (100 a search).",
+      "description": "What the searches spent of their own quota: YouTube's 100 searches a day, 1 a search (none of the 10,000 units).",
       "datasource": {
         "type": "prometheus",
         "uid": "${prom}"
@@ -1601,8 +1601,8 @@
     },
     {
       "type": "bargauge",
-      "title": "YouTube units used this window",
-      "description": "The YouTube Data API's daily units (reset at midnight Pacific) used so far, of the allowance (its quota less a margin). Searches stop while under a quarter is left.",
+      "title": "YouTube quota used today",
+      "description": "Each YouTube quota (reset at midnight Pacific) used so far, of its allowance: youtube-data, the Data API's 10,000 units a day; youtube-search, its 100 searches a day. Moment searches stop once the searches are spent; sweeps leave what the moment searches' cap may still spend.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prom}"

@@ -1,6 +1,6 @@
 """The feed's moment searches without a database (searches.py, Sport.search_words, adapters/youtube.py): the words
-each sport gives a big moment, the search request and what it costs of the day's quota, and the share the channel
-poll and the weekly check keep. Every answer here is made up, in the shape YouTube sends."""
+each sport gives a big moment, the search request and what it costs of the day's searches (a quota of their own, not
+the 10,000 units the channel poll and the weekly check spend). Every answer here is made up, in the shape YouTube sends."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 from sports_follow import searches, sports
 from sports_follow.adapters import VIDEOS, budget, youtube
 from sports_follow.sports import Fired
-from tests.test_feed_fetch import NOW, Fake
+from tests.test_feed_fetch import NOW, Fake, video
 
 SOURCE = VIDEOS["youtube"]
 CHANNEL = "UC" + "b" * 22
@@ -109,10 +109,27 @@ def test_a_search_asks_for_embeddable_syndicated_videos_since_the_moment_by_view
                       "publishedAfter": "2026-10-19T11:30:00Z", "videoEmbeddable": "true", "videoSyndicated": "true", "regionCode": "IN"}
 
 
-def test_a_search_spends_a_hundred_units_of_the_days_quota(fake):
+def test_a_search_spends_one_of_the_days_searches_and_none_of_its_units(fake):
     SOURCE.search("Virat Kohli century", NOW, "IN")
-    assert budget.room(youtube.BUDGET) == (youtube.PER_DAY - youtube.MARGIN - 100, youtube.PER_DAY)
-    assert SOURCE.search_cost == 100 and [s.system for s in searches.searching()] == ["youtube"]
+    assert budget.room(youtube.SEARCH_BUDGET) == (youtube.SEARCHES_PER_DAY - youtube.SEARCH_MARGIN - 1, youtube.SEARCHES_PER_DAY)
+    assert budget.room(youtube.BUDGET) == (youtube.PER_DAY - youtube.MARGIN, youtube.PER_DAY)
+    assert SOURCE.search_cost == 1 and SOURCE.search_budgets() == (youtube.SEARCH_BUDGET,)
+    assert youtube.SEARCH_BUDGET in SOURCE.budgets() and [s.system for s in searches.searching()] == ["youtube"]
+
+
+def test_youtube_saying_the_days_searches_are_spent_stops_searches_and_nothing_else(fake):
+    fake.error = (403, "quotaExceeded")
+    with budget.in_lane("feed"), pytest.raises(budget.RateLimited, match="searches are spent"):
+        SOURCE.search("Virat Kohli century", NOW, "IN")
+    assert budget.left(youtube.SEARCH_BUDGET) == 0 and budget.left(youtube.BUDGET) is None
+    assert not searches.room(SOURCE)
+    fake.error = None
+    fake.videos["aaaaaaaaaaa"] = video("aaaaaaaaaaa")
+    with budget.in_lane("feed"):
+        assert list(SOURCE.facts(["aaaaaaaaaaa"])) == ["aaaaaaaaaaa"]  # videos.list spends the 10,000 units, still there
+        with pytest.raises(budget.RateLimited):
+            SOURCE.search("Virat Kohli century", NOW, "IN")
+    assert fake.api_calls("/search") == 1
 
 
 def test_without_a_key_no_source_searches(monkeypatch):
@@ -132,23 +149,31 @@ def test_a_costly_request_is_refused_whole_and_not_counted():
     assert budget.room(tight) == (0, 1000)
 
 
-def test_searches_leave_a_quarter_of_the_day_to_the_channel_poll_and_the_weekly_check(fake):
+def test_moment_searches_run_until_the_days_searches_are_spent_whatever_is_left_of_the_units(fake):
+    budget.take(youtube.BUDGET, cost=youtube.PER_DAY - youtube.MARGIN)  # the 10,000 units spent: searches don't spend them
     assert searches.room(SOURCE)
-    budget.take(youtube.BUDGET, cost=6400)  # 2,600 of the 9,000 spendable left: a search would leave 2,500
+    budget.take(youtube.SEARCH_BUDGET, cost=94)  # 1 of the 95 spendable left
     assert searches.room(SOURCE)
-    budget.take(youtube.BUDGET)
+    budget.take(youtube.SEARCH_BUDGET)
     assert not searches.room(SOURCE)
-    budget.observe(youtube.BUDGET, "", 3000, 3600)  # what the source says is left counts too
-    assert budget.room(youtube.BUDGET) == (3000 - youtube.MARGIN, youtube.PER_DAY)
 
 
-def test_the_default_cap_is_well_inside_the_days_quota():
-    """40 searches a day are 4,000 units of the 9,000 spendable; the channel poll's worst day (every feed down, its
-    playlists read instead, every half hour) and the weekly check's reads are under 2,000."""
+def test_what_youtube_says_is_left_of_the_days_searches_counts_too(fake):
+    budget.observe(youtube.SEARCH_BUDGET, "", youtube.SEARCH_MARGIN + 1, 3600)
+    assert budget.room(youtube.SEARCH_BUDGET) == (1, youtube.SEARCHES_PER_DAY) and searches.room(SOURCE)
+    budget.observe(youtube.SEARCH_BUDGET, "", youtube.SEARCH_MARGIN, 3600)
+    assert not searches.room(SOURCE)
+
+
+def test_the_default_caps_are_inside_the_days_searches_and_their_reads_inside_its_units():
+    """40 moment searches and the sweeps' 39 a day are 79 of the 95 spendable searches; the channel poll's worst day
+    (every feed down, its playlists read instead, every half hour) and a videos.list read for each search's finds
+    stay well inside the 9,000 spendable units."""
     from sports_follow import config
 
     channels = len({c for s in sports.ALL for c in s.video_channels})
     poll_worst = channels * 48
-    assert config.FEED_MOMENT_SEARCHES == 40 and SOURCE.search_cost == 100
-    assert config.FEED_MOMENT_SEARCHES * SOURCE.search_cost + poll_worst + 40 <= youtube.PER_DAY - youtube.MARGIN
-    assert config.FEED_MOMENT_SEARCHES * SOURCE.search_cost <= (youtube.PER_DAY - youtube.MARGIN) * (1 - searches.KEEP_SHARE)
+    a_day = config.FEED_MOMENT_SEARCHES + config.FEED_GAP_SEARCHES + config.FEED_WIDE_SEARCHES + -(-config.FEED_FAMOUS_SEARCHES // 7)
+    assert config.FEED_MOMENT_SEARCHES == 40 and SOURCE.search_cost == 1 and a_day == 79
+    assert a_day * SOURCE.search_cost <= youtube.SEARCHES_PER_DAY - youtube.SEARCH_MARGIN
+    assert poll_worst + a_day <= youtube.PER_DAY - youtube.MARGIN

@@ -6,20 +6,21 @@ answers 404 or 500 for a while, for no reason it gives. When it doesn't answer a
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
 (how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
 videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
-maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list, 100
-units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
-(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left. A followed
-player with nothing to watch this week is searched for once a day, each one's six months' most watched once a week, and
-their most watched ever once a month (sweeps.py), under caps of their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES,
-SPORTS_FOLLOW_FEED_WIDE_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and none while what's left is the moment
-searches' quarter and what their cap may still spend.
+maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list:
+searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
+(SPORTS_FOLLOW_FEED_MOMENT_SEARCHES). A followed player with nothing to watch this week is searched for once a day,
+each one's six months' most watched once a week, and their most watched ever once a month (sweeps.py), under caps of
+their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES, SPORTS_FOLLOW_FEED_WIDE_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and
+none while what's left of the day's searches is what the moment searches' cap may still spend.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
 the repo), an API key of a Google Cloud project with the YouTube Data API v3 turned on. Without one the source
 is off: the admin panel's Sources tab says there's no key, and nothing else changes.
 
-The free quota is 10,000 units a day, reset at midnight Pacific time. The day is counted in Redis (budget.py);
-when YouTube says the quota is spent, nothing is asked of it until it resets.
+The free quota is 10,000 units a day, and, since 1 June 2026, search.list's own: 100 searches a day, 1 unit each,
+which spend none of the 10,000 (the "Search Queries" bucket: developers.google.com/youtube/v3/determine_quota_cost; the
+Cloud console's YouTube Data API v3 Quotas page lists both). Both reset at midnight Pacific time. Each day is counted in
+Redis (budget.py), from midnight Pacific; when YouTube says one is spent, nothing is asked of it until it resets.
 
 Terms (developers.google.com/youtube/terms): videos are shown in YouTube's own embedded player; data from the
 API is kept at most 30 days without being read again (the curator's weekly check reads every stored video
@@ -46,17 +47,21 @@ from .base import AdapterError, Provider, Upload, VideoFacts, VideoSource
 API = "https://www.googleapis.com/youtube/v3"
 FEEDS = "https://www.youtube.com/feeds/"
 KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_YOUTUBE_KEY_FILE", Path.home() / ".config" / "sports-follow" / "youtube-key"))
-PER_DAY = 10_000  # units; each request this module sends costs 1, but a search
-SEARCH_COST = 100  # units a search.list costs, whatever it finds
-SEARCH_RESULTS = 50  # videos a search lists, the most watched of them: the most it may, for the same units
+PER_DAY = 10_000  # units; each request this module sends costs 1, but a search, which spends SEARCHES_PER_DAY instead
+SEARCHES_PER_DAY = 100  # search.list calls, 1 unit each in a quota of their own, whatever they find
+SEARCH_COST = 1
+SEARCH_RESULTS = 50  # videos a search lists, the most watched of them: the most it may, for the same unit
 # What every search leaves out (search.list's q takes a NOT, "-"): the Shorts tagged so. Most watched first, a
 # search's results are mostly Shorts, and those under a minute are refused (candidates.MIN_SECONDS); its
 # videoDuration can't help, as "short" is anything under four minutes, where 1-4 minute highlight clips are too.
 NOT_SHORTS = "-#shorts"
-# Never spent: a day counted in UTC isn't YouTube's (Pacific), and another process may count a moment late.
+# Never spent: another process may count a moment late, and a request YouTube counts may not be ours (one sent by hand).
 MARGIN = 1_000
+SEARCH_MARGIN = 5
+PACIFIC = "America/Los_Angeles"  # where YouTube's quota day starts
 # Not "youtube" alone: that's also a platform players have accounts on (curate.py), not only this source.
-BUDGET = budget.Budget("youtube-data", windows=(budget.Window(86400, PER_DAY, margin=MARGIN),))
+BUDGET = budget.Budget("youtube-data", windows=(budget.Window(86400, PER_DAY, margin=MARGIN, zone=PACIFIC),))
+SEARCH_BUDGET = budget.Budget("youtube-search", windows=(budget.Window(86400, SEARCHES_PER_DAY, margin=SEARCH_MARGIN, zone=PACIFIC),))
 FEED_BUDGET = budget.Budget("youtube-feeds", urls=(FEEDS,))  # the channels' public feeds: free, counted only
 FEED_TTL = 20 * 60  # a channel's latest uploads, read again after this: the curator polls every half hour
 
@@ -71,7 +76,7 @@ PROVIDER = Provider(
     name="YouTube",
     url="https://www.youtube.com",
     what="videos about players from channels each sport trusts, played in YouTube's own player.",
-    budgets=(BUDGET, FEED_BUDGET),
+    budgets=(BUDGET, SEARCH_BUDGET, FEED_BUDGET),
 )
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=20, follow_redirects=True)
@@ -148,10 +153,11 @@ def reset_in(now: datetime | None = None) -> float:
     return (midnight - pacific).total_seconds()
 
 
-def _fetch(path: str, params: dict[str, str], cost: int = 1) -> dict[str, Any]:
+def _fetch(path: str, params: dict[str, str], spends: budget.Budget = BUDGET) -> dict[str, Any]:
+    """A Data API request, counted as 1 of the quota it spends (BUDGET, or SEARCH_BUDGET for search.list)."""
     if not key():
         raise AdapterError("no YouTube key (~/.config/sports-follow/youtube-key)")
-    budget.take(BUDGET, cost=cost)
+    budget.take(spends)
     try:
         # The key in a header, not the query string: it stays out of every URL a log line or a span may show.
         res = _client.get(f"{API}/{path}", params=params, headers={"x-goog-api-key": key() or ""})
@@ -164,10 +170,10 @@ def _fetch(path: str, params: dict[str, str], cost: int = 1) -> dict[str, Any]:
     if res.status_code != 200 or not isinstance(data, dict):
         reasons = {e.get("reason") for e in ((data.get("error") or {}).get("errors") or []) if isinstance(e, dict)} if isinstance(data, dict) else set()
         if reasons & {"quotaExceeded", "dailyLimitExceeded"}:
-            budget.observe(BUDGET, "", 0, reset_in())
-            raise budget.RateLimited("YouTube says the day's quota is spent")
+            budget.observe(spends, "", 0, reset_in())
+            raise budget.RateLimited(f"YouTube says the day's {'searches are' if spends is SEARCH_BUDGET else 'quota is'} spent")
         if res.status_code == 429 or reasons & {"rateLimitExceeded", "userRateLimitExceeded"}:
-            budget.pause(BUDGET)
+            budget.pause(spends)
             raise budget.RateLimited("YouTube said slow down")
         if reasons & {"keyInvalid", "keyExpired", "accessNotConfigured", "forbidden"}:
             raise AdapterError(f"YouTube rejected the key ({', '.join(sorted(r for r in reasons if r))})")
@@ -283,6 +289,10 @@ class YouTube(VideoSource):
     platform = "youtube"
     search_cost = SEARCH_COST
 
+    def search_budgets(self) -> tuple[budget.Budget, ...]:
+        """search.list spends a quota of its own, not the 10,000 units."""
+        return (SEARCH_BUDGET,)
+
     def embed(self, video_id: str) -> dict[str, str] | None:
         """The app plays YouTube's own embedded player (youtube-nocookie.com), by the video's id."""
         return {"youtube_id": video_id} if VIDEO_ID.fullmatch(video_id) else None
@@ -315,7 +325,7 @@ class YouTube(VideoSource):
         return out
 
     def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:
-        """search.list (100 units, never cached): videos published after then (or ever, for None), most viewed
+        """search.list (1 of the day's SEARCHES_PER_DAY, never cached): videos published after then (or ever, for None), most viewed
         first, that may be embedded and played off YouTube (syndicated), as a viewer in this country is shown them,
         but for the Shorts tagged #shorts (NOT_SHORTS)."""
         params = {
@@ -324,4 +334,4 @@ class YouTube(VideoSource):
         }  # fmt: skip
         if after is not None:
             params["publishedAfter"] = after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return parse_search(_fetch("search", params, cost=SEARCH_COST))
+        return parse_search(_fetch("search", params, spends=SEARCH_BUDGET))

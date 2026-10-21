@@ -252,7 +252,7 @@ def test_no_room_left_in_the_days_quota_holds_the_searches(world):
 
     fire(player("Virat Kohli"), game("England vs India", venue="Lord's"), hundred())
     searches.queue(NOW + timedelta(minutes=5))
-    budget.take(youtube.BUDGET, cost=6500)
+    budget.take(youtube.SEARCH_BUDGET, cost=youtube.SEARCHES_PER_DAY - youtube.SEARCH_MARGIN)
     assert searches.run(FIRST)["searched"] == 0 and world.api_calls("/search") == 0
     assert queued()[0][4] is None  # still due
 

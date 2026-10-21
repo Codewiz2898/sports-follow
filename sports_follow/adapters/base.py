@@ -479,7 +479,7 @@ class VideoSource:
     platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
     kind = "video"  # what its rows are, as the Feed's judge knows kinds (curate.Kind)
     batch = 50  # the most videos one facts() call asks about
-    search_cost: int | None = None  # what one search() spends of its budget; None: it can't search
+    search_cost: int | None = None  # what one search() spends of each of its search_budgets(); None: it can't search
 
     def embed(self, video_id: str) -> dict[str, str] | None:
         """How the app's video player plays one of its videos (feed.Video's fields, past duration and views), or
@@ -494,6 +494,10 @@ class VideoSource:
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py)."""
         return self.provider.budgets
+
+    def search_budgets(self) -> tuple[Budget, ...]:
+        """What a search() spends (search_cost of each): all its budgets, unless the source counts searches apart."""
+        return self.budgets()
 
     def uploads(self, channel_id: str) -> list[Upload]:
         raise NotImplementedError

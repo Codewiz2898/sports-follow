@@ -37,8 +37,10 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .. import controls
 from .base import AdapterError
@@ -60,6 +62,31 @@ class Window:
     seconds: int  # 60, 3600, 86400: counted in windows of this many seconds, from the epoch
     requests: int  # the plan's allowance a window
     margin: int = 0  # never spent: another process may count a moment late
+    zone: str | None = None  # the time zone its windows start in, where the source's day isn't UTC's: "America/Los_Angeles"
+
+
+def _offset(zone: str | None, now: float) -> float:
+    """Seconds the zone is ahead of UTC at that moment (0 for UTC, or a zone this machine doesn't know)."""
+    if not zone:
+        return 0.0
+    try:
+        offset = datetime.fromtimestamp(now, ZoneInfo(zone)).utcoffset()
+    except (ZoneInfoNotFoundError, ValueError):
+        if time.time() - _warned["zone"] > 3600:
+            log.warning("source budgets: no time zone %r here; its windows are counted in UTC", zone)
+            _warned["zone"] = time.time()
+        return 0.0
+    return offset.total_seconds() if offset else 0.0
+
+
+def _start(w: Window, now: float) -> int:
+    """Which of its windows now falls in: the epoch's, or for a zoned one, counted from the zone's midnight."""
+    return int((now + _offset(w.zone, now)) // w.seconds)
+
+
+def _ttl(w: Window) -> int:
+    """How long a window's count is kept: past its end, and a zoned day may run 25 hours (the clocks go back)."""
+    return w.seconds + (3660 if w.zone else 60)
 
 
 @dataclass(frozen=True)
@@ -77,14 +104,17 @@ class Budget:
 def effective(budget: Budget) -> Budget:
     """The budget as the admin panel left it (controls.set_budget): its windows (each one's allowance and
     margin), reserve, fans' share and pause where the panel changed them, the rest as its source declares.
-    A change of the wrong shape (written by hand) is left out."""
+    A window keeps the time zone its source declares for its span (the panel doesn't set one). A change of the
+    wrong shape (written by hand) is left out."""
     change = controls.current().budgets.get(budget.name)
     if not change:
         return budget
     fields: dict[str, Any] = {}
+    zones = {w.seconds: w.zone for w in budget.windows}
     try:
         if isinstance(change.get("windows"), list):
-            fields["windows"] = tuple(Window(int(w["seconds"]), int(w["requests"]), int(w.get("margin", 0))) for w in change["windows"])
+            fields["windows"] = tuple(Window(int(w["seconds"]), int(w["requests"]), int(w.get("margin", 0)), zones.get(int(w["seconds"])))
+                                      for w in change["windows"])
     except (KeyError, TypeError, ValueError):
         log.warning("source budgets: %s's windows from the admin panel aren't readable; its own stand", budget.name)
     for name in ("reserve", "pause"):
@@ -182,7 +212,7 @@ def _redis() -> Any:
 
 STORE: Any = RedisStore()
 _fallback = MemoryStore()
-_warned = {"at": 0.0}
+_warned = {"at": 0.0, "zone": 0.0}
 
 
 def _store_call(method: str, *args: Any) -> Any:
@@ -199,7 +229,7 @@ def _store_call(method: str, *args: Any) -> Any:
 
 
 def _window_key(budget: Budget, bucket: str, w: Window, now: float) -> str:
-    return f"budget:{budget.name}:{bucket}:{w.seconds}:{int(now // w.seconds)}"
+    return f"budget:{budget.name}:{bucket}:{w.seconds}:{_start(w, now)}"
 
 
 def _left_key(budget: Budget, bucket: str) -> str:
@@ -251,11 +281,11 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     if lane_name == "fan" and budget.fan is not None and budget.windows:
         w = budget.windows[0]
         why = f"{budget.name}: fans' share ({budget.fan} {per(w.seconds)}) is spent"
-        counts.append((f"budget:{budget.name}:{bucket}:fan:{w.seconds}:{int(now // w.seconds)}", w.seconds + 60, budget.fan, why))
+        counts.append((f"budget:{budget.name}:{bucket}:fan:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why))
     for w in budget.windows:
         where = f"{budget.name}{f' ({bucket})' if bucket else ''}"
         why = f"{where}: the {lane_name} share of its {w.requests} requests {per(w.seconds)} is spent" if keep else f"{where}: its {w.requests} requests {per(w.seconds)} are spent"
-        counts.append((_window_key(budget, bucket, w, now), w.seconds + 60, w.requests - w.margin - keep, why))
+        counts.append((_window_key(budget, bucket, w, now), _ttl(w), w.requests - w.margin - keep, why))
     taken: list[tuple[str, int]] = []
     for key, ttl, limit, why in counts:
         taken.append((key, ttl))
@@ -356,7 +386,7 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
     prefix = f"budget:{budget.name}:"
     buckets = {""}
     for w in budget.windows:
-        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{int(now // w.seconds)}")}
+        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{_start(w, now)}")}
     windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _store_call("get", _window_key(budget, b, w, now)) or 0, "allowance": w.requests}
                for b in sorted(buckets) for w in budget.windows]
     left_now = {b: v for b in sorted(buckets) if (v := left(budget, b)) is not None}

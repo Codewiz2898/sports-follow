@@ -156,7 +156,7 @@ def test_every_known_allowance_is_shown_with_who_spends_it(scarce):
     view = admin.sources_view()
     assert [b["name"] for b in view["budgets"]] == [scarce.name]
     assert {s["system"] for s in view["sources"]} == set(KNOWN) | set(VIDEOS) | set(NEWS)
-    assert view["budgets"][0]["declared"] == {"windows": [{"seconds": 3600, "requests": 10, "margin": 1}], "reserve": 3, "fan": 2, "pause": 60}
+    assert view["budgets"][0]["declared"] == {"windows": [{"seconds": 3600, "requests": 10, "margin": 1, "zone": None}], "reserve": 3, "fan": 2, "pause": 60}
 
 
 # ---------------------------------------------------------------- the password
@@ -365,7 +365,7 @@ def test_the_panel_sets_and_resets_an_allowance(api, password, scarce):
     answer = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body=good)
     assert answer.status_code == 200
     shown = answer.json()["budgets"][0]
-    assert shown["limits"] == good and shown["changed"] is True
+    assert shown["limits"] == {**good, "windows": [{**good["windows"][0], "zone": None}]} and shown["changed"] is True  # a zone is its source's to say
     refused = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**good, "reserve": 28})
     assert refused.status_code == 400 and "reserve" in refused.json()["detail"]
     assert api.call("PUT", "/api/admin/budgets/nobody", headers=cookie, body=good).status_code == 404

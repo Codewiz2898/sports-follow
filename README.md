@@ -498,7 +498,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
-  never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day.
+  never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day. Searches
+  have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
+  none of the 10,000, counted as the `youtube-search` budget with 5 never spent. Both are counted from midnight
+  Pacific, as YouTube counts them; the Google Cloud console's quota page for the YouTube Data API v3 (APIs &
+  Services, YouTube Data API v3, Quotas) shows both, "Queries per day" and "Search Queries per day".
   Without the key the source is off, the admin panel says so, and nothing else changes.
 - **Big moments are searched for too** (`sports_follow/searches.py`, BHA-303): fans post edits of a hundred or a
   brace within hours, mostly on channels no sport lists. After each poll the curator queues a search for each key
@@ -509,11 +513,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   as a viewer in India finds them; one the cap held back for a day runs once, its last at least eight hours after
   its first, a run no source answered is tried again, and one two days old is dropped. What
   it finds goes the channel poll's way: kept where it names the player and passes the hard filters, unless it's
-  stored for them already, with its moment attached, then judged and ranked. A search costs 100 units, so they're
-  capped at `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` runs in any 24 hours (40, 4,000 units: 20 moments searched twice;
-  rolling, so YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none run while less than a quarter of the day's units is left,
-  which stays the channel poll's and the weekly check's. The ranking keeps a searched video's moment while it
-  stands, rather than the biggest one near it. Off without the key.
+  stored for them already, with its moment attached, then judged and ranked. Searches are 100 a day, so they're
+  capped at `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` runs in any 24 hours (40: 20 moments searched twice; rolling, so
+  YouTube's Pacific quota day holds no more), the biggest moments first when there are more, and none once the
+  day's searches are spent. Moment searches have first claim on them: the sweeps leave what this cap may still
+  spend. What each finds is read with one `videos.list` (1 of the 10,000 units). The ranking keeps a searched
+  video's moment while it stands, rather than the biggest one near it. Off without the key.
 - **Players with nothing to watch are searched for, and so are their season's and their most watched** (`sports_follow/sweeps.py`,
   BHA-336): a channel's feed holds only its latest 15 uploads and most games fire no big moment, so a followed
   player can go a week with nothing. Once a day (08:15 UTC, just after YouTube's quota day starts; again at 20:15, which only does what a missed morning
@@ -521,38 +526,37 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   **gap search** for each followed player with nothing the Feed would serve published in the last 7 days (the
   coverage gauge's test): their name and their sport's words (`Sport.video_words`: "Shreyas Iyer cricket", "TenZ
   Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
-  them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20, 2,000 units); a
+  them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
   **wide sweep** (BHA-340): every followed player, gaps or not, for videos of the last six months (183 days), most
   viewed first, which the score weighs for their age and the Feed fades as it serves them; each player at most once
-  a week, a seventh of them a day, up to `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` in any 24 hours (14, 1,400 units), the longest unswept first and the most
+  a week, a seventh of them a day, up to `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` in any 24 hours (14), the longest unswept first and the most
   followed of those; a player the same run gap-searches waits for a later day. Then the
   **famous sweep**: each followed player's most watched videos ever (no date limit), for "The ones everyone's seen",
   each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` in any 7 days (35) and a seventh of that a
-  day (5, 500 units), the longest unswept first and the most followed of those, so a cap that binds gets round
+  day (5), the longest unswept first and the most followed of those, so a cap that binds gets round
   everyone before anyone's swept again. What they find goes the moment search's way (hard filters, the judge,
   the ranking; what's stored already isn't kept again, and counts as `already_stored`). Each search is a
   `feed_sweep` row with what it found and kept, and each kept candidate names its sweep, so
   `python -m sports_follow.curator sweeps` lists the last week's with what each serves (`--run` runs the day's
   first). In the feed's funnel they're the `gap`, `wide` and `famous` streams, run in that order. Moment searches
-  come first: sweeps stop while less is left than the moment searches' quarter and what their cap may still spend
-  in the day (40 searches, 4,040 units with their reads), so on a day no moment search has run yet the sweeps get
-  about 2,400 units (24 searches), less after a busy one; the three caps (20 gap, 14 wide, 5 famous) are ceilings
-  under that. At 19 followed players (17 uncovered) the first day is the heaviest: 17 gap searches, the 2 covered
-  players' wide searches and 5 famous, about 2,400 units; after that a day is the gap searches still due (fewer
-  as players are covered or wait out the 3 days), about 3 wide searches and the famous sweep's 5 for its first 4
-  days, then under 1: about 2,000 units while 17 still have gaps, well under once most are covered. At 500 the gate
-  binds: 20 gap searches and 4 wide ones on a quiet day, about 2,400 units, so the wide sweep gets round each
-  player every 4 months or so and the famous sweep waits for a day with fewer gaps. More for the sweeps means a
-  lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` (each moment search less is 101 units more) or more YouTube quota. Off
-  without the key.
+  come first: sweeps stop while what's left of the day's 95 spendable searches is what the moment searches' cap
+  may still spend in the last 24 hours (40), so on a day no moment search has run yet the sweeps have room for 55
+  and their three caps (20 gap, 14 wide, 5 famous: 39) bind first; all four caps together are 79 searches a day,
+  under the 95, and their finds' reads under 100 of the 10,000 units. At 19 followed players (17 uncovered) the
+  first day is the heaviest: 17 gap searches, the 2 covered players' wide searches and 5 famous, 24 searches;
+  after that a day is the gap searches still due (fewer as players are covered or wait out the 3 days), about 3
+  wide searches and the famous sweep's 5 for its first 4 days, then under 1. At 500 the caps bind: 20 gap, 14 wide
+  and 5 famous a day, so the wide sweep gets round each player every 5 weeks or so. The 16 searches a day no cap
+  claims are room to raise the sweeps' caps; more than that means a lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` or
+  more YouTube quota (Google's quota extension form). Off without the key.
 - **What every search asks for** (BHA-341): the player by the name fans and titles write (`candidates.search_name`):
   of their own name and the aliases with fewer words than it, the shortest that still names them and no other
   followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
   football"): "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
   Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
   players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
-  the same 100 units, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
+  the same one search, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
   `-#shorts`, YouTube's NOT): most watched first, results are mostly Shorts, and those under a minute are refused
   for length. `videoDuration` can't do it: its `short` is anything under 4 minutes, where 1-4 minute highlight
   clips are too. A Short nothing tags is still refused, as `too_short` in the funnel, which is how to tell whether
@@ -841,9 +845,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
-| `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; 100 YouTube units each); the biggest moments first; `0` turns them off |
-| `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; 100 YouTube units each; `0` turns them off |
-| `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; 100 YouTube units each; `0` turns it off |
+| `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; each 1 of YouTube's 100 searches a day); the biggest moments first; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; each 1 of YouTube's 100 searches a day; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |

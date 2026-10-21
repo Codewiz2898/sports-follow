@@ -25,9 +25,9 @@ judged and ranked with the rest (curator.rank_new). Each search a source answere
 found and kept, and each candidate it kept names it, which says what it served (report). In the feed's funnel each
 is a stream of its own, "gap", "wide" and "famous". They run in that order, as far as there's room.
 
-Moment searches come first: sweeps stop while less of a source's tightest window is left than moment searches keep
-(searches.KEEP_SHARE) and what their cap may still spend in the day (_room), so however full the sweeps' caps, the
-day's moment searches all have room. With no source that can search running (no key), nothing runs.
+Moment searches come first: sweeps stop while what's left of a source's searches (VideoSource.search_budgets) is what
+the moment searches' cap may still spend in the day (_room), so however full the sweeps' caps, the day's moment
+searches all have room. With no source that can search running (no key), nothing runs.
 """
 
 from __future__ import annotations
@@ -217,9 +217,8 @@ def _sweep(stream: str, due: list[candidates.Followed], after: datetime | None, 
 
 
 def _room(source: VideoSource, now: datetime) -> bool:
-    """Whether a sweep's search leaves the day's moment searches their room: what their gate keeps, and what their
-    cap may still spend (each search with a read of its results)."""
-    still = max(0, FEED_MOMENT_SEARCHES - searches.spent(now - searches.DAY)) * ((source.search_cost or 0) + 1)
+    """Whether a sweep's search leaves the day's moment searches their room: what their cap may still spend."""
+    still = max(0, FEED_MOMENT_SEARCHES - searches.spent(now - searches.DAY)) * (source.search_cost or 0)
     return searches.room(source, keep=still)
 
 
