@@ -1,0 +1,32 @@
+// The engine of a chess board's Play from here, in a hidden WebView of its own (src/main/java/io/slam/chessengine):
+// an Expo module of this app's own, linked like any other (expo-module.config.json).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'io.slam'
+version = '1.0.0'
+
+android {
+  namespace "io.slam.chessengine"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+  // The engine's files beside its page (src/main/assets/engine), served from the app's assets: copied at each
+  // build from the website's own (web/src/sports/engine), never a second copy in the repo.
+  sourceSets.main.assets.srcDirs += "$buildDir/generated/chess-engine/assets"
+}
+
+def repo = file("../../../..")
+tasks.register("chessEngineFiles", Copy) {
+  from("$repo/web/src/sports/engine") { include "stockfish-18-lite-single.js", "stockfish-18-lite-single.wasm", "Copying.txt" }
+  into("$buildDir/generated/chess-engine/assets/engine")
+}
+preBuild.dependsOn("chessEngineFiles")
+
+dependencies {
+  // WebViewAssetLoader and the page's message channel; the version react-native-webview builds with.
+  implementation 'androidx.webkit:webkit:1.14.0'
+}

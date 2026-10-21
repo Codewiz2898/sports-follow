@@ -623,6 +623,11 @@ class Sport:
     side_by_side = False
     engine = False  # live positions are evaluated by our engine (chess)
 
+    def credits_also(self) -> list[dict[str, Any]]:
+        """Others whose work runs in the sport's own pages, for the Credits page while it's on (chess's
+        engine on the fan's device, under its analysis board)."""
+        return []
+
     # ---- predictions (predictions.py): what fans call before a game, read off its board (Snapshot.state)
 
     predicts = False  # it asks fans to call its games (asks): the worker reads its games coming up ahead, to ask in time
