@@ -9,9 +9,10 @@ videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the s
 maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list, 100
 units: searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
 (SPORTS_FOLLOW_FEED_MOMENT_SEARCHES) and stops them while less than a quarter of the day's units is left. A followed
-player with nothing to watch this week is searched for once a day, and each one's most watched videos once a month
-(sweeps.py), under caps of their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and
-none while less than half the day's units is left.
+player with nothing to watch this week is searched for once a day, each one's six months' most watched once a week, and
+their most watched ever once a month (sweeps.py), under caps of their own (SPORTS_FOLLOW_FEED_GAP_SEARCHES,
+SPORTS_FOLLOW_FEED_WIDE_SEARCHES, SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES), and none while what's left is the moment
+searches' quarter and what their cap may still spend.
 
 Runs only with a key: SPORTS_FOLLOW_YOUTUBE_KEY, or the file ~/.config/sports-follow/youtube-key (kept outside
 the repo), an API key of a Google Cloud project with the YouTube Data API v3 turned on. Without one the source

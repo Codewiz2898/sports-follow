@@ -1,5 +1,5 @@
-"""The feed's ranking at ingest (rank.py, BHA-301), without the database: how fast a video is watched from its
-two reads, its like ratio, the judge's interest and its channel's trust make one score; a verdict that isn't
+"""The feed's ranking at ingest (rank.py, BHA-301), without the database: how widely a video is watched for its
+age (views a day since it was published, the same whatever day it's worked out), its like ratio, the judge's interest and its channel's trust make one score; a verdict that isn't
 about the player, is paid for or names a risk is never served; a share published within two days after one
 of the player's moments is about the biggest of them; older videos still being watched are evergreen; and a
 stored row reads as the judge's Candidate. Made-up numbers and channels only."""
@@ -30,17 +30,21 @@ def verdict(**kw) -> dict:
             "reason": "A fan edit of the winning moment.", "stage": "model", **kw}  # fmt: skip
 
 
-def test_views_an_hour_come_from_the_two_reads_else_from_its_life_so_far():
+def test_views_a_day_come_from_the_latest_read_since_it_was_published():
+    # Read 6 hours ago, 40 hours after it came out: 25,000 views over 34 hours.
     two = numbers(read(30, 1_000), read(6, 25_000))
+    assert rank.per_day(two, NOW - timedelta(hours=40)) == pytest.approx(25_000 / (34 / 24))
+    # Read 90 days after it came out: 900,000 views is 10,000 a day.
+    assert rank.per_day(numbers(read(24, 900_000)), NOW - timedelta(days=91)) == pytest.approx(10_000.0)
+    # A read minutes after it's out counts as MIN_AGE of its life, not a burst.
+    assert rank.per_day(numbers(read(0, 600)), NOW - timedelta(minutes=5)) == pytest.approx(600 / 0.25)
+    assert rank.per_day(numbers(read(0, 600)), None) is None and rank.per_day({"views": 600}, NOW) is None
+    assert rank.popular_part(numbers(read(0, 999)), NOW - timedelta(days=1)) == pytest.approx(0.5, abs=1e-3)  # 1,000 a day: half
+    assert rank.popular_part(numbers(read(0, 5_000_000)), NOW - timedelta(days=1)) == 1.0
+    assert rank.popular_part({}, NOW) == 0.0
+    # How fast it's watched lately, between the last two reads: for evergreen, not the score.
     assert rank.growth(two) == pytest.approx(1_000.0)
-    assert rank.pace(two, NOW - timedelta(hours=40), NOW) == pytest.approx(1_000.0)
-    # One read, two hours after it was published: 4,000 views over those two hours.
-    one = numbers(read(1, 4_000))
-    assert rank.growth(one) is None
-    assert rank.pace(one, NOW - timedelta(hours=3), NOW) == pytest.approx(2_000.0)
-    # A read minutes after it's out counts as an hour of its life, not a burst.
-    assert rank.pace(numbers(read(0, 600)), NOW - timedelta(minutes=5), NOW) == pytest.approx(600.0)
-    assert rank.pace(numbers(read(0, 600)), None, NOW) == 0.0
+    assert rank.growth(numbers(read(1, 4_000))) is None
     # Three reads: how fast it's watched lately, between the last two.
     assert rank.growth(numbers(read(24 * 30, 1_000), read(24 * 7, 500_000), read(1, 516_700))) == pytest.approx(100.0)
     # Reads that fell (YouTube recounting) aren't negative.
@@ -63,17 +67,28 @@ def test_what_the_judge_lets_through():
     assert not rank.passes(None) and not rank.passes({})
 
 
-def test_the_score_weighs_interest_pace_and_likes_and_trust_multiplies_it():
-    fast = numbers(read(30, 1_000, 20), read(6, 241_000, 9_000))  # 10,000 views an hour, a 3.7% like ratio
-    slow = numbers(read(30, 100, 2), read(6, 340, 7))
-    published = NOW - timedelta(hours=40)
-    assert rank.score(verdict(interest=1.0), fast, 1.0, published, NOW) > rank.score(verdict(interest=1.0), slow, 1.0, published, NOW)
-    assert rank.score(verdict(interest=0.9), slow, 1.0, published, NOW) > rank.score(verdict(interest=0.1), slow, 1.0, published, NOW)
-    top = rank.score(verdict(interest=1.0), {**fast, "likes": 241_000}, 1.0, published, NOW)
+def test_the_score_weighs_interest_popularity_and_likes_and_trust_multiplies_it():
+    published = NOW - timedelta(hours=30)
+    fast = numbers(read(24, 1_000, 20), read(6, 1_000_000, 37_000))  # a million views in its first day, a 3.7% like ratio
+    slow = numbers(read(24, 100, 2), read(6, 340, 7))
+    assert rank.score(verdict(interest=1.0), fast, 1.0, published) > rank.score(verdict(interest=1.0), slow, 1.0, published)
+    assert rank.score(verdict(interest=0.9), slow, 1.0, published) > rank.score(verdict(interest=0.1), slow, 1.0, published)
+    top = rank.score(verdict(interest=1.0), {**fast, "likes": 1_000_000}, 1.0, published)
     assert top == pytest.approx(1.0)
-    assert rank.score(verdict(), fast, 0.5, published, NOW) == pytest.approx(rank.score(verdict(), fast, 1.0, published, NOW) / 2, abs=1e-3)
-    assert rank.score(verdict(about_player="mention"), fast, 1.0, published, NOW) == pytest.approx(rank.score(verdict(), fast, 1.0, published, NOW) * rank.MENTION, abs=1e-3)
-    assert rank.score(verdict(interest="lots"), fast, 1.0, published, NOW) < rank.score(verdict(), fast, 1.0, published, NOW)  # a bad value counts as none
+    assert rank.score(verdict(), fast, 0.5, published) == pytest.approx(rank.score(verdict(), fast, 1.0, published) / 2, abs=1e-3)
+    assert rank.score(verdict(about_player="mention"), fast, 1.0, published) == pytest.approx(rank.score(verdict(), fast, 1.0, published) * rank.MENTION, abs=1e-3)
+    assert rank.score(verdict(interest="lots"), fast, 1.0, published) < rank.score(verdict(), fast, 1.0, published)  # a bad value counts as none
+
+
+def test_the_score_is_age_fair_and_stays_put_as_days_pass():
+    """No "now" in it: the same reads score the same any day; and a video watched as widely for its age scores
+    alike, whether it's a day or three months old."""
+    rows = numbers(read(24, 90_000, 2_700))
+    a = rank.score(verdict(), rows, 1.0, NOW - timedelta(days=2))
+    assert rank.score(verdict(), rows, 1.0, NOW - timedelta(days=2)) == a  # no clock in it
+    # 90,000 views read one day after it came out; 9,000,000 read 100 days after: both 90,000 a day.
+    old = numbers({"at": (NOW - timedelta(days=1)).isoformat(), "views": 9_000_000, "likes": 270_000})
+    assert rank.score(verdict(), old, 1.0, NOW - timedelta(days=101)) == pytest.approx(a, abs=1e-4)
 
 
 def test_a_channels_trust_is_the_admins_word_else_whether_a_sport_lists_it_and_fans_reports_lower_it_to_half():
@@ -120,6 +135,7 @@ def test_older_videos_still_being_watched_are_evergreen():
     growing = numbers(read(24 * 39, 2_000), read(24 * 8, 900_000), read(1, 960_000))
     assert rank.evergreen(growing, old, NOW)
     assert not rank.evergreen(growing, NOW - timedelta(days=3), NOW)  # still this week's
+    assert not rank.evergreen(growing, NOW - timedelta(days=15), NOW)  # still this month's (feed.py)
     assert not rank.evergreen(numbers(read(24 * 8, 900_000), read(1, 900_100)), old, NOW)  # hardly watched now
     assert not rank.evergreen(numbers(read(1, 960_000)), old, NOW)  # one read: can't tell
     assert not rank.evergreen(numbers(read(24 * 8, 1_000), read(1, 9_000)), old, NOW)  # growing, but few have seen it

@@ -36,7 +36,7 @@ def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811
 
 def test_without_a_key_nothing_is_swept(monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
-    assert sweeps.run(NOW) == {"gap searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
+    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
 
 
 def test_a_sweeps_rows_are_counted_as_its_own_stream():
@@ -44,7 +44,8 @@ def test_a_sweeps_rows_are_counted_as_its_own_stream():
     assert rank.stream("youtube", {"swept": 5, "stream": "famous"}) == "famous"
     assert rank.stream("youtube", {"searched_for": 9}) == "search" and rank.stream("youtube", {}) == "channels"
     assert rank.stream("youtube", {"stream": "made-up"}) == "channels"
-    assert {"gap", "famous"} <= set(metrics.STREAMS)
+    assert rank.stream("youtube", {"swept": 6, "stream": "wide"}) == "wide"
+    assert {"gap", "wide", "famous"} <= set(metrics.STREAMS)
 
 
 def test_what_a_sweep_finds_stored_already_counts_as_spent_for_nothing(measured):  # noqa: F811
@@ -55,22 +56,40 @@ def test_what_a_sweep_finds_stored_already_counts_as_spent_for_nothing(measured)
     assert counts(measured, "sports_follow.feed.search_units") == {("cricket", "famous"): 100}
 
 
-def test_sweeps_leave_half_the_day_to_moment_searches_and_the_rest(fake):  # noqa: F811
-    budget.take(youtube.BUDGET, cost=3900)  # 5,100 of the 9,000 spendable left: a search would leave 5,000
-    assert searches.room(SOURCE, sweeps.KEEP_SHARE)
-    budget.take(youtube.BUDGET)
-    assert not searches.room(SOURCE, sweeps.KEEP_SHARE) and searches.room(SOURCE)
+def test_sweeps_leave_the_days_moment_searches_their_room(fake, monkeypatch):  # noqa: F811
+    """With no moment search run yet, sweeps leave what the moment searches' gate keeps (a quarter) and a whole cap's
+    worth of them (40, each with a read of its results): 2,500 + 4,040 of the 9,000 spendable."""
+    monkeypatch.setattr(searches, "spent", lambda since: 0)
+    budget.take(youtube.BUDGET, cost=2260)  # 6,740 left: a search would leave 6,640
+    assert sweeps._room(SOURCE, NOW)  # pyright: ignore[reportPrivateUsage]
+    budget.take(youtube.BUDGET, cost=101)
+    assert not sweeps._room(SOURCE, NOW)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(searches, "spent", lambda since: 40)  # the day's moment searches have all run
+    assert sweeps._room(SOURCE, NOW)  # pyright: ignore[reportPrivateUsage]
 
 
-def test_the_default_caps_fit_the_days_quota_with_the_moment_searches():
-    """A day's worst: 40 moment searches, 20 gap searches and the famous sweep's 5 are 6,500 units, each with a
-    videos.list of its results (65 more), under the 9,000 spendable less the channel poll's and the weekly check's
-    worst (2,000 together, test_moment_search)."""
+def test_however_full_the_sweeps_caps_the_days_moment_searches_all_run(fake, monkeypatch):  # noqa: F811
     from sports_follow import config
 
-    searches_a_day = config.FEED_MOMENT_SEARCHES + config.FEED_GAP_SEARCHES + math.ceil(config.FEED_FAMOUS_SEARCHES / 7)
-    assert searches_a_day * (youtube.SEARCH_COST + 1) <= youtube.PER_DAY - youtube.MARGIN - 2000
-    assert sweeps.KEEP_SHARE > searches.KEEP_SHARE  # moment searches go on after sweeps stop
+    monkeypatch.setattr(searches, "spent", lambda since: 0)
+    swept = 0
+    while sweeps._room(SOURCE, NOW):  # pyright: ignore[reportPrivateUsage]
+        budget.take(youtube.BUDGET, cost=youtube.SEARCH_COST + 1)
+        swept += 1
+    assert swept == 24  # under the three caps' 39: on a quiet day at 500 players, the gate binds before them
+    for _ in range(config.FEED_MOMENT_SEARCHES):
+        assert searches.room(SOURCE)
+        budget.take(youtube.BUDGET, cost=youtube.SEARCH_COST + 1)
+
+
+def test_the_default_caps_share_the_day_with_the_moment_searches():
+    """A day's 40 moment searches (4,040 units with their videos.list reads) fit under the 9,000 spendable less the
+    quarter their gate keeps for the channel poll and the weekly check; the sweeps' caps (20 gap, 14 wide, 5
+    famous) are ceilings, and the gate above holds them to what's left of that."""
+    from sports_follow import config
+
+    assert config.FEED_MOMENT_SEARCHES * (youtube.SEARCH_COST + 1) <= youtube.PER_DAY - youtube.MARGIN - searches.KEEP_SHARE * youtube.PER_DAY
+    assert (config.FEED_GAP_SEARCHES, config.FEED_WIDE_SEARCHES, math.ceil(config.FEED_FAMOUS_SEARCHES / 7)) == (20, 14, 5)
 
 
 def test_the_daily_sweep_runs_in_the_feed_lane_then_ranks_what_it_kept(monkeypatch):

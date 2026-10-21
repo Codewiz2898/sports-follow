@@ -9,7 +9,8 @@ the news the player's page already has.
 `judged` is where the pipeline plugs in: the rows the curator judged and scored (rank.py), served as videos,
 and stories from the publishers' feeds (news.py) as news, each with the number of outlets that ran it. While a
 player has any of those stories they are the feed's news, and the curator puts them on the card too (news_for,
-rank.cards), so the player page's news is theirs; without any, the card's news is. Their score fades with age (HALF_LIFE); a page holds one video from each channel and
+rank.cards), so the player page's news is theirs; without any, the card's news is. Their score, age-fair as the curator stores it (rank.py),
+fades with age only here (fade); a page holds one video from each channel and
 PER_MOMENT around each moment; older ones still being watched are "the ones everyone's seen" (evergreen). If
 reading them fails, a feed is the card's news alone (never emptier than the News tab was), and Today's rail,
 which takes no news (the Wire has it), is empty.
@@ -44,9 +45,19 @@ VERDICTS = ("not_interested", "not_about_player", "report")
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
+MONTH = timedelta(days=30)
 THIS_WEEK = "This week"
+THIS_MONTH = "This month"  # 8 to 30 days old
 EARLIER = "Earlier"
-HALF_LIFE = timedelta(days=3)  # a video's score halves over this, so last week's best gives way to today's
+# Recency, weighed only as the Feed serves (the stored score is age-fair, rank.py): a share's score is multiplied by
+#
+#     FADE_FLOOR + (1 - FADE_FLOOR) x 0.5 ^ (age / HALF_LIFE)
+#
+# which falls fast over the first days and levels off at FADE_FLOOR. So this week's good ones lead (an interesting,
+# well-watched video two days old keeps about 80% of its score), and a strong one from three months ago (45%) still
+# outranks a weak one from yesterday (89% of a much lower score): tests/test_feed.py pins the order of a few.
+HALF_LIFE = timedelta(days=3)
+FADE_FLOOR = 0.45
 PER_MOMENT = 2  # videos on a page around one moment: the best two of the many edits of one goal
 NEWS_ON_CARD = 10  # stories a player page's news holds (news_for), newest first
 
@@ -80,7 +91,7 @@ class Item(BaseModel):
 
 
 class Group(BaseModel):
-    head: str  # the moment's title, or "This week" / "Earlier"
+    head: str  # the moment's title, or "This week" / "This month" / "Earlier"
     moment: bool  # around a moment of the player's: the line opens its game
     when: datetime | None = None
     match: str | None = None  # the game's page in the app ("/match/<source>/<id>"), when the moment had one
@@ -153,6 +164,12 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
         return {}
 
 
+def fade(published: datetime | None, now: datetime) -> float:
+    """What of a share's score is left at its age (the curve above); one with no date counts as HALF_LIFE x 4 old."""
+    age = (now - published) if published else HALF_LIFE * 4
+    return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
+
+
 def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
     fades only past its pin, so it leads however old, and is never put among the evergreen."""
@@ -163,8 +180,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
     score = (r.score or 0.0) - (rank.PIN if pinned else 0.0)
     published = rank.when(kept.get("published"))
     evergreen = not pinned and rank.evergreen(features, published, now)
-    age = (now - published) if published else HALF_LIFE * 4
-    faded = (score if evergreen else score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)) + (rank.PIN if pinned else 0.0)
+    faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=str(kept.get("title") or "").strip() or "A video", url=r.url,
         source=str(kept.get("channel") or source), published_at=str(kept.get("published") or "") or None,
@@ -177,8 +193,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime) -> 
 
 def _faded(score: float, pinned: bool, published: datetime | None, now: datetime) -> float:
     """A row's score faded by age, a pinned one only past its pin."""
-    age = (now - published) if published else HALF_LIFE * 4
-    return score * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE) + (rank.PIN if pinned else 0.0)
+    return score * fade(published, now) + (rank.PIN if pinned else 0.0)
 
 
 def _story(r: Any, now: datetime) -> Candidate | None:
@@ -216,22 +231,32 @@ def news_for(db: Session, player_ids: Sequence[int], now: datetime | None = None
     return out
 
 
-def _page(candidates: list[Candidate]) -> list[Candidate]:
-    """What one page shows of a player's ranked candidates: one video from each channel (and one more among the
-    evergreen ones, a list apart), and PER_MOMENT around each moment, the best of each kept. News and posts
-    aren't thinned."""
-    channels: set[tuple[bool, str]] = set()  # (evergreen, channel id)
+def _when_group(c: Candidate, now: datetime) -> str:
+    """The dated group a share not about a moment goes in: This week (or pinned), This month, or Earlier."""
+    at = _when(c.item.published_at)
+    if c.pinned or (at and now - at <= WEEK):
+        return THIS_WEEK
+    return THIS_MONTH if at and now - at <= MONTH else EARLIER
+
+
+def _page(candidates: list[Candidate], now: datetime) -> list[Candidate]:
+    """What one page shows of a player's ranked candidates: one video from each channel of each age (this week's,
+    around a moment or not; this month's; earlier; the evergreen ones), so a channel's strong old video never takes
+    its place from this week's, and PER_MOMENT around each moment, the best of each kept. News and posts aren't
+    thinned."""
+    channels: set[tuple[bool, str, str]] = set()  # (evergreen, its age's group, channel id)
     per_moment: dict[int, int] = {}
     out = []
     for c in _ranked(candidates):
         if c.item.kind == "video":
-            if (c.evergreen, c.channel or c.item.source) in channels:
+            key = (c.evergreen, _when_group(c, now), c.channel or c.item.source)
+            if key in channels:
                 continue
             if c.moment_id is not None:
                 if per_moment.get(c.moment_id, 0) >= PER_MOMENT:
                     continue
                 per_moment[c.moment_id] = per_moment.get(c.moment_id, 0) + 1
-            channels.add((c.evergreen, c.channel or c.item.source))
+            channels.add(key)
         out.append(c)
     return out
 
@@ -242,21 +267,28 @@ def feed_for(db: Session, player_id: int, fan: str, now: datetime | None = None)
     if card is None:
         return None
     now = now or datetime.now(timezone.utc)
-    shown = _page(_unhidden(db, fan, player_id, _candidates(db, player_id, card.card, now)))
+    shown = _page(_unhidden(db, fan, player_id, _candidates(db, player_id, card.card, now)), now)
     moments = _moments(db, {c.moment_id for c in shown if c.moment_id is not None and not c.evergreen})
     groups = _arrange([c for c in shown if not c.evergreen], moments, now)
     evergreen = [c.item for c in _ranked(c for c in shown if c.evergreen)]
     return Feed(player_id=player_id, groups=groups, evergreen=evergreen, count=sum(len(g.items) for g in groups) + len(evergreen))
 
 
+def _rail(candidates: list[Candidate], now: datetime) -> list[Candidate]:
+    """A player's shares as Today's rail picks among them: this week's first, best first, then the rest."""
+    return sorted(candidates, key=lambda c: (_when_group(c, now) != THIS_WEEK, _newest(c)))
+
+
 def shares_for(db: Session, fan: str) -> list[Share]:
-    """Each followed player's top video or post, in the order they were followed. News never comes here:
-    the Wire carries it. With nothing judged for any of them the rail is absent."""
+    """Each followed player's top video or post, in the order they were followed: this week's best if they have
+    one this week, however strong an older one is (Today is about now). News never comes here: the Wire carries
+    it. With nothing judged for any of them the rail is absent."""
+    now = datetime.now(timezone.utc)
     ids = list(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan).order_by(Follow.created_at)))
-    kept = judged(db, ids) if ids else {}
+    kept = judged(db, ids, now) if ids else {}
     out = []
     for player_id in ids:
-        top = _ranked(_unhidden(db, fan, player_id, [c for c in kept.get(player_id, []) if c.item.kind != "news" and not c.evergreen]))
+        top = _rail(_unhidden(db, fan, player_id, [c for c in kept.get(player_id, []) if c.item.kind != "news" and not c.evergreen]), now)
         if top:
             out.append(Share(player_id=player_id, item=top[0].item))
     return out
@@ -352,23 +384,23 @@ def _ranked(candidates: Iterable[Candidate]) -> list[Candidate]:
 
 
 def _arrange(candidates: list[Candidate], moments: dict[int, Moment], now: datetime) -> list[Group]:
-    """A group per moment, the latest first, then This week and Earlier."""
+    """A group per moment, the latest first, then This week, This month (8 to 30 days old) and Earlier (older, or
+    undated). A pinned item is at the top of This week however old."""
     around: dict[int, list[Candidate]] = {}
     week: list[Candidate] = []
+    month: list[Candidate] = []
     earlier: list[Candidate] = []
     for c in candidates:
         if c.moment_id in moments:
             around.setdefault(c.moment_id, []).append(c)
-        elif c.pinned or ((at := _when(c.item.published_at)) and now - at <= WEEK):
-            week.append(c)
         else:
-            earlier.append(c)
+            {THIS_WEEK: week, THIS_MONTH: month, EARLIER: earlier}[_when_group(c, now)].append(c)
     groups = []
     for moment_id in sorted(around, key=lambda i: moments[i].created_at, reverse=True):
         m = moments[moment_id]
         match = m.url if m.url.startswith("/match/") else None
         groups.append(Group(head=m.title, moment=True, when=m.created_at, match=match, items=[c.item for c in _ranked(around[moment_id])]))
-    for head, these in ((THIS_WEEK, week), (EARLIER, earlier)):
+    for head, these in ((THIS_WEEK, week), (THIS_MONTH, month), (EARLIER, earlier)):
         if these:
             groups.append(Group(head=head, moment=False, items=[c.item for c in _ranked(these)]))
     return groups
