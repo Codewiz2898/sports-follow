@@ -313,14 +313,22 @@ export interface FeedCircle extends FeedWho { count: number; newest: string | nu
 
 /** An item of the fan's Feed, under its day ("Today", "Yesterday", "This week", "This month", "Earlier"), with the
  * moment it's about when it is one (`match`: its game in the app). */
-export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null }
+export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null; following: boolean }
+
+/** The fan's Feed's tabs: For you mixes in videos of players they don't follow (each entry's `following` says);
+ * Following is their players alone. */
+export type FeedTabKey = 'for_you' | 'following'
+
+/** How the apps draw the fan's Feed, as the server says (feed.layout, the admin panel's live setting): posts edge to
+ * edge, or one video a screen. */
+export type FeedLayout = 'edge' | 'full'
 
 /**
  * A page of the fan's Feed (GET /api/me/feed/items?cursor=&player=&limit=&tz=, sports_follow/feed.py `page`):
  * every followed player's items by day, players taking turns. `cursor` asks for the next page (null: the last);
  * `count` is every item (of the player picked); `newest` when the newest of anyone's came in (the tab's dot).
  */
-export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[] }
+export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[]; tab: FeedTabKey; layout: FeedLayout }
 
 /** What a fan can say about an item from its "…" sheet. */
 export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
@@ -347,7 +355,7 @@ export interface Account { signed_in: true; email: string; google: boolean; crea
 export type Me = Account | { signed_in: false; reason?: 'signed_out' }
 /** What this server offers (GET /api/config). */
 // research: false when the server runs without the research agent: pages come from live sources alone.
-export interface ServerConfig { name: string; model: string; research?: boolean; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string }
+export interface ServerConfig { name: string; model: string; research?: boolean; email_sign_in: boolean; google_sign_in?: boolean; contact_email: string; feed_layout?: FeedLayout }
 
 /** A player offered to a new fan, and why (starters.py): pinned by the operator, playing (live, started by
  * the clock, or soon), among the most followed, or among the best known with a game soon. */

@@ -273,7 +273,8 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
                 "contentDetails": details,
                 "statistics": stats,
                 "status": status,
-                "snippet": {k: snippet[k] for k in ("liveBroadcastContent", "categoryId", "defaultAudioLanguage", "tags") if k in snippet},
+                "snippet": {k: snippet[k] for k in ("liveBroadcastContent", "categoryId", "defaultAudioLanguage", "tags") if k in snippet}
+                | {"thumbnails": sorted(k for k, v in (snippet.get("thumbnails") or {}).items() if isinstance(v, dict))},  # the sizes it has (picture)
             },
         )
     return out
@@ -297,11 +298,16 @@ class YouTube(VideoSource):
         """The app plays YouTube's own embedded player (youtube-nocookie.com), by the video's id."""
         return {"youtube_id": video_id} if VIDEO_ID.fullmatch(video_id) else None
 
-    def picture(self, video_id: str) -> str | None:
-        """YouTube's own thumbnail of the video, from its image host (the Content-Security-Policy allows it):
-        hqdefault, 480x360, the biggest it makes for every video (maxresdefault and sddefault only exist for some),
-        the 16:9 picture letterboxed in it, so a 16:9 frame that covers crops the bars off exactly."""
-        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if VIDEO_ID.fullmatch(video_id) else None
+    def picture(self, video_id: str, details: dict[str, Any] | None = None) -> str | None:
+        """YouTube's own thumbnail of the video, from its image host (the Content-Security-Policy allows it), the
+        biggest it has: maxresdefault (1280x720) or sddefault (640x480) where videos.list said the video has one
+        (details: what it said, as the candidate keeps it), else hqdefault (480x360), which every video has. The
+        4:3 ones letterbox the 16:9 picture, so a 16:9 frame that covers crops the bars off exactly."""
+        if not VIDEO_ID.fullmatch(video_id):
+            return None
+        sizes = ((details or {}).get("snippet") or {}).get("thumbnails") or []
+        name = "maxresdefault" if "maxres" in sizes else "sddefault" if "standard" in sizes else "hqdefault"
+        return f"https://i.ytimg.com/vi/{video_id}/{name}.jpg"
 
     @classmethod
     def available(cls) -> bool:

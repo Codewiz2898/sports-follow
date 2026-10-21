@@ -16,10 +16,10 @@ from sqlalchemy import create_engine, delete, select, text, update
 
 from sports_follow import bus, db as db_module, sweeps
 from sports_follow.models import FeedCandidate, FeedSweep, Follow, Player, PlayerAlias
-from tests.test_feed_fetch import NOW, video
+from tests.test_feed_fetch import NOW, listing, video
 from tests.test_feed_metrics import counts, measured  # noqa: F401
 from tests.test_feed_fetch_db import Redis
-from tests.test_moment_search import Searching, asked_for, hit
+from tests.test_moment_search import CHANNEL as SEARCHED, Searching, asked_for, hit
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -38,6 +38,7 @@ def world(monkeypatch):
     made = Searching()
     monkeypatch.setattr(youtube, "_client", httpx.Client(transport=httpx.MockTransport(made)))
     monkeypatch.setattr(youtube, "key", lambda: "test-key")
+    listing(monkeypatch, SEARCHED)
     monkeypatch.setattr(bus, "sync_redis", lambda: made.redis)
     made.redis = Redis()
     yield made
@@ -359,3 +360,18 @@ def test_when_the_famous_cap_binds_everyone_is_swept_before_anyone_again(world, 
     for day in range(4):
         sweeps.run(NOW + day * DAY)
     assert [p for p, *_ in swept()] == [a, b, c, a]  # Charlie before Alpha's second, though Alpha's the most followed
+
+
+@pytest.mark.parametrize(("stream", "caps"), [("gap", {"gap": 20, "famous": 0}), ("wide", {"gap": 0, "famous": 0, "wide": 14}), ("famous", {"gap": 0, "famous": 35})])
+def test_each_sweep_keeps_only_whats_from_a_channel_the_players_sport_lists(world, monkeypatch, stream, caps):
+    only(monkeypatch, **caps)
+    iyer = player("Shreyas Iyer")
+    if stream != "gap":
+        served(iyer, "iyerrecent1")  # covered this week: no gap search
+    world.found["Shreyas Iyer cricket"] = [hit("iyerlisted1", "Shreyas Iyer 90 vs Australia"), hit("iyeroffli01", "SHREYAS IYER 🔥🔥", channel="UC" + "z" * 22)]
+    world.videos.update({v: video(v) for v in ("iyerlisted1", "iyeroffli01")})
+    done = sweeps.run(NOW)
+    assert (done[f"{stream} searched"], done["kept"]) == (1, 1)
+    with db_module.session() as s:
+        assert set(s.scalars(select(FeedCandidate.external_id))) == {"iyerlisted1"} | ({"iyerrecent1"} if stream != "gap" else set())
+    assert "iyeroffli01" not in "".join(str(r.url) for r in world.asked if r.url.path == "/youtube/v3/videos")  # never asked about

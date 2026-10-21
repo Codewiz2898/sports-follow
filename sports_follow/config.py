@@ -88,6 +88,9 @@ SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_P
 STARTERS_HOME_COUNTRY = os.environ.get("SPORTS_FOLLOW_STARTERS_HOME_COUNTRY", "India").strip()
 # Where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept (candidates.py).
 FEED_COUNTRY = os.environ.get("SPORTS_FOLLOW_FEED_COUNTRY", "IN").strip().upper() or "IN"
+# How the apps draw the fan's Feed (feed.layout, BHA-349): "edge", posts edge to edge, or "full", a video a screen.
+# The admin panel's Feed tab changes it live; this is what it is until it does (and once the panel's word is taken back).
+FEED_LAYOUT = os.environ.get("SPORTS_FOLLOW_FEED_LAYOUT", "edge").strip().lower() or "edge"
 # Searches in any 24 hours for fans' videos of followed players' big moments (searches.py), each run counted: a
 # moment's search runs twice. The biggest moments go first when there are more. 0 turns them off.
 FEED_MOMENT_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MOMENT_SEARCHES", 40)))

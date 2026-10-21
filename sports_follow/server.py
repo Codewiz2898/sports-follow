@@ -422,10 +422,12 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
     """What this server offers the app: its name, the model and whether it researches players no source has
-    (config.RESEARCH), the ways to sign in, who to write to about privacy."""
+    (config.RESEARCH), the ways to sign in, who to write to about privacy, and how to draw the fan's Feed
+    (feed.layout: "edge" or "full", which the admin panel changes live; each page of the Feed says it too)."""
     from .config import RESEARCH
 
-    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(),
+            "contact_email": CONTACT_EMAIL, "feed_layout": feed.layout()}
 
 
 @app.get("/api/sports")
@@ -1662,6 +1664,18 @@ def admin_feed(show: Annotated[str, Query(max_length=20)] = "all", offset: Annot
         raise HTTPException(400, str(exc)) from None
 
 
+@app.put("/api/admin/feed/layout", dependencies=AdminOnly)
+def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
+    """How the apps draw the fan's Feed ({"layout": "edge" | "full" | null}; null: the server's setting), live in
+    every process within a few seconds: no deploy. Before /api/admin/feed/{row_id}, which would take "layout" for a row."""
+    try:
+        admin.set_feed_layout(body.get("layout"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed layout %s", body.get("layout") or "back to the server's")
+    return {"layout": admin.layout_view()}
+
+
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
@@ -2049,14 +2063,17 @@ def my_feed_items(
     player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
     tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
+    tab: Annotated[str, Query(max_length=20)] = feed.FOLLOWING,
     fan: str = Depends(fan_id),
     db: Session = Depends(get_db),
 ) -> feed.Page:
     """The fan's Feed (feed.page): every followed player's videos, posts and news, by day where the fan is (tz:
-    minutes east of UTC), players taking turns; ?player=<id> for one of them; ?cursor= for the next page. Read from
-    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's dot)."""
+    minutes east of UTC), players taking turns; ?tab=for_you mixes in videos of players they don't follow (the default,
+    following, is theirs alone); ?player=<id> for one of them; ?cursor= for the next page (of the same tab). Read from
+    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's
+    dot). Each page says how the apps draw it (layout)."""
     try:
-        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz)
+        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz, tab=tab)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})

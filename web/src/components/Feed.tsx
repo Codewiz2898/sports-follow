@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Feed, type FeedEntry, type FeedItem, type FeedVerdict, type Photo } from '../api'
 import { ago, duration, feedOf, fromTheFans, outlets, postFrom, views, without, type FeedKind } from '../feed'
@@ -7,6 +7,7 @@ import { useFollowing } from '../following'
 import { useMyFeed } from '../myFeed'
 import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
+import { EdgePost, EdgeSheetExtras } from './FeedLayouts'
 import { FeedPost } from './FeedPost'
 
 /**
@@ -145,7 +146,7 @@ function ItemCard({ item, name, now, onMore }: { item: FeedItem; name: string; n
 }
 
 /** The "…" sheet: why the item is here, and the three things a fan can tell the judge about it. */
-export function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; name: string; onClose: () => void; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
+export function ItemSheet({ item, name, onClose, onHide, children }: { item: FeedItem; name: string; onClose: () => void; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void>; children?: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -170,6 +171,7 @@ export function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; nam
       <div className="feed-sheet-box">
         <span className="eyebrow">Why this is here</span>
         <p style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.4 }}>{item.reason}</p>
+        {children}
         {error && <span className="small" role="alert" style={{ color: 'var(--danger)' }}>{error}</span>}
         <div className="stack" style={{ gap: 8, marginTop: 4 }}>
           <button type="button" className="btn feed-say" disabled={busy} onClick={() => say('not_interested')}>Not interested</button>
@@ -296,24 +298,26 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
-/** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed right now in its
- * cards, and the way to the rest. Absent while their Feed is empty. */
+/** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed (Following) right now
+ * in the edge-to-edge layout's cards (FeedLayouts.tsx, boxed here, whichever layout the Feed tab draws: a full-screen
+ * one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. */
 export function FromYourPlayers({ now }: { now: number }) {
   const { cards, loaded } = useFollowing()
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const { page, hide } = useMyFeed(null, 2, loaded ? who : null)  // once, when the follow list is in
   const [open, setOpen] = useState<FeedEntry | null>(null)
+  const [playing, setPlaying] = useState<string | null>(null)
   if (!loaded || !page?.items.length) return null
   return (
     <section className="section from-players" aria-label="From your players">
       <SectionHead title="From your players">
-        <Link to="/me/feed" className="eyebrow link" style={{ color: 'var(--text)' }}>All {page.count}</Link>
+        <Link to="/me/feed?tab=following" className="eyebrow link" style={{ color: 'var(--text)' }}>All {page.count}</Link>
       </SectionHead>
-      <div className="posts">
-        {page.items.map((e) => <FeedPost key={e.item.id} who={e.player} item={e.item} moment={e.moment} now={now} onMore={() => setOpen(e)} />)}
+      <div className="edge boxed">
+        {page.items.map((e) => <EdgePost key={e.item.id} entry={e} now={now} playing={playing === e.item.id} onPlay={setPlaying} onMore={() => setOpen(e)} />)}
       </div>
-      <Link to="/me/feed" className="btn all">All {page.count} in your Feed</Link>
-      {open && <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_, verdict) => hide(open, verdict)} />}
+      <Link to="/me/feed?tab=following" className="btn all">All {page.count} in your Feed</Link>
+      {open && <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_, verdict) => hide(open, verdict)}><EdgeSheetExtras entry={open} /></ItemSheet>}
     </section>
   )
 }

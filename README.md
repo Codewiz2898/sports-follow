@@ -369,8 +369,22 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   across the top (a tap filters with `player=`), each with when their newest came in, which rings them in their
   sport's colour until the fan taps them; `newest` puts a dot on the tab until the fan opens it (only items of
   Today and Yesterday count, so an old video a sweep finds now isn't "new"; both kept on
-  the device, `web/src/feedSeen.ts`). Today's "From your players" is its top two in the same cards
-  (`components/FeedPost.tsx`) and "All N in your Feed". In the dev server, `?feed-sample` on a player's page
+  the device, `web/src/feedSeen.ts`). Today's "From your players" is its top two, in the edge-to-edge cards
+  below, and "All N in your Feed".
+- **For you and Following, edge to edge or full screen** (BHA-349, `web/src/components/FeedLayouts.tsx`): the Feed
+  tab opens on For you (`?tab=for_you`), which mixes in videos of players the fan doesn't follow, 3 of every 5 items
+  the fan's own and 2 others' (`feed.others`: of the players with something served, the fan's sports first, then
+  anyone with a big moment in the last day, then the most followed on the app; 30 at most), each entry saying
+  `following`, so its card offers Follow, which works in place. A fan who follows nobody gets For you all from
+  them. Following (`?tab=following`, the API's default) is the fan's players alone, with the circles; when they run
+  out it says so and offers For you. How the apps draw it is a setting: `layout` on every page, and
+  `feed_layout` in `/api/config`, `edge` (full-width posts: photo ringed in the sport's colour, name, Follow, "…",
+  the 16:9 picture with the video's length, title, "channel · views · when") or `full` (one item a screen, snapping,
+  its picture framed on a blurred copy of itself, Follow, Share and More down the right). It's
+  `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
+  Titles are tidied as they're served (`sports_follow/titles.py`): emoji, hashtags and the channel's name off,
+  bars as dots, a shouted part in sentence case keeping names (the players', `Sport.title_words`) as written.
+  A video's picture is the biggest YouTube has for it (maxres, then sd, then hq; the sizes come with each read). In the dev server, `?feed-sample` on a player's page
   shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
   it all too: the Feed tab with its dot and circles (`mobile/src/app/feed.tsx`, its own address `/feed`, since
   claiming `/me/` would take the site's `/me/leagues` into the app too), the same cards
@@ -520,7 +534,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sports_follow.curator`, the `curator` service in `deploy/compose.yaml`): an arq worker on its own queue, so
   it never takes the worker's slots, logged, traced, measured and stopped as the worker is, its requests in
   the `feed` lane. Every half hour (`sports_follow/candidates.py`) it reads the latest uploads of every
-  channel a running sport trusts (`Sport.video_channels`) from each channel's public feed, which costs no
+  channel a running sport lists (`Sport.video_channels`: official channels, meaning leagues, federations, clubs,
+  broadcasters and tournaments, and a few top creators; the only channels any stream keeps a video from,
+  BHA-349) from each channel's public feed, which costs no
   quota (when a feed doesn't answer, as YouTube's often don't for a while, the channel's uploads playlist
   costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
   characters at most: not the related-video or podcast links under it) names a followed player of that sport
@@ -543,14 +559,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
-  never spent: a few hundred a day in use, about 2,500 at most if every channel's feed failed all day. Searches
+  never spent: a few hundred a day in use, about 3,500 at most if every channel's feed failed all day. Searches
   have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
   none of the 10,000, counted as the `youtube-search` budget with 5 never spent. Both are counted from midnight
   Pacific, as YouTube counts them; the Google Cloud console's quota page for the YouTube Data API v3 (APIs &
   Services, YouTube Data API v3, Quotas) shows both, "Queries per day" and "Search Queries per day".
   Without the key the source is off, the admin panel says so, and nothing else changes.
 - **Big moments are searched for too** (`sports_follow/searches.py`, BHA-303): fans post edits of a hundred or a
-  brace within hours, mostly on channels no sport lists. After each poll the curator queues a search for each key
+  brace within hours, and a channel's feed holds only its latest 15 (what a search finds is kept only from a channel
+  the player's sport lists, as everything is). After each poll the curator queues a search for each key
   moment of a followed player's (not one taken back; a search whose moment is taken back goes) that its sport has words for (`Sport.search_words`: "century
   Lord's", "brace Liverpool vs Everton", "wins game 4"), after the player's name as fans write it (below): one per player and game, `feed_search`,
   which a later moment in the game takes over (the brace over the goal) until its last run. Each runs twice, three
@@ -666,8 +683,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   content judge reads about it (`content_hints`: a few lines on what a milestone and a big moment are there, and what a
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
   vouches for may run before it's taken for a whole game re-uploaded, or `None` where long videos are normal, as in
-  chess), and the channels it trusts for the feed's videos about its players (`video_channels`, in one block at the
-  end of its class: real channel ids only, each checked to answer at
+  chess), the only channels the feed's videos about its players come from (`video_channels`, official ones and a
+  few top creators, in one block at the end of its class, with `title_words` after it, the names a tidied title
+  keeps in capitals: real channel ids only, each checked to answer at
   `https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, which often takes a few tries; a sport that's off has
   none read; esports' are the `Esports` class's, for every game), the publishers' feeds it reads for news about its
   players (`news_feeds`, right after: each feed's address with the publisher's name as stories credit it; real RSS
@@ -895,6 +913,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; each 1 of YouTube's 100 searches a day; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
+| `SPORTS_FOLLOW_FEED_LAYOUT` | `edge` | how the apps draw the Feed tab: `edge` (posts edge to edge) or `full` (a video a screen); the admin panel's Feed tab changes it live, and every page of the Feed and `/api/config` say which |
 | `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_RESEARCH` | `0` | `1` gives players no live source has a page the research agent writes whole: a typed name no source knows, a registry athlete no source has, offered as "AI research" (3 a fan a day). Off, they can't be followed, search doesn't list them, and nothing offers AI research; the agent only writes the background of a player Wikipedia has no article on |
