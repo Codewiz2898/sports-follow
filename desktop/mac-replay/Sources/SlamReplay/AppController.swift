@@ -285,6 +285,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
             menu.addItem(it)
             endItems.append(it)
         }
+        let snd = NSMenuItem(title: "End card sound", action: #selector(toggleSting(_:)), keyEquivalent: "")
+        snd.target = self
+        snd.state = Sting.enabled ? .on : .off
+        menu.addItem(snd)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
@@ -305,6 +309,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         ClipEditor.endStyle = style
         endItems.forEach { $0.state = ($0.representedObject as? String) == raw ? .on : .off }
         Log.json("end-card", ["style": raw])
+    }
+    @objc private func toggleSting(_ sender: NSMenuItem) {
+        Sting.enabled.toggle()
+        sender.state = Sting.enabled ? .on : .off
     }
     @objc private func montageToday() { makeMontage(Montage.todaysClips()) }
     @objc private func montagePick() {

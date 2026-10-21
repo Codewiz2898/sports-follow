@@ -102,6 +102,7 @@ enum Montage {
             if hold < card { v.insertEmptyTimeRange(CMTimeRange(start: cursor + hold, duration: card - hold)) }
         }
         let total = cursor + card
+        try await Sting.add(to: a, style: ClipEditor.endStyle, at: cardRange.start, seconds: opts.card)
 
         let render = opts.vertical ? CGSize(width: 1080, height: 1920) : first.size
         // Where the game sits, in video coordinates (y down): the whole frame, or a band across a 9:16.

@@ -55,6 +55,7 @@ enum ClipEditor {
         let end = CMTime(seconds: min(endSeconds, duration.seconds), preferredTimescale: 600)
         try v.insertTimeRange(CMTimeRange(start: duration - end, duration: end), of: vSrc, at: duration + slow)
         let total = duration + slow + end
+        try await Sting.add(to: a, style: endStyle, at: duration + slow, seconds: end.seconds)
 
         let fps = rate > 0 ? Int32(rate.rounded()) : 30
         let vc = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: comp)

@@ -28,6 +28,7 @@ func value(_ flag: String) -> String? {
 }
 
 if let e = value("--end"), let style = Overlays.EndStyle(rawValue: e) { ClipEditor.endStyle = style }
+if args.contains("--no-sting") { Sting.enabled = false }
 
 if args.contains("--selftest") {
     let s = value("--selftest").flatMap(Int.init) ?? 40
