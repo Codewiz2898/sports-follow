@@ -499,9 +499,18 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   one waiting position (the newest), positions are cached, the game that has waited longest goes next,
   and a game is evaluated at most once every 20 s. One engine lane runs system-wide (a Redis lock) on
   one thread at low priority, about a second per position, and rests as long as it worked: at most
-  half of one core. A band changes only when two evaluations agree, so a board glitch isn't a swing.
-  The live state carries the latest evaluation (`eval`), and the board draws it as a bar beside the
-  board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
+  half of one core. Every position gets that first look, and alerts go by first looks alone: each is
+  deterministic (its own engine process, cleared before each look, one thread, a node budget and no
+  clock), so a position scores the same however busy the server is or whatever was searched before, on
+  one Stockfish version. While someone has the game's match page open (web or Android), the lane then
+  deepens the position it's on with the time it would otherwise idle: one search of it, in a second
+  process, a second at a time and paused in between (a new position anywhere goes first), to depth 30,
+  so the evaluation beside the board gets deeper the longer a player thinks; with several boards on,
+  they take turns. A position scores the same whether the game is watched, and deeper readings are
+  shown, never alerted on. A band changes only when the first looks of two positions in a row agree, so a board glitch
+  isn't a swing. It's settled once a board, so both players' events of it agree, and a decided game (a
+  mini-match stays live after it) isn't evaluated any more. The live state carries the latest evaluation (`eval`), and the board draws it
+  as a bar beside the board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
   `web/src/sports/facts/chess.ts`).
 - **Play from here, on the fan's device.** A chess game's match page makes its board an analysis board
   where it is: the fan plays either side's legal moves from the game's position (or from any move of a
@@ -1016,8 +1025,12 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
 | `SPORTS_FOLLOW_ENGINE_BUSY` | `0.5` | the share of one CPU core the engine may use |
-| `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work per position (about a second on one core) |
-| `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between evaluations of one game |
+| `SPORTS_FOLLOW_ENGINE_NODES` | `500000` | work for a position's first look, which alerts go by (about a second on one core, depth about 20); the same nodes give the same score on one Stockfish version |
+| `SPORTS_FOLLOW_ENGINE_DEEPEN` | `watched` | when a position is deepened past its first look: `watched`, while someone has the game's match page open (web or Android); `all`, whenever its game is evaluated; `off`, never. Alerts go by first looks either way; an unknown value is taken as `watched`, with a warning |
+| `SPORTS_FOLLOW_ENGINE_DEPTH` | `30` | a position a game stays on is deepened until it's this deep… |
+| `SPORTS_FOLLOW_ENGINE_POSITION_NODES` | `32000000` | …or has had this much work in all (about a minute on one core): the most CPU one position gets |
+| `SPORTS_FOLLOW_ENGINE_HASH_MB` | `128` | the deep search's hash table, which holds its tree. Each Stockfish process takes about 250 MB besides: the lane runs one for first looks (16 MB hash) and, while something's deepened, one for deep searches |
+| `SPORTS_FOLLOW_ENGINE_GAME_INTERVAL` | `20` | seconds between first looks at one game's positions, from when its polls asked for the last one (deepening doesn't count) |
 | `SPORTS_FOLLOW_HISTORY_READS` | `20` | source requests a minute for older results and scorecards |
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run (a source of several esports games reads only those left in), and its followed players' pages stay as they are. Each esports game is a sport (`valorant,cs2,lol,dota2,bgmi,freefire,pubgmobile,pubg,mlbb,hok,r6siege,overwatch,apex,rocketleague,cod,wildrift`), and `esports` stands for every game. The admin panel turns these off and on while the app runs |
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |

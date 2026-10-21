@@ -589,6 +589,14 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
             log.warning("match: couldn't ask for %s:%s", system, game, exc_info=True)
     if page is None:
         raise HTTPException(404, "This game isn't here: it may have ended before anyone opened it.")
+    if page.get("status") == "live":
+        try:
+            # Someone has it open, on the web or Android: the engine deepens its position past its first look
+            # while they do (engine.deepens), whichever of its fixtures polls it.
+            for event_id in page.get("event_ids") or []:
+                await state["redis"].set(bus.watching_key(event_id), "1", ex=bus.WATCH_SECONDS)
+        except Exception:
+            log.warning("match: couldn't note %s:%s as watched", system, game, exc_info=True)
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 

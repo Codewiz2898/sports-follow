@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, engine, livecards, notify, server, structured
 from sports_follow.adapters import KNOWN, Snapshot, lichess_chess
-from sports_follow.models import Event, EventPlayer, Follow, NotificationMute, Player, PlayerIdentity, PushSubscription
+from sports_follow.models import Event, EventPlayer, Follow, Moment, NotificationMute, Player, PlayerIdentity, PushSubscription
 
 from .test_fcm import fake_fcm  # noqa: F401  (the fixture)
 from .test_match_follow import Store
@@ -106,6 +106,13 @@ class Redis(Store):
 
     def expire(self, name: str, seconds: int) -> int:
         return 1
+
+    def eval(self, script: str, numkeys: int, key: str, was: str, new: str, seconds: int) -> str | None:
+        assert script == engine.SETTLE  # the board's settle: kept only if it's still what it was settled from
+        if (self.get(key) or "") == was:
+            self.set(key, new, ex=seconds)
+            return new
+        return self.get(key)
 
 
 @pytest.fixture
@@ -528,3 +535,39 @@ def test_a_moment_its_other_side_says_in_time_isnt_sent_late(db, polls):
     held = notify.held_due(later)  # the swing, and Lazavik's start
     assert len(held) == 2 and notify.send_held(held, later) == 0  # Carlsen's words for both went
     assert polls.pushed == [] and notify.held_due(later) == []
+
+
+def test_a_look_between_the_two_sides_polls_is_still_one_swing(db, polls, monkeypatch):
+    # The engine's readings as the lane leaves them, each side settling the board's one evaluation (engine.settled).
+    # Lazavik's side polls after move 42's look (Carlsen winning: the band moved at 42); the lane looks at move 43
+    # before Carlsen's side polls. Both word the swing as the one at 42 (settle's "since"), so a fan of both hears it
+    # once, from Carlsen's side, and nothing late: the moment held for Carlsen's side to say was said.
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    for asked in ("request", "drop"):
+        monkeypatch.setattr(engine, asked, lambda *args, **kwargs: None)  # the lane's queue isn't what's tested here
+    monkeypatch.setattr(engine, "deepens", lambda event_id: False)
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, side(event_id, status="*"))
+    game = side(1, status="*", ongoing=True).state["game_id"]
+
+    def reading(move: int, cp: int, at: int) -> None:
+        polls.redis.set(f"engine:latest:{game}", json.dumps({"cp": cp, "mate": None, "depth": 20, "look": {"cp": cp, "mate": None, "depth": 20},
+                                                              "fen": f"8/8/8/8/8/8/8/8 w - - 0 {move}", "at": at, "first": at}))
+
+    for at, (move, cp) in enumerate([(40, 20), (41, 340)], 1):
+        reading(move, cp, at)
+        for event_id in (1, 2):
+            poll(event_id, side(event_id, status="*", ongoing=True))
+    polls.pushed.clear()
+    reading(42, 340, 3)
+    poll(2, side(2, status="*", ongoing=True))
+    assert heard(polls.pushed) == {"lazavik": ["Denis Lazavik is in trouble"]}
+    reading(43, 345, 4)
+    poll(1, side(1, status="*", ongoing=True))
+    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen is winning"], "both": ["Magnus Carlsen is winning"]}
+    swings = db.scalars(select(Moment.key).where(Moment.kind == "swing").order_by(Moment.id)).all()
+    assert swings == [f"2:6:swing:{game}w2m42", f"1:5:swing:{game}w2m42"]  # each side's word for one play
+    later = datetime.now(timezone.utc) + timedelta(seconds=structured.TELLS_WITHIN + 30)
+    held = notify.held_due(later)  # Lazavik's swing and his start, each left to Carlsen's side
+    assert notify.send_held(held, later) == 0 and polls.pushed == []

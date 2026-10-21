@@ -428,14 +428,6 @@
                     "endColumn": 25,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 44,
-                    "endColumn": 47,
-                    "lineCount": 1
-                }
             }
         ],
         "./sports_follow/history.py": [
@@ -846,14 +838,6 @@
                 "range": {
                     "startColumn": 24,
                     "endColumn": 33,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 36,
                     "lineCount": 1
                 }
             },

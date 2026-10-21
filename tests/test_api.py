@@ -1341,6 +1341,12 @@ def test_a_match_page_is_served_and_its_game_read_at_most_once_a_minute(api, mon
 
     for path in ("/api/match/nowhere/1", "/api/match/lichess_chess/..", "/api/match/lichess_chess/a%2Fb", f"/api/match/lichess_chess/{'1' * 65}"):
         assert api.call("GET", path, fan="fan").status_code == 404, path
+    # A live game's page open (the web's or the app's, either asks every 30 s) marks each of its events watched for a
+    # while: the engine deepens the board meanwhile (engine.deepens). Not one that isn't on.
+    assert not [k for k in api.redis.data if k.startswith("watching:")]
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: ({**page, "status": "live", "event_ids": [7, 8]}, False))
+    api.call("GET", "/api/match/lichess_chess/abcd1234-5", fan="fan")
+    assert sorted(k for k in api.redis.data if k.startswith("watching:")) == [bus.watching_key(7), bus.watching_key(8)]
     monkeypatch.setattr(match, "view", lambda db, fan, system, game: (None, False))
     answer = api.call("GET", "/api/match/lichess_chess/abcd1234-9", fan="fan")
     assert answer.status_code == 404 and answer.json() == {"detail": "This game isn't here: it may have ended before anyone opened it."}
