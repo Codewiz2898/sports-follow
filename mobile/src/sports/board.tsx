@@ -11,6 +11,7 @@ import { colour, font, num, t } from '../theme'
 import { alpha } from '../ui'
 
 export interface Palette {
+  ground: string // what the board sits on: the scoreboard's ink, a card's paper, the sport's colour
   text: string
   muted: string
   raised: string
@@ -26,18 +27,18 @@ export interface Palette {
 
 /** On the ink scoreboard (.board): white type; 52px score, 40px compact. */
 export function onInk(tone: Tone, compact?: boolean): Palette {
-  return { text: '#FFFFFF', muted: colour.inkMuted, raised: colour.inkRaised, line: colour.inkLine, clock: '#FF6B5F', note: '#FF8A80', ours: tone.ink, score: compact ? 40 : 52, paper: false }
+  return { ground: colour.text, text: '#FFFFFF', muted: colour.inkMuted, raised: colour.inkRaised, line: colour.inkLine, clock: '#FF6B5F', note: '#FF8A80', ours: tone.ink, score: compact ? 40 : 52, paper: false }
 }
 
 /** On a paper card (.live-other): ink type, the clock in the page's red; a 40px score. */
 export function onPaper(tone: Tone): Palette {
-  return { text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: tone.ink, score: 40, paper: true }
+  return { ground: colour.surface, text: colour.text, muted: colour.muted, raised: colour.raised, line: colour.line, clock: colour.liveText, note: colour.liveText, ours: tone.ink, score: 40, paper: true }
 }
 
 /** On a match page's band (.match-band .match-board): everything in the ink that reads on the sport's colour,
  * the clock too; a 64px score, 18px names and a 24px clock. */
 export function onSport(tone: Tone): Palette {
-  return { text: tone.on, muted: tone.onSoft, raised: alpha(tone.on, 0.14), line: alpha(tone.on, 0.24), clock: tone.on, note: tone.on, ours: tone.on, score: 64, paper: false, title: 18, clockSize: 24 }
+  return { ground: tone.sport, text: tone.on, muted: tone.onSoft, raised: alpha(tone.on, 0.14), line: alpha(tone.on, 0.24), clock: tone.on, note: tone.on, ours: tone.on, score: 64, paper: false, title: 18, clockSize: 24 }
 }
 
 export interface BoardProps<S = unknown> {
@@ -50,6 +51,9 @@ export interface BoardProps<S = unknown> {
   // each other in) or a match page; without it, the live block's own. A board drawn from their side (chess) has
   // none to take when they're on both.
   lines?: Stat[][]
+  // The match page's board: one the fan may explore, where its sport has a way to (a chess board's Play from
+  // here, an analysis board on the phone). Elsewhere a board is the game's alone.
+  explore?: boolean
   pal: Palette
 }
 

@@ -1,7 +1,9 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // chess.js for the shared web/src/sports/facts/chessLine.ts is the app's own, as Metro has it (metro.config.js).
+    "paths": { "chess.js": ["./node_modules/chess.js"] }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
 }

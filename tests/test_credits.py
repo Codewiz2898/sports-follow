@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from importlib.metadata import metadata
+from pathlib import Path
 
 from sports_follow import credits
+from sports_follow.sports import chess, football
 
 
 def _names(items: list[dict]) -> list[str]:
@@ -12,18 +15,53 @@ def _names(items: list[dict]) -> list[str]:
 
 
 def test_a_public_build_credits_its_licensed_sources_only():
-    page = credits.credits({"sportmonks_football": 1, "sportmonks_cricket": 1, "lichess_chess": 1}, stockfish=True)
+    page = credits.credits({"sportmonks_football": 1, "sportmonks_cricket": 1, "lichess_chess": 1}, stockfish=True, on=(football.SPORT, chess.SPORT))
     assert _names(page["data"]) == ["Sportmonks", "Lichess"]
     assert page["data"][0]["what"].startswith("Football and cricket: ")
     lichess = page["data"][1]
     assert (lichess["licence"], lichess["licence_url"]) == ("Broadcast games: CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/")
-    assert _names(page["also"]) == ["Wikidata", "Wikipedia", "FIDE", "Stockfish", "AI", "News publishers"]
+    assert _names(page["also"]) == ["Wikidata", "Wikipedia", "FIDE", "Stockfish", "Stockfish.js", "AI", "News publishers"]
     wikipedia = page["also"][1]  # each player's About paragraph is CC BY-SA, which asks for the credit and the licence
     assert (wikipedia["licence"], wikipedia["licence_url"]) == ("CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/")
 
 
+def test_the_engine_on_the_fans_device_is_credited_while_chess_is_on():
+    # Play from here runs Stockfish.js on the fan's phone or browser (GPL-3.0): its credit links its source, the
+    # commit that built it, and the licence as that commit has it; with chess off, there's no board to run it.
+    js = next(c for c in credits.credits({}, stockfish=False, on=(chess.SPORT,))["also"] if c["name"] == "Stockfish.js")
+    assert (js["licence"], js["url"], js["licence_url"]) == ("GPL-3.0", chess.ENGINE_SOURCE, chess.ENGINE_LICENCE)
+    assert "Stockfish.js" not in _names(credits.credits({}, stockfish=False, on=(football.SPORT,))["also"])
+
+
+ROOT = Path(__file__).resolve().parent.parent
+ENGINE = ROOT / "web" / "src" / "sports" / "engine"
+
+
+def test_the_engines_source_is_the_one_the_boards_link():
+    # The boards' "source" link (web/src/sports/facts/chessEngineCore.ts) and the Credits page name one commit.
+    core = (ROOT / "web" / "src" / "sports" / "facts" / "chessEngineCore.ts").read_text()
+    built = re.search(r"const BUILT_FROM = '([0-9a-f]{40})'", core)
+    assert built and built[1] == chess.ENGINE_BUILT_FROM
+
+
+def test_every_engine_file_named_is_there():
+    # Each place that names the engine's files by name: the web's two ?url imports, the Android module's copy (whose
+    # build fails on a missing one, but CI doesn't build the app), and the Android page's worker. A renamed or
+    # missing file would ship a board whose engine never starts.
+    web = re.findall(r"from '\./engine/([^'?]+)\?url'", (ROOT / "web" / "src" / "sports" / "chessEngine.ts").read_text())
+    android = ROOT / "mobile" / "modules" / "chess-engine" / "android"
+    gradle = re.search(r"def engineFiles = \[([^\]]*)\]", (android / "build.gradle").read_text())
+    copied = re.findall(r'"([^"]+)"', gradle[1]) if gradle else []
+    page = re.findall(r"new Worker\('([^'#]+)#' \+ encodeURIComponent\('([^']+)'\)\)", (android / "src" / "main" / "assets" / "engine" / "page.js").read_text())
+    ran = [name for pair in page for name in pair]
+    assert len(web) == 2 and len(copied) == 3 and len(ran) == 2
+    assert set(ran) <= set(copied)  # what the page runs is what the build copies
+    missing = [name for name in (*web, *copied, *ran) if not (ENGINE / name).is_file()]
+    assert not missing, f"named but not in web/src/sports/engine: {missing}"
+
+
 def test_a_development_build_also_names_espn():
-    page = credits.credits({"espn_soccer": 1, "espn_cricket": 1, "espn_tennis": 1}, stockfish=False)
+    page = credits.credits({"espn_soccer": 1, "espn_cricket": 1, "espn_tennis": 1}, stockfish=False, on=(football.SPORT,))
     assert _names(page["data"]) == ["ESPN"]
     assert page["data"][0]["what"].startswith("Football, cricket (ESPNcricinfo) and tennis: ")
     assert "FIDE" not in _names(page["also"]) and "Stockfish" not in _names(page["also"])  # no chess, no engine
