@@ -648,19 +648,26 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
         # row, the other waits for it to commit and reads it back instead of failing on the key.
         db.execute(insert(Event).values(key=key, sport=sport, title=f.title, status=f.status).on_conflict_do_nothing(index_elements=[Event.key]))
         event = db.scalars(select(Event).where(Event.key == key)).one()
-    if event.start_utc is not None and f.start_utc is not None and f.start_utc != event.start_utc:
-        predictions.moved(db, event, f.start_utc)  # put back (or brought forward): its questions start then
     event.title = f.title
     event.competition = f.competition
-    event.start_utc = f.start_utc
     event.venue = f.venue
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    later = f.start_utc is not None and f.start_utc > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
-    event.status = next_status(event.status, f.status, moved_later=later)
+    reschedule(db, event, f.start_utc, f.status, sport)
     db.flush()
     return event
+
+
+def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None) -> None:
+    """An event's start and status as its source last said: a schedule read (upsert_game), or a read of the game
+    itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
+    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status)."""
+    if event.start_utc is not None and start is not None and start != event.start_utc:
+        predictions.moved(db, event, start)
+    event.start_utc = start
+    later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
+    event.status = next_status(event.status, status, moved_later=later)
 
 
 def _record_final(db: Session, event: Event, player_id: int, snap: Snapshot, line: Line | None) -> None:
