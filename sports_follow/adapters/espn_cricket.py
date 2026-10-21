@@ -52,6 +52,14 @@ def _text(value: str | None) -> str:
     return html.unescape(value or "")
 
 
+def _winner(value: Any) -> bool | None:
+    """Whether a side won, as the board keeps it: True, False, or None when the feed doesn't say. The day feed
+    gives a bool, the summary the strings "true" and "false", and "false" read as a win (BHA-355)."""
+    if value is None or isinstance(value, bool):
+        return value
+    return {"true": True, "false": False}.get(str(value).strip().lower())
+
+
 def _off(kind: dict[str, Any], played: bool) -> bool:
     """A match that won't be played or wasn't: postponed, cancelled, or abandoned without a ball bowled.
     One abandoned after play is a no result, with its scorecard."""
@@ -81,7 +89,7 @@ def parse_day(data: dict[str, Any]) -> list[Fixture]:
             if status == "final":
                 full = e.get("fullStatus") or {}
                 # The top-level summary is just "Result"; the real one ("India won by 8 wkts (50b rem)") is in fullStatus.
-                result = {"summary": _text(full.get("summary") or full.get("longSummary") or e.get("summary")), "teams": [{"id": str(c.get("id")), "name": c.get("displayName"), "score": c.get("score") or "", "winner": c.get("winner")} for c in competitors]}
+                result = {"summary": _text(full.get("summary") or full.get("longSummary") or e.get("summary")), "teams": [{"id": str(c.get("id")), "name": c.get("displayName"), "score": c.get("score") or "", "winner": _winner(c.get("winner"))} for c in competitors]}
             out.append(
                 Fixture(
                     source_id=str(e["id"]),
@@ -112,7 +120,7 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
     teams = []
     for c in comp.get("competitors") or []:
         team = c.get("team") or {}
-        teams.append({"id": str(team.get("id")), "name": team.get("displayName"), "abbr": team.get("abbreviation"), "score": c.get("score") or "", "winner": c.get("winner")})
+        teams.append({"id": str(team.get("id")), "name": team.get("displayName"), "abbr": team.get("abbreviation"), "score": c.get("score") or "", "winner": _winner(c.get("winner"))})
         for ls in c.get("linescores") or []:
             # ESPN repeats the match's overs on a side that hasn't batted yet: skip innings with nothing in them.
             if not ls.get("isBatting") and not _int(ls.get("runs")) and not _int(ls.get("wickets")):
