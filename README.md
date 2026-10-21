@@ -371,7 +371,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   enclosure, else the description's lead image), kept as its https address and loaded from the publisher as
   they serve it, lazily; without one the headline is drawn on the sport's colour, and a post is words only. The
   Caddyfile's Content-Security-Policy allows images over https from anywhere (publishers' images live on their
-  own image hosts, not their feeds') and frames from youtube-nocookie.com, and from player.twitch.tv and
+  own image hosts, not their feeds'), video over https from anywhere (clips play from their bucket's public
+  address) and frames from youtube-nocookie.com, and from player.twitch.tv and
   player.kick.com for a match page's Watch live (a `/watch/` page has its own).
 - **The Feed tab: every followed player's at once** (`feed.page`, `web/src/pages/FeedPage.tsx`, BHA-344): one feed
   in the bottom bar and the sidebar, at `/me/feed` (a two-word address, which the Android app's links leave in the

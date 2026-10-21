@@ -95,8 +95,14 @@ if let file = value("--share-size") {
 }
 
 if let i = args.firstIndex(of: "--ocr"), i + 2 < args.count {
-    // --ocr <clip> <seconds>: the clocks the save would read off that frame, and all the text it saw
+    // --ocr <clip> <seconds>: the clocks the save would read off that frame, and all the text it saw; first,
+    // how long the launch's warm-up takes (long the first time a build at this path reads: TopBar.warmUp)
     runAsync {
+        let w0 = Date()
+        let warm = TopBar.warmUp()
+        print("warm-up:", Int(Date().timeIntervalSince(w0) * 1000), "ms", warm)
+        let r0 = Date()
+        defer { print("frame read:", Int(Date().timeIntervalSince(r0) * 1000), "ms") }
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: args[i + 1])))
         gen.requestedTimeToleranceBefore = .zero
         gen.requestedTimeToleranceAfter = .zero
