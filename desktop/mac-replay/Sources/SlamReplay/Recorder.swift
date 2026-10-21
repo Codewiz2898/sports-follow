@@ -6,13 +6,16 @@ struct Options {
     var target = "com.valvesoftware.dota2"
     var label = "Dota2"
     var seconds = 30.0
-    var fps = 30
+    var fps = 60
     var maxWidth = 1600
     var maxHeight = 900
-    var bitrate = 6_000_000
+    var bitrate = 10_000_000
     var hevc = false
     var audio = true
-    var picker = false      // consent through the system picker instead of the Screen Recording permission
+    var picker = true       // the player picks the window in the system picker (no Screen Recording permission);
+                            // false (--dota) finds the Dota 2 window itself, which needs the permission
+    var edit = true         // after each save, also make the cut with the half-speed replay and the stat strip
+    var match: String?      // the stat strip's match (stann.in URL or PandaScore id); else the live Dota game
     var fpsProbe = false    // read the game's own FPS counter every few seconds (OCR of the top strip)
     var statsEvery = 5.0
 }
@@ -35,6 +38,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var followTimer: Timer?
     var onStateChange: ((String) -> Void)?
     private(set) var outputSize = CGSize.zero
+    private var latest: CVPixelBuffer?  // the newest frame, for reading the game clock on screen at save
+
+    var latestFrame: CVPixelBuffer? { lock.withLock { latest } }
 
     init(opts: Options) {
         self.opts = opts
@@ -163,7 +169,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 lock.withLock { if status == .idle { idle += 1 } else { other += 1 } }
                 return
             }
-            lock.withLock { complete += 1 }
+            lock.withLock { complete += 1; latest = pb }
             video?.encode(pb, pts: sb.presentationTimeStamp)
         case .audio:
             audio?.push(sb)

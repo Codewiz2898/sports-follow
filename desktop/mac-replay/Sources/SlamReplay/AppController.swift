@@ -19,10 +19,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private var saves = 0
     private let started = Date()
     private var attempts = 0
+    private var edit: Bool
+    private let feed: MatchFeed
+    private var lastClip: URL?
+    private var editItem: NSMenuItem?
+    private var matchItem: NSMenuItem?
 
     init(opts: Options, probeOnly: Bool) {
         self.opts = opts
         self.probeOnly = probeOnly
+        edit = opts.edit
+        feed = MatchFeed(path: opts.match)
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -124,8 +131,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         let snapMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
         let url = ClipWriter.newURL(label: opts.label)
         let previous = saveChain
+        let edit = self.edit, feed = self.feed
+        let frame = edit ? recorder.latestFrame : nil
         saves += 1
         flash("Saving…")
+        // The strip's numbers and the clock on screen, both as of the tap, while the clip is written.
+        let line = edit ? Task.detached { await feed.line() } : nil
+        let screen = Task.detached { frame.map(FPSProbe.clocks(in:)) ?? [] }
         saveChain = Task.detached {
             await previous?.value  // saves queue; each keeps the 30 s before its own tap
             do {
@@ -136,8 +148,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                                   "writeMs": round2(r.writeMs),
                                   "sinceTapMs": round2(Date().timeIntervalSince(tap) * 1000)])
                 await MainActor.run {
+                    self.lastClip = r.url
                     NSSound(named: "Tink")?.play()
-                    self.flash("Saved ✓")
+                    self.flash(edit ? "Saved ✓ · cutting…" : "Saved ✓")
+                }
+                guard edit else { return }
+                let strip = await line?.value
+                let clocks = await screen.value
+                Log.json("strip", ["text": strip?.text ?? "", "apiClock": strip?.clock ?? "", "screenClocks": clocks,
+                                   "apiMs": round1(strip?.ms ?? 0), "match": feed.path ?? ""])
+                let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
+                let e = try await ClipEditor.make(from: r.url, to: cut, strip: strip?.text)
+                Log.json("cut", ["file": cut.lastPathComponent, "seconds": round2(e.seconds),
+                                 "MB": round2(Double(e.bytes) / 1_048_576), "ms": round1(e.ms),
+                                 "sinceTapMs": round2(Date().timeIntervalSince(tap) * 1000)])
+                await MainActor.run {
+                    self.lastClip = cut
+                    self.flash("Replay ✓")
                 }
             } catch {
                 Log.json("save-failed", ["error": error.localizedDescription])
@@ -190,14 +217,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         let save = NSMenuItem(title: "Save last \(Int(opts.seconds)) s   (⌃⇧S)", action: #selector(saveClicked), keyEquivalent: "")
         save.target = self
         menu.addItem(save)
+        let last = NSMenuItem(title: "Play last clip", action: #selector(openLast), keyEquivalent: "")
+        last.target = self
+        menu.addItem(last)
         let open = NSMenuItem(title: "Open clips folder", action: #selector(openFolder), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
-        if opts.picker {
-            let pick = NSMenuItem(title: "Pick another window…", action: #selector(pickAgain), keyEquivalent: "")
-            pick.target = self
-            menu.addItem(pick)
-        }
+        menu.addItem(.separator())
+        let pick = NSMenuItem(title: "Choose window to clip…", action: #selector(pickAgain), keyEquivalent: "")
+        pick.target = self
+        menu.addItem(pick)
+        let e = NSMenuItem(title: "Add half-speed replay + stat strip", action: #selector(toggleEdit), keyEquivalent: "")
+        e.target = self
+        e.state = edit ? .on : .off
+        menu.addItem(e)
+        editItem = e
+        let m = NSMenuItem(title: matchTitle(), action: #selector(setMatch), keyEquivalent: "")
+        m.target = self
+        menu.addItem(m)
+        matchItem = m
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
@@ -210,7 +248,35 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         try? FileManager.default.createDirectory(at: ClipWriter.folder, withIntermediateDirectories: true)
         NSWorkspace.shared.open(ClipWriter.folder)
     }
-    @objc private func pickAgain() { SCContentSharingPicker.shared.present() }
+    @objc private func pickAgain() {
+        if opts.picker { SCContentSharingPicker.shared.present() } else { presentPicker() }
+    }
+    @objc private func openLast() {
+        if let lastClip { NSWorkspace.shared.open(lastClip) } else { openFolder() }
+    }
+    @objc private func toggleEdit() {
+        edit.toggle()
+        editItem?.state = edit ? .on : .off
+    }
+    @objc private func setMatch() {
+        let alert = NSAlert()
+        alert.messageText = "Match for the stat strip"
+        alert.informativeText = "Paste the stann.in match page link (or a PandaScore match id). Leave it empty to use the live Dota 2 game."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+        field.stringValue = feed.path.map { "https://stann.in/match/\($0)" } ?? ""
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Use")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        feed.path = text.isEmpty ? nil : MatchFeed.parse(text)
+        matchItem?.title = matchTitle()
+        Log.json("strip", ["set": feed.path ?? "live Dota game"])
+    }
+    private func matchTitle() -> String {
+        "Stat strip match: " + (feed.path.map { $0.replacingOccurrences(of: "pandascore_esports/", with: "#") } ?? "the live Dota 2 game") + "…"
+    }
     @objc private func quitClicked() { quit() }
 
     private func setState(_ s: String) {

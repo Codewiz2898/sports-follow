@@ -82,3 +82,20 @@ final class FPSProbe {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 }
+
+extension FPSProbe {
+    /// Game clocks ("26:00") in the top fifth of a frame: Dota's clock when spectating in the client,
+    /// or a stream's overlay. To compare with the API's clock at the same moment.
+    static func clocks(in pb: CVPixelBuffer) -> [String] {
+        let req = VNRecognizeTextRequest()
+        req.recognitionLevel = .accurate
+        req.usesLanguageCorrection = false
+        req.regionOfInterest = CGRect(x: 0, y: 0.8, width: 1, height: 0.2)  // Vision's y goes up
+        try? VNImageRequestHandler(cvPixelBuffer: pb).perform([req])
+        let texts = (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        let r = try! NSRegularExpression(pattern: #"\b\d{1,2}:\d{2}\b"#)
+        return texts.flatMap { t in
+            r.matches(in: t, range: NSRange(t.startIndex..., in: t)).compactMap { Range($0.range, in: t).map { String(t[$0]) } }
+        }
+    }
+}

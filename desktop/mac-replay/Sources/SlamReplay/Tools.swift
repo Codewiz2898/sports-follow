@@ -6,9 +6,9 @@ import CoreVideo
 /// the same encoders, ring and writer, then the clip is read back. Needs no permission.
 enum SelfTest {
     static func run(seconds: Int, hevc: Bool) async throws {
-        let w = 1600, h = 900, fps = 30
+        let w = 1600, h = 900, fps = 60
         let ring = ReplayRing(seconds: 30)
-        let video = try VideoEncoder(width: w, height: h, hevc: hevc, bitrate: 6_000_000, fps: fps,
+        let video = try VideoEncoder(width: w, height: h, hevc: hevc, bitrate: 10_000_000, fps: fps,
                                      realTime: false) { ring.appendVideo($0) }
         let audio = try AudioEncoder { ring.appendAudio($0) }
         print("hardware encoder: \(video.hardware)")
@@ -57,6 +57,11 @@ enum SelfTest {
                      url.lastPathComponent, res.seconds, Double(res.bytes) / 1_048_576, res.videoFrames,
                      res.audioPackets, res.writeMs))
         try await Probe.run(url)
+        let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
+        let e = try await ClipEditor.make(from: url, to: cut, strip: "YNDX 21–18 GL · YNDX +4.4k gold · 26:00")
+        print(String(format: "cut %@: %.2f s, %.1f MB, made in %.0f ms", cut.lastPathComponent, e.seconds,
+                     Double(e.bytes) / 1_048_576, e.ms))
+        try await Probe.run(cut)
     }
 
     private static func paint(_ pb: CVPixelBuffer, frame: Int) {
