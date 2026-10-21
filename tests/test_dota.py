@@ -3,7 +3,7 @@ live map, finished maps' numbers, the series board's state, alerts, and the clie
 made-up responses in OpenDota's shapes (checked against its live list, proMatches and a match, 13 Oct
 2026). And each finished map's part of the match page, against a recorded series: the BLAST Slam VIII grand
 final, 11 Oct 2026, Team Spirit 1-3 Team Yandex (tests/fixtures/opendota: OpenDota's four matches, fetched
-21 Oct, trimmed to the fields stann reads; its heroes and items, only those the series has)."""
+21 Oct, trimmed to the fields the app reads; its heroes and items, only those the series has)."""
 
 from __future__ import annotations
 

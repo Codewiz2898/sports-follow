@@ -1,13 +1,13 @@
-// The Android app's config (Expo). Its name is stann's, from sports_follow/app.json, the one place it's
-// written; its icons are the web app's (web/scripts/make_icons.py draws them). The API it talks to is
-// src/api.ts's.
+// The Android app's config (Expo). Its name is sports_follow/app.json's, the one place it's written; its
+// icons are the web app's (web/scripts/make_icons.py draws them). The API it talks to is src/api.ts's.
 //
 // Notifications come through the app's Firebase project (src/push.ts): its google-services.json is never
 // committed. It's GOOGLE_SERVICES_JSON's file when that's set, else mobile/google-services.json (gitignored);
-// a build without either runs, without notifications.
+// a build without either, or with one that has no Android app for this package in it, runs, without
+// notifications.
 
 //
-// stann.in links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
+// The site's links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
 // needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
 // (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android trusts the
 // claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed it
@@ -23,11 +23,32 @@ if (!name) throw new Error('sports_follow/app.json has no name')
 
 const ICONS = '../web/public/icons'
 const PAPER = '#F3F3EF' // web/src/styles.css --bg
-const BLUE = '#1F5BEF' // stann's own blue, the badge's (web/scripts/make_icons.py)
+const BLUE = '#1F5BEF' // the app's own blue, the badge's (web/scripts/make_icons.py)
 const FONTS = 'node_modules/@expo-google-fonts'
 const GOOGLE_SERVICES = process.env.GOOGLE_SERVICES_JSON || './google-services.json'
-const FIREBASE = fs.existsSync(path.resolve(__dirname, GOOGLE_SERVICES))
+// Play never lets a package id change after the first upload (io.stann.app until the rename to Slam, BHA-348).
+const PACKAGE = 'io.slam.app'
+// TODO(BHA-348): the new domain once it's bought, with src/api.ts's and the notifications' (Settings.kt) default.
 const SITE = 'stann.in'
+
+/** Whether there's a Firebase file and it has an Android app for this package: Google's Gradle plugin stops the
+ *  build on one without (a file downloaded before the package changed). */
+function firebase(): boolean {
+  const file = path.resolve(__dirname, GOOGLE_SERVICES)
+  if (!fs.existsSync(file)) return false
+  type Client = { client_info?: { android_client_info?: { package_name?: string } } }
+  let client: Client[]
+  try {
+    client = (JSON.parse(fs.readFileSync(file, 'utf8')) as { client?: Client[] }).client ?? []
+  } catch (e) {
+    throw new Error(`${GOOGLE_SERVICES} isn't a google-services.json Firebase gave: ${String(e)}`)
+  }
+  if (client.some((c) => c.client_info?.android_client_info?.package_name === PACKAGE)) return true
+  console.warn(`${GOOGLE_SERVICES} has no Android app ${PACKAGE}: building without notifications. Add the app to the Firebase project and download its google-services.json again (README.md, "Android app").`)
+  return false
+}
+
+const FIREBASE = firebase()
 
 /** The addresses on the site the app has a page for: one per route file, every one under a route folder. */
 function pages(): ExpoConfigAndroidIntentFiltersData[] {
@@ -42,16 +63,15 @@ function pages(): ExpoConfigAndroidIntentFiltersData[] {
 
 export default (): ExpoConfig => ({
   name,
-  slug: 'stann',
-  scheme: 'stann',
+  slug: 'slam',
+  scheme: 'slam', // the app's own links (a notification's tap, modules/stann-notifications Cards.kt)
   version: '0.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'light',
   backgroundColor: PAPER,
   icon: `${ICONS}/icon-512.png`,
   android: {
-    // Play never lets a package id change after the first upload (decided 16 Oct 2026, BHA-210).
-    package: 'io.stann.app',
+    package: PACKAGE,
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
     intentFilters: [{
@@ -62,12 +82,12 @@ export default (): ExpoConfig => ({
     }],
     ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
   },
-  ios: { bundleIdentifier: 'io.stann.app' },
+  ios: { bundleIdentifier: PACKAGE },
   plugins: [
     'expo-router',
     // The badge on paper while the first screen waits for the sports (catalog.tsx).
     ['expo-splash-screen', { image: `${ICONS}/mark-192.png`, imageWidth: 96, backgroundColor: PAPER }],
-    // The status bar's mark for a notification is the badge in white (badge-96), tinted stann's blue. A push on
+    // The status bar's mark for a notification is the badge in white (badge-96), tinted the app's blue. A push on
     // a channel this build hasn't made lands on the quiet one (src/push.ts's QUIET_CHANNEL), not on FCM's own
     // fallback, which rings: a server and an app a channel apart stay silent.
     ['expo-notifications', { icon: `${ICONS}/badge-96.png`, color: BLUE, defaultChannel: 'other' }],

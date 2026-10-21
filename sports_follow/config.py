@@ -15,7 +15,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6380/0")
 # full cache never pushes out a job, a lock or a budget (deploy/compose.yaml). Unset: the Redis above.
 CACHE_REDIS_URL = os.environ.get("SPORTS_FOLLOW_CACHE_REDIS_URL", "").strip() or REDIS_URL
 
-# The app's name as fans see it ("stann"). It's written once, in app.json next to this file, because the
+# The app's name as fans see it ("Slam"). It's written once, in app.json next to this file, because the
 # web build (web/vite.config.ts) and the Android app (android/generate.mjs) read it there too: the page
 # title, the manifest, the service worker's notifications and the launcher are built with it. So it's not
 # an environment setting: a server can't call itself anything its web app wasn't built with.

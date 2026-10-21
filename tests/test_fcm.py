@@ -24,9 +24,9 @@ from sports_follow import fcm, notify
 from .test_api import api  # noqa: F401  (the fixture)
 
 ROOT = Path(__file__).resolve().parent.parent
-PROJECT = "stann-test"
+PROJECT = "sports-follow-test"
 TOKEN_URI = "https://oauth2.example.test/token"
-EMAIL = "fcm-sender@stann-test.iam.gserviceaccount.com"
+EMAIL = "fcm-sender@sports-follow-test.iam.gserviceaccount.com"
 TOKEN = "dGVzdC1pbnN0YW5jZQ:APA91bE" + "x" * 140  # the shape of a real one: an instance id, a colon, the token
 
 

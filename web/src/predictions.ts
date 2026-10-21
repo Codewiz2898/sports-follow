@@ -18,7 +18,7 @@ export function shareOf(q: Prediction, key: string | null | undefined): number |
   return q.options.find((o) => o.key === key)?.share ?? null
 }
 
-/** The line under a fan's pick: whom they're with ("You and 71% of stann fans say Gukesh D"), or how few. */
+/** The line under a fan's pick: whom they're with ("You and 71% of Slam fans say Gukesh D"), or how few. */
 export function withWhom(q: Prediction): string {
   const share = shareOf(q, q.mine)
   const label = labelOf(q, q.mine)
