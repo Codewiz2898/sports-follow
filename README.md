@@ -204,6 +204,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and draft come only with the page's own read (each poll's state is stored and sent to every card, so it
   stays small), as the state's `page_detail`, and show under whichever board is newest. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
+- **Watch live** (`sports_follow/watch.py`, the match page's Watch block). A source that lists a game's
+  broadcasts puts them on its fixtures (`Fixture.streams`: each one's page, its language, whether the
+  organiser runs it and whether it's their main one; PandaScore's `streams_list` for esports series), and
+  the game's read keeps them. The page's `streams` name each one's platform from its address and come in
+  order: the organiser's main broadcasts, then those in English, then the rest. While the game is on, or
+  within half an hour of its start, the web app plays a Twitch or Kick channel inside the page once it's
+  tapped (`player.twitch.tv`, told the page's host; `player.kick.com`), as it does a YouTube video
+  (youtube-nocookie.com), with "Open on Twitch" beside it; any other platform is a "Watch on Douyu" link.
+  Twitch's player must be at least 400×300, so where the column is narrower (a phone) it opens over the
+  whole screen instead, sideways while the phone is held upright. A player a fan has started stays while the
+  page is open, though the game is called over before the broadcast, which runs behind, has shown the end.
+  The Android app has a "Watch on …" button that opens the stream in its own app or the browser. A
+  platform is one entry in `watch.PLATFORMS`.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
   (`match_follow`: the fan, the game's event, their level, and when it lapsed); following a game nobody
@@ -334,7 +347,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   enclosure, else the description's lead image), kept as its https address and loaded from the publisher as
   they serve it, lazily; without one the headline is drawn on the sport's colour, and a post is words only. The
   Caddyfile's Content-Security-Policy allows images over https from anywhere (publishers' images live on their
-  own image hosts, not their feeds') and frames from youtube-nocookie.com only.
+  own image hosts, not their feeds') and frames from youtube-nocookie.com, and from player.twitch.tv and
+  player.kick.com for a match page's Watch live.
 - **The Feed tab: every followed player's at once** (`feed.page`, `web/src/pages/FeedPage.tsx`, BHA-344): one feed
   in the bottom bar and the sidebar, at `/me/feed` (a two-word address, which the Android app's links leave in the
   browser), from `GET /api/me/feed/items?cursor=&player=&limit=&tz=`. Each player's items as
@@ -440,9 +454,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `match` for a game's match page (one game by a fixture's id, whoever follows it, live, to come or over,
   with its line-ups and every player's line, in a request or two: a finished chess board's moves are a
   second; a finished game's read that lacks what the source will have later, or may still change, sets
-  `LiveGame.partial`, so it's read again rather than kept a week; ids of another shape than its
-  `fixture_pattern` are refused; `sports_follow/match.py`; a league game whose source has none has no page of
-  its own),
+  `LiveGame.partial`, so it's read again rather than kept a week; where the source lists the game's
+  broadcasts, `LiveGame.streams` has them, as its fixture's `streams` do, for the page's Watch live; ids of
+  another shape than its `fixture_pattern` are refused; `sports_follow/match.py`; a league game whose source
+  has none has no page of its own),
   `schedule` for Today's big results and big games coming up (its competitions' games between two days,
   whoever plays them, three days back and a fortnight on; `sports_follow/league.py`; each game ranked by its
   sport's `notable`, and a source that rates its events sets `Fixture.tier`, and what else its sport ranks

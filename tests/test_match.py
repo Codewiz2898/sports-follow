@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, live, match, registry, sports
-from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot
+from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot, Stream
 from sports_follow.adapters.base import DIGITS
 from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
 
@@ -228,6 +228,21 @@ def test_a_game_nobody_follows_is_live_nows_until_its_own_read_comes(db, redis, 
     assert match.view(db, "fan", "pitch", "100", over + timedelta(seconds=match.CONFIRM + 1))[1]
     match.read("pitch", "100", over + timedelta(seconds=match.CONFIRM + 1))
     assert not match.view(db, "fan", "pitch", "100", over + timedelta(days=3))[1]
+
+
+@needs_db
+def test_where_to_watch_a_game_comes_with_its_read_the_organisers_main_broadcast_first(db, redis, source):
+    source.live = [game()]
+    live.read("pitch", NOW)
+    assert match.view(db, "fan", "pitch", "100", NOW)[0]["streams"] == []  # Live now's copy: none till its read
+    source.game = game()
+    source.game.streams = [Stream("https://www.twitch.tv/costreamer", "es"), Stream("https://kick.com/league_en", "en", official=True, main=True),
+                           Stream("ftp://example.com/x", "en", official=True, main=True)]
+    match.read("pitch", "100", NOW + timedelta(seconds=10))
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=20))
+    assert [(s["platform"], s["language_name"], s["official"], s["embed"]) for s in page["streams"]] == [
+        ("Kick", "English", True, {"player": "kick", "id": "league_en"}), ("Twitch", "Spanish", False, {"player": "twitch", "id": "costreamer"})]
+    assert json.loads(redis["match:pitch:100"])["game"]["streams"][0] == {"url": "https://www.twitch.tv/costreamer", "language": "es", "official": False, "main": False}
 
 
 @needs_db
