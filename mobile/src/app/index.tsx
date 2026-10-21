@@ -165,9 +165,9 @@ export default function TodayScreen() {
         {/* Who's out and who's back among the best-known players. */}
         <Wire rows={week.wire} now={now} />
         <View style={s.hero}>
-          <Text style={[dsp(48), { color: '#FFFFFF' }]}>Pick your players</Text>
+          <Text style={[dsp(48), { color: colour.text }]}>Pick your players</Text>
           <Text style={s.heroText}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</Text>
-          <Btn label="Find a player" icon={<SearchIcon size={18} />} colours={{ bg: '#FFFFFF', fg: colour.text, border: '#FFFFFF' }} onPress={() => router.push('/search')} style={{ alignSelf: 'flex-start' }} />
+          <Btn label="Find a player" icon={<SearchIcon size={18} color={colour.bg} />} kind="primary" onPress={() => router.push('/search')} style={{ alignSelf: 'flex-start' }} />
         </View>
         <StartersSection />
       </Page>
@@ -254,6 +254,6 @@ const s = StyleSheet.create({
   small: { fontFamily: font[600], fontSize: 13, color: colour.text },
   smallMuted: { fontFamily: font[500], fontSize: 13, lineHeight: 18, color: colour.muted },
   tinyMuted: { fontFamily: font[500], fontSize: 12, color: colour.muted },
-  hero: { overflow: 'hidden', gap: 14, padding: 18, borderRadius: 26, backgroundColor: '#0D0D0D' },
-  heroText: { fontFamily: font[600], fontSize: 15, lineHeight: 22, color: '#FFFFFF', maxWidth: 330 },
+  hero: { overflow: 'hidden', gap: 14, padding: 18, borderRadius: 26, backgroundColor: colour.surface },
+  heroText: { fontFamily: font[600], fontSize: 15, lineHeight: 22, color: colour.text, maxWidth: 330 },
 })

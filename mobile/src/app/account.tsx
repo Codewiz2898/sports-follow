@@ -125,7 +125,7 @@ function SignIn() {
   return (
     <>
       <View style={s.hero}>
-        <Text style={[dsp(44), { color: '#FFFFFF' }]}>Save your players</Text>
+        <Text style={[dsp(44), { color: colour.text }]}>Save your players</Text>
         <Text style={s.heroText}>Sign in to keep your players, alerts and muted games on every phone and computer. Everything you follow on this device comes with you.</Text>
       </View>
 
@@ -231,8 +231,8 @@ function SignedIn({ account }: { account: Account }) {
 }
 
 const s = StyleSheet.create({
-  hero: { overflow: 'hidden', gap: 14, padding: 18, borderRadius: 26, backgroundColor: '#0D0D0D' },
-  heroText: { fontFamily: font[600], fontSize: 15, lineHeight: 22, color: '#FFFFFF' },
+  hero: { overflow: 'hidden', gap: 14, padding: 18, borderRadius: 26, backgroundColor: colour.surface },
+  heroText: { fontFamily: font[600], fontSize: 15, lineHeight: 22, color: colour.text },
   field: { height: 54, paddingHorizontal: 16, borderRadius: 16, borderWidth: 2, borderColor: colour.text, backgroundColor: colour.surface, fontFamily: font[600], fontSize: 17, color: colour.text },
   code: { height: 64, fontFamily: font.display, fontSize: 36, letterSpacing: 11, textAlign: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },

@@ -253,6 +253,7 @@ a.photo-credit:hover { text-decoration: underline; }
 /* ---------------------------------------------------------------- today */
 /* A new fan's first step: a block of colour. */
 .hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--sport); color: var(--on-sport); }
+.hero.plain { background: var(--surface); color: var(--text); }  /* one of no sport (Pick your players, Save your players): white */
 
 /* A game on now that nobody here may follow yet (LiveNow.tsx): outlined in its sport's colour, with players to
    follow from it as pills that fill in once followed. */
@@ -383,16 +384,16 @@ a.photo-credit:hover { text-decoration: underline; }
 
 /* The Wire (Wire.tsx): an ink card of rows, each a tag in the player's sport colour (outlined for a player the
    fan doesn't follow, as Today's other cards are), one line, and when. */
-.wire { list-style: none; margin: 0; padding: 4px 16px; border-radius: 18px; background: var(--text); color: var(--bg); --focus: var(--bg); }
-.wire li + li { border-top: 1px solid rgba(255, 255, 255, 0.16); }
+.wire { list-style: none; margin: 0; padding: 4px 16px; border-radius: 18px; background: var(--surface); color: var(--text); }
+.wire li + li { border-top: 1px solid var(--line); }
 .wire-row { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; }
 .wire-tag { flex-shrink: 0; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 10px; font-weight: 800; line-height: 22px; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
-.wire-tag.theirs { background: transparent; color: var(--sport-on-ink); box-shadow: inset 0 0 0 2px var(--sport-on-ink); }
+.wire-tag.theirs { background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--sport); }  /* the sport's colour as a ring, ink words: it reads on white in every sport */
 .wire-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .wire-text { font-size: 13px; font-weight: 700; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 /* Where it's from, always shown: a story's site (the line is its headline, not ours), a fact's source. */
 .wire-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; }
-.wire-source, .wire-time { color: #a9abb0; }
+.wire-source, .wire-time { color: var(--muted); }
 .wire-time { flex-shrink: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; white-space: nowrap; }
 a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset: 3px; }
 
@@ -809,14 +810,12 @@ div.result-main { cursor: default; }
 .btn.on-ink { border-color: var(--bg); color: var(--bg); }
 .btn.on-ink:hover { background: rgba(243, 243, 239, 0.12); }
 .btn.on-ink.primary { background: var(--bg); color: var(--text); }
-.league-band { display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--text); color: var(--bg); --focus: var(--bg); }
-.league-band .muted { color: #a9abb0; }
+.league-band { display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--surface); color: var(--text); }
 .league-name { font-size: 52px; overflow-wrap: anywhere; }
-.invite-box { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 18px; background: #262626; }
+.invite-box { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 18px; background: var(--surface); }
 .league-table { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
 .league-table li { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px; border-radius: 16px; }
-.league-table li.you { background: var(--text); color: var(--bg); }
-.league-table li.you .muted { color: #a9abb0; }
+.league-table li.you { background: var(--bg); box-shadow: inset 0 0 0 2px var(--text); }  /* the fan's own row, ringed */
 .league-table .num { font-size: 26px; }
 .friends { display: flex; flex-wrap: wrap; gap: 6px; }
 .friend { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--bg); font-size: 12px; font-weight: 800; }

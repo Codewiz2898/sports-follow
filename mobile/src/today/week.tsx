@@ -85,7 +85,7 @@ function Line({ row, now, last }: { row: WireRow; now: number; last: boolean }) 
     <Pressable disabled={!open} onPress={open} style={[s.row, !last && s.rowLine]}>
       {row.yours
         ? <Pill small label={row.tag} bg={tone.sport} color={tone.on} style={{ flexShrink: 0 }} />
-        : <Pill small outline label={row.tag} color={tone.ink} style={{ flexShrink: 0 }} />}
+        : <Pill small outline label={row.tag} color={colour.text} style={{ flexShrink: 0, borderColor: tone.sport }} />}
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text style={s.text} numberOfLines={2}>{wireText(row)}</Text>
         {row.source ? <Text style={s.source} numberOfLines={1}>{row.source}</Text> : null}
@@ -95,7 +95,7 @@ function Line({ row, now, last }: { row: WireRow; now: number; last: boolean }) 
   )
 }
 
-/** The Wire on Today: an ink card of who's out and who's back, line-ups and news, the fan's players' first. Nothing
+/** The Wire on Today: a white card of who's out and who's back, line-ups and news, the fan's players' first. Nothing
  * when there's none. */
 export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
   if (!rows.length) return null
@@ -111,10 +111,10 @@ const s = StyleSheet.create({
   poster: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, height: 236, padding: POSTER_PAD, borderRadius: RADIUS_TILE },
   posterShare: { position: 'absolute', top: 10, right: 10 },
   line: { fontFamily: font[700], fontSize: 12, lineHeight: 15.6 },
-  wire: { paddingVertical: 4, paddingHorizontal: 16, borderRadius: 18, backgroundColor: colour.text },
+  wire: { paddingVertical: 4, paddingHorizontal: 16, borderRadius: 18, backgroundColor: colour.surface },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 8 },
-  rowLine: { borderBottomWidth: 1, borderBottomColor: colour.inkLine },
-  text: { fontFamily: font[700], fontSize: 13, lineHeight: 17, color: colour.bg },
-  source: { fontFamily: font[700], fontSize: 11, color: colour.inkMuted },
-  time: { flexShrink: 0, fontFamily: font[800], fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: colour.inkMuted },
+  rowLine: { borderBottomWidth: 1, borderBottomColor: colour.line },
+  text: { fontFamily: font[700], fontSize: 13, lineHeight: 17, color: colour.text },
+  source: { fontFamily: font[700], fontSize: 11, color: colour.muted },
+  time: { flexShrink: 0, fontFamily: font[800], fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: colour.muted },
 })
