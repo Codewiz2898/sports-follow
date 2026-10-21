@@ -47,6 +47,9 @@ REFRESH_RETRY_MAX = 2 * 3600
 # Polls of a live event further apart than this (or three of its source's rounds) left a gap: a restart,
 # or the source failing for a while. What changed meanwhile is old news, not a moment.
 POLL_GAP = 5 * 60
+# A fixture polled this lately tells its side of a game the fan hears from the other side too (polled_lately):
+# well inside POLL_GAP, so its next poll still comes in time to find the moment rather than start a new baseline.
+TELLS_WITHIN = 2 * 60
 PRE_MATCH = ("scheduled", "armed", "postponed")
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
@@ -127,8 +130,9 @@ def boards(db: Session, event_ids: Iterable[int | None]) -> dict[int, Fixtures]:
 
 
 def polled_lately(event_ids: Iterable[int]) -> set[int]:
-    """Which of these events were polled within POLL_GAP (_polled notes each poll), so their players' moments are
-    being found; none where Redis can't say."""
+    """Which of these events were polled within TELLS_WITHIN (_polled notes each poll), so their players' moments
+    are being found and will be: a fixture that stalls past it lets the other side say them; none where Redis
+    can't say."""
     ids = sorted(set(event_ids))
     if not ids:
         return set()
@@ -138,7 +142,7 @@ def polled_lately(event_ids: Iterable[int]) -> set[int]:
         log.warning("when events %s were last polled: Redis didn't say", ids, exc_info=True)
         return set()
     now = time.time()
-    return {e for e, at in zip(ids, polled) if at and now - float(at) <= POLL_GAP}
+    return {e for e, at in zip(ids, polled) if at and now - float(at) <= TELLS_WITHIN}
 
 
 def game_events(db: Session, event_id: int) -> list[int]:

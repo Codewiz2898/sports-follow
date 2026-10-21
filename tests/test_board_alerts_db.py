@@ -104,8 +104,8 @@ def polls(monkeypatch):
 
 
 def quiet(redis: Store, event_id: int) -> None:
-    """A side's fixture not polled for longer than a poll gap (a restart, its source failing a while)."""
-    redis.set(f"polled_at:{event_id}", str(int(time.time()) - structured.POLL_GAP - 60))
+    """A side's fixture not polled for three minutes: inside a poll gap, but past TELLS_WITHIN (it stalled)."""
+    redis.set(f"polled_at:{event_id}", str(int(time.time()) - structured.TELLS_WITHIN - 60))
 
 
 def poll(event_id: int, snap: Snapshot, band: int | None = None, move: int = 40) -> None:
