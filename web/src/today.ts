@@ -60,7 +60,9 @@ export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = 
   }
   const merged = new Map<string, Coming>()
   // Each game by every event it's under (a chess board's two): a team's game, or a game followed by itself, names one.
+  // And its players' match pages: a board followed by itself may be at the other player's until the tick moves it.
   const events = new Map<number, Coming>()
+  const addresses = new Set<string>()
   for (const c of cards) {
     for (const u of c.upcoming ?? []) {
       const start = soon(u.start_utc)
@@ -70,6 +72,7 @@ export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = 
       if (!game) merged.set(key, (game = { key, event: u, players: [] }))
       if (!game.players.includes(c)) game.players.push(c)
       if (u.event_id != null) events.set(u.event_id, game)
+      if (u.match) addresses.add(u.match)
     }
   }
   for (const t of teams) {
@@ -87,7 +90,7 @@ export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = 
     }
   }
   for (const m of matches) {
-    if (events.has(m.event_id) || !soon(m.start_utc) || !['scheduled', 'armed'].includes(m.status)) continue
+    if (events.has(m.event_id) || (m.addresses ?? []).some((a) => addresses.has(a)) || !soon(m.start_utc) || !['scheduled', 'armed'].includes(m.status)) continue
     const key = `event:${m.event_id}`
     merged.set(key, { key, event: { title: m.title, competition: m.competition, start_utc: m.start_utc, status: m.status, event_id: m.event_id, match: m.match }, players: [], sport: m.sport })
   }
