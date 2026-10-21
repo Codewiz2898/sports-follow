@@ -140,6 +140,12 @@ async def send_moments(ctx, moment_ids: list[int]) -> None:
     await asyncio.to_thread(notify.send, moment_ids)
 
 
+async def send_held(ctx, moment_ids: list[int]) -> None:
+    """Moments a fan of both sides of a board was left to hear from the other side, late where it never said them
+    (notify.send_held)."""
+    await asyncio.to_thread(notify.send_held, moment_ids)
+
+
 async def engine_lane(ctx) -> None:
     """Chess engine evaluations for live games, within its CPU budget (engine.py)."""
     await asyncio.to_thread(engine.run_lane)
@@ -386,6 +392,10 @@ async def tick(ctx) -> None:
     if unsent:
         log.info("tick: sending %d moment(s) no sender claimed", len(unsent))
         await ctx["redis"].enqueue_job("send_moments", unsent, _job_id="send-moments")
+    held = await _in_tick_pool(notify.held_due)
+    if held:
+        log.info("tick: %d moment(s) a board's other side was to tell, to send if it never did", len(held))
+        await ctx["redis"].enqueue_job("send_held", held, _job_id="send-held")
     if await _in_tick_pool(history.has_work):
         await ctx["redis"].enqueue_job("history_lane", _job_id="history-lane")
     if due.builds or due.refreshes or due.teams or due.polls or due.lanes or due.lives or due.profiles:
@@ -394,7 +404,7 @@ async def tick(ctx) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
+    functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, send_held, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
     cron_jobs = [

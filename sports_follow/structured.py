@@ -102,9 +102,10 @@ class Fixtures:
     events: dict[int, int]  # player id: their fixture's event
 
 
-def _boards_shown(db: Session, ids: Iterable[int]) -> dict[int, tuple[str, datetime | None, str, tuple[str, ...]]]:
+def _boards_shown(db: Session, ids: Iterable[int]) -> dict[int, tuple[str, datetime | None, str, tuple[str, ...], str]]:
     """These events' latest boards where a game is under several fixtures: each one's source, start, board (Sport.board,
-    the game on it now) and the players on it (Sport.board_players), sorted."""
+    the game on it now), the players on it (Sport.board_players), sorted, and which meeting of theirs it is
+    (Sport.pairing)."""
     latest = (select(EventState.event_id, Event.key, Event.start_utc, EventState.state).join(Event, Event.id == EventState.event_id).where(EventState.event_id.in_(sorted(set(ids))))
               .ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))
     out = {}
@@ -113,25 +114,26 @@ def _boards_shown(db: Session, ids: Iterable[int]) -> dict[int, tuple[str, datet
         board = rules.board(state or {})
         players = tuple(sorted(rules.board_players(state or {}))) if board else ()
         if players:
-            out[event_id] = ((key or "").partition(":")[0], start, board, players)
+            out[event_id] = ((key or "").partition(":")[0], start, board, players, rules.pairing(state or {}))
     return out
 
 
 def boards(db: Session, event_ids: Iterable[int | None]) -> dict[int, Fixtures]:
     """Each of these events that's one fixture of a game under several (Sport.board, by its latest state), with the
-    game's fixtures here: of the players on it (Sport.board_players), each one's event whose latest board has the same
-    players, from the same source, starting within SAME_GAME of it (or with no start, touched in the last day); of
-    two, the one on the same board now, else the nearer start, else the newer. Alerts, live cards and mutes take them
-    for one game (BHA-378). An event whose fixture is the game, or with no board yet, isn't in it."""
+    game's fixtures here: of the players on it (Sport.board_players), each one's event whose latest board is the same
+    meeting of theirs (Sport.pairing: not the same players in another round), from the same source, starting within
+    SAME_GAME of it (or with no start, touched in the last day); of two, the one on the same board now, else the
+    nearer start, else the newer. A fixture whose board isn't out yet isn't one of them till it is. Alerts, live cards
+    and mutes take them for one game (BHA-378). An event whose fixture is the game, or with no board yet, isn't in it."""
     on = _boards_shown(db, {e for e in event_ids if e})
     if not on:
         return {}
-    pairs = {(system, p) for system, _, _, players in on.values() for p in players}
+    pairs = {(system, p) for system, _, _, players, _ in on.values() for p in players}
     here = {(system, external): player_id for player_id, system, external in db.execute(
         select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(pairs)))}
     rows: list[tuple[int, int]] = []
     if here:
-        starts = [start for _, start, _, _ in on.values() if start is not None]
+        starts = [start for _, start, _, _, _ in on.values() if start is not None]
         lately = Event.updated_at >= func.now() - timedelta(days=1)
         when = [and_(Event.start_utc.is_(None), lately)]
         if starts:
@@ -142,12 +144,12 @@ def boards(db: Session, event_ids: Iterable[int | None]) -> dict[int, Fixtures]:
         rows = [(player_id, e) for player_id, e in db.execute(found)]
     shown = _boards_shown(db, {e for _, e in rows}) if rows else {}
     out = {}
-    for event_id, (system, start, board, players) in on.items():
+    for event_id, (system, start, board, players, pairing) in on.items():
         mine = {p: here[(system, p)] for p in players if (system, p) in here}
         best: dict[int, tuple[tuple[bool, float, int], int]] = {}
         for player_id, e in rows:
             other = shown.get(e)
-            if player_id not in mine.values() or other is None or other[0] != system or other[3] != players:
+            if player_id not in mine.values() or other is None or other[0] != system or other[3] != players or other[4] != pairing:
                 continue
             apart = abs((other[1] - start).total_seconds()) if other[1] is not None and start is not None else 0.0
             if apart > SAME_GAME.total_seconds():

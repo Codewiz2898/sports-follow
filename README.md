@@ -470,7 +470,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification all
   through a mini-match, one Android live card and one mute, and a fan who follows both players hears each
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
-  say it (else from both: twice beats never). A goal VAR rules out is corrected on that notification, for the
+  say it (else from both: twice beats never), and late from the other side should it never say it. A goal VAR rules out is corrected on that notification, for the
   fans who were sent it, and told again if the source shows it again (a goal the source credits to
   another player instead is left as it was).
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
@@ -769,8 +769,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   under several fixtures: a chess game's result, each map of an esports series, a football or cricket match's
   winner; predictions.py; Today's cards say the game by `board` too, so a chess board two of a fan's players are
   on is one card, and in Coming up by the id a source puts on its fixtures before there's a board to read,
-  `Fixture.board`: Lichess's once a round is paired; and by `board_players` alerts take its fixtures for one game,
-  each moment from the side its `voice` names), how an Android
+  `Fixture.board`: Lichess's once a round is paired; and by `board_players` and `pairing` (which meeting of the
+  players it is) alerts take its fixtures for one game, each moment from the side its `voice` names), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
   along it is, the match clock or the overs, with the goals marked), its form summary,
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's

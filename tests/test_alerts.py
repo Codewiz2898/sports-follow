@@ -176,6 +176,18 @@ def test_the_alerts_list_takes_a_boards_moment_for_the_other_sides_only_on_the_s
     assert not voiced_by(trouble, replace(winning, id=3, detail="w2m47"))  # another swing a few moves later: both stay
 
 
+def test_a_moment_left_to_the_other_side_is_kept_and_its_twin_after_it_went_late_isnt_said():
+    trouble = replace(side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), detail="gw2m41")
+    winning = replace(side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN), detail="gw2m41")
+    both = {CARLSEN: "key", LAZAVIK: "key"}
+    held: list[Item] = []
+    assert plan([trouble], both, set(), [], NOW, held=held) == [] and held == [trouble]  # for notify.send_held, should Carlsen's never come
+    # Sent late after all (notify.send_held), Carlsen's word for it, coming later still, isn't said too.
+    late = sent(ON_LAZAVIKS, "Denis Lazavik is in trouble", player=LAZAVIK, moments=[1], ago=60)
+    assert plan([winning], both, set(), [late], NOW, heard=[trouble]) == []
+    assert [p.title for p in plan([winning], {CARLSEN: "key"}, set(), [], NOW)] == ["Magnus Carlsen is winning"]
+
+
 def test_a_board_under_two_fixtures_is_one_notification_with_one_story():
     # The turnaround is Lazavik's to tell, from his fixture; the game's notification is the one Carlsen's winning went on.
     turned = side(3, LAZAVIK, "Turnaround: Denis Lazavik is winning", LAZAVIK, priority=85)

@@ -195,9 +195,9 @@ class Chess(Sport):
         opponent = stat(now.line, "Opponent")
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
         mine, theirs, _ = _sides(now)
-        # Its band from White's side and its move: the same from either side of the board, so each side's word for a
-        # swing is told as one play (alerts.voiced_by).
-        return [Found("swing", level, title, body, f"w{got['band']}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30,
+        # Its game, its band from White's side and its move: the same from either side of the board, so each side's
+        # word for a swing is told as one play (alerts.voiced_by), and one game of a mini-match isn't taken for another.
+        return [Found("swing", level, title, body, f"{self.board(now.state)}w{got['band']}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30,
                       voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
@@ -277,6 +277,12 @@ class Chess(Sport):
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
         """White and Black by their FIDE ids, the same all through a mini-match's games."""
         return tuple(str(p["id"]) for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id"))
+
+    def pairing(self, state: dict[str, Any]) -> str:
+        """Its tournament's and round's names and its two players: a round is one meeting, its mini-match's games
+        and all."""
+        players = sorted(self.board_players(state))
+        return "|".join([str(state.get("tournament") or ""), str(state.get("round") or ""), *players]) if len(players) == 2 else ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A

@@ -27,7 +27,9 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   whichever finds the moment, all through a mini-match, and each of its moments is found from both sides,
   "Gukesh D is winning" and "Sindarov is in trouble". A fan who follows both hears it once, from the side
   the sport says tells it (voiced: the side it went toward, the winner, White for the start), where that
-  side's fixture is being polled to say it; one who follows one of them hears it from their side.
+  side's fixture is being polled to say it; one who follows one of them hears it from their side. What's
+  left to the other side is kept (held), and sent late should that side never say it (notify.send_held);
+  the other side's word for a moment they were told already, late or not, isn't said again.
 - **Muted games** ("Mute this game" on the notification) send nothing more, a game under several
   fixtures muted under any of them.
 - **Sound is rationed.** A game makes a sound at most once every GAME_COOLDOWN and a fan's phone at
@@ -195,12 +197,12 @@ def voiced(item: Item, levels: dict[int, str]) -> bool:
     return voice is not None and voice != item.player_id and voice in levels and tier(levels[voice], item) is not None
 
 
-def voiced_by(item: Item, other: Item) -> bool:
+def voiced_by(item: Item, other: Item, within: timedelta | None = PLAY_WINDOW) -> bool:
     """Whether a player's moment is `other` told from the other side of its board: `other` is the moment of the player
     whose side tells it (voiced), of the same game, kind and play (its detail, which a sport words the same from either
-    side: a chess swing's band from White's and move), found within PLAY_WINDOW of it."""
+    side: a chess swing's game, band from White's and move), found within `within` of it (None: whenever)."""
     return (item.voice is not None and item.voice != item.player_id and other.player_id == item.voice and other.kind == item.kind and other.detail == item.detail
-            and other.event_id in item.fixtures and abs(item.created_at - other.created_at) <= PLAY_WINDOW)
+            and other.event_id in item.fixtures and (within is None or abs(item.created_at - other.created_at) <= within))
 
 
 def tag_of(item: Item) -> str:
@@ -210,11 +212,13 @@ def tag_of(item: Item) -> str:
 
 
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
-         games: dict[int, Watch] | None = None, heard: list[Item] | None = None) -> list[Push]:
+         games: dict[int, Watch] | None = None, heard: list[Item] | None = None, held: list[Item] | None = None) -> list[Push]:
     """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
     moments corrections in these games have taken back, which leave the story (this batch's own
     corrections count without it). `games` is the games the fan follows by themselves, by event; `heard`,
-    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about."""
+    the moments of these games earlier pushes sent them (`sent`'s), each one's own and whom it's about. A moment
+    left to the other side of its board to tell (voiced) goes in `held`, to send late should that side never say it
+    (notify.send_held); and one whose other side's word reached them already, late or not, isn't said again."""
     told = {m for s in sent for m in s.moment_ids}
     taken = (taken_back or set()) | {i.corrects for i in items if i.corrects is not None}
     kept: list[tuple[Item, str]] = []
@@ -247,7 +251,11 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     for item, how in kept:
         if item.player_id is None and (any(same(item, p) for p in theirs) or any(same(item, p, exact=True) for p in heard_theirs)):
             continue
-        if item.player_id is not None and (voiced(item, levels) or any(same(g, item, exact=True) for g in heard_games)):
+        if item.player_id is not None and voiced(item, levels):
+            if held is not None:
+                held.append(item)
+            continue
+        if item.player_id is not None and (any(same(g, item, exact=True) for g in heard_games) or any(voiced_by(h, item, None) for h in heard_theirs)):
             continue
         groups.setdefault(tag_of(item), []).append((item, how == "loud"))
 

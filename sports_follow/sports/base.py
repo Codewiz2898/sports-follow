@@ -645,6 +645,12 @@ class Sport:
         () where the fixture is the game."""
         return ()
 
+    def pairing(self, state: dict[str, Any]) -> str:
+        """Which meeting of its players a game under several fixtures is, as each of its fixtures' boards says it: the
+        same all through it, a mini-match's games too, and another for the same players meeting again (another round),
+        so its fixtures are told apart from theirs (structured.boards). "" where the fixture is the game."""
+        return ""
+
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """The questions fans may call about this game, from its board before it starts: none, for a sport that
         asks nothing (yet)."""
