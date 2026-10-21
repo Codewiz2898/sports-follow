@@ -308,8 +308,9 @@ class Esports(Sport):
         """Every game's, whichever title: a series map by map (who took each, the one being played, and in a
         Dota 2 map, its best player's numbers where OpenDota has them), or a lobby's whole standings and who
         won each of its matches. A series whose source told the page more about each finished map (the
-        state's "page_detail": a Dota 2 map's gold by minute, how it went, every player and the draft) has
-        that too, by map, with the two teams it names by id and their short names."""
+        state's "page_detail": a Dota 2 map's gold by minute, how it went, every player and the draft, and the
+        map being played: its gold line so far, its buildings and heroes) has that too, with the two teams it
+        names by id and their short names."""
         if state.get("kind") == "battle_royale":
             teams = {t.get("id"): t.get("name") for t in state.get("standings") or []}
             return {
@@ -328,9 +329,9 @@ class Esports(Sport):
         if not maps:
             return {}
         told = state.get("page_detail") or {}
-        if not told.get("maps") or len(told.get("teams") or []) != 2:
+        if not (told.get("maps") or told.get("live")) or len(told.get("teams") or []) != 2:
             return {"maps": maps}
-        return {"maps": maps, "teams": told["teams"], "detail": {"maps": told["maps"]}}
+        return {"maps": maps, "teams": told["teams"], "detail": {"maps": told.get("maps") or [], "live": told.get("live")}}
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the

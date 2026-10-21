@@ -508,3 +508,100 @@ def test_an_empty_list_of_heroes_or_pros_isnt_kept(monkeypatch):
     with pytest.raises(AdapterError):
         opendota.heroes()
     assert opendota.heroes() == {1: "Anti-Mage"}  # asked again, not a week of "?"
+
+
+# ---------------------------------------------------------------- the map being played, recorded
+
+def _recorded_live() -> list[dict]:
+    """Three league games' live readings (OpenDota's live list once a minute, 21 Oct 2026) and the buildings
+    their parsed matches say fell, and when."""
+    return recorded("live-recorded.json.gz")
+
+
+def _standing(kills: list, side: str, lane: str, t: int) -> dict:
+    gone = {key for at, key in kills if at <= t}
+    return {"towers": [f"npc_dota_{side}_tower{tier}_{lane}" not in gone for tier in (1, 2, 3)],
+            "barracks": [f"npc_dota_{side}_{kind}_rax_{lane}" not in gone for kind in ("melee", "range")]}
+
+
+def test_the_live_buildings_are_what_the_parsed_matches_say():
+    """At each reading, which towers and barracks stand, as the match's own record of what fell says. The
+    live list runs a little behind (a tower that fell a minute ago can still show), never ahead: no reading
+    has anything down that the match says stands, and nearly every one is exact."""
+    exact = ahead = lanes = 0
+    for game in _recorded_live():
+        for r in game["readings"]:
+            built = dota.buildings(r["building_state"])
+            if built is None:
+                assert r["building_state"] == dota.NO_BUILDINGS
+                continue
+            for side, ours in (("radiant", "goodguys"), ("dire", "badguys")):
+                for lane in dota.LANES:
+                    truth, live = _standing(game["building_kills"], ours, lane, r["game_time"]), built[side][lane]
+                    lanes += 1
+                    exact += live == truth
+                    ahead += any(not shown and stands for shown, stands in zip(live["towers"] + live["barracks"], truth["towers"] + truth["barracks"]))
+    assert lanes > 900 and ahead == 0 and exact / lanes > 0.98
+
+
+def test_radiant_barracks_count_while_they_stand_and_dires_once_theyre_down():
+    # Game 9054498345: Radiant's mid T3 down, both its barracks standing (7); Dire's top and mid T3 and
+    # barracks all down (7 too).
+    reading = next(r for g in _recorded_live() for r in g["readings"] if r["match_id"] == "9054498345" and r["game_time"] == 3190)
+    built = dota.buildings(reading["building_state"])
+    assert built["radiant"]["mid"] == {"towers": [False, False, False], "barracks": [True, True]}
+    assert built["dire"]["mid"] == {"towers": [False, False, False], "barracks": [False, False]}
+    assert built["radiant"]["top"] == {"towers": [False, False, True], "barracks": [True, True]}
+    assert dota.buildings(dota.NO_BUILDINGS) is None and dota.buildings(0) is None and dota.buildings(None) is None
+
+
+def test_the_gold_line_takes_each_newer_reading_once_the_horn_has_gone():
+    line = dota.add_reading([], -30, 0)
+    assert line == []  # still drafting
+    line = dota.add_reading(line, 60, 120)
+    line = dota.add_reading(line, 120, -340)
+    assert dota.add_reading(line, 90, 500) is line and dota.add_reading(line, 120, 0) is line  # the clock stepped back
+    assert line == [[60, 120], [120, -340]]
+    long = []
+    for t in range(1, dota.READINGS + 50):
+        long = dota.add_reading(long, t * 30, t)
+    assert len(long) == dota.READINGS and long[-1] == [(dota.READINGS + 49) * 30, dota.READINGS + 49]
+
+
+def test_the_map_being_played_has_its_line_buildings_and_ten_heroes():
+    reading = next(r for g in _recorded_live() for r in g["readings"] if r["match_id"] == "9054431552" and r["game_time"] == 2147)
+    teams = [{"id": "7", "name": "The Bot^$"}, {"id": "8", "name": "Dawn Bulls"}]  # the series' order: Dire first
+    heroes = {p["hero_id"]: f"Hero {p['hero_id']}" for p in reading["players"]}
+    named = reading["players"][0]
+    part = dota.live_detail(reading, teams, {named["account_id"]: "42"}, {"42": "Their PandaScore name"}, heroes, 3, [[60, 0], [120, 500]])
+    assert part["n"] == 3 and part["lead"] == {"team": "8", "what": "gold", "readings": [[60, 0], [120, 500]]}
+    assert part["buildings"]["7"]["mid"] == {"towers": [False, False, False], "barracks": [True, True]}  # Dire's mid T3 down
+    assert part["buildings"]["8"]["mid"] == {"towers": [False, True, True], "barracks": [True, True]}
+    assert len(part["heroes"]) == 10 and [h["team"] for h in part["heroes"]] == ["8"] * 5 + ["7"] * 5  # Radiant's first
+    radiant = [p for p in reading["players"] if p["team"] == 0]
+    cores = sorted((p for p in radiant if p["fantasy_role"] == 1), key=lambda p: p["team_slot"])
+    assert [h["as"] for h in part["heroes"][: len(cores)]] == [f"Hero {p['hero_id']}" for p in cores]
+    assert next(h for h in part["heroes"] if h["id"] == "42")["name"] == "Their PandaScore name"
+    assert dota.live_detail(reading, teams, {}, {}, heroes, 3, [[60, 0]])["lead"] is None  # one reading isn't a line
+
+
+def test_a_live_maps_page_part_comes_with_the_read_and_its_line_grows_with_each(opendota_up, monkeypatch):
+    m = _series("running", [("finished", SPIRIT), ("running", None)])
+    game = dict(LIVE_GAME, building_state=dota.NO_BUILDINGS)
+    clock = {"t": 600}
+
+    def live():
+        return [dict(game, game_time=clock["t"], radiant_lead=clock["t"] * 3)]
+
+    monkeypatch.setattr(opendota, "live", live)
+    adapter = ps.PandascoreEsports()
+    for t in (600, 630, 660):
+        clock["t"] = t
+        snap = ps.parse_match(m)
+        adapter._dota(m, snap)  # a poll: adds to the line, carries no page part
+        assert "page_detail" not in snap.state
+    snap = ps.parse_match(m)
+    adapter._dota(m, snap, detail=True)
+    now = snap.state["page_detail"]["live"]
+    assert now["n"] == 2 and now["lead"]["readings"] == [[600, 1800], [630, 1890], [660, 1980]] and now["lead"]["team"] == str(LIQUID)
+    assert now["buildings"] is None and [h["as"] for h in now["heroes"]] == ["Juggernaut", "Faceless Void"]

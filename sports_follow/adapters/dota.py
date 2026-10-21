@@ -94,6 +94,75 @@ def live_map(game: dict[str, Any], teams: list[dict[str, Any]], players: dict[in
     }
 
 
+# Which buildings stand, as OpenDota's live list says it: one number (Valve's building_state, undocumented;
+# read from league games recorded 21 Oct 2026 against their parsed matches, which fit it at every reading).
+# Radiant's buildings are its low 16 bits, Dire's its high 16, each lane (top, mid, bot) 3 bits from the
+# bottom: 1 to 4 count its towers down (1: all standing, 4: the T3 down), and past 4 its barracks, 4 plus 1
+# for the melee and 2 for the ranged: Dire's while they're down, Radiant's while they stand. This one value
+# comes now and then, even minutes into a game, when OpenDota hasn't got the buildings.
+NO_BUILDINGS = 0x01240724
+LANES = ("top", "mid", "bot")
+READINGS = 240  # a live map's gold lead readings kept: two hours of one every 30 s
+
+
+def buildings(state: Any) -> dict[str, dict[str, dict[str, list[bool]]]] | None:
+    """Each side's ("radiant", "dire") lanes: which of its towers stand (T1, T2, T3) and which barracks
+    (melee, ranged). None when OpenDota hasn't got them."""
+    value = int(state or 0)
+    if not value or value == NO_BUILDINGS:
+        return None
+    out: dict[str, dict[str, dict[str, list[bool]]]] = {}
+    for side, half in (("radiant", value & 0xFFFF), ("dire", value >> 16 & 0xFFFF)):
+        out[side] = {}
+        for i, lane in enumerate(LANES):
+            v = half >> 3 * i & 7
+            if not v:
+                return None
+            down = min(v, 4) - 1
+            rax = v - 4 if v >= 4 else None
+            if rax is None:
+                standing = [True, True]
+            elif side == "radiant":
+                standing = [bool(rax & 1), bool(rax & 2)]
+            else:
+                standing = [not rax & 1, not rax & 2]
+            out[side][lane] = {"towers": [down < tier for tier in (1, 2, 3)], "barracks": standing}
+    return out
+
+
+def add_reading(line: list[list[int]], game_time: Any, lead: Any) -> list[list[int]]:
+    """A live map's gold line with this reading ([seconds, Radiant's lead]): once the horn has gone, and
+    only when newer than the last (the live list's clock can step back a little)."""
+    t = int(game_time or 0)
+    if t <= 0 or (line and t <= line[-1][0]):
+        return line
+    return [*line, [t, int(lead or 0)]][-READINGS:]
+
+
+def live_detail(game: dict[str, Any], teams: list[dict[str, Any]], players: dict[int, str], names: dict[str, str], hero_names: dict[int, str], n: int, line: list[list[int]]) -> dict[str, Any] | None:
+    """The map being played, for its match page: its gold line from the readings so far, which towers and
+    barracks stand in each lane, and all ten heroes (each side's cores first, as the live list ranks them).
+    None where its sides aren't the series' two teams."""
+    sides = _sides(game.get("team_name_radiant"), game.get("team_name_dire"), teams)
+    if sides is None:
+        return None
+    radiant, dire = sides
+    built = buildings(game.get("building_state"))
+
+    def name(p: dict[str, Any]) -> str:
+        pid = players.get(int(p.get("account_id") or 0))
+        return (names.get(pid) if pid else None) or p.get("name") or ""
+
+    ten = sorted((p for p in game.get("players") or [] if p.get("hero_id")), key=lambda p: (p.get("team") != 0, p.get("fantasy_role") != 1, p.get("team_slot") or 0))
+    return {
+        "n": n,
+        "lead": {"team": radiant["id"], "what": "gold", "readings": line} if len(line) > 1 else None,
+        "buildings": {radiant["id"]: built["radiant"], dire["id"]: built["dire"]} if built else None,
+        "heroes": [{"id": players.get(int(p.get("account_id") or 0)), "name": name(p), "team": (radiant if p.get("team") == 0 else dire)["id"],
+                    "as": hero_names.get(int(p["hero_id"]), "?")} for p in ten],
+    }
+
+
 SERIES_SLACK = 3600  # OpenDota's start times run ahead of PandaScore's (17 minutes, seen 13 Oct 2026)
 
 
