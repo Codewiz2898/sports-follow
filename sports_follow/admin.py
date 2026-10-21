@@ -1,5 +1,6 @@
-"""The admin panel (/admin): turn sports and sources off and on, set what each source may spend, and look
-after accounts (sign one out everywhere, block it, delete it), on the running app.
+"""The admin panel (/admin): turn sports and sources off and on, set what each source may spend, look after
+accounts (sign one out everywhere, block it, delete it), and check the Feed's judge (approve, hide or pin what
+it read, and say how far each video channel is trusted), on the running app.
 
 It opens with a password of its own, not a fan's account, and a 6-digit code from an authenticator app
 (TOTP, RFC 6238: Google Authenticator, 1Password, Authy…). Both live in one file,
@@ -37,10 +38,10 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from . import accounts, controls, sports
-from .adapters import ADAPTERS, ALL, KNOWN, budget
+from . import accounts, controls, feedstats, rank, sports
+from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, SOURCES
-from .models import Account, AccountSession, Follow, Player, PushSubscription
+from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -55,7 +56,9 @@ FAILURES_PER_HOUR = 30  # wrong passwords or codes an hour from everyone: past i
 CODE_STEP = 30  # seconds each authenticator code lasts
 CODE_DIGITS = 6
 CODE_DRIFT = 1  # steps either side a code still works, for a phone whose clock is a little off
-PAGE = 50  # accounts a page
+PAGE = 50  # accounts a page, and feed candidates
+FEED_SHOWS = ("all", "unjudged", "served", "held", "reviewed")  # which candidates the Feed tab lists
+TRUST_STEPS = (1.0, 0.7, 0.4, 0.0)  # what the Feed tab offers for a channel: high, some, low, hidden
 
 
 # ---------------------------------------------------------------- the password
@@ -191,7 +194,7 @@ def set_sport(key: str, on: bool) -> None:
 
 
 def _windows(b: budget.Budget) -> list[dict[str, Any]]:
-    return [{"seconds": w.seconds, "requests": w.requests, "margin": w.margin} for w in b.windows]
+    return [{"seconds": w.seconds, "requests": w.requests, "margin": w.margin, "zone": w.zone} for w in b.windows]
 
 
 def _limits(b: budget.Budget) -> dict[str, Any]:
@@ -225,14 +228,54 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "running": system in running,
             "budgets": [b.name for b in a.budgets()],
         })
+    # The feed's video sources, under a heading of their own: every sport's channels are theirs to read.
+    feeding = videos()
+    for system, v in VIDEOS.items():
+        sport_on = any(v.channel_pattern.fullmatch(c) for s in sports.ENABLED for c in s.video_channels)
+        out.append({
+            "system": system,
+            "name": v.name,
+            "provider": v.provider.name,
+            "covers": v.covers,
+            "sport": "",
+            "sport_label": "Feed",
+            "licensed": v.provider.licensed,
+            "token": v.available(),
+            "allowed": not SOURCES or system in SOURCES,
+            "sport_on": sport_on,
+            "on": system not in off,
+            "running": v in feeding and sport_on,
+            "budgets": [b.name for b in v.budgets()],
+        })
+    # And its news sources: every sport's publishers' feeds are theirs to read.
+    reading = news()
+    for system, n in NEWS.items():
+        sport_on = any(n.feed_pattern.fullmatch(f) for s in sports.ENABLED for f in s.news_feeds)
+        out.append({
+            "system": system,
+            "name": n.name,
+            "provider": n.provider.name,
+            "covers": n.covers,
+            "sport": "",
+            "sport_label": "Feed",
+            "licensed": n.provider.licensed,
+            "token": n.available(),
+            "allowed": not SOURCES or system in SOURCES,
+            "sport_on": sport_on,
+            "on": system not in off,
+            "running": n in reading and sport_on,
+            "budgets": [b.name for b in n.budgets()],
+        })
+    fetching = [*feeding, *reading]
+    every = [*KNOWN.values(), *VIDEOS.values(), *NEWS.values()]
     used = {(r["source"], r["lane"]): r for r in budget.usage(budget.known(), now)}
     budgets = []
     for b in budget.known():
         live = budget.effective(b)
         budgets.append({
             "name": b.name,
-            "sources": list(dict.fromkeys(a.name for a in KNOWN.values() if b in a.budgets())),
-            "running": any(b in a.budgets() for a in running.values()),
+            "sources": list(dict.fromkeys(a.name for a in every if b in a.budgets())),
+            "running": any(b in a.budgets() for a in [*running.values(), *fetching]),
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
@@ -243,7 +286,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
 
 
 def set_source(system: str, on: bool) -> None:
-    if system not in KNOWN:
+    if system not in KNOWN and system not in VIDEOS and system not in NEWS:
         raise LookupError(system)
     controls.turn_source(system, on)
 
@@ -390,6 +433,99 @@ def sign_out(db: Session, account_id: int) -> list[str] | None:
     if db.get(Account, account_id) is None:
         return None
     return accounts.end_sessions(db, account_id)
+
+
+# ---------------------------------------------------------------- the Feed's judge (rank.py)
+
+
+def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]:
+    """A page of the Feed's candidates, newest found first, with the judge's verdict, the score and an admin's
+    word on each. show: all, unjudged, served (scored, not hidden), held (judged, not served) or reviewed."""
+    if show not in FEED_SHOWS:
+        raise ValueError(f"show one of {', '.join(FEED_SHOWS)}")
+    query = select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
+    where = {
+        "unjudged": FeedCandidate.verdict.is_(None),
+        "served": FeedCandidate.score.is_not(None) & FeedCandidate.review.is_distinct_from("hidden"),
+        "held": FeedCandidate.verdict.is_not(None) & rank.unserved(),
+        "reviewed": FeedCandidate.review.is_not(None),
+    }.get(show)
+    if where is not None:
+        query = query.where(where)
+    rows = db.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id.desc()).offset(offset).limit(PAGE + 1)).all()
+    counts = dict(db.execute(select(FeedCandidate.review, func.count()).where(FeedCandidate.review.is_not(None)).group_by(FeedCandidate.review)).all())
+    totals = {
+        "all": db.scalar(select(func.count()).select_from(FeedCandidate)) or 0,
+        "unjudged": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.verdict.is_(None))) or 0,
+        "served": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"))) or 0,
+        **{f"review_{k}": v for k, v in counts.items()},
+    }
+    return {"candidates": [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], "next": offset + PAGE if len(rows) > PAGE else None,
+            "totals": totals, "channels": channels_view(db)}  # fmt: skip
+
+
+def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:
+    kept, numbers, verdict = c.candidate or {}, c.features or {}, c.verdict
+    source = VIDEOS.get(c.source)
+    return {
+        "id": c.id, "player": {"id": c.player_id, "name": name, "sport": sport}, "url": c.url, "video": source.embed(c.external_id) if source else None,
+        "title": kept.get("title") or "", "channel": kept.get("channel") or "", "channel_id": kept.get("channel_id") or "",
+        "published": kept.get("published"), "fetched_at": _iso(c.fetched_at), "judged_at": _iso(c.judged_at),
+        "views": rank.whole(numbers.get("views")), "likes": rank.whole(numbers.get("likes")), "seconds": rank.whole(numbers.get("seconds")),
+        "verdict": verdict, "passes": rank.passes(verdict), "score": c.score, "review": c.review, "moment_id": c.moment_id,
+        "served": c.score is not None and c.review != "hidden",
+    }  # fmt: skip
+
+
+def channels_view(db: Session) -> list[dict[str, Any]]:
+    """Every video channel a running sport lists or a candidate came from: how far it's trusted (the panel's
+    word, else the default), and how many of its candidates there are, served, and hidden or reported by fans;
+    and its yield over the last 30 days (feedstats.channel_yield): uploads read, those naming a followed player,
+    kept and served, and when it last posted."""
+    each = select(FeedCandidate.candidate["channel_id"].astext.label("cid"), FeedCandidate.candidate["channel"].astext.label("name"), FeedCandidate.score).subquery()
+    found = db.execute(select(each.c.cid, func.max(each.c.name), func.count(), func.count(each.c.score)).group_by(each.c.cid)).all()
+    listed, set_by_admin = rank.listed_channels(), controls.current().channel_trust
+    names = {cid: name for cid, name, _, _ in found}
+    counts = {cid: (n, scored) for cid, _, n, scored in found}
+    said = rank.channel_feedback(db)
+    every = sorted(set(names) | listed | set(set_by_admin), key=lambda c: ((names.get(c) or "~").lower(), c))
+    yields = feedstats.channel_yield(db, every, listed)
+    out = []
+    for cid in every:
+        if not cid:
+            continue
+        n, scored = counts.get(cid, (0, 0))
+        out.append({
+            "channel_id": cid, "name": names.get(cid) or "", "listed": cid in listed, "trust": set_by_admin.get(cid),
+            "default": rank.LISTED if cid in listed else rank.UNLISTED, "effective": round(rank.trust(cid, listed, set_by_admin, said.get(cid, 0.0)), 3),
+            "candidates": n, "served": scored, "feedback": round(said.get(cid, 0.0), 2), "yield": yields[cid],
+        })  # fmt: skip
+    return out
+
+
+def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
+    """Approve, hide or pin a candidate (rank.REVIEWS), or take that back (None), and rank it again at once:
+    the candidate as the Feed tab lists it, or None for no such candidate. ValueError for a word that isn't one."""
+    from . import db
+
+    with db.session() as session:
+        if not rank.review(session, row_id, said):
+            return None
+    rank.rescore(row=row_id)
+    with db.session() as session:
+        found = session.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id).where(FeedCandidate.id == row_id)).first()
+        return _candidate_row(*found) if found else None
+
+
+def set_channel_trust(channel: str, trust: Any) -> None:
+    """How far the Feed trusts a channel: one of TRUST_STEPS, or None for its default; then rank its videos
+    again. ValueError for a channel id or trust that isn't one."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", channel):
+        raise ValueError("That isn't a channel id.")
+    if trust is not None and (isinstance(trust, bool) or not isinstance(trust, (int, float)) or float(trust) not in TRUST_STEPS):
+        raise ValueError(f"Trust is one of {', '.join(str(t) for t in TRUST_STEPS)}, or null for the default.")
+    controls.set_channel_trust(channel, None if trust is None else float(trust))
+    rank.rescore(channel=channel)
 
 
 # ---------------------------------------------------------------- the command

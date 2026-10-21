@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import Fact, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stat, stage, values
+from .base import Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -203,6 +203,12 @@ class Football(Sport):
     follow_teams = True
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
+    honours = {
+        "Q166177": "Ballon d'Or", "Q2291862": "Ballon d'Or", "Q59411480": "Ballon d'Or Féminin",
+        "Q182529": "FIFA World Player of the Year", "Q10869150": "FIFA World Player of the Year",
+        "Q28156245": "The Best FIFA Men's Player", "Q28196702": "The Best FIFA Women's Player",
+        "Q233454": "European Golden Shoe", "Q17355204": "World Cup Golden Ball",
+    }
     athletes = 260_000
     no_line = "Not in the matchday squad"
     team_sheet_before = 75 * 60  # the Premier League's since 2024-25; most leagues publish about an hour ahead
@@ -456,6 +462,42 @@ class Football(Sport):
             if shots:
                 stats.append({"label": "Shots (on target)", "value": f"{shots} ({on_target})"})
         return stats
+
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a club or career goal landmark (100th, 500th), a hat-trick, a debut, 100 caps, a trophy (league, cup, \
+Champions League, World Cup), an individual award (Ballon d'Or, Golden Boot). A match moment: a goal, an assist, a \
+save, a red card, a missed penalty. Transfers and injuries reported by clubs or outlets are news; "here we go", \
+"done deal" or "sources" from aggregator accounts before a club confirms are rumours. Full-match or full-half \
+uploads are restreams; extended highlights from a league or broadcaster are official."""
+
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UC6c1z7bA__85CIWZ_jpCK-Q",  # ESPN FC: analysis, debate
+        "UCjXIw1GlwaY1IzpW_jN9iCQ",  # The Overlap: interviews
+        "UCXzrxvm0Jqq1OpSZQhT6lEQ",  # Statman Dave: tactical analysis
+        "UCEPKlFeUjRY_1mpZP8GnkVg",  # COPA90: fan culture, features
+        "UCjVd6vTuoAYLFYvX5TSK1aA",  # GOAL: features, interviews
+    )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.theguardian.com/football/rss": "The Guardian",
+        "https://www.skysports.com/rss/11095": "Sky Sports",
+        "https://www.thehindu.com/sport/football/feeder/default.rss": "The Hindu",
+    }
+
+    def video_words(self) -> str:
+        return "football"
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A goal, a brace or a hat-trick (the player's goals in the game so far), in the game: "brace Liverpool vs
+        Everton". A later goal in the same game takes over its search before that runs (searches.py)."""
+        if fired.kind != "goal":
+            return None
+        return words({1: "goal", 2: "brace"}.get(fired.count, "hat-trick"), fired.game)
 
 
 SPORT = Football()

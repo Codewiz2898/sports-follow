@@ -18,7 +18,7 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
   (`font.slanted`, made by `scripts/slant_font.py`): use `dsp()` or `Dsp`, never a skew transform on text.
 - **Share, don't copy.** What the pages decide comes from the web app: `web/src/endpoints.ts`, `types.ts`,
   `today.ts`, `lines.ts`, `search.ts`, `alerts.ts`, `format.ts`, `follow.ts`, `share.ts`, `campaign.ts`,
-  `match.ts`, `sports/naming.ts` and `sports/facts/` (Metro watches `web/src`). Keep those files free of the
+  `match.ts`, `feed.ts`, `sports/naming.ts` and `sports/facts/` (Metro watches `web/src`). Keep those files free of the
   browser, and add to them rather than writing a second copy here; only the drawing lives here.
 - **Sports and sources come from the API**, as in the web app (the root CLAUDE.md):
   `tests/test_web_names.py` fails if `mobile/src` names one.

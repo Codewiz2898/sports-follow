@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Team
+from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -410,7 +410,8 @@ async def read_card(player_id: int) -> dict[str, Any] | None:
 
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
     return {k: card.get(k) for k in ("player_id", "slug", "status", "version", "built_at", "player", "live", "upcoming", "freshness", "error")} | {
-        "news": (card.get("news") or [])[:3],
+        # The publishers' stories the curator served (rank.cards), else the research agent's news.
+        "news": (card.get("stories") or card.get("news") or [])[:3],
         # The results the card keeps, newest first: structured.RECENT_LIMIT for a bound player, and no more
         # than that of what the agent wrote for one only it covers. Today's results rail shows them all, the
         # tiles the newest.
@@ -421,10 +422,10 @@ def _summary(card: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/config")
 def config(request: Request) -> dict[str, Any]:
     """What this server offers the app: its name, the model and whether it researches players no source has
-    (config.AGENT), the ways to sign in, who to write to about privacy."""
-    from .config import AGENT
+    (config.RESEARCH), the ways to sign in, who to write to about privacy."""
+    from .config import RESEARCH
 
-    return {"name": APP_NAME, "model": MODEL, "research": AGENT, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
+    return {"name": APP_NAME, "model": MODEL, "research": RESEARCH, "email_sign_in": mail.configured(_secure(request)), "google_sign_in": google_signin.configured(), "contact_email": CONTACT_EMAIL}
 
 
 @app.get("/api/sports")
@@ -500,6 +501,15 @@ async def player_picture(player_id: RowId, g: Annotated[int | None, Query(ge=1, 
     return await _picture(preview.picture)
 
 
+@app.get("/api/predictions/{question_id}/share.png")
+async def question_picture(question_id: RowId) -> Response:
+    """The picture a link to a question shows (share.of_question): how fans split on it, or how few called it."""
+    q = await in_db(predictions.public, question_id)
+    if q is None:
+        raise HTTPException(404, "No such question.")
+    return await _picture(share.of_question(q).picture)
+
+
 @app.get("/api/share.png")
 async def app_picture() -> Response:
     """The picture a link to any other page shows: the app's own."""
@@ -554,6 +564,12 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
         page, ask = match.view(db, fan, system, game)
         if page is not None:
             page["follow"] = matches.offer(db, fan, system, game, page)  # the Follow button: following, and whether alerts can come
+            page["predictions"] = []  # the questions fans call before it starts (predictions.py): a fault there leaves the page as it was
+            try:
+                with db.begin_nested():
+                    page["predictions"] = predictions.for_page(db, fan, system, game, page)
+            except Exception:
+                log.exception("match %s:%s: predictions", system, game)
         return page, ask
 
     page, ask = await in_db(view)
@@ -625,6 +641,147 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
     row.alert_rules = {**(row.alert_rules or {}), "level": level}
     db.commit()
     return {"event_id": event_id, "alerts": level}
+
+
+# ---------------------------------------------------------------- predictions with friends (predictions.py)
+
+LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9]+$")]
+LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
+INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
+PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
+PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+
+
+def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
+    db.rollback()
+    return HTTPException(refused.status, refused.message)
+
+
+@app.put("/api/predictions/{question_id}/pick")
+async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
+    it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address."""
+    option = body.get("option")
+    if not isinstance(option, str) or not 0 < len(option) <= 64:
+        raise HTTPException(400, "option is one of the question's answers")
+    address = client_address(request)
+    await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
+                "That's a lot of picks from your network. Try again in a while.")
+
+    def call(db: Session) -> dict[str, Any]:
+        try:
+            q = predictions.pick(db, fan, question_id, option)
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+        db.commit()  # before the answer: the tick polls its game from now on
+        return predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]
+
+    return {"question": await in_db(call)}
+
+
+@app.delete("/api/predictions/{question_id}/pick")
+def take_back_pick(question_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Take a pick back while its question's open."""
+    try:
+        predictions.unpick(db, fan, question_id)
+    except predictions.Refused as refused:
+        raise _refused(db, refused)
+    db.commit()
+    q = db.get_one(Question, question_id)
+    return {"question": predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]}
+
+
+@app.get("/api/me/predictions")
+def my_predictions(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Today's calls: the questions still open on this fan's games (their players', teams', games they follow, and
+    any they've picked), soonest first, and their picks settled lately."""
+    return predictions.today(db, fan)
+
+
+@app.get("/api/me/leagues")
+def my_leagues(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The leagues this fan is in, with their place in each (none for a fan who isn't signed in)."""
+    return {"leagues": predictions.mine(db, fan)}
+
+
+@app.post("/api/leagues")
+async def make_league(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """A new league ({name, member}: the league's name, and the maker's in it), its maker in it. Needs an account (a
+    401 without), LEAGUES_MADE_PER_HOUR a fan an hour."""
+    if signed is None:
+        raise HTTPException(401, predictions.SIGN_IN)
+    await _take(f"leagues:made:{fan}:{int(time.time() // 3600)}", LEAGUES_MADE_PER_HOUR, 7200, "That's a lot of leagues for one hour. Try again later.")
+
+    def make(db: Session) -> dict[str, Any]:
+        try:
+            made = predictions.create(db, fan, body.get("name"), body.get("member"))
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+        db.flush()
+        return predictions.league(db, fan, made.code)
+
+    return {"league": await in_db(make)}
+
+
+@app.get("/api/leagues/{code}")
+def league_page(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A league's page, for its members: its table and its members' calls (each friend's once the question's
+    closed). A 404 for anyone else: the invite page is theirs."""
+    try:
+        return {"league": predictions.league(db, fan, code)}
+    except predictions.Refused as refused:
+        raise _refused(db, refused)
+
+
+@app.get("/api/leagues/{code}/invite")
+async def league_invite(code: LeagueCode, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """What an invite link shows anyone: the league's name, how many are in it, who made it, and whether this fan's
+    in it already. INVITES_PER_HOUR a fan an hour."""
+    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+
+    def look(db: Session) -> dict[str, Any]:
+        try:
+            return predictions.invite(db, code, fan)
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+
+    return {"invite": await in_db(look)}
+
+
+@app.post("/api/leagues/{code}/join")
+async def join_league(code: LeagueCode, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """Join a league by its invite ({member}: this fan's name in it; joined already, their name changes). Needs an
+    account (a 401 without); INVITES_PER_HOUR a fan an hour, with the invite pages they open."""
+    if signed is None:
+        raise HTTPException(401, predictions.SIGN_IN)
+    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+
+    def join(db: Session) -> dict[str, Any]:
+        try:
+            joined = predictions.join(db, fan, code, body.get("member"))
+        except predictions.Refused as refused:
+            raise _refused(db, refused)
+        db.commit()
+        return predictions.league(db, fan, joined.code)
+
+    return {"league": await in_db(join)}
+
+
+@app.delete("/api/leagues/{code}/me")
+def leave_league(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Leave a league; the last one out takes it with them."""
+    predictions.leave(db, fan, code)
+    db.commit()
+    return {"left": True}
+
+
+@app.post("/api/leagues/{code}/shared")
+def league_shared(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+    """A member shared the league's invite from the app (counted for the launch numbers)."""
+    predictions.was_shared(db, fan, code)
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/teams/{team_id}")
@@ -744,8 +901,21 @@ def _campaign_slug(slug: str) -> str:
 @app.get("/api/campaigns/{slug}")
 async def campaign(slug: str, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """A campaign page (/<slug>): its words, its players and its teams' players as result rows (whether this
-    fan follows each), and its games."""
-    shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
+    fan follows each), its games, and the questions of its players' games to call (predictions.py)."""
+
+    def view(db: Session) -> dict[str, Any] | None:
+        shown = campaigns.page(db, _campaign_slug(slug), fan)
+        if shown is not None:
+            rows = [*shown["players"], *(p for t in shown["teams"] for p in t["players"])]
+            shown["predictions"] = []  # a fault there leaves the page as it was
+            try:
+                with db.begin_nested():
+                    shown["predictions"] = predictions.for_players(db, fan, [r["player_id"] for r in rows if r.get("player_id")])
+            except Exception:
+                log.exception("campaign %s: predictions", slug)
+        return shown
+
+    shown = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such page.")
     return shown
@@ -954,9 +1124,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research, and with the agent off (config.AGENT) can't be followed.
+    AI research, and without research (config.RESEARCH) can't be followed.
     """
-    from .config import AGENT
+    from .config import RESEARCH
 
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
@@ -968,7 +1138,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             player_id, created, ref = holder, False, None
         else:
             found = await _resolve(person)
-            if found is None and not AGENT:
+            if found is None and not RESEARCH:
                 raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
             if found is None:
                 taken = await take_research(fan, address, "No live source has this athlete, so following them needs an AI research, and you've used today's. Try again tomorrow.")
@@ -1013,18 +1183,17 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         await give_back_research(taken)
         raise
     if created:
-        # With a live source: scores and fixtures in seconds, the agent's profile and news in a couple
-        # of minutes (none with the agent off). Without one: the agent builds the whole page.
+        # With a live source: scores and fixtures in seconds, and the profile from Wikidata and Wikipedia.
+        # Without one: the profile, and the agent's research for an athlete Wikipedia has no article on.
         if ref is not None:
             await enqueue("refresh_structured", player_id)
-        if ref is None or AGENT:
-            await enqueue("build_card", player_id)
+        await enqueue("build_card", player_id)
     return player_id
 
 
 @app.post("/api/follows")
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
-    from .config import AGENT
+    from .config import RESEARCH
 
     if body.get("system") or body.get("qid"):
         player_id = await _follow_athlete(body, fan, client_address(request))
@@ -1053,8 +1222,8 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     # A name nobody has followed (or a page whose build failed) sends the research agent out: that is
     # the part with a daily allowance. Following a player already here costs nothing.
     counted = known is None or known.status == "failed"
-    if counted and not AGENT:
-        # Without the agent (config.AGENT) a page comes from a live source, picked in search, or not at all.
+    if counted and not RESEARCH:
+        # Without research (config.RESEARCH) a page comes from a live source, picked in search, or not at all.
         raise HTTPException(404, "No live source has this player, so their page can't be built." if known is not None else "Pick an athlete from the search results: pages here come from live sources.")
     taken = await take_research(fan, client_address(request), "You've used today's AI researches. Pick a player from the search results, or try again tomorrow.") if counted else []
 
@@ -1484,9 +1653,43 @@ def admin_linear() -> dict[str, Any]:
     return linear.status()
 
 
+@app.get("/api/admin/feed", dependencies=AdminOnly)
+def admin_feed(show: Annotated[str, Query(max_length=20)] = "all", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The Feed's candidates, newest found first, with the judge's verdicts and scores, and every video channel's trust."""
+    try:
+        return admin.feed_page(db, show, offset)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
+def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
+    said = body.get("review")
+    try:
+        found = admin.review_candidate(row_id, said if isinstance(said, str) or said is None else "?")
+    except ValueError:
+        raise HTTPException(400, "Review is approved, hidden, pinned, or null.") from None
+    if found is None:
+        raise HTTPException(404, "There's no such candidate.")
+    admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
+    return found
+
+
+@app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
+def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """How far the Feed trusts a video channel ({"trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its videos."""
+    try:
+        admin.set_channel_trust(channel, body.get("trust"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
+    return {"channels": admin.channels_view(db)}
+
+
 @app.get("/api/admin/users", dependencies=AdminOnly)
 def admin_users(q: Annotated[str, Query(max_length=254)] = "", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return {"overview": admin.overview(db), **admin.account_page(db, q, offset)}
+    return {"overview": admin.overview(db), "predictions": predictions.numbers(db), **admin.account_page(db, q, offset)}
 
 
 @app.get("/api/admin/users/{account_id}", dependencies=AdminOnly)
@@ -1805,6 +2008,61 @@ def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict
     return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
 
 
+@app.get("/api/players/{player_id}/feed")
+def player_feed(player_id: RowId, response: Response, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> feed.Feed:
+    """The player's Feed (feed.py): videos, posts and news about them, grouped around their moments, without
+    what this fan hid. Read from rows only, never a model or a source; with nothing judged yet, their news."""
+    found = feed.feed_for(db, player_id, fan)
+    if found is None:
+        raise HTTPException(404, "No such player.")
+    response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})
+    return found
+
+
+@app.post("/api/players/{player_id}/feed/{item_id}/feedback")
+def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What the fan said about an item from its "…" sheet ({"verdict": one of feed.VERDICTS}): it leaves
+    their feed at once, and the judge learns from it later."""
+    verdict = body.get("verdict")
+    try:
+        feed.feedback(db, fan, player_id, item_id, verdict if isinstance(verdict, str) else "")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    db.commit()
+    return {"item_id": item_id, "hidden": True}
+
+
+@app.get("/api/me/feed")
+def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
+    """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab
+    (BHA-346) show on Today; both apps now show the top of the fan's Feed there instead (/api/me/feed/items). No
+    news, which the Wire carries: empty until the curator has judged and ranked something about a followed player."""
+    return {"shares": feed.shares_for(db, fan)}
+
+
+@app.get("/api/me/feed/items")
+def my_feed_items(
+    response: Response,
+    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
+    limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
+    tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
+    fan: str = Depends(fan_id),
+    db: Session = Depends(get_db),
+) -> feed.Page:
+    """The fan's Feed (feed.page): every followed player's videos, posts and news, by day where the fan is (tz:
+    minutes east of UTC), players taking turns; ?player=<id> for one of them; ?cursor= for the next page. Read from
+    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's dot)."""
+    try:
+        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})
+    return found
+
+
 @app.delete("/api/follows/{player_id}")
 def unfollow(player_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
@@ -1849,6 +2107,7 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
     card = await read_card(player_id)
     if card is None:
         raise HTTPException(404, "No such player.")
+    await _research_if_due(player_id, card)
     rules = await in_db(lambda db: db.scalar(select(Follow.alert_rules).where(Follow.fan_id == fan, Follow.player_id == player_id)))
     following = rules is not None
     body = {**card, "following": following, "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL) if following else None}
@@ -1858,6 +2117,19 @@ async def card(player_id: RowId, request: Request, response: Response, fan: str 
     if etag in (t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")):
         return Response(status_code=304, headers=response.headers)  # with a cookie fan_id set, if any
     return body
+
+
+async def _research_if_due(player_id: int, card: dict[str, Any]) -> None:
+    """A page the research agent has a part on (a background with no Wikipedia article, monthly; with research
+    on, the whole page of a player no source has) is researched again when a fan opens it and its words are
+    stale (pipeline.agent_due), not on a clock. Never fails the page."""
+    if card.get("status") != "ready":
+        return
+    try:
+        if await asyncio.to_thread(pipeline.agent_due, player_id, card) and await state["redis"].set(f"research:{player_id}", "1", nx=True, ex=REFRESH_EVERY):
+            await enqueue("build_card", player_id)
+    except Exception:
+        log.warning("research check for player %s failed", player_id, exc_info=True)
 
 
 REFRESH_EVERY = 60  # seconds: one refresh of a player a minute, whoever asks
@@ -2090,6 +2362,22 @@ def _route_of(method: str, path: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------- a stream's player alone (the Android app's)
+
+
+@app.get("/watch/{player}/{plays}", include_in_schema=False)
+def watch_page(player: str, plays: str, request: Request) -> Response:
+    """A match page's stream played by the app's own player, alone on a page of the site (watch.page): what the
+    Android app shows over the whole screen, as Twitch's player must sit in a page on the site it's told. It brings
+    its own Content-Security-Policy, which the Caddyfile leaves it. No such player, or what it plays of another
+    shape, is a 404; nothing else is read."""
+    made = watch.page(player, plays, request.url.hostname or "")
+    if made is None:
+        raise HTTPException(404, "Not Found")
+    body, policy = made
+    return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
+
+
 # ---------------------------------------------------------------- the built frontend (production)
 
 # Served fresh every time, so a new build reaches installed apps: the page, the service worker that
@@ -2099,6 +2387,8 @@ MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", 
 
 # A player's page, and a game of theirs (?g=<event id>): served with their own link preview.
 PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
+# A game's page, with a question of it (?q=<question id>, the link its card shares): the question's preview.
+MATCH_PAGE = re.compile(r"match/([a-z_]{1,40})/([A-Za-z0-9][A-Za-z0-9_.:-]{0,62})/?")
 GAME = re.compile(r"[0-9]{1,10}")
 
 if WEB_DIST.is_dir():
@@ -2111,7 +2401,8 @@ def _site(request: Request) -> str:
 
 
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
-    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, or None for the app's own."""
+    """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, a question's (a game's page
+    with ?q=), or None for the app's own."""
     if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
         try:
             shown = await in_db(campaigns.page, path.rstrip("/"), None)
@@ -2119,6 +2410,14 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
             log.warning("link preview of /%s", path, exc_info=True)
             return None
         return share.of_campaign(shown) if shown else None
+    question = request.query_params.get("q", "")
+    if (g := MATCH_PAGE.fullmatch(path)) and GAME.fullmatch(question) and 0 < int(question) <= MAX_ID:
+        try:
+            q = await in_db(predictions.public, int(question))
+        except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+            log.warning("link preview of /%s", path, exc_info=True)
+            return None
+        return share.of_question(q) if q and q["match"] == f"{g[1]}/{g[2]}" else None
     m = PLAYER_PAGE.fullmatch(path)
     if not m or int(m[1]) > MAX_ID:
         return None

@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, joined, number, short, spaced, stage, stat, undecided, values
+from .base import ORDINAL, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -153,6 +153,10 @@ class Cricket(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_cricket": "P2697"}
+    honours = {
+        "Q7526820": "ICC Cricketer of the Year", "Q8027398": "Wisden Leading Cricketer in the World",
+        "Q26910896": "Wisden Leading Woman Cricketer in the World", "Q3569447": "Wisden Cricketer of the Year",
+    }
     athletes = 19_745
     no_line = "Did not bat or bowl"
     nation_first = True  # India before Royal Challengers Bengaluru
@@ -338,6 +342,52 @@ class Cricket(Sport):
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         return batting_bowling(lines)
+
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a fifty, a hundred or double hundred, a five-wicket haul, a hat-trick, a career landmark (10,000 runs, \
+100 Tests, 500 wickets), a captaincy or a trophy (World Cup, IPL). A match moment: a six, a wicket, a catch, a \
+run-out, a last-over finish. Fantasy team picks ("Dream11 prediction", "GL team", "C/VC picks") are betting. Full \
+innings or whole-match uploads by anyone but a board or broadcaster are restreams. Selection and squad news from \
+a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
+
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UCujuVKmt_utAQZJghxlRMIQ",  # ESPNcricinfo: analysis, interviews
+        "UCQYRGzYaVa7aWd8TsbjdJ6Q",  # Aakash Chopra: analysis
+        "UCVXCo0W9pk2dDkEBNLhTt7A",  # Sports Tak: interviews, news (Hindi)
+        "UCjFw-0Vdfy2KW78NClGECXw",  # Sports Yaari: interviews (Hindi)
+        "UCms-xnI50pEtJC06xdw4J6A",  # Wisden Cricket: analysis, interviews
+        "UCjGC9zWjHHF6CG1j8YfJK9g",  # RevSportz: interviews, news
+        "UC5oTaFLOFlLNeAJt_dt5rBw",  # CricTracker: interviews, fan edits
+        "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
+        "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
+    )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",
+        "https://www.theguardian.com/sport/cricket/rss": "The Guardian",
+        "https://www.skysports.com/rss/12040": "Sky Sports",
+        "https://www.thehindu.com/sport/cricket/feeder/default.rss": "The Hindu",
+    }
+
+    def video_words(self) -> str:
+        return "cricket"
+
+    def search_words(self, fired: Fired) -> str | None:
+        """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
+        knock and where it was ("Kohli century Lord's")."""
+        mark = number(fired.detail.rpartition(":")[2].lstrip("w"))
+        if fired.kind == "hundred":
+            what = "double century" if mark >= 200 else "150" if mark >= 150 else "century"
+        elif fired.kind == "wickets" and mark >= 5:
+            what = f"{mark} wickets"
+        else:
+            return None
+        return words(what, ground(fired.venue) or fired.game)
 
 
 SPORT = Cricket()

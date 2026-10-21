@@ -48,6 +48,9 @@ class Player(Base):
     nationality: Mapped[str | None] = mapped_column(String(120))
     role: Mapped[str | None] = mapped_column(String(200))
     teams: Mapped[list] = mapped_column(JSONB, default=list)
+    # Their own accounts, [{"platform": "x", "handle": "imVkohli"}]: the Feed's judge (curate.py) takes a share
+    # from one of them as the player's own. Set with `python -m sports_follow.players socials`.
+    socials: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     wikidata_qid: Mapped[str | None] = mapped_column(String(20))
     disambiguation: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
@@ -413,6 +416,78 @@ class NewsPlayer(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True)
 
 
+class FeedCandidate(Base):
+    """Something shared about a followed player that the feed may show (a video that names them), as the curator
+    fetched it (candidates.py): one row per player and item, which goes with the player. The later stages fill
+    their own columns: the judge's verdict, then a score and the moment it's about (rank.py)."""
+
+    __tablename__ = "feed_candidates"
+    __table_args__ = (
+        UniqueConstraint("player_id", "external_id"),
+        Index("ix_feed_candidates_source_external", "source", "external_id"),
+        Index("ix_feed_candidates_unjudged", "fetched_at", postgresql_where=text("verdict IS NULL")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(40))  # the video source's system (VideoSource.system)
+    external_id: Mapped[str] = mapped_column(String(64))  # the source's id for it
+    url: Mapped[str] = mapped_column(Text)
+    # What was fetched, as the source gave it: title, description, channel, published, thumbnail, and which of
+    # the player's names it was kept for.
+    candidate: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Numbers for ranking: views, likes, seconds, and reads of views and likes with when: the first and the latest two.
+    features: Mapped[dict] = mapped_column(JSONB, default=dict)
+    fetched_at: Mapped[datetime] = _now()
+    checked_at: Mapped[datetime] = _now()  # when the source last said it's still there and still plays here
+    verdict: Mapped[dict | None] = mapped_column(JSONB)  # the judge's (L1), once it has read it
+    # The ranking's number (rank.py), from the verdict, the features and the channel's trust; NULL: never served.
+    score: Mapped[float | None] = mapped_column(Float)
+    judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The player's moment it's about (published within two days after it), so the Feed groups it there.
+    moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
+    # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
+    review: Mapped[str | None] = mapped_column(String(10))
+
+
+class FeedSearch(Base):
+    """A search for fans' videos of a followed player's big moment (searches.py): one per player and game, which a
+    later moment of theirs in the game takes over until its last run (a brace over the goal before it). It runs a
+    few hours after the moment, and again a day after; it goes with the player, the game and the moment."""
+
+    __tablename__ = "feed_search"
+    __table_args__ = (UniqueConstraint("player_id", "event_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
+    moment_id: Mapped[int] = mapped_column(ForeignKey("moment.id", ondelete="CASCADE"), index=True)  # the latest it's for
+    query: Mapped[str] = mapped_column(String(300))  # the player's name and the sport's words for the moment
+    priority: Mapped[int] = mapped_column(Integer)  # its moments' highest (moments.PRIORITY): the biggest run first
+    fired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # its first moment's: videos published since
+    first_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when its first run ran
+    second_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # and its second, the last
+    kept: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # candidates its runs kept
+
+
+class FeedSweep(Base):
+    """One search for videos about a followed player that no moment asked for (sweeps.py): a gap search (nothing
+    of theirs to watch this week), the wide sweep (their six months' most watched) or the famous sweep (their most
+    watched ever), with what it found and kept. A
+    candidate it kept names it (candidate["swept"]), which says what it served. It goes with the player."""
+
+    __tablename__ = "feed_sweep"
+    __table_args__ = (Index("ix_feed_sweep_player_stream_ran", "player_id", "stream", "ran_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
+    stream: Mapped[str] = mapped_column(String(10))  # "gap", "wide" or "famous" (metrics.STREAMS)
+    query: Mapped[str] = mapped_column(String(300))  # the player's name and their sport's words (Sport.video_words)
+    ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    found: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # results naming the player
+    kept: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # candidates it stored
+
+
 class Sidelined(Base):
     """A spell a player is out of their team's games, injured or suspended, as a source listed it at its
     reads (sidelined.py), whoever follows them: by the source's ids, for the spell and the player, never a
@@ -568,6 +643,19 @@ class NotificationMute(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class FeedFeedback(Base):
+    """What a fan said about one item on a player's Feed (feed.py): not interested, not about the player, or a
+    report. The item leaves that fan's feed at once; the judge learns from all of them later."""
+
+    __tablename__ = "feed_feedback"
+
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), primary_key=True, index=True)
+    item_id: Mapped[str] = mapped_column(String(32), primary_key=True)  # feed.item_id: of the item's address
+    verdict: Mapped[str] = mapped_column(String(20))  # feed.VERDICTS
+    created_at: Mapped[datetime] = _now()
+
+
 class PushSubscription(Base):
     """One device a fan turned notifications on for, with its quiet hours: a browser or installed web app
     (Web Push), or the Android app (FCM, fcm.py)."""
@@ -633,3 +721,83 @@ class Control(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)  # "sports_off", "sources_off", "budget:sportmonks"
     value: Mapped[dict | list] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = _now()
+
+
+class Question(Base):
+    """A question fans call before a game, or a part of it, starts (predictions.py), as its sport asks it
+    (Sport.asks): "Who wins?" of a chess game, "Who takes map 2?" of a series. It belongs to the game, whichever
+    fixture or event shows it (a chess board is one of each player's), and closes as its game or part starts;
+    once the board says, it's settled and each pick scored, or voided."""
+
+    __tablename__ = "prediction_question"
+    __table_args__ = (UniqueConstraint("game", "ask"), Index("ix_prediction_question_keys", "keys", postgresql_using="gin"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # The game, as its source and the id its sport tells it apart by (Sport.board), else the fixture's: one row
+    # set whichever of its addresses asked.
+    game: Mapped[str] = mapped_column(String(100))
+    ask: Mapped[str] = mapped_column(String(30))  # which question in the game: "result", "map2"
+    # Every event key the game has shown under (a chess board's two fixtures), as a followed game's (MatchFollow.keys):
+    # Today finds the questions of a fan's games by them.
+    keys: Mapped[list] = mapped_column(JSONB, default=list)
+    # The event it's settled by, polled while a pick waits on it (predictions.watched).
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"), index=True)
+    sport: Mapped[str] = mapped_column(String(60))
+    match: Mapped[str] = mapped_column(String(100))  # its match page's address: "lichess_chess/abc-123"
+    title: Mapped[str] = mapped_column(String(200))  # "Who wins?"
+    game_title: Mapped[str] = mapped_column(String(300), default="")  # "Gukesh D vs Javokhir Sindarov"
+    options: Mapped[list] = mapped_column(JSONB, default=list)  # [{"key", "label"}]
+    position: Mapped[int] = mapped_column(Integer, default=0)  # its place in the game's list: a map's number
+    status: Mapped[str] = mapped_column(String(10), default="open", index=True)  # open | closed | settled | void
+    answer: Mapped[str | None] = mapped_column(String(64))  # the right option's key, once settled
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the game's start, as last seen: a question long past it is voided
+    locks_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the game's start, for its first question
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _now()
+
+
+class Pick(Base):
+    """A fan's answer to a question (predictions.py), changed as often as they like until it closes; scored when it
+    settles: 100 less the share of fans who picked the same, for a right one, at least predictions.FLOOR; 0 for a
+    wrong one; none when the question was voided. Kept under the fan id, an anonymous fan's moving to the account
+    they sign in to (accounts.adopt)."""
+
+    __tablename__ = "prediction_pick"
+
+    question_id: Mapped[int] = mapped_column(ForeignKey("prediction_question.id", ondelete="CASCADE"), primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    option: Mapped[str] = mapped_column(String(64))
+    points: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class League(Base):
+    """Friends calling games together (predictions.py): made by a signed-in fan, joined by its invite link
+    (/j/<code>) by another, its table their points on the questions settled since it was made. Bragging rights
+    only: no fee, no prize."""
+
+    __tablename__ = "prediction_league"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True)  # the invite link's
+    name: Mapped[str] = mapped_column(String(60))
+    owner: Mapped[str | None] = mapped_column(String(64))  # the fan id (an account's) that made it
+    shared: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # times its invite was shared from the app
+    opened: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # times its invite page was opened by a non-member
+    created_at: Mapped[datetime] = _now()
+
+
+class LeagueMember(Base):
+    """A signed-in fan in a league, by the name they gave it: friends see that, never their email."""
+
+    __tablename__ = "prediction_member"
+
+    league_id: Mapped[int] = mapped_column(ForeignKey("prediction_league.id", ondelete="CASCADE"), primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    joined_at: Mapped[datetime] = _now()

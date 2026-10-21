@@ -80,11 +80,11 @@ def test_a_games_own_moment_is_read_without_the_games_name():
 
 
 def test_a_players_news_wears_their_sports_colour_and_their_photo(monkeypatch):
-    monkeypatch.setattr(notify, "SITE_URL", "https://stann.example")
+    monkeypatch.setattr(notify, "SITE_URL", "https://sports-follow.example")
     news = ["Rohit Sharma: injury news"]
     drawn = notify.scorecard(push(news, player_id=7, event_id=None, kind="news"), {1: item(1, "news", news[0])}, {}, {7: ("Rohit Sharma", "Cricket", "/api/photos/ab.jpg")})
     assert drawn == {"sport": "cricket", "colour": "#1f5bef", "ink": "#ffffff", "league": "", "match": "", "sides": [], "status": "", "live": "0",
-                     "word": "News", "line": "Rohit Sharma: injury news", "story": [], "photo": "https://stann.example/api/photos/ab.jpg"}
+                     "word": "News", "line": "Rohit Sharma: injury news", "story": [], "photo": "https://sports-follow.example/api/photos/ab.jpg"}
     # Without the site's address (in development) there's no address for the photo the app could load.
     monkeypatch.setattr(notify, "SITE_URL", "")
     assert notify.scorecard(push(news, player_id=7, event_id=None, kind="news"), {1: item(1, "news", news[0])}, {}, {7: ("Rohit Sharma", "Cricket", "/api/photos/ab.jpg")})["photo"] == ""
@@ -98,7 +98,7 @@ def test_a_push_whose_scorecard_cant_be_drawn_goes_plain(monkeypatch, caplog):
     assert notify._scorecard_or_none(push, None) == {}  # type: ignore[arg-type]
 
 
-def test_the_test_push_is_a_moment_of_no_sport_in_stann_blue():
+def test_the_test_push_is_a_moment_of_no_sport_in_the_apps_blue():
     message = notify.fcm.message("t" * 40, {"id": 0, "title": "Notifications are on", "body": "…", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}, 600)
     data = message["data"]
     assert "notification" not in message and (data["v"], data["type"], data["tag"], data["loud"]) == ("2", "moment", "test", "1")

@@ -62,7 +62,7 @@ export function useLive(): LiveSport[] {
 
 type Follow = ReturnType<typeof useFollowToggle>
 
-/** A game's players to follow, each with a tap (the server puts those already on stann first): a live card's,
+/** A game's players to follow, each with a tap (the server puts those already on the app first): a live card's,
  * or one side's on a match page. */
 export function FollowPills({ game, follow }: { game: Pick<LiveGame, 'title' | 'players'>; follow: Follow }) {
   if (!game.players.length) return null

@@ -192,8 +192,8 @@ function Settings() {
   )
 }
 
-/** On or off for this phone, its quiet hours, its live cards, and a test alert (the web's "On this device"; live
- * cards are the app's alone). */
+/** On or off for this phone, its quiet hours, its live cards and sport colours, and a test alert (the web's "On
+ * this device"; live cards and colours are the app's alone). */
 function Device() {
   const push = usePush()
   const [start, setStart] = useState(push.quiet.start ?? '22:00')
@@ -235,6 +235,15 @@ function Device() {
                 <Text style={[t.small, t.muted]}>A card on your lock screen for each game you follow while it’s on, kept up to date, without sound.</Text>
               </View>
               <Switch label="Live scores" on={push.live} onChange={push.saveLive} />
+            </View>
+          )}
+          {push.colours === null ? null : (
+            <View style={[s.setting, s.line]}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={t.title}>Sport colours</Text>
+                <Text style={[t.small, t.muted]}>Each sport’s alerts in its own colour. Off, they’re all in black: quieter beside other apps.</Text>
+              </View>
+              <Switch label="Sport colours" on={push.colours} onChange={push.saveColours} />
             </View>
           )}
           <Btn kind="link" label="Send a test alert" disabled={push.busy} onPress={push.test} style={{ height: 48 }} />

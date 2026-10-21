@@ -9,7 +9,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from sports_follow import bus, controls, registry, shutdown, tracing
+from sports_follow import bus, controls, registry, shutdown, tracing, wiki
 from sports_follow.adapters import budget, cache
 
 
@@ -62,6 +62,12 @@ def no_wikidata(monkeypatch):
         raise RuntimeError("tests don't query Wikidata")
 
     monkeypatch.setattr(registry, "sparql", sparql)
+
+    def get(*args, **kwargs):
+        raise RuntimeError("tests don't ask Wikidata or Wikipedia for profiles")
+
+    # Nor the Wikidata API or Wikipedia for a player's profile (wiki.py): test_wiki.py gives their answers.
+    monkeypatch.setattr(wiki._client, "get", get)
 
 
 @pytest.fixture

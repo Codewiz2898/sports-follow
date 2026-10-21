@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import ORDINAL, Found, Glance, Line, Played, Poster, Seen, Sport, num, number, short, stat, values
+from .base import ORDINAL, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, num, number, short, stage, stat, values, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -120,6 +120,40 @@ class Tennis(Sport):
             mine, _, theirs = (values(ln).get("Sets") or "").partition("–")
             won, lost = won + int(num(mine)), lost + int(num(theirs))
         return [{"label": "Sets", "value": f"{won}–{lost}"}] if won or lost else []
+
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a title, a Grand Slam, a first, a ranking landmark (career high, No. 1), a win streak. A match \
+moment: a match point, a tweener, a long rally, a comeback from a set down. Full-match uploads are restreams; \
+tournament and tour channels' highlights are official."""
+
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UCbcxFkd6B9xUU54InHv4Tig",  # Tennis TV: the ATP's highlights, interviews
+        "UCaBIVVpHjq6j3tSyxwTE-8Q",  # WTA: highlights, interviews
+        "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel: analysis
+    )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.theguardian.com/sport/tennis/rss": "The Guardian",
+        "https://www.skysports.com/rss/12110": "Sky Sports",
+        "https://www.thehindu.com/sport/tennis/feeder/default.rss": "The Hindu",
+    }
+
+    def video_words(self) -> str:
+        return "tennis"
+
+    def search_words(self, fired: Fired) -> str | None:
+        """An upset, or a win from the semi-finals on, at the tournament."""
+        late, word = stage(fired.game, fired.competition)
+        if fired.kind == "upset":
+            return words("upset", fired.competition)
+        if fired.kind == "final" and ": won" in fired.title.lower() and late >= 2:
+            return words("wins", word.lower(), fired.competition)
+        return None
 
 
 SPORT = Tennis()

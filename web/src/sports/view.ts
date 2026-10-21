@@ -12,10 +12,12 @@ export interface BoardProps<S = unknown> {
 }
 
 /** What a sport's part of a match page is drawn from: its sections (the server's Sport.match_page, by name:
- * a timeline, a scorecard, maps), and the game's live block, if it has one yet. */
+ * a timeline, a scorecard, maps), the game's live block, if it has one yet, and the names of the fan's
+ * players in it, to mark them. */
 export interface MatchProps<P = unknown> {
   page: P
   live: LiveStatus | null
+  yours?: string[]
 }
 
 /**

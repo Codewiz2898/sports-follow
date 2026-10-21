@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Found, Glance, Line, Poster, Seen, Sport, crossed, num, number, stat, values
+from .base import Fired, Found, Glance, Line, Poster, Seen, Sport, crossed, num, number, stat, values, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -42,6 +42,7 @@ class Basketball(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_basketball": "P3685", "nba": "P3647", "wnba": "P3588", "bref_nba": "P2685", "bref_wnba": "P4561"}
+    honours = {"Q222047": "NBA Most Valuable Player", "Q1339172": "WNBA Most Valuable Player"}
     athletes = 9_612
     no_line = "Not on the game's roster"
     leagues = ("nba", "wnba")
@@ -139,6 +140,38 @@ class Basketball(Sport):
         if any(minutes):
             stats.append({"label": "MIN", "value": avg(minutes)})
         return stats
+
+    # ---- the Feed's content judge (curate.py)
+
+    def content_hints(self) -> str:
+        return """\
+A milestone: a career high, a 40 or 50-point game, a triple-double, a scoring landmark, an All-Star, MVP or \
+championship. A match moment: a dunk, a block, a buzzer-beater, a clutch shot. Trade talk before a team \
+announces it is rumour. Full-game uploads are restreams."""
+
+    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+
+    video_channels = (
+        "UC3HPbvB6f58X_7SMIp6OPYw",  # Thinking Basketball: analysis
+        "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis
+        "UCWJ2lWNubArHWmf3FIHbfcQ",  # NBA: highlights, interviews
+    )
+    # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
+    news_feeds = {
+        "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",
+        "https://www.theguardian.com/sport/nba/rss": "The Guardian",
+    }
+
+    def video_words(self) -> str:
+        return "basketball"
+
+    def search_words(self, fired: Fired) -> str | None:
+        """40 points or more, or a triple-double, in the game."""
+        if fired.kind == "points" and number(fired.detail) >= 40:
+            return words(f"{number(fired.detail)} points", fired.game)
+        if fired.kind == "triple":
+            return words("triple-double", fired.game)
+        return None
 
 
 SPORT = Basketball()

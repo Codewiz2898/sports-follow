@@ -42,7 +42,8 @@ internal object Cards {
   const val ID = 1 // each notification is told apart by its tag, which the server gives it
   private const val LOG = "StannNotifications"
   private const val STALE = 20 * 60 * 1000L // a live card nobody updates for this long goes by itself (the server resends every 10)
-  private val BLUE = Color.parseColor("#1f5bef") // stann's own, for a push with no sport (a test)
+  private val BLUE = Color.parseColor("#1f5bef") // the app's own, for a push with no sport (a test)
+  private val INK = Color.parseColor("#0d0d0d") // the app's text colour (web/src/styles.css --text)
   private val SHORT = Regex("\\d{1,3}") // a score the board can put side by side: "2", "104"
 
   fun liveTag(event: String) = "live-e$event"
@@ -89,7 +90,7 @@ internal object Cards {
   }
 
   private fun moment(c: Context, d: Map<String, String>, tag: String, photo: Bitmap?): NotificationCompat.Builder {
-    val look = Look(d)
+    val look = Look(d, Settings.sportColours(c))
     val type = Type(c)
     val sides = sides(d["sides"])
     val word = d["word"].orEmpty()
@@ -104,6 +105,7 @@ internal object Cards {
 
     val big = RemoteViews(c.packageName, R.layout.stann_moment_big)
     look.paint(big, R.id.stann_line)
+    look.pill(big)
     tag(big, d)
     picture(big, R.id.stann_word, type.word(word, 44f, look.ink, type.wide - 80f), word)
     big.setTextViewText(R.id.stann_line, line)
@@ -137,7 +139,7 @@ internal object Cards {
   private fun live(c: Context, d: Map<String, String>) {
     val event = d["event_id"] ?: return
     if (!Settings.liveCards(c) || Settings.stopped(c, event)) return
-    val look = Look(d)
+    val look = Look(d, Settings.sportColours(c))
     val type = Type(c)
     val sides = sides(d["sides"])
     val players = strings(d["players"])
@@ -152,6 +154,7 @@ internal object Cards {
 
     val big = RemoteViews(c.packageName, R.layout.stann_live_big)
     look.paint(big, R.id.stann_league)
+    look.pill(big)
     big.setTextViewText(R.id.stann_tag, status)
     big.setTextViewCompoundDrawablesRelative(R.id.stann_tag, R.drawable.stann_dot, 0, 0, 0)
     text(big, R.id.stann_league, d["league"].orEmpty())
@@ -199,7 +202,7 @@ internal object Cards {
     val score = compact(sides).ifBlank { d["title"].orEmpty() }
     val builder = NotificationCompat.Builder(c, Channels.LIVE)
       .setSmallIcon(icon(c))
-      .setColor(look.colour)
+      .setColor(look.accent)
       .setContentTitle(score)
       .setContentText(listOf(status, players.firstOrNull().orEmpty()).filter { it.isNotBlank() }.joinToString(" · "))
       .setSubText(d["league"]?.takeIf { it.isNotBlank() })
@@ -212,9 +215,9 @@ internal object Cards {
       .setShortCriticalText(chip(sides).ifBlank { status })
       .setContentIntent(open(c, match, null))
     progress(d["progress"])?.let { done ->
-      val dark = ColorUtils.blendARGB(look.colour, Color.BLACK, 0.45f)
+      val dark = ColorUtils.blendARGB(look.accent, Color.BLACK, 0.45f)
       builder.setStyle(NotificationCompat.ProgressStyle()
-        .setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(1000).setColor(look.colour)))
+        .setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(1000).setColor(look.accent)))
         .setProgress(done)
         .setProgressPoints(marks(d["progress"], d["marks"]).map { (at, side) ->
           NotificationCompat.ProgressStyle.Point(at).setColor(if (side == 0) dark else Color.GRAY)
@@ -245,16 +248,27 @@ internal object Cards {
 
   // ---------------------------------------------------------------- the parts
 
-  /** A sport's colours: its block, and the words on it (Sport.colour's "sport" and "on"). */
-  private class Look(d: Map<String, String>) {
-    val colour = colour(d["colour"], BLUE)
-    val ink = colour(d["ink"], Color.WHITE)
+  /** A notification's colours: its sport's block and the words on it (Sport.colour's "sport" and "on"), or, with
+   *  sport colours off on this phone (Alerts' Settings), every sport's block in the app's ink, white on it, and
+   *  the icon in the app's blue: quieter beside other apps' notifications. */
+  private class Look(d: Map<String, String>, private val own: Boolean) {
+    val colour = if (own) colour(d["colour"], BLUE) else INK
+    val ink = if (own) colour(d["ink"], Color.WHITE) else Color.WHITE
+    val accent = if (own) colour else BLUE // the icon's tint, and a Live Update's bar
     val darkInk = ColorUtils.calculateLuminance(ink) < 0.5
 
-    /** The block in the sport's colour, and the given words in its ink. */
+    /** The block in its colour, and the given words in its ink. */
     fun paint(v: RemoteViews, vararg words: Int) {
       v.setInt(R.id.stann_bg, "setColorFilter", colour)
       for (id in words) v.setTextColor(id, ink)
+    }
+
+    /** The live tag of an opened card: an ink pill, or with sport colours off, on the ink block, a white one with
+     *  ink words. */
+    fun pill(v: RemoteViews) {
+      if (own) return
+      v.setInt(R.id.stann_tag, "setBackgroundResource", R.drawable.stann_pill_light)
+      v.setTextColor(R.id.stann_tag, INK)
     }
   }
 
@@ -263,7 +277,7 @@ internal object Cards {
   private fun base(c: Context, d: Map<String, String>, channel: String, look: Look, small: RemoteViews, big: RemoteViews) =
     NotificationCompat.Builder(c, channel)
       .setSmallIcon(icon(c))
-      .setColor(look.colour)
+      .setColor(look.accent)
       .setContentTitle(d["title"])
       .setContentText(d["body"])
       .setSubText(d["league"]?.takeIf { it.isNotBlank() })
@@ -365,11 +379,11 @@ internal object Cards {
   private fun icon(c: Context): Int =
     c.resources.getIdentifier("notification_icon", "drawable", c.packageName).takeIf { it != 0 } ?: c.applicationInfo.icon
 
-  /** Opens the app at one of its pages ("/player/7", "/match/espn/401"), by its own link (stann://), saying
-   *  which notification was tapped (n=) so the app can count the open. */
+  /** Opens the app at one of its pages ("/player/7", "/match/espn/401"), by its own link (app.config.ts's scheme),
+   *  saying which notification was tapped (n=) so the app can count the open. */
   private fun open(c: Context, path: String, notification: String?): PendingIntent {
     val query = notification?.takeIf { it.isNotBlank() && it != "0" }?.let { (if ('?' in path) "&" else "?") + "n=$it" }.orEmpty()
-    val uri = Uri.parse("stann://" + path.trimStart('/') + query)
+    val uri = Uri.parse("slam://" + path.trimStart('/') + query)
     val intent = Intent(Intent.ACTION_VIEW, uri).setPackage(c.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     return PendingIntent.getActivity(c, uri.toString().hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }

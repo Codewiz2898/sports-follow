@@ -6,7 +6,9 @@ import { APP_NAME } from '../app'
 import { useNow } from '../clock'
 import { ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
+import { FromYourPlayers } from '../components/Feed'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
+import { TodayCalls } from '../components/Picks'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { AlsoLive, MoreLive } from '../components/LiveNow'
@@ -51,7 +53,7 @@ function SaveNudge() {
 
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions
- * stann covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
+ * the app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
  * taking turns. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
 function BigGames({ league, now }: { league: League | null; now: number }) {
@@ -221,6 +223,11 @@ export function TodayPage() {
           follow list has answered, so a game of the fan's is never counted as another. */}
       {(loaded || failed) && <MoreLive mine={games.flatMap(([, group]) => group)} />}
 
+      {/* Calling their games before they start (sports_follow/predictions.py), and how their calls went. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+        <TodayCalls refreshKey={theirKey} />
+      </ErrorBoundary>
+
       <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
         {resultCount > 0 && (
           <Rail title={done ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
@@ -230,6 +237,11 @@ export function TodayPage() {
             {bigDone.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />)}
           </Rail>
         )}
+      </ErrorBoundary>
+
+      {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+        <FromYourPlayers now={now} />
       </ErrorBoundary>
 
       <SaveNudge />

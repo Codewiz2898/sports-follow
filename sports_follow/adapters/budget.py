@@ -14,8 +14,9 @@ request) and carried into the threads it uses (carry):
     refresh  a followed player's fixtures and stats
     history  older results (history.py)
     import   the weekly registry import
+    feed     videos and posts about players, for the feed (curator.py)
 
-The background lanes (refresh, history, import) stop while a window's allowance is down to the source's
+The background lanes (refresh, history, import, feed) stop while a window's allowance is down to the source's
 reserve, which is kept for live games and fans. A scarce source gives fans a share of their own (fan: at
 most that many fan requests a window): one fan following a pro is a request, but searches or previews in
 a loop would spend what live games need, so past the share they're refused, and logged.
@@ -36,16 +37,18 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .. import controls
 from .base import AdapterError
 
 log = logging.getLogger("sports_follow.budget")
 
-LANES = ("live", "fan", "refresh", "history", "import")
-BACKGROUND = ("refresh", "history", "import")
+LANES = ("live", "fan", "refresh", "history", "import", "feed")
+BACKGROUND = ("refresh", "history", "import", "feed")
 _lane: contextvars.ContextVar[str] = contextvars.ContextVar("source_lane", default="refresh")
 T = TypeVar("T")
 
@@ -59,6 +62,31 @@ class Window:
     seconds: int  # 60, 3600, 86400: counted in windows of this many seconds, from the epoch
     requests: int  # the plan's allowance a window
     margin: int = 0  # never spent: another process may count a moment late
+    zone: str | None = None  # the time zone its windows start in, where the source's day isn't UTC's: "America/Los_Angeles"
+
+
+def _offset(zone: str | None, now: float) -> float:
+    """Seconds the zone is ahead of UTC at that moment (0 for UTC, or a zone this machine doesn't know)."""
+    if not zone:
+        return 0.0
+    try:
+        offset = datetime.fromtimestamp(now, ZoneInfo(zone)).utcoffset()
+    except (ZoneInfoNotFoundError, ValueError):
+        if time.time() - _warned["zone"] > 3600:
+            log.warning("source budgets: no time zone %r here; its windows are counted in UTC", zone)
+            _warned["zone"] = time.time()
+        return 0.0
+    return offset.total_seconds() if offset else 0.0
+
+
+def _start(w: Window, now: float) -> int:
+    """Which of its windows now falls in: the epoch's, or for a zoned one, counted from the zone's midnight."""
+    return int((now + _offset(w.zone, now)) // w.seconds)
+
+
+def _ttl(w: Window) -> int:
+    """How long a window's count is kept: past its end, and a zoned day may run 25 hours (the clocks go back)."""
+    return w.seconds + (3660 if w.zone else 60)
 
 
 @dataclass(frozen=True)
@@ -76,14 +104,17 @@ class Budget:
 def effective(budget: Budget) -> Budget:
     """The budget as the admin panel left it (controls.set_budget): its windows (each one's allowance and
     margin), reserve, fans' share and pause where the panel changed them, the rest as its source declares.
-    A change of the wrong shape (written by hand) is left out."""
+    A window keeps the time zone its source declares for its span (the panel doesn't set one). A change of the
+    wrong shape (written by hand) is left out."""
     change = controls.current().budgets.get(budget.name)
     if not change:
         return budget
     fields: dict[str, Any] = {}
+    zones = {w.seconds: w.zone for w in budget.windows}
     try:
         if isinstance(change.get("windows"), list):
-            fields["windows"] = tuple(Window(int(w["seconds"]), int(w["requests"]), int(w.get("margin", 0))) for w in change["windows"])
+            fields["windows"] = tuple(Window(int(w["seconds"]), int(w["requests"]), int(w.get("margin", 0)), zones.get(int(w["seconds"])))
+                                      for w in change["windows"])
     except (KeyError, TypeError, ValueError):
         log.warning("source budgets: %s's windows from the admin panel aren't readable; its own stand", budget.name)
     for name in ("reserve", "pause"):
@@ -181,7 +212,7 @@ def _redis() -> Any:
 
 STORE: Any = RedisStore()
 _fallback = MemoryStore()
-_warned = {"at": 0.0}
+_warned = {"at": 0.0, "zone": 0.0}
 
 
 def _store_call(method: str, *args: Any) -> Any:
@@ -198,7 +229,7 @@ def _store_call(method: str, *args: Any) -> Any:
 
 
 def _window_key(budget: Budget, bucket: str, w: Window, now: float) -> str:
-    return f"budget:{budget.name}:{bucket}:{w.seconds}:{int(now // w.seconds)}"
+    return f"budget:{budget.name}:{bucket}:{w.seconds}:{_start(w, now)}"
 
 
 def _left_key(budget: Budget, bucket: str) -> str:
@@ -227,11 +258,12 @@ def _headroom(budget: Budget, lane_name: str) -> int:
     return budget.reserve if lane_name in BACKGROUND else 0
 
 
-def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None:
+def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: int = 1) -> None:
     """Count one request this lane is about to send, or refuse it (RateLimited): the source asked us to
     slow down, what it says is left is down to the margin (or, for a background lane, the reserve), a
     window's allowance less the same is spent, or so is the fans' share of a scarce source. A refused
-    request isn't counted."""
+    request isn't counted. cost: what the request spends of each window, where a source prices its calls apart
+    (a search worth a hundred reads, where a source counts them in one allowance)."""
     budget = effective(budget)
     lane_name = lane_name or lane()
     now = time.time()
@@ -241,7 +273,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
         raise RateLimited(f"{budget.name} asked us to slow down; paused until it's over")
     keep = _headroom(budget, lane_name)
     left = _store_call("get", _left_key(budget, bucket))
-    if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
+    if budget.windows and left is not None and left - cost < min(w.margin for w in budget.windows) + keep:
         _note(budget, lane_name, "refused", now)
         raise RateLimited(f"{budget.name} says {left} requests are left{f' ({bucket})' if bucket else ''}: kept for {'live games' if keep else 'the margin'}")
     # (key, ttl, limit, why): the fans' share of a scarce source first, then each window less what this lane leaves.
@@ -249,17 +281,17 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None) -> None
     if lane_name == "fan" and budget.fan is not None and budget.windows:
         w = budget.windows[0]
         why = f"{budget.name}: fans' share ({budget.fan} {per(w.seconds)}) is spent"
-        counts.append((f"budget:{budget.name}:{bucket}:fan:{w.seconds}:{int(now // w.seconds)}", w.seconds + 60, budget.fan, why))
+        counts.append((f"budget:{budget.name}:{bucket}:fan:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why))
     for w in budget.windows:
         where = f"{budget.name}{f' ({bucket})' if bucket else ''}"
         why = f"{where}: the {lane_name} share of its {w.requests} requests {per(w.seconds)} is spent" if keep else f"{where}: its {w.requests} requests {per(w.seconds)} are spent"
-        counts.append((_window_key(budget, bucket, w, now), w.seconds + 60, w.requests - w.margin - keep, why))
+        counts.append((_window_key(budget, bucket, w, now), _ttl(w), w.requests - w.margin - keep, why))
     taken: list[tuple[str, int]] = []
     for key, ttl, limit, why in counts:
         taken.append((key, ttl))
-        if _store_call("incr", key, ttl) > limit:
+        if _store_call("incr", key, ttl, cost) > limit:
             for k, t in taken:
-                _store_call("incr", k, t, -1)
+                _store_call("incr", k, t, -cost)
             _note(budget, lane_name, "refused", now)
             if lane_name == "fan":
                 log.warning("source budgets: a fan request refused: %s", why)
@@ -280,6 +312,21 @@ def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
     if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
         return False
     return all((_store_call("get", _window_key(budget, bucket, w, now)) or 0) < w.requests - w.margin - keep for w in budget.windows)
+
+
+def room(budget: Budget, bucket: str = "", lane_name: str = "feed") -> tuple[int, int] | None:
+    """What this lane may still spend of the source's tightest window now, and that window's allowance: (left, of).
+    What the source says is left counts too, against its first window. None for a source with no published limit."""
+    budget = effective(budget)
+    if not budget.windows:
+        return None
+    now = time.time()
+    keep = _headroom(budget, lane_name)
+    rooms = [(w.requests - w.margin - keep - (_store_call("get", _window_key(budget, bucket, w, now)) or 0), w.requests) for w in budget.windows]
+    said = _store_call("get", _left_key(budget, bucket))
+    if said is not None:
+        rooms.append((said - min(w.margin for w in budget.windows) - keep, budget.windows[0].requests))
+    return min(rooms, key=lambda r: r[0])
 
 
 def observe(budget: Budget, bucket: str, left: int, resets_in: float) -> None:
@@ -339,7 +386,7 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
     prefix = f"budget:{budget.name}:"
     buckets = {""}
     for w in budget.windows:
-        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{int(now // w.seconds)}")}
+        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{_start(w, now)}")}
     windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _store_call("get", _window_key(budget, b, w, now)) or 0, "allowance": w.requests}
                for b in sorted(buckets) for w in budget.windows]
     left_now = {b: v for b in sorted(buckets) if (v := left(budget, b)) is not None}
@@ -348,11 +395,12 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
 
 
 def known() -> list[Budget]:
-    """Every budget a known source spends (Adapter.budgets), once each, in adapters.KNOWN's order."""
-    from . import KNOWN
+    """Every budget a known source spends (Adapter.budgets, VideoSource.budgets, NewsSource.budgets), once each, in
+    adapters.KNOWN's order, then adapters.VIDEOS', then adapters.NEWS'."""
+    from . import KNOWN, NEWS, VIDEOS
 
     found: dict[str, Budget] = {}
-    for adapter in KNOWN.values():
+    for adapter in [*KNOWN.values(), *VIDEOS.values(), *NEWS.values()]:
         for b in adapter.budgets():
             found.setdefault(b.name, b)
     return list(found.values())

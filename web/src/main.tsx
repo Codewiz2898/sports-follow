@@ -6,15 +6,17 @@ import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow, TeamRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { BellIcon, ChevronIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
+import { BellIcon, ChevronIcon, FeedIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
 import { entries, SearchResults, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
+import { useFeedDot } from './feedSeen'
 import { FollowingProvider, useFollowing } from './following'
 import { AccountPage } from './pages/AccountPage'
 import { AthletePage } from './pages/AthletePage'
 import { CampaignPage } from './pages/CampaignPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { CreditsPage } from './pages/CreditsPage'
+import { FeedPage } from './pages/FeedPage'
 import { FollowingPage } from './pages/FollowingPage'
 import { LivePage } from './pages/LivePage'
 import { MatchPage } from './pages/MatchPage'
@@ -22,6 +24,7 @@ import { TeamPage } from './pages/TeamPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
+import { FriendLeaguePage, InvitePage, LeaguesPage } from './pages/LeaguesPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
 import { loadSports } from './sports'
@@ -128,6 +131,7 @@ function Sidebar() {
       <SidebarSearch />
       <nav className="side-nav" aria-label="Main">
         <NavLink to="/" end><HomeIcon width={18} height={18} />Today</NavLink>
+        <NavLink to="/me/feed"><FeedIcon width={18} height={18} />Feed<FeedDot /></NavLink>
         <NavLink to="/live"><LiveIcon width={18} height={18} />Live now</NavLink>
         <NavLink to="/notifications"><BellIcon width={18} height={18} />Alerts<Unread /></NavLink>
         <NavLink to="/account"><UserIcon width={18} height={18} />{me?.signed_in ? 'Account' : 'Sign in'}</NavLink>
@@ -172,6 +176,12 @@ function Unread() {
   return <span className="nav-count" aria-label={`${unread} new`}>{unread > 9 ? '9+' : unread}</span>
 }
 
+/** The Feed tab's dot: something came into the fan's Feed since they last opened it (feedSeen.ts). */
+function FeedDot() {
+  if (!useFeedDot()) return null
+  return <span className="nav-dot" aria-label="new in your Feed" />
+}
+
 /** An address that isn't a page here (an old link, a typo): say so, with the way back. */
 function NotFound() {
   return (
@@ -204,6 +214,7 @@ function App() {
             <Route path="/" element={<TodayPage />} />
             <Route path="/welcome" element={<WelcomePage />} />
             <Route path="/following" element={<FollowingPage />} />
+            <Route path="/me/feed" element={<FeedPage />} />
             <Route path="/live" element={<LivePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/player/:id" element={<PlayerPage />} />
@@ -214,6 +225,9 @@ function App() {
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/me/leagues" element={<LeaguesPage />} />
+            <Route path="/league/:code" element={<FriendLeaguePage />} />
+            <Route path="/j/:code" element={<InvitePage />} />
             {/* A campaign page (stann.in/gukesh): any other one-word address; the server says if it's one. */}
             <Route path="/:slug" element={<CampaignPage notFound={<NotFound />} />} />
             <Route path="*" element={<NotFound />} />
@@ -223,6 +237,7 @@ function App() {
       <nav className="tabbar" aria-label="Main">
         {/* The Following and Live pages are part of Today here (Today opens them): Today stays lit there. */}
         <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' || pathname === '/live' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>
+        <NavLink to="/me/feed"><FeedIcon width={20} height={20} />Feed<FeedDot /></NavLink>
         <NavLink to="/search"><SearchIcon width={20} height={20} />Search</NavLink>
         <NavLink to="/notifications"><BellIcon width={20} height={20} />Alerts<Unread /></NavLink>
       </nav>

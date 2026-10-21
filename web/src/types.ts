@@ -18,6 +18,15 @@ export interface Photo {
   crop?: { x: number; y: number; w: number; h: number }
 }
 
+/** Where a player's About paragraph comes from, when it isn't the research agent's: their Wikipedia article,
+ * shown under it with its licence (sports_follow/wiki.py). */
+export interface AboutSource {
+  source: string  // "Wikipedia"
+  url?: string | null  // the article
+  licence: string  // "CC BY-SA 4.0"
+  licence_url: string
+}
+
 export interface PlayerProfile {
   name: string
   sport: string
@@ -26,6 +35,12 @@ export interface PlayerProfile {
   role?: string | null
   teams: string[]
   summary?: string
+  about?: AboutSource | null
+  born?: string | null  // "1988-11-05", or "1988" when only the year is known
+  honours?: string[]  // "Ballon d'Or ×8"
+  // Which fields Wikidata and Wikipedia gave ({"born": "wikidata", "summary": "wikipedia"}); the rest are a
+  // live source's or the research agent's.
+  profile_from?: Record<string, string>
   disambiguation?: string | null
   photo?: Photo | null
 }
@@ -61,7 +76,7 @@ export interface LiveStatus {
 
 export interface Provenance { source: string; url?: string | null; at: string }
 
-export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null }
+export interface NewsItem { headline: string; summary: string; source: string; url: string; published?: string | null; outlets?: number | null }  // outlets: how many ran the story
 
 export interface UpcomingEvent {
   title: string
@@ -120,6 +135,7 @@ export interface Card {
   player: PlayerProfile
   live: LiveStatus
   news: NewsItem[]
+  stories?: NewsItem[]  // the publishers' stories the curator served (sports_follow/rank.py cards): shown in place of news
   upcoming: UpcomingEvent[]
   recent_results?: RecentResult[]
   season_stats?: Stat[]
@@ -260,6 +276,55 @@ export interface WeekPoster { id: number | null; player_id: number; player: stri
  */
 export interface WireRow { id: string; player_id: number | null; player: string; sport: string; tag: string; text: string; source: string | null; url: string; yours: boolean; at: string }
 
+/**
+ * A player's Feed (GET /api/players/<id>/feed, sports_follow/feed.py): videos, posts and news about them, judged
+ * before a fan sees it. A video plays in YouTube's no-cookie player once tapped; a post links to where it was
+ * posted. `reason` is the one line under "Why this is here".
+ */
+export interface FeedItem {
+  id: string
+  kind: 'video' | 'post' | 'news'
+  tag: string
+  title: string
+  url: string
+  source: string
+  published_at: string | null  // an instant, or a bare day for a story known only by its day
+  reason: string
+  summary?: string | null
+  outlets?: number | null  // a story's: how many outlets ran it, when more than one
+  // The card's picture, an https address loaded as served: a video's thumbnail, a story's image from the publisher's
+  // feed. None: a story's headline on the sport's colour; a post is words only.
+  picture?: string | null
+  video?: { youtube_id: string; duration: number | null; views: number | null } | null
+  post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
+}
+
+/** Items around one of the player's moments (`match` its game's page), or "This week", "This month" and "Earlier". */
+export interface FeedGroup { head: string; moment: boolean; when: string | null; match: string | null; items: FeedItem[] }
+
+export interface Feed { player_id: number; groups: FeedGroup[]; evergreen: FeedItem[]; count: number }
+
+/** Who an item of the fan's Feed is about: the card's head. */
+export interface FeedWho { id: number; name: string; sport: string | null; photo: Photo | null }
+
+/** A player across the top of the fan's Feed. `newest`: when the newest of theirs came in, which rings them while
+ * it's after the fan last looked at them. */
+export interface FeedCircle extends FeedWho { count: number; newest: string | null }
+
+/** An item of the fan's Feed, under its day ("Today", "Yesterday", "This week", "This month", "Earlier"), with the
+ * moment it's about when it is one (`match`: its game in the app). */
+export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null }
+
+/**
+ * A page of the fan's Feed (GET /api/me/feed/items?cursor=&player=&limit=&tz=, sports_follow/feed.py `page`):
+ * every followed player's items by day, players taking turns. `cursor` asks for the next page (null: the last);
+ * `count` is every item (of the player picked); `newest` when the newest of anyone's came in (the tab's dot).
+ */
+export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[] }
+
+/** What a fan can say about an item from its "…" sheet. */
+export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
+
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =
@@ -329,6 +394,7 @@ export interface Campaign {
   teams: CampaignTeam[]
   games: CampaignGame[]
   zone: { name: string; label: string }
+  predictions?: Prediction[]  // its players' games to call, open first, then settled lately (sports_follow/predictions.py)
 }
 
 /** A whole team on a campaign page: following it follows every player on its roster, as its source lists them. */
@@ -406,6 +472,21 @@ export interface Match {
   fixtures: string[]
   refreshing: boolean  // a newer read is on its way: look again in a moment
   follow?: MatchFollowState
+  predictions?: Prediction[]  // what fans call before it starts (sports_follow/predictions.py); a server before them sends none
+  streams?: MatchStream[]  // where it can be watched, in the order to offer them (sports_follow/watch.py); a server before them sends none
+}
+
+/** One broadcast of a game (sports_follow/watch.py): its page, the platform it's on and the language it's called in,
+ * whether the event's organiser runs it (and it's their main one), and, where the app plays it inside the page,
+ * which of its players and what that plays: "twitch" and a channel, "youtube" and a video. */
+export interface MatchStream {
+  url: string
+  platform: string  // "Twitch", "Kick"
+  language: string  // "en"; "" where its source doesn't say
+  language_name: string  // "English"
+  official: boolean
+  main: boolean
+  embed: { player: string; id: string } | null
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.
@@ -458,3 +539,54 @@ export interface SportInfo {
 // sports: those the app lists, in order; groups: sports that stand for several of them and aren't listed (esports,
 // every game), as a name no listed sport has ("Esports", "Call of Duty: Mobile") is drawn; other: any other sport.
 export interface SportCatalog { sports: SportInfo[]; groups?: SportInfo[]; other: SportInfo }
+
+/** One answer to a question, and how fans split on it: picks and share (whole percents adding up to 100) come only
+ * once this fan has picked, or the question's closed, so the crowd doesn't pick for them. */
+export interface PredictionOption { key: string; label: string; picks?: number; share?: number }
+
+/** A question fans call before a game, or a map of a series, starts (sports_follow/predictions.py): "Who wins?" of
+ * a chess game, "Who takes map 2?". Open until its game or map starts (locks_at, for the first one), then closed;
+ * settled once its board says (answer: an option's key), or voided ("void": a map the series didn't need). A right
+ * pick scores 100 less the share who picked the same, at least 10; worth is what this fan's would score now. */
+export interface Prediction {
+  id: number
+  ask: string  // which question in its game: "result", "map2"
+  title: string
+  game: string  // its game's title: "Gukesh D vs Javokhir Sindarov"
+  sport: string  // a sport's key
+  match: string  // its game's address after /match/
+  status: 'open' | 'closed' | 'settled' | 'void'
+  locks_at: string | null
+  answer: string | null
+  picks: number  // how many fans picked
+  split_from: number  // picks before an open question's split shows: with fewer, it would tell a fan a friend's pick
+  options: PredictionOption[]
+  mine: string | null  // this fan's pick
+  points: number | null  // what it scored, once settled
+  worth: number | null  // what it would score, were it right, now
+  friends?: { name: string; you: boolean; option?: string }[]  // on a league's page: who picked, and what once it's closed
+  waiting?: string[]  // and who hasn't yet, while it's open
+}
+
+/** Today's calls (GET /api/me/predictions): open questions on the fan's games, soonest first, and their picks settled lately. */
+export interface MyPredictions { open: Prediction[]; settled: Prediction[] }
+
+/** A league of friends calling games together (needs an account to make or join): its invite code, its table (members'
+ * points on questions settled since it was made; level on points, the same place) and its members' calls. */
+export interface FriendLeague {
+  code: string
+  name: string
+  created_at: string | null
+  members: number
+  table: { place: number; name: string; points: number; right: number; played: number; you: boolean }[]
+  questions: Prediction[]
+}
+
+/** A league as the fan's list of theirs shows it (GET /api/me/leagues). */
+export interface FriendLeagueSummary { code: string; name: string; members: number; place: number | null; points: number }
+
+/** What an invite link shows anyone (GET /api/leagues/<code>/invite): who made it, by their name in it. */
+export interface LeagueInvite { code: string; name: string; members: number; by: string | null; member: boolean }
+
+/** The predictions numbers on the admin panel's Users tab. */
+export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }

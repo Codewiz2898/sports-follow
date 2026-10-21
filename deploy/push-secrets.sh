@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # From the Mac: copy the API tokens this app uses to the server, without printing any of them.
 #   deploy/push-secrets.sh deploy@<server-ip>
-# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token,
+# Sends ~/.config/sports-follow/{sportmonks-token,lichess-token}, pandascore-token, liquipedia-token, pubg-token, youtube-key,
 # resend-key and google-client-secret (signing in), admin-password (the admin panel's password hash and
 # authenticator key, made by python -m sports_follow.admin password and code), linear-key (a read-only Linear API key, for the
 # admin panel's plan and issue count), fcm-service-account.json (the Android app's notifications), alert-url
@@ -24,7 +24,7 @@ for f in sportmonks-token lichess-token; do
   [ -s "$LOCAL/$f" ] || { echo "push-secrets: $LOCAL/$f is missing or empty" >&2; exit 1; }
   cp "$LOCAL/$f" "$stage/$f"
 done
-for f in pandascore-token liquipedia-token pubg-token resend-key google-client-secret admin-password linear-key fcm-service-account.json alert-url heartbeat-url offsite.env grafana.env otlp.env; do
+for f in pandascore-token liquipedia-token pubg-token youtube-key resend-key google-client-secret admin-password linear-key fcm-service-account.json alert-url heartbeat-url offsite.env grafana.env otlp.env; do
   [ -s "$LOCAL/$f" ] && cp "$LOCAL/$f" "$stage/$f"
 done
 PROD_KEY="${OPENROUTER_KEY_FILE:-$LOCAL/openrouter-key}"

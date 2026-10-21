@@ -205,6 +205,21 @@ def team_name(label: str) -> str:
     return side.group(1) if side else NATIONAL.sub("", label).strip()
 
 
+def keeps_team(kind: sports.Sport, label: str) -> bool:
+    """Whether a team Wikidata lists for one of a sport's athletes is one the app shows: not a youth, reserve
+    or college side, and one of the sport's."""
+    return bool(label) and not YOUTH.search(label) and not COLLEGE.search(label) and kind.team_ok(label)
+
+
+def team_list(kind: sports.Sport, stints: list[tuple[str, str, bool]]) -> list[str]:
+    """An athlete's teams as the app shows them, from their current stints (start, name, national): the newest
+    club and the newest national side, the country first in a sport that puts it first (cricket)."""
+    stints = sorted(stints, key=lambda t: t[0], reverse=True)
+    clubs = [t[1] for t in stints if not t[2]]
+    nations = [t[1] for t in stints if t[2]]
+    return list(dict.fromkeys([*nations[:1], *clubs[:1]] if kind.nation_first else [*clubs[:1], *nations[:1]]))
+
+
 def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], today: date | None = None) -> list[dict[str, Any]]:
     """Athlete rows from one batch's query rows. Pure, so it's tested without the network.
 
@@ -248,7 +263,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
     current_teams: dict[str, list[tuple[str, str, bool]]] = {}
     for r in teams:
         label = r.get("teamLabel") or ""
-        if not label or YOUTH.search(label) or COLLEGE.search(label) or not kind.team_ok(label):
+        if not keeps_team(kind, label):
             continue
         national = is_national(label)
         current_teams.setdefault(_qid(r["p"]), []).append((r.get("start") or "", team_name(label), national))
@@ -262,13 +277,10 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         folded = " ".join(words(name))
         extra = [a for a in dict.fromkeys(aliases.get(qid, [])) if " ".join(words(a)) not in ("", folded)][:MAX_ALIASES]
         stints = sorted(current_teams.get(qid, []), key=lambda t: t[0], reverse=True)
-        clubs = [t[1] for t in stints if not t[2]]
-        nations = [t[1] for t in stints if t[2]]
-        team_list = list(dict.fromkeys([*nations[:1], *clubs[:1]] if kind.nation_first else [*clubs[:1], *nations[:1]]))
         birth: date | None = p.get("birth")
         age = (today - birth).days // 365 if birth else None
         latest_start = _date(stints[0][0]) if stints and stints[0][0] else None
-        current = kind.current(age, bool(clubs or nations), latest_start, today)
+        current = kind.current(age, bool(stints), latest_start, today)
         league = kind.league_of(p["ids"])
         rows.append({
             "qid": qid,
@@ -279,7 +291,7 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             "birth_date": birth,
             "birth_precision": p.get("birth_precision") if birth else None,
             "country": (p["countries"] or [None])[0],
-            "teams": team_list,
+            "teams": team_list(kind, stints),
             "league": league,
             "title": p.get("title"),
             "ids": p["ids"],

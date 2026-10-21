@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, live, match, registry, sports
-from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot
+from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, PlayerRef, Snapshot, Stream
 from sports_follow.adapters.base import DIGITS
 from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
 
@@ -231,6 +231,21 @@ def test_a_game_nobody_follows_is_live_nows_until_its_own_read_comes(db, redis, 
 
 
 @needs_db
+def test_where_to_watch_a_game_comes_with_its_read_the_organisers_main_broadcast_first(db, redis, source):
+    source.live = [game()]
+    live.read("pitch", NOW)
+    assert match.view(db, "fan", "pitch", "100", NOW)[0]["streams"] == []  # Live now's copy: none till its read
+    source.game = game()
+    source.game.streams = [Stream("https://www.twitch.tv/costreamer", "es"), Stream("https://kick.com/league_en", "en", official=True, main=True),
+                           Stream("ftp://example.com/x", "en", official=True, main=True)]
+    match.read("pitch", "100", NOW + timedelta(seconds=10))
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=20))
+    assert [(s["platform"], s["language_name"], s["official"], s["embed"]) for s in page["streams"]] == [
+        ("Kick", "English", True, {"player": "kick", "id": "league_en"}), ("Twitch", "Spanish", False, {"player": "twitch", "id": "costreamer"})]
+    assert json.loads(redis["match:pitch:100"])["game"]["streams"][0] == {"url": "https://www.twitch.tv/costreamer", "language": "es", "official": False, "main": False}
+
+
+@needs_db
 def test_a_game_no_source_has_named_isnt_one(db, redis, source):
     assert match.view(db, "fan", "pitch", "404", NOW) == (None, False)  # not on Live now, never read, nobody's
     source.game = None
@@ -278,6 +293,31 @@ def test_a_followed_players_game_is_their_live_cards_with_the_moments_found_in_i
     source.game.fixtures = ["100", "101"]
     match.read("pitch", "101", NOW)
     assert match.view(db, "fan", "pitch", "101", NOW + timedelta(seconds=40))[0]["event_ids"] == [40]
+
+
+SERIES = {"kind": "esports", "teams": [{"id": "10", "name": "Team Spirit"}, {"id": "20", "name": "Team Yandex"}],
+          "maps": [{"n": 1, "status": "finished", "winner": "10"}, {"n": 2, "status": "running", "winner": None}]}
+
+
+@needs_db
+def test_a_reads_detail_shows_under_a_followed_players_newer_card(db, redis, source):
+    """A poll carries no map detail (each poll's state is stored and sent to every card); the game's own read
+    does (a Dota 2 map's draft and gold), and it shows under the followed player's newer board."""
+    maps = [{"n": 1, "events": [{"t": 88, "clock": "1:28", "title": "First blood to Spirit", "note": None, "team": "10", "mark": None}]}]
+    teams = [{"id": "10", "name": "Team Spirit", "short": "Spirit"}, {"id": "20", "name": "Team Yandex", "short": "Yandex"}]
+    source.game = LiveGame(source_id="100", title="Team Spirit vs Team Yandex", competition="BLAST Slam", start_utc=NOW, teams=["Team Spirit", "Team Yandex"],
+                           snapshot=Snapshot(status="live", score_label="1–0", clock_label="Map 2", state={**SERIES, "page_detail": {"teams": teams, "maps": maps}}))
+    match.read("pitch", "100", NOW)
+    db.add_all([Player(id=5, slug="yatoro", name="Yatoro", sport="Dota 2"),
+                Event(id=40, key="pitch:100", sport="Dota 2", title="Team Spirit vs Team Yandex", competition="BLAST Slam", status="live", start_utc=NOW)])
+    db.flush()
+    block = {"is_live": True, "event_id": 40, "event": "Team Spirit vs Team Yandex", "competition": "BLAST Slam", "score": "1–0", "clock": "Map 2 · 3:10",
+             "state": SERIES, "moments": [], "source": "Pitch", "as_of": (NOW + timedelta(seconds=30)).isoformat()}
+    db.add_all([PlayerCard(player_id=5, status="ready", card={"live": block}, is_live=True), EventPlayer(event_id=40, player_id=5)])
+    db.commit()
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    assert page["live"]["clock"] == "Map 2 · 3:10"  # the card's board: newer than the read
+    assert page["page"]["detail"] == {"maps": maps} and page["page"]["teams"] == teams
 
 
 def card(minute: int) -> dict:

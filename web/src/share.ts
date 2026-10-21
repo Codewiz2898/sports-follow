@@ -4,7 +4,8 @@
 // link and a title are all that's shared. Free of the browser: the Android app shares from it (mobile/).
 
 import { shortName } from './format'
-import type { WeekPoster } from './types'
+import { questionPath, shareText } from './predictions'
+import type { FeedItem, FriendLeague, Prediction, WeekPoster } from './types'
 
 /** A page to share: its path on the site, the title it's shared with, and what its button says. */
 export interface Shared { path: string; title: string; label: string }
@@ -28,6 +29,11 @@ export function shareTeam(id: number, name: string, app: string): Shared {
   return { path: `/team/${id}`, title: `${name} on ${app}`, label: `Share ${name}` }
 }
 
+/** An item of a player's Feed: their Feed tab, shared with the item's title. */
+export function shareFeedItem(playerId: number, item: Pick<FeedItem, 'title'>): Shared {
+  return { path: `/player/${playerId}?tab=feed`, title: item.title, label: 'Share' }
+}
+
 /** A This week poster: its game (/player/<id>?g=<event id>), whose link previews this moment; the player's page when it has no game. */
 export function sharePoster(poster: WeekPoster): Shared {
   const game = poster.event_id != null ? `?g=${poster.event_id}` : ''
@@ -36,4 +42,14 @@ export function sharePoster(poster: WeekPoster): Shared {
     title: `${poster.word}: ${poster.player}`,
     label: `Share ${shortName(poster.player)}'s ${poster.word.toLowerCase()}`,
   }
+}
+
+/** A question fans call (predictions.ts): its address, whose link previews how fans split on it. */
+export function shareQuestion(q: Prediction): Shared {
+  return { path: questionPath(q), title: shareText(q), label: 'Share the split' }
+}
+
+/** A league's invite: its link (/j/<code>) opens the page to join it. */
+export function shareInvite(league: Pick<FriendLeague, 'code' | 'name'>, app: string): Shared {
+  return { path: `/j/${league.code}`, title: `Join ${league.name} on ${app}: call the games with us`, label: `Share ${league.name}'s invite` }
 }

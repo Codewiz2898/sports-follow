@@ -36,6 +36,26 @@ def spellings(text: str) -> list[list[str]]:
     return [plain] if native == plain else [plain, native]
 
 
+# How much of a description says who and what it's about: its first paragraph, up to the first blank line or a
+# line with a link in it, and no more than this many characters (cut at a word). What's under it (related videos,
+# podcasts, a channel's own links and sponsors) is about someone or something else.
+LEAD_MAX = 300
+_LINK = re.compile(r"https?://|www\.", re.I)
+
+
+def lead(description: str) -> str:
+    """A description's opening (LEAD_MAX)."""
+    kept: list[str] = []
+    for line in (description or "").strip().splitlines():
+        if not line.strip() or (kept and _LINK.search(line)):
+            break
+        kept.append(line)
+    text = "\n".join(kept)
+    if len(text) <= LEAD_MAX:
+        return text
+    return text[:LEAD_MAX].rstrip() if text[LEAD_MAX].isspace() else text[: LEAD_MAX + 1].rsplit(None, 1)[0]
+
+
 def team_key(name: str) -> str:
     """A team name reduced for exact comparison: "Australia 'A'" == "australia a"; never a substring match."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", fold(name)).split())

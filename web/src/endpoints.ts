@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, FollowedMatch, FollowedTeam, FollowTarget, Form, GameDetail, League, LiveSport, Match, Me, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedPage, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -64,6 +64,19 @@ export function endpoints(request: Request) {
     pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
     activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
     week: () => request<{ posters: WeekPoster[]; wire: WireRow[] }>('/api/me/week'),
+    // A player's Feed (sports_follow/feed.py), and what the fan says about an item there.
+    feed: (playerId: number) => request<Feed>(`/api/players/${playerId}/feed`),
+    feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
+      request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
+    // The fan's own Feed, a page at a time (feed.page): the next after `cursor`, one player's with `player`; days are
+    // the device's. limit 0: the circles, the count and the newest only.
+    myFeedPage: ({ cursor, player, limit }: { cursor?: string | null; player?: number | null; limit?: number } = {}) => {
+      const q = new URLSearchParams({ tz: String(-new Date().getTimezoneOffset()) })
+      if (cursor) q.set('cursor', cursor)
+      if (player != null) q.set('player', String(player))
+      if (limit != null) q.set('limit', String(limit))
+      return request<FeedPage>(`/api/me/feed/items?${q}`, { cache: 'no-store' })
+    },
     mutes: () => request<{ event_ids: number[] }>('/api/me/mutes'),
     mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
     config: () => request<ServerConfig>('/api/config'),
@@ -77,7 +90,23 @@ export function endpoints(request: Request) {
     /** Follow a whole team on a campaign page (its roster's players), or all of its own players, in one call. */
     campaignFollow: (slug: string, which: { team: string } | { players: true }) =>
       request<{ player_ids: number[]; failed: number }>(`/api/campaigns/${encodeURIComponent(slug)}/follow`, json('POST', which)),
+    // Calling games (sports_follow/predictions.py): a pick on a question, or taking it back, while it's open; today's calls.
+    pick: (questionId: number, option: string) => request<{ question: Prediction }>(`/api/predictions/${questionId}/pick`, json('PUT', { option })),
+    unpick: (questionId: number) => request<{ question: Prediction }>(`/api/predictions/${questionId}/pick`, { method: 'DELETE' }),
+    myPredictions: () => request<MyPredictions>('/api/me/predictions'),
+    // Leagues of friends: making or joining one needs an account (a 401 says so).
+    myLeagues: () => request<{ leagues: FriendLeagueSummary[] }>('/api/me/leagues'),
+    makeLeague: (name: string, member: string) => request<{ league: FriendLeague }>('/api/leagues', json('POST', { name, member })),
+    friendLeague: (code: string) => request<{ league: FriendLeague }>(`/api/leagues/${encodeURIComponent(code)}`),
+    leagueInvite: (code: string) => request<{ invite: LeagueInvite }>(`/api/leagues/${encodeURIComponent(code)}/invite`),
+    joinLeague: (code: string, member: string) => request<{ league: FriendLeague }>(`/api/leagues/${encodeURIComponent(code)}/join`, json('POST', { member })),
+    leaveLeague: (code: string) => request<{ left: boolean }>(`/api/leagues/${encodeURIComponent(code)}/me`, { method: 'DELETE' }),
+    leagueShared: (code: string) => request<{ ok: boolean }>(`/api/leagues/${encodeURIComponent(code)}/shared`, { method: 'POST' }),
     /** Where this fan came from: the first link's tags (s=, utm_…) and its page; the server keeps the first. */
     visitSource: (tags: Record<string, string>, path: string) => request<{ ok: boolean }>('/api/me/source', json('POST', { ...tags, path })),
   }
 }
+
+/** The site's page of a stream's player alone (sports_follow/watch.py's page), for a stream's `embed`: the Android
+ * app shows it over the whole screen, as Twitch's player must sit in a page on the site it's told. */
+export const watchPage = (embed: { player: string; id: string }) => `/watch/${encodeURIComponent(embed.player)}/${encodeURIComponent(embed.id)}`

@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import controls, sports
 from ..config import SOURCES
-from .base import Absence, Adapter, AdapterError, Fixture, Line, LiveGame, LiveSearch, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam
+from .base import Absence, Adapter, AdapterError, Article, Fixture, Line, LiveGame, LiveSearch, NewsSource, PlayerRef, Provider, Roster, Rostered, SearchResult, Snapshot, SourceTeam, Stream, Upload, VideoFacts, VideoSource
 from .espn_basketball import EspnBasketball
 from .espn_cricket import EspnCricket
 from .espn_soccer import EspnSoccer
@@ -20,8 +20,10 @@ from .lichess_chess import LichessChess
 from .liquipedia_esports import LiquipediaEsports
 from .pandascore_esports import PandascoreEsports
 from .pubg_esports import PubgEsports
+from .publisher_rss import PublisherRss
 from .sportmonks_cricket import SportmonksCricket
 from .sportmonks_football import SportmonksFootball
+from .youtube import YouTube
 
 # Every source, in order of preference where two serve a sport: for_sport() picks the first that runs.
 # Licensed sources run only with a token, so where both run (a development build) football and cricket
@@ -42,6 +44,37 @@ KNOWN: dict[str, Adapter] = {a.system: a for a in (
 )}
 # The ones this build can run.
 ALL: tuple[Adapter, ...] = tuple(a for a in KNOWN.values() if a.available())
+# Every source of videos about players, for the feed (curator.py). Each takes the channels of its own shape
+# that a sport lists (Sport.video_channels); like KNOWN, adding one is its module plus an entry here.
+VIDEOS: dict[str, VideoSource] = {v.system: v for v in (
+    YouTube(),
+)}
+# Every source of stories about players, for the feed (news.py). Each takes the feeds of its own shape that a sport
+# lists (Sport.news_feeds); like VIDEOS, adding one is its module plus an entry here.
+NEWS: dict[str, NewsSource] = {n.system: n for n in (
+    PublisherRss(),
+)}
+
+
+def videos() -> list[VideoSource]:
+    """The video sources that run now: this build can run them (their key), SPORTS_FOLLOW_SOURCES lists them
+    (or lists none), and the admin panel hasn't turned them off. Which sports' channels they read is the
+    curator's: those of the sports that run."""
+    off = controls.current().sources_off
+    return [v for v in VIDEOS.values() if v.available() and (not SOURCES or v.system in SOURCES) and v.system not in off]
+
+
+def news() -> list[NewsSource]:
+    """The news sources that run now, as videos() says of video sources. Which sports' feeds they read is the
+    curator's: those of the sports that run."""
+    off = controls.current().sources_off
+    return [n for n in NEWS.values() if n.available() and (not SOURCES or n.system in SOURCES) and n.system not in off]
+
+
+def feed_source(system: str) -> VideoSource | NewsSource | None:
+    """The feed's source a stored row names (FeedCandidate.source): a video source or a news source, which says what
+    its rows are (kind) and where (platform); None for one no longer known."""
+    return VIDEOS.get(system) or NEWS.get(system)
 
 
 def pick(adapters: tuple[Adapter, ...], sources: set[str], enabled: Sequence[sports.Sport] = sports.ALL) -> dict[str, Adapter]:
@@ -139,6 +172,7 @@ def source_name(system: str) -> str:
 
 
 __all__ = [
-    "ADAPTERS", "ALL", "KNOWN", "Absence", "Adapter", "AdapterError", "Fixture", "Line", "LiveGame", "LiveSearch", "PlayerRef", "Provider", "SourceTeam",
-    "Roster", "Rostered", "SearchResult", "Snapshot", "for_sport", "pick", "providers", "serving", "source_name",
+    "ADAPTERS", "ALL", "KNOWN", "NEWS", "VIDEOS", "Absence", "Adapter", "AdapterError", "Article", "Fixture", "Line", "LiveGame", "LiveSearch", "NewsSource", "PlayerRef",
+    "Provider", "SourceTeam", "Roster", "Rostered", "SearchResult", "Snapshot", "Stream", "Upload", "VideoFacts", "VideoSource", "feed_source", "for_sport", "news", "pick",
+    "providers", "serving", "source_name", "videos",
 ]

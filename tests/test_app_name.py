@@ -1,8 +1,10 @@
 """The app's name as fans see it is written once, in sports_follow/app.json (config.APP_NAME), so the next
 rename is a one-line change (README, "Renaming the app"). The API reads it there; the web build fills it
 in for %APP_NAME% (web/vite.config.ts) and APP_NAME (web/src/app.ts); mobile/app.config.ts gives it to
-the Android app, whose code reads it from Expo's config (android/generate.mjs, to the old TWA). These tests fail if anything fans see writes the name out itself. Comments don't count,
-and nor does the domain ("stann.in"), which is a different setting."""
+the Android app, whose code reads it from Expo's config, and mobile/babel.config.js fills in web/src/app.ts
+for the shared code the app loads (android/generate.mjs, to the old TWA). These tests fail if anything fans see writes the name out itself. Comments don't count,
+and nor does the domain ("stann.in"), which is a different setting, or a sport's own word that has the name in
+it (tennis's "Grand Slam")."""
 
 from __future__ import annotations
 
@@ -20,8 +22,8 @@ from tests.test_api import api  # noqa: F401  (the fixture)
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "sports_follow"
 WEB = ROOT / "web"
-# The name as a word of its own, not part of an address ("stann.in") or a longer word.
-NAME = re.compile(rf"(?<![\w.@-]){re.escape(APP_NAME)}(?![\w@-]|\.\w)", re.I)
+# The name as a word of its own, not part of an address ("stann.in"), a longer word or a Grand Slam.
+NAME = re.compile(rf"(?<![\w.@-])(?<!grand ){re.escape(APP_NAME)}(?![\w@-]|\.\w)", re.I)
 # A comment in TypeScript, or a one-line string (kept, so a "//" inside a string isn't a comment).
 TS_COMMENTS = re.compile(r"""//[^\n]*|/\*.*?\*/|(["'`])(?:\\.|(?!\1)[^\\\n])*\1""", re.S)
 
@@ -57,6 +59,60 @@ def test_the_android_apps_code_takes_the_name_from_config():
         code = without_comments(path.read_text())
         found += [f"mobile/{path.relative_to(ROOT / 'mobile').as_posix()}: {m[0]!r}" for m in NAME.finditer(code)]
     assert not found, "Use Constants.expoConfig.name (from mobile/app.config.ts) instead of writing the name out:\n" + "\n".join(found)
+
+
+# An import of a relative path, in any form: `import x from './a'`, `export * from '../b'`, `import './c'`.
+IMPORT = re.compile(r"""(?:\bfrom|\bimport)\s*['"](\.{1,2}/[^'"]+)['"]""")
+DEFINE = re.compile(r"\bdeclare\s+const\s+(__\w+__)")
+
+
+def _module(base: Path, spec: str) -> Path | None:
+    target = (base / spec).resolve()
+    for path in (target, target.with_name(target.name + ".ts"), target.with_name(target.name + ".tsx"), target / "index.ts", target / "index.tsx"):
+        if path.is_file():
+            return path
+    return None
+
+
+def test_the_android_app_defines_what_the_web_code_it_loads_reads():
+    """The app loads some of web/src (mobile/CLAUDE.md, "Share, don't copy"). What Vite fills in at build time
+    (a `declare const __X__`, import.meta) doesn't exist in the app unless mobile/babel.config.js defines it: an
+    app that reads one stops on its first screen, and the type-check can't tell."""
+    seen: set[Path] = set()
+    todo = [p for p in (ROOT / "mobile" / "src").rglob("*") if p.suffix in (".ts", ".tsx")]
+    while todo:
+        path = todo.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for spec in IMPORT.findall(without_comments(path.read_text())):
+            found = _module(path.parent, spec)
+            if found and found.is_relative_to(ROOT / "web" / "src"):
+                todo.append(found)
+    shared = sorted(p for p in seen if p.is_relative_to(ROOT / "web" / "src"))
+    assert ROOT / "web" / "src" / "app.ts" in shared  # through share.ts and predictions.ts
+    babel = ROOT / "mobile" / "babel.config.js"
+    defined = babel.read_text() if babel.is_file() else ""
+    missing, meta = [], []
+    for path in shared:
+        code = without_comments(path.read_text())
+        rel = path.relative_to(ROOT).as_posix()
+        missing += [f"{rel}: {name}" for name in DEFINE.findall(code) if f"'{name}'" not in defined]
+        meta += [rel] * ("import.meta" in code)
+    assert not missing, "mobile/babel.config.js doesn't define what the app's shared code reads:\n" + "\n".join(missing)
+    assert not meta, "Shared code the Android app loads reads import.meta, which only Vite fills in:\n" + "\n".join(meta)
+
+
+def test_the_android_apps_own_link_and_site_are_the_configs():
+    """mobile/app.config.ts says the app's own link (its scheme) and the site; the notifications module (Kotlin)
+    and src/api.ts can't read it there, so they say them again, and a rename has to change all three."""
+    config = (ROOT / "mobile" / "app.config.ts").read_text()
+    scheme, site = re.search(r"\bscheme: '([a-z][a-z0-9.+-]*)'", config), re.search(r"\bconst SITE = '([^']+)'", config)
+    assert scheme and site
+    kotlin = ROOT / "mobile" / "modules" / "stann-notifications" / "android" / "src" / "main" / "java" / "io" / "stann" / "notifications"
+    assert f'Uri.parse("{scheme[1]}://"' in (kotlin / "Cards.kt").read_text(), "Cards.kt opens the app by another scheme"
+    assert f'DEFAULT_API = "https://{site[1]}"' in (kotlin / "Settings.kt").read_text(), "Settings.kt's DEFAULT_API isn't the site"
+    assert f"'https://{site[1]}'" in (ROOT / "mobile" / "src" / "api.ts").read_text(), "src/api.ts's API_URL isn't the site"
 
 
 def test_the_android_app_is_named_by_generate_mjs():

@@ -69,6 +69,23 @@ class Found:
     about: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Fired:
+    """A player's moment as the feed's moment search reads it (searches.py, Sport.search_words): the moment as it
+    was stored, how many of its kind the player has in this game so far (this one too: a second goal is 2), and
+    the game it was in, as its fixture names it."""
+
+    kind: str
+    detail: str
+    title: str
+    body: str
+    priority: int
+    count: int = 1
+    game: str = ""  # the game's title: "India vs England"
+    competition: str = ""
+    venue: str = ""
+
+
 # The statuses of a game not under way yet.
 PRE_MATCH = ("scheduled", "armed", "postponed")
 EVERYONE = ("*",)
@@ -138,6 +155,25 @@ class Glance:
     marks: list[tuple[float, int]] = field(default_factory=list)
 
 
+# The answer to a question that won't have one (Sport.answer): a map never played, a game called off.
+VOID = "void"
+
+
+@dataclass(frozen=True)
+class Ask:
+    """A question fans call before a game, or a part of it, starts (predictions.py, Sport.asks): which one it is in
+    the game ("result", "map2"), its words ("Who wins?"), the answers to pick from as (key, label), each key a side's
+    id in the game's source or a word ("draw"), and where it comes in the game's list. A `first` question closes
+    when the game starts (its start time closes it too, should a poll be late); a later one (map 2) when its part
+    of the game does."""
+
+    key: str
+    title: str
+    options: tuple[tuple[str, str], ...]
+    order: int = 0
+    first: bool = True
+
+
 # How late in a competition a game is, from its stage's words, latest first: "Grand final", "Upper bracket
 # final: SEN vs 100T", "Semi-finals", "Qualifier 1". A semi's or a quarter's "finals" isn't a final, so
 # those are read first.
@@ -195,6 +231,16 @@ def stat(line: dict[str, Any] | None, label: str) -> str | None:
 def number(value: str | None) -> int:
     match = re.match(r"\s*(\d+)", value or "")
     return int(match.group(1)) if match else 0
+
+
+def words(*parts: str | None) -> str:
+    """The parts that say something, in one line: a moment search's words (Sport.search_words)."""
+    return " ".join(p.strip() for p in parts if p and p.strip())
+
+
+def ground(venue: str | None) -> str:
+    """A venue as a search names it: "Lord's", not "Lord's, London"."""
+    return (venue or "").split(",")[0].strip()
 
 
 def crossed(before: int, now: int, marks: tuple[int, ...]) -> list[int]:
@@ -320,6 +366,15 @@ class Sport:
             return age is None or age <= self.retire_age
         current = teams and ((latest_start is not None and latest_start.year >= today.year - 10) or (age is not None and age <= 38))
         return current or (age is not None and age <= 30)
+
+    # ---- the profile on a player's page, from their Wikidata person (wiki.py)
+
+    profile_nation: tuple[str, ...] = ("P1532", "P27")  # the country they compete for, else their citizenship
+    profile_role: tuple[str, ...] = ("P413",)  # what the page calls their role: position played ("forward", "batter")
+    # Awards worth naming on the page (Wikidata's "award received"), by item, and what the page calls each.
+    # Two items with one name (FIFA Ballon d'Or and Ballon d'Or) are counted together. Only awards Wikidata
+    # records reliably, with the year of each, go here: a list of every honour is the article's to give.
+    honours: dict[str, str] = {}
 
     # ---- the registry, for a sport whose athletes come from its sources' lists (roster): who on Wikidata
     # is one of its people, so each athlete's Wikidata person, and their photo, can be found (roster_wikidata.py)
@@ -564,6 +619,32 @@ class Sport:
     side_by_side = False
     engine = False  # live positions are evaluated by our engine (chess)
 
+    # ---- predictions (predictions.py): what fans call before a game, read off its board (Snapshot.state)
+
+    predicts = False  # it asks fans to call its games (asks): the worker reads its games coming up ahead, to ask in time
+
+    def board(self, state: dict[str, Any]) -> str:
+        """The game as its board tells it apart, where one game is under several fixtures (a chess board is one of
+        each player's): an id they share, so its questions are one set whichever address asks. "" where the
+        fixture is the game."""
+        return ""
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """The questions fans may call about this game, from its board before it starts: none, for a sport that
+        asks nothing (yet)."""
+        return []
+
+    def closed(self, ask: str, status: str | None, state: dict[str, Any]) -> bool:
+        """Whether a question's picks are closed, by the board: the game, or the part of it the question's about,
+        has started."""
+        return status in ("live", "final")
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """A question's answer, once the board says it: an option's key; VOID when it won't have one (a map the
+        series didn't need); None while it's still to come. A game called off waits for its new date: one that
+        never comes is voided by predictions.sweep."""
+        return None
+
     # ---- form (form.summarize)
 
     draws = False  # a record always shows draws (W–D–L), even with none
@@ -577,3 +658,42 @@ class Sport:
 
     def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
         return self.games
+
+    # ---- the Feed's content judge (curate.py)
+
+    # A video longer than this (seconds) from a channel nobody vouches for is taken for a re-upload of a whole game,
+    # and not shown; None where long videos are normal, for the judge's model to tell apart.
+    restream_after: int | None = 20 * 60
+
+    def content_hints(self) -> str:
+        """A few lines the content judge reads about this sport: what a milestone and a big moment are here, and
+        what's a promo, a rumour or a re-upload in its fans' world. "" for none: the judge's own rules alone."""
+        return ""
+
+    # ---- the feed (curator.py): videos about its players
+
+    # Channels it trusts for videos about its players (fan edits, analysis, interviews), by their ids where they
+    # post: a video source takes those of the shape its own channel ids have (VideoSource.channel_pattern). Each
+    # channel's new uploads that name a followed player of the sport are kept for the feed; a sport that's off
+    # has none read. Every id is a real one that answers (README.md, "Adding or removing").
+    video_channels: tuple[str, ...] = ()
+    # Publishers' feeds (RSS or Atom) it reads for stories about its players (news.py), each with the publisher's
+    # name as a story credits it: a news source takes those of the shape its feed addresses have
+    # (NewsSource.feed_pattern). Each feed's new stories that name a followed player of the sport are kept for the
+    # feed; a sport that's off has none read. Every address is a real feed that answers with headlines, links, dates
+    # and a short description (README.md, "Adding or removing"), never a search engine's feed of other sites.
+    news_feeds: dict[str, str] = {}
+
+    def video_words(self) -> str:
+        """Words that, after a player's name, find videos about them on a video source's search when there's no moment
+        to name (sweeps.py: a player with nothing to watch this week, and their most watched ever): the sport as its
+        fans' titles name it ("cricket", "Valorant"), so the search finds this player and not a namesake. "" for the
+        name alone."""
+        return ""
+
+    def search_words(self, fired: Fired) -> str | None:
+        """Words that, after the player's name, find fans' videos of this moment on a video source's search: "hundred
+        Lord's", "brace Liverpool vs Everton", "wins game 4". None for a moment not worth a search (most aren't:
+        each one is a hundredth of a day's quota). The feed searches once a few hours after the moment, and again
+        a day later (searches.py)."""
+        return None

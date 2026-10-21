@@ -64,7 +64,7 @@ export function useLive(): LiveSport[] {
 type Follow = ReturnType<typeof useFollowToggle>
 
 /** A game's players to follow, each with a tap (.follow-pill), filled in their sport's colour once followed (the
- * server puts those already on stann first): a live card's, or one side's on a match page. */
+ * server puts those already on the app first): a live card's, or one side's on a match page. */
 export function FollowPills({ game, sport, follow }: { game: Pick<LiveGame, 'title' | 'players'>; sport: string; follow: Follow }) {
   const tone = toneOf(useSports(), sport)
   if (!game.players.length) return null

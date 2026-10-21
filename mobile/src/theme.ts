@@ -1,4 +1,4 @@
-// stann's look, the web app's own (web/src/styles.css, "Matchday"): a light paper ground, ink type, and each
+// The app's look, the web app's own (web/src/styles.css, "Matchday"): a light paper ground, ink type, and each
 // sport's colour as a solid block. Red means "happening now" and nothing else. The values here are that
 // stylesheet's; each sport's colours come from the server (sports.tsx), never from here.
 
@@ -24,7 +24,7 @@ export const colour = {
 export const font = {
   display: 'Anton_400Regular',
   slanted: 'AntonSlanted', // Anton leaning 7 degrees (scripts/slant_font.py): Android draws a skewed Text upright
-  logo: 'Fredoka_600SemiBold',
+  logo: 'Fredoka_600SemiBold', // the name, in lower case like the badge's "s" (web/src/styles.css .brand)
   500: 'Manrope_500Medium',
   600: 'Manrope_600SemiBold',
   700: 'Manrope_700Bold',

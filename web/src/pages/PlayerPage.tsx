@@ -1,23 +1,26 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAccount } from '../account'
 import { APP_NAME } from '../app'
 import { useActivity } from '../activity'
-import { api, subscribe, type Card, type StreamEvent } from '../api'
+import { api, subscribe, type Card, type Feed, type StreamEvent } from '../api'
 import { useNow } from '../clock'
 import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
+import { FeedTab, FromTheFans, useFeed } from '../components/Feed'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ShareButton } from '../components/Share'
-import { day, outcome, playedOn, relative, shortName } from '../format'
-import { bareScore, lastChecked, liveLag, liveUpdates, nextGame } from '../lines'
+import { day, outcome, playedOn, relative, safeHref, shortName } from '../format'
+import { bareScore, lastChecked, liveLag, liveUpdates, newsOf, nextGame, pendingLine, profileFacts } from '../lines'
 import { sharePlayer } from '../share'
 import { sportName } from '../sports'
 import { useFollowing } from '../following'
 import { AlertLevels, LEVELS, levelText } from '../notifications'
 
-type Tab = 'overview' | 'matches' | 'stats' | 'news'
+type Tab = 'overview' | 'matches' | 'stats' | 'feed'
+// ?tab=feed opens the Feed (Today's "From your players" links there).
+const firstTab = (asked: string | null): Tab => (asked === 'feed' ? 'feed' : 'overview')
 
 /**
  * One player's page, always from the full card: the Following list only carries summaries (no stats,
@@ -28,6 +31,8 @@ export function PlayerPage() {
   const params = useParams()
   const playerId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
   const navigate = useNavigate()
+  const [search] = useSearchParams()
+  const asked = search.get('tab')
   const following = useFollowing()
   const isFollowing = following.isFollowing(playerId)
   const { listen } = following
@@ -39,7 +44,7 @@ export function PlayerPage() {
   const [progress, setProgress] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)  // a follow, retry or alert change the server refused
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<Tab>(() => firstTab(asked))
   const [matches, setMatches] = useState<MatchesView | null>(null)
   const [alertsOpen, setAlertsOpen] = useState(false)
   const { muted, setMuted } = useActivity()
@@ -52,7 +57,7 @@ export function PlayerPage() {
     setProgress([])
     setError(null)
     setFailure(null)
-    setTab('overview')
+    setTab(firstTab(asked))
     setMatches(null)
     if (!Number.isFinite(playerId)) {
       setError('No such player.')
@@ -65,7 +70,8 @@ export function PlayerPage() {
       setShown(playerId)
     }).catch((e: Error) => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
-  }, [playerId])
+  }, [playerId])  // not on asked: that only picks the tab a new page opens on
+  useEffect(() => { if (asked === 'feed') setTab('feed') }, [asked])  // a link to this page's Feed, while on it
 
   // Once the card is in. A followed player's updates ride the fan stream the app holds anyway: a
   // second stream per page would let three tabs use all six of a browser's HTTP/1.1 connections.
@@ -89,6 +95,9 @@ export function PlayerPage() {
     const stop = isFollowing ? listen(onEvent) : subscribe(`/api/players/${playerId}/stream`, onEvent)
     return () => { stale = true; stop() }
   }, [shown, playerId, isFollowing, listen, navigate])
+
+  // The Feed reads rows, never a model: it loads with the page, for Overview's "From the fans" and the tab.
+  const feed = useFeed(playerId, card?.player.name ?? '', (card ? newsOf(card) : []).map((n) => n.url).join(' '))
 
   if (error) return <div className="error-box">{error}</div>
   if (!card) return <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
@@ -114,8 +123,8 @@ export function PlayerPage() {
   }
 
   const tabs: [Tab, string][] = retired
-    ? [['overview', 'Overview'], ['stats', 'Career'], ['matches', 'Results'], ['news', 'News']]
-    : [['overview', 'Overview'], ['matches', 'Matches'], ['stats', 'Stats'], ['news', 'News']]
+    ? [['overview', 'Overview'], ['stats', 'Career'], ['matches', 'Results'], ['feed', 'Feed']]
+    : [['overview', 'Overview'], ['matches', 'Matches'], ['stats', 'Stats'], ['feed', 'Feed']]
 
   return (
     <>
@@ -167,7 +176,7 @@ export function PlayerPage() {
         <>
           {card.pending && (
             <p className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="spinner" />Scores and fixtures are live. Still gathering news and background, about two minutes.
+              <span className="spinner" />{pendingLine(card)}
             </p>
           )}
           {card.pending_error && <p className="small muted">News and background couldn't be gathered: {card.pending_error}</p>}
@@ -179,10 +188,10 @@ export function PlayerPage() {
           </div>
 
           <ErrorBoundary fallback={<BlockError />} resetKey={`${tab}:${card.version}`}>
-            {tab === 'overview' && <Overview card={card} show={(t, view) => { setTab(t); setMatches(view ?? null) }} onError={setFailure} />}
+            {tab === 'overview' && <Overview card={card} feed={feed.feed} show={(t, view) => { setTab(t); setMatches(view ?? null) }} onError={setFailure} />}
             {tab === 'matches' && <Matches card={card} view={matches} setView={setMatches} />}
             {tab === 'stats' && <div className="section"><StatsWithForm card={card} /></div>}
-            {tab === 'news' && <NewsList items={card.news ?? []} empty="No recent news found." />}
+            {tab === 'feed' && <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} photo={p.photo} now={now} onHide={feed.hide} />}
           </ErrorBoundary>
 
           <p className="tiny muted">
@@ -196,7 +205,7 @@ export function PlayerPage() {
 }
 
 /** The first tab: what's happening now or next, the last game, form, the key numbers and the news. */
-function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
+function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null; show: (t: Tab, view?: MatchesView) => void; onError: (message: string) => void }) {
   // Without the research agent (GET /api/config) a page no source updates stays as it was found.
   const research = useAccount().config?.research !== false
   const p = card.player
@@ -212,6 +221,7 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
   const { muted, setMuted } = useActivity()
   // "Won 133–128" is a score once the badge says won; "West Indies won by 5 wkts" stays a sentence.
   const score = last && bareScore(last.result)
+  const facts = profileFacts(p)
 
   return (
     <>
@@ -269,6 +279,8 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
         </section>
       )}
 
+      <FromTheFans feed={feed} name={p.name} sport={p.sport} now={now} onAll={() => show('feed')} />
+
       {marks.length >= 3 && (
         <div className="row card card-pad">
           <span className="stack" style={{ gap: 2 }}>
@@ -289,19 +301,26 @@ function Overview({ card, show, onError }: { card: Card; show: (t: Tab, view?: M
         </section>
       )}
 
-      {(card.news ?? []).length > 0 && (
+      {newsOf(card).length > 0 && (
         <section className="section" aria-label="News">
           <SectionHead title="News">
-            {(card.news ?? []).length > 2 && <button type="button" className="btn link" onClick={() => show('news')}>All news</button>}
+            {newsOf(card).length > 2 && <button type="button" className="btn link" onClick={() => show('feed')}>All news</button>}
           </SectionHead>
-          <NewsList items={(card.news ?? []).slice(0, 2)} brief empty="" />
+          <NewsList items={newsOf(card).slice(0, 2)} brief empty="" />
         </section>
       )}
 
-      {p.summary && (
+      {(p.summary || facts.length > 0) && (
         <section className="section" aria-label="About">
           <SectionHead title="About" />
-          <p style={{ maxWidth: '70ch' }}>{p.summary}</p>
+          {facts.length > 0 && <p className="small muted">{facts.join(' · ')}</p>}
+          {p.summary && <p style={{ maxWidth: '70ch' }}>{p.summary}</p>}
+          {p.summary && p.about && (
+            <p className="tiny muted">
+              From {safeHref(p.about.url) ? <a href={safeHref(p.about.url)} target="_blank" rel="noreferrer" className="link">{p.about.source}</a> : p.about.source}
+              {', '}<a href={safeHref(p.about.licence_url)} target="_blank" rel="noreferrer license" className="link">{p.about.licence}</a>
+            </p>
+          )}
           {p.disambiguation && <p className="tiny muted">{p.disambiguation}</p>}
         </section>
       )}

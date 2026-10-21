@@ -24,7 +24,8 @@ export interface AdminSource {
   budgets: string[]
 }
 
-export interface Window { seconds: number; requests: number; margin: number }
+/** zone: the time zone its windows start in, where the source's day isn't UTC's (its source's, never the panel's to set). */
+export interface Window { seconds: number; requests: number; margin: number; zone?: string | null }
 /** What a source may spend: its allowance a window, a margin never spent, a reserve kept for live games and fans, the fans' share, the pause after a 429. */
 export interface Limits { windows: Window[]; reserve: number; fan: number | null; pause: number }
 export interface Standing {
@@ -64,6 +65,8 @@ export interface LinearStatus {
 }
 
 export interface Overview { accounts: number; active_week: number; blocked: number; anonymous: number; devices: number }
+/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call another game day. */
+export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
 export interface AccountRow {
   id: number
   email: string
@@ -81,6 +84,69 @@ export interface AccountDetail extends AccountRow {
   alert_devices: { created_at: string; last_ok_at: string | null; timezone: string; failures: number }[]
 }
 
+/** What the Feed's judge said of a candidate (sports_follow/curate.py's Verdict). */
+export interface FeedVerdict {
+  about_player: 'subject' | 'mention' | 'no'
+  by: string
+  kind: string
+  interest: number
+  risks: string[]
+  sponsored: boolean
+  reason: string
+  stage: 'rules' | 'model'
+}
+export type Review = 'approved' | 'hidden' | 'pinned'
+/** A video the curator found about a player, with the judge's verdict, its score (null: never served) and an admin's word. */
+export interface FeedCandidateRow {
+  id: number
+  player: { id: number; name: string; sport: string }
+  url: string
+  video: { youtube_id: string } | null // how the app's player plays it (the source says); null: it can't
+  title: string
+  channel: string
+  channel_id: string
+  published: string | null
+  fetched_at: string
+  judged_at: string | null
+  views: number | null
+  likes: number | null
+  seconds: number | null
+  verdict: FeedVerdict | null
+  passes: boolean
+  score: number | null
+  review: Review | null
+  moment_id: number | null
+  served: boolean
+}
+/** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */
+export interface ChannelYield {
+  read: number
+  matched: number
+  kept: number
+  served: number
+  last_upload: string | null
+}
+/** A video channel: listed by a running sport or not, its trust as the panel set it (null: its default), and what fans said of its videos. */
+export interface FeedChannel {
+  channel_id: string
+  name: string
+  listed: boolean
+  trust: number | null
+  default: number
+  effective: number
+  candidates: number
+  served: number
+  feedback: number
+  yield: ChannelYield
+}
+export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed'
+export interface FeedPage {
+  candidates: FeedCandidateRow[]
+  next: number | null
+  totals: Record<string, number>
+  channels: FeedChannel[]
+}
+
 const at = (path: string) => `/api/admin/${path}`
 
 export const admin = {
@@ -95,8 +161,12 @@ export const admin = {
   setLimits: (name: string, limits: Limits) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', limits)),
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   linear: () => request<LinearStatus>(at('linear')),
+  feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
+  review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
+  channelTrust: (channel: string, trust: number | null) =>
+    request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
   users: (q: string, offset = 0) =>
-    request<{ overview: Overview; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
+    request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),
   signOut: (id: number) => request<{ signed_out: number }>(at(`users/${id}/signout`), { method: 'POST' }),
   block: (id: number, blocked: boolean) => request<{ blocked: boolean; signed_out: number }>(at(`users/${id}/block`), json('PUT', { blocked })),

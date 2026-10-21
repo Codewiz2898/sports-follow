@@ -10,11 +10,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from sports_follow import agent, search, sports
-from sports_follow.adapters import ADAPTERS, KNOWN, Provider, budget, providers, source_name
+from sports_follow.adapters import ADAPTERS, KNOWN, VIDEOS, Provider, budget, providers, source_name
 
 PACKAGE = Path(__file__).resolve().parent.parent / "sports_follow"
-# Every module in adapters/ is a source's, but what all of them share: what an adapter is, and the budget.
-SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base", "budget"}
+# Every module in adapters/ is a source's, but what all of them share: what an adapter is, the budget, and the
+# cache their answers are kept in (which Wikidata's and Wikipedia's are kept in too: wiki.py).
+SOURCE_MODULES = {p.stem for p in (PACKAGE / "adapters").glob("*.py")} - {"__init__", "base", "budget", "cache"}
 
 
 def test_every_source_describes_itself():
@@ -23,6 +24,11 @@ def test_every_source_describes_itself():
         assert adapter.name and adapter.covers and isinstance(adapter.provider, Provider), system
         assert not adapter.id_pattern.fullmatch(""), system
     assert {p.name for p, _ in providers(KNOWN)} == {"Sportmonks", "ESPN", "Lichess", "PandaScore", "Liquipedia", "PUBG"}
+    # The feed's video sources (adapters.VIDEOS) describe themselves too.
+    for system, source in VIDEOS.items():
+        assert source.system == system and system not in KNOWN and source.name and source.covers, system
+        assert isinstance(source.provider, Provider) and source.budgets(), system
+        assert not source.id_pattern.fullmatch("") and not source.channel_pattern.fullmatch(""), system
 
 
 def test_providers_keep_the_order_of_preference():
@@ -66,7 +72,7 @@ def _naming() -> Callable[[str], str | None]:
     other name, as written or in lower case) names the game, not a source ("pubg", "PUBG Mobile"), unless
     it's exactly a provider's name ("PUBG")."""
     provider_names = {p.name for p, _ in providers(KNOWN)}
-    systems = re.compile(rf"\b({'|'.join(KNOWN)})\b")
+    systems = re.compile(rf"\b({'|'.join([*KNOWN, *VIDEOS])})\b")  # the feed's video sources too
     names = sorted(provider_names | {b.name for b in budget.known()}, key=len, reverse=True)  # "lichess-anonymous" first
     by_name = re.compile(rf"\b({'|'.join(map(re.escape, names))})\b", re.I)
     written = {g for a in KNOWN.values() for g in getattr(a, "games", ())}
@@ -109,6 +115,12 @@ def test_no_shared_module_names_a_source():
         # A game's names are the game's, one its provider shares too ("PUBG", sports/esports.py's GAMES).
         games = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "Game"]
         skip |= {id(n) for g in games for n in ast.walk(g)}
+        # The platforms the Feed's judge knows (curate.Source, Literal["youtube", "x", …]) are where shares are, not sources.
+        platforms = [n for n in ast.walk(tree) if isinstance(n, ast.Subscript) and getattr(n.value, "id", None) == "Literal"]
+        skip |= {id(n) for p in platforms for n in ast.walk(p)}
+        # So are the platforms a game's broadcasts are on (watch.py's PLATFORMS: "YouTube"): where it's watched.
+        streamed = [n for n in ast.walk(tree) if path.name == "watch.py" and isinstance(n, ast.Assign) and [getattr(t, "id", None) for t in n.targets] == ["PLATFORMS"]]
+        skip |= {id(n) for p in streamed for n in ast.walk(p)}
         for node in ast.walk(tree):
             module = (getattr(node, "module", None) or "").split(".")
             if isinstance(node, ast.ImportFrom) and path in shared and node.level == 1:
@@ -152,7 +164,7 @@ def test_no_source_borrows_from_another():
     # What two sources of a sport share lives in sports/ (Sportmonks cricket once read ESPN's scorecard
     # parser), so removing one never breaks another. A provider's client module (espn, sportmonks) is
     # shared by its own adapters.
-    adapter_modules = {type(a).__module__.rsplit(".", 1)[-1] for a in KNOWN.values()}
+    adapter_modules = {type(a).__module__.rsplit(".", 1)[-1] for a in [*KNOWN.values(), *VIDEOS.values()]}
     found = []
     for name in adapter_modules:
         tree = ast.parse((PACKAGE / "adapters" / f"{name}.py").read_text())

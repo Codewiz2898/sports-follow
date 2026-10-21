@@ -50,6 +50,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.endsWith('/stream') || (req.headers.get('accept') || '').includes('text/event-stream')) return
 
   if (url.origin === self.location.origin) {
+    if (url.pathname.startsWith('/watch/')) return  // a stream's player alone (the Android app's), never the app's page
     if (req.mode === 'navigate') return event.respondWith(networkFirst(req, SHELL, '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, FILES))
     // A player's photo: its address is its content, so the copy kept is always right.
@@ -110,9 +111,10 @@ self.addEventListener('push', (event) => {
 })
 
 async function show(data) {
-  // With the app open and in front, the moment shows as a toast in the page instead.
+  // With the app open and in front, the moment shows as a toast in the page instead. A test, and a call's push
+  // ("Make your pick", how a pick went: sports_follow/predictions_push.py), have no toast: they show anyway.
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-  if (data.kind !== 'test' && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
+  if (!['test', 'pick', 'called'].includes(data.kind) && windows.some((w) => w.focused && w.visibilityState === 'visible')) return
   await self.registration.showNotification(data.title || '%APP_NAME%', options(data))
   return badge()
 }

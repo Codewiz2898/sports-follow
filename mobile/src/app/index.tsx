@@ -1,7 +1,7 @@
 // Today, the web's TodayPage.tsx: the day and the app's name, the fan's players as a strip, their live games as
 // scoreboards (each opening its match page) and the games they follow by themselves, a link to everything else
-// on now (the Live page), their results and their games coming up with the league's big ones after them, this
-// week's big moments and the Wire, and players to follow while they follow few. A fan with no players and no
+// on now (the Live page), their results, the two best of their Feed (post.tsx), their games coming up
+// with the league's big ones after them, this week's big moments and the Wire, and players to follow while they follow few. A fan with no players and no
 // games gets the welcome first, once.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -28,6 +28,7 @@ import { PlayersStrip } from '../today/strip'
 import { ThisWeek, useWeek, Wire } from '../today/week'
 import { Btn, Eyebrow, Notice } from '../ui'
 import { Page } from '../page'
+import { FromYourPlayers } from '../post'
 import { useWelcomed } from '../welcome'
 import { LoadFailed } from '../today/load'
 
@@ -47,7 +48,7 @@ function Head({ now }: { now: number }) {
         <Eyebrow>{today}</Eyebrow>
         <View accessibilityRole="header" accessibilityLabel={NAME} style={{ flexDirection: 'row', alignItems: 'center', gap: size * 0.18 }}>
           <Image source={require('../../../web/public/icons/mark-192.png')} style={{ width: size * 0.95, height: size * 0.95 }} />
-          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text }}>{NAME}</Text>
+          <Text style={{ fontFamily: font.logo, fontSize: size, lineHeight: size * 1.1, letterSpacing: -size * 0.01, color: colour.text, textTransform: 'lowercase' }}>{NAME}</Text>
         </View>
       </View>
       <View style={{ flexDirection: 'row', gap: 8, paddingBottom: 4 }}>
@@ -132,6 +133,7 @@ export default function TodayScreen() {
   const { cards, loaded, failed, matches, matchesLoaded, teams } = following
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
+  const [pulled, setPulled] = useState(0)
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
@@ -149,6 +151,7 @@ export default function TodayScreen() {
 
   const refresh = async () => {
     setRefreshing(true)
+    setPulled((n) => n + 1)
     await Promise.all([following.reload(), following.reloadMatches()])
     setRefreshing(false)
   }
@@ -221,6 +224,9 @@ export default function TodayScreen() {
           ]}
         </Rail>
       ) : null}
+
+      {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
+      <FromYourPlayers now={now} again={pulled} />
 
       <SaveNudge />
 
