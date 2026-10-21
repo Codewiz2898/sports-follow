@@ -504,6 +504,8 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
     # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
     # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
+    # A club's name as titles leave it ("Liverpool", "Real Madrid", "Barcelona"): its company letters off (BHA-382).
+    team_affixes = ("FC", "F.C.", "CF", "C.F.", "AFC", "SC", "SSC", "AC", "Club de Fútbol", "Football Club")
     video_channels = (
         "UCG5qGWdu8nIRZqJ_GgDwQ-w",  # Premier League
         "UCTv-XvfzLX3i4IGWAm4sbmA",  # LaLiga

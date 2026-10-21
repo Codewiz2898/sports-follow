@@ -426,7 +426,10 @@ def test_the_curator_runs_its_own_queue_its_jobs_logged_and_stopping_as_the_work
 
     assert curator.CuratorSettings.queue_name not in ("arq:queue", getattr(worker.WorkerSettings, "queue_name", "arq:queue"))
     assert all(hasattr(j.coroutine, "__wrapped__") for j in curator.CuratorSettings.cron_jobs)
-    assert {j.name for j in curator.CuratorSettings.cron_jobs} == {"cron:poll_channels", "cron:check_videos", "cron:poll_news", "cron:prune_news", "cron:sweep"}
+    assert {j.name for j in curator.CuratorSettings.cron_jobs} == {"cron:poll_channels", "cron:check_videos", "cron:poll_news", "cron:prune_news", "cron:sweep",
+                                                                   "cron:refresh_pool"}
+    # The pool's refresh is a job too, queued by a curator starting without a pool (feedpool.POOL_KEY).
+    assert [f.name for f in curator.CuratorSettings.functions] == ["refresh_pool"]
     assert curator.CuratorSettings.on_shutdown is worker.wind_down
 
 

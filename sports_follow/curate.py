@@ -12,6 +12,10 @@ model: a post from one of the player's own handles is by the player, and nothing
 to a small model through the llm-providers gateway, as the research agent's calls do (agent.py), with a few
 lines from the player's sport on what's big there (Sport.content_hints).
 
+A candidate found for the player as their team's (Candidate.team: its title names their team, not them; BHA-382)
+is judged as a share about that team: "team" when it is, which the Feed serves for them as it serves one about
+them. Only such a candidate can be "team": any other team highlight is a mention, as it always was.
+
 judge() is a pure function of a Candidate: no database, no fetching. The curator process hands it candidates
 and stores what it says, so moving the judge to a service of its own later is only transport.
 
@@ -61,7 +65,7 @@ Kind = Literal["video", "article", "post"]
 Source = Literal["youtube", "rss", "x", "instagram", "threads", "other"]
 Platform = Literal["youtube", "x", "instagram", "threads", "other"]  # where a player has an account of their own
 AuthorKind = Literal["player", "official", "creator", "outlet", "unknown"]
-About = Literal["subject", "mention", "no"]
+About = Literal["subject", "team", "mention", "no"]
 By = Literal["player", "official", "fan_or_creator", "outlet", "unknown"]
 ContentKind = Literal["match_moment", "milestone", "personal_or_fun", "interview_or_analysis", "news", "rumour", "promo", "other"]
 Risk = Literal["betting", "misinformation", "deepfake", "abuse", "restream"]
@@ -122,6 +126,9 @@ class Candidate(BaseModel):
     platform_flags: PlatformFlags = PlatformFlags()
     duration_seconds: int | None = None  # a video's
     player: PlayerContext
+    # Found for the player as their team's (candidates.py, BHA-382): the team its title or description names, which
+    # the player plays for. "" when it was found by the player's own name.
+    team: str = ""
 
     @field_validator("published_at", mode="before")
     @classmethod
@@ -148,7 +155,7 @@ class Judged(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    about_player: About = Field(description="subject: it is about this player. mention: they come up in something about another player, a team or a game. no: it's not about them (a namesake, or nothing to do with them).")
+    about_player: About = Field(description="subject: it is about this player. team: it was found for them as their team's (the share says so) and it's about that team: its match, its news, its players together. mention: they come up in something about another player, a team or a game. no: it's not about them (a namesake, or nothing to do with them; for a share found as their team's, another side of that name, such as its women's or youth side, or another sport's).")
     by: By = Field(description="Who made it: the player themself, an official account (league, team, broadcaster, tournament), a fan or creator, a news outlet, or unknown.")
     kind: ContentKind = Field(description="match_moment: a play or moment from a game. milestone: a record, landmark or title. personal_or_fun: off the field. interview_or_analysis: the player talking, or someone breaking down their play. news: reported facts (injury, transfer, selection). rumour: unconfirmed claims. promo: selling something. other.")
     interest: float = Field(ge=0, le=1, description="How much a fan of this player would want to see it, 0 to 1. 0.8+ only for a big moment, milestone or genuinely new insight; a passing mention or a generic compilation is 0.3 or less.")
@@ -252,6 +259,8 @@ def _about(c: Candidate, by: By | None) -> About:
     headline = c.title or c.text.split("\n", 1)[0][:TITLE_MAX]  # a post has no title: its first line stands in
     if _named_in(headline, names):
         return "subject"
+    if c.team and _named_in(f"{c.title}\n{lead(c.text)}", sports.of(c.player.sport).team_names(c.team)):
+        return "team"
     teams = [n for n in (fold(t) for t in c.player.teams) if len(n) >= 3]
     return "mention" if _named_in(f"{c.title}\n{c.text}", [*names, *teams]) else "no"
 
@@ -275,6 +284,10 @@ def rules(c: Candidate) -> Facts:
     facts = Facts(by=_by_hint(c))
     if facts.by == "player":
         facts.hints.append("Posted from one of the player's own accounts.")
+    if c.team:
+        facts.hints.append(f"Found for them as their team's: it names {c.team}, a team they play for, and not them. about_player is \"team\" when "
+                           f"it's about {c.team} (its match, its news, its players together), \"subject\" when it's about the player after all, "
+                           "\"no\" when it's another side of that name (its women's or youth side, another sport's).")
     words = f"{c.title}\n{c.text}"
     tags = set(c.platform_flags.hashtags) | {t.lower() for t in HASHTAG.findall(words)}
     teams = fold(" ".join(c.player.teams))
@@ -322,7 +335,9 @@ paid for. Then submit your verdict with the submit_verdict tool.
 How to judge:
 - about_player is "subject" only when the player is what it's about. A team highlight they appear in, a \
 match report naming them once, or a post about a teammate is a "mention". A namesake, or nothing to do with \
-them, is "no".
+them, is "no". "team" is only for a share found for them as their team's (what's already known says so): \
+"team" when it's about that team, judged as a fan of the team would want it; for any other share, a team's \
+highlight is still a "mention".
 - Fans want moments, milestones, real insight and the player's own voice. Generic compilations, reaction \
 bait, clickbait titles and recycled old clips are low interest (0.3 or less). Be sparing with 0.8 and above.
 - sponsored is true only when a brand paid for the share or it exists to sell something: a product it shows \
@@ -375,7 +390,10 @@ def _settle(c: Candidate, judged: Judged, facts: Facts) -> Verdict:
     by = facts.by or judged.by
     if by == "player" and facts.by != "player":
         by = "outlet" if c.kind == "article" else "unknown"
-    return Verdict(**{**judged.model_dump(), "by": by, "stage": "model"})
+    # A share found by the player's own name that the model calls their team's is a mention, as it always was: only
+    # one found as their team's is served as that.
+    about = "mention" if judged.about_player == "team" and not c.team else judged.about_player
+    return Verdict(**{**judged.model_dump(), "about_player": about, "by": by, "stage": "model"})
 
 
 @cache

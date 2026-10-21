@@ -398,8 +398,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **For you and Following, edge to edge or full screen** (BHA-349, `web/src/components/FeedLayouts.tsx`): the Feed
   tab opens on For you (`?tab=for_you`), which mixes in videos of players the fan doesn't follow, 3 of every 5 items
   the fan's own and 2 others' (`feed.others`: of the players with something served, the fan's sports first, then
-  anyone with a big moment in the last day, then the most followed on the app; 30 at most), each entry saying
-  `following`, so its card offers Follow, which works in place. A fan who follows nobody gets For you all from
+  anyone with a big moment in the last day, then the most followed on the app; 50 at most, the pool's among them,
+  below), each entry saying `following`, so its card offers Follow, which works in place. Others' videos of the
+  last two months (`feed.OTHERS_WINDOW`, BHA-382) are one list, best first by their score faded for age whatever
+  their day, so a strong official video of three weeks ago comes before a weak one of today's; older ones follow.
+  The fan's own players' stay in their days. A fan who follows nobody gets For you all from
   them. Following (`?tab=following`, the API's default) is the fan's players alone, with the circles; when they run
   out it says so and offers For you. How the apps draw it is a setting: `layout` on every page, and
   `feed_layout` in `/api/config`, `edge` (full-width posts: photo ringed in the sport's colour, name and under it the
@@ -578,9 +581,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   BHA-349) from each channel's public feed, which costs no
   quota (when a feed doesn't answer, as YouTube's often don't for a while, the channel's uploads playlist
   costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
-  characters at most: not the related-video or podcast links under it) names a followed player of that sport
-  (their full name or a hashtag of it, a nickname fans typed, or their surname when no other followed player
-  of the sport has it); asks YouTube about the new ones, 1 unit for every 50, which also says whether the
+  characters at most: not the related-video or podcast links under it) names a followed player of that sport, or one
+  of its pool (below) (their full name or a hashtag of it, a nickname fans typed, or their surname when no other
+  such player of the sport has it); one that names none of them but names a team they play for ("Falcons vs
+  Vitality", "Liverpool v City": the team as its sport's titles write it, `Sport.team_names`, without the words its
+  titles leave off, `team_affixes`; not "India Women" for India, `other_sides`) is kept for the team's followed
+  players and 3 of its pool players, marked `about: team`, which the judge reads as a share about the team
+  (`team`, served for them at 0.8 of one about them; it reads one such video once for all of them); asks YouTube about the new ones, 1 unit for every 50, which also says whether the
   maker declared paid promotion in it; and keeps those that pass the hard
   filters (embeddable, public, playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
@@ -606,7 +613,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
-  never spent: a few hundred a day in use, about 3,500 at most if every channel's feed failed all day. Searches
+  never spent: a few hundred a day in use, about 4,850 at most if every channel's feed failed all day (101 channels). Searches
   have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
   none of the 10,000, counted as the `youtube-search` budget with 5 never spent. Both are counted from midnight
   Pacific, as YouTube counts them; the Google Cloud console's quota page for the YouTube Data API v3 (APIs &
@@ -652,13 +659,27 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   come first: sweeps stop while what's left of the day's 95 spendable searches is what the moment searches' cap
   may still spend in the last 24 hours (40), so on a day no moment search has run yet the sweeps have room for 55
   and their three caps (20 gap, 14 wide, 5 famous: 39) bind first; all four caps together are 79 searches a day,
-  under the 95, and their finds' reads under 100 of the 10,000 units. At 19 followed players (17 uncovered) the
+  under the 95, and their finds' reads under 100 of the 10,000 units. Then the **pool sweep** (BHA-382): each pool
+  player nobody follows (below), for videos of the last 60 days, each at most once a fortnight, up to
+  `SPORTS_FOLLOW_FEED_POOL_SEARCHES` in any 24 hours (10), the longest unswept first and the best known of those:
+  the five caps are 89 searches a day, and 10 more units of the 10,000 for reading what they find. At 19 followed players (17 uncovered) the
   first day is the heaviest: 17 gap searches, the 2 covered players' wide searches and 5 famous, 24 searches;
   after that a day is the gap searches still due (fewer as players are covered or wait out the 3 days), about 3
   wide searches and the famous sweep's 5 for its first 4 days, then under 1. At 500 the caps bind: 20 gap, 14 wide
   and 5 famous a day, so the wide sweep gets round each player every 5 weeks or so. The 16 searches a day no cap
-  claims are room to raise the sweeps' caps; more than that means a lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` or
+  claims are room to raise the sweeps' caps (6 since the pool sweep's 10); more than that means a lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` or
   more YouTube quota (Google's quota extension form). Off without the key.
+- **A pool of top players fills For you** (`sports_follow/feedpool.py`, BHA-382): besides followed players, the
+  curator fetches for each running sport's best known: `SPORTS_FOLLOW_FEED_POOL_SIZE` (50) a sport, and that many
+  for each running game of esports, by Wikipedia editions (the starters' measure, the home country's double), then
+  their team's tier (`Team.tier`, all an esports pro has); one neither rates, or an operator removed, is left out.
+  Once a day (07:40 UTC, and when the curator starts without one) it works the pool out and makes a player of each
+  member who has none, found in their sport's live source as a fan's follow from search would, up to
+  `SPORTS_FOLLOW_FEED_POOL_ADDS` (40) a day, the sports taking turns; one no live source has is looked for again
+  after a week. Nobody follows them, so the worker reads nothing of theirs until a fan does: then their page is
+  built and their games read as for any follow. The pool (player ids, in Redis `feed:pool`) joins the followed
+  players in the channel poll (no quota) and gets the pool sweep above; its videos reach fans as For you's others,
+  never Following. `python -m sports_follow.curator pool [--run]` lists it (and works it out first).
 - **What every search asks for** (BHA-341): the player by the name fans and titles write (`candidates.search_name`):
   of their own name and the aliases with fewer words than it, the shortest that still names them and no other
   followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
@@ -736,7 +757,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   few top creators, in one block at the end of its class, with `title_words` after it, the names a tidied title
   keeps in capitals: real channel ids only, each checked to answer at
   `https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, which often takes a few tries; a sport that's off has
-  none read; esports' are the `Esports` class's, for every game), the publishers' feeds it reads for news about its
+  none read; esports' are the `Esports` class's, for every game, and each game's own, its leagues' and teams', given
+  with its `Game(..., channels=...)`), the words its videos' titles leave off a team's name (`team_affixes`: "FC",
+  "Team") for matching a video to a player's team, the publishers' feeds it reads for news about its
   players (`news_feeds`, right after: each feed's address with the publisher's name as stories credit it; real RSS
   or Atom feeds only, each checked to answer with headlines, links, dates and descriptions, never a search engine's
   feed of other sites; each publisher's terms for headlines with links are noted in the pull request that adds it),
@@ -974,6 +997,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |
 | `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; each 1 of YouTube's 100 searches a day; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
+| `SPORTS_FOLLOW_FEED_POOL_SIZE` | `50` | the feed's pool of top players a sport (`feedpool.py`), and that many for each running esports game: fetched for besides followed players, for For you; `0` turns the pool off |
+| `SPORTS_FOLLOW_FEED_POOL_ADDS` | `40` | pool players made a day at most, each found in their sport's live source as a follow from search would (a request or a few each) |
+| `SPORTS_FOLLOW_FEED_POOL_SEARCHES` | `10` | pool-sweep searches in any 24 hours (`sweeps.py`): a pool player nobody follows, their last 60 days, each at most fortnightly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_FEED_LAYOUT` | `edge` | how the apps draw the Feed tab: `edge` (posts edge to edge) or `full` (a video a screen); the admin panel's Feed tab changes it live, and every page of the Feed and `/api/config` say which |
 | `SPORTS_FOLLOW_CLIPS_ENDPOINT` | none | the clips bucket's S3 endpoint (`https://<account>.r2.cloudflarestorage.com`); clips are off without it and the next three |

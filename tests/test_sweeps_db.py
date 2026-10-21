@@ -73,10 +73,11 @@ def swept() -> list[tuple]:
                                             .order_by(FeedSweep.id)).all()]
 
 
-def only(monkeypatch, gap: int, famous: int, wide: int = 0) -> None:
+def only(monkeypatch, gap: int, famous: int, wide: int = 0, pool: int = 0) -> None:
     monkeypatch.setattr(sweeps, "FEED_GAP_SEARCHES", gap)
     monkeypatch.setattr(sweeps, "FEED_WIDE_SEARCHES", wide)
     monkeypatch.setattr(sweeps, "FEED_FAMOUS_SEARCHES", famous)
+    monkeypatch.setattr(sweeps, "FEED_POOL_SEARCHES", pool)
 
 
 # ---------------------------------------------------------------- the gap search
@@ -182,7 +183,7 @@ def test_no_room_left_in_the_days_quota_holds_the_sweeps(world, monkeypatch):
     only(monkeypatch, gap=20, famous=35)
     player("Shreyas Iyer")
     budget.take(youtube.SEARCH_BUDGET, cost=55)  # 40 of the 95 spendable searches left: the moment searches' cap
-    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
+    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "pool searched": 0, "found": 0, "kept": 0, "refused": 0}
     assert searched(world) == [] and swept() == []
 
 
@@ -375,3 +376,30 @@ def test_each_sweep_keeps_only_whats_from_a_channel_the_players_sport_lists(worl
     with db_module.session() as s:
         assert set(s.scalars(select(FeedCandidate.external_id))) == {"iyerlisted1"} | ({"iyerrecent1"} if stream != "gap" else set())
     assert "iyeroffli01" not in "".join(str(r.url) for r in world.asked if r.url.path == "/youtube/v3/videos")  # never asked about
+
+
+def test_the_pool_sweep_searches_pool_players_last_two_months_after_the_followed_players_under_its_own_cap(world, monkeypatch):
+    """BHA-382: pool players nobody follows (feedpool.ids) get a search of their own, after the followed players',
+    FEED_POOL_SEARCHES a day, each once a fortnight, the pool's best known first."""
+    import json
+
+    from sports_follow import feedpool
+
+    only(monkeypatch, gap=20, famous=0, pool=2)
+    iyer = player("Shreyas Iyer")
+    first, second, third = (player(n, followers=0) for n in ("Smriti Mandhana", "Jemimah Rodrigues", "Richa Ghosh"))
+    world.redis.data[feedpool.POOL_KEY] = json.dumps({"players": {"cricket": [first, second, third, iyer]}})  # a followed one in it is searched as followed
+    world.found["Smriti Mandhana cricket"] = [hit("mandhana117", "Smriti Mandhana 117 vs Australia | highlights")]
+    world.videos["mandhana117"] = video("mandhana117")
+    done = sweeps.run(NOW)
+    assert (done["gap searched"], done["pool searched"], done["kept"]) == (1, 2, 1)
+    after = (NOW - sweeps.POOL_DAYS).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert searched(world)[1:] == [("Smriti Mandhana cricket", after), ("Jemimah Rodrigues cricket", after)]
+    assert [(pid, stream) for pid, stream, *_ in swept()] == [(iyer, "gap"), (first, "pool"), (second, "pool")]
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate).where(FeedCandidate.external_id == "mandhana117"))
+        assert row is not None and row.player_id == first and row.candidate["stream"] == "pool"
+    # The day's cap is spent; the next day the one not yet searched goes first, and the others wait out the fortnight.
+    assert sweeps.run(NOW + timedelta(hours=1))["pool searched"] == 0
+    assert sweeps.run(NOW + DAY)["pool searched"] == 1 and swept()[-1][:2] == (third, "pool")
+    assert sweeps.run(NOW + DAY * 15)["pool searched"] == 2

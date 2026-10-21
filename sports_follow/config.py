@@ -103,6 +103,16 @@ FEED_WIDE_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_WIDE_SEARCHES
 # Searches in any 7 days for a followed player's most watched videos ever (sweeps.py: the famous sweep), spread
 # over the week's days; each player at most once a month. 0 turns them off.
 FEED_FAMOUS_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES", 35)))
+# The feed's pool of top players (feedpool.py, BHA-382): besides followed players, the curator fetches for this many
+# of each running sport's best known (for a group of sports, each of its running sports' share: esports' games), the
+# most followed first; their videos fill For you's others. 0 turns the pool off.
+FEED_POOL_SIZE = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_SIZE", 50)))
+# Pool players made a day at most, each found in their sport's live source as a fan's follow would (a request or a
+# few each): the pool fills over days, and a source's allowance never pays for it all at once.
+FEED_POOL_ADDS = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_ADDS", 40)))
+# Searches in any 24 hours for pool players nobody follows (sweeps.py: the pool sweep), after the followed players'
+# sweeps, each player at most every two weeks. 0 turns them off.
+FEED_POOL_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_SEARCHES", 10)))
 
 # Which data sources run, by adapter name. Empty means every source (development). A public build lists
 # only licensed ones, e.g. "lichess_chess,sportmonks_football,sportmonks_cricket": the ESPN adapters

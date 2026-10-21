@@ -261,3 +261,25 @@ def test_a_served_videos_title_is_tidied_and_its_picture_the_biggest_there_is(db
     assert c.item.picture == "https://i.ytimg.com/vi/iyerpress01/maxresdefault.jpg"
     stored = db.scalar(text("SELECT candidate->>'title' FROM feed_candidates"))
     assert stored == "🔴SHREYAS IYER ON THE IPL AUCTION | Sony Sports Network"  # tidied as it's served, never as it's stored
+
+
+@needs_db
+def test_for_yous_others_last_two_months_are_one_list_best_first_whatever_the_day_and_older_ones_after(db, monkeypatch):  # noqa: F811
+    """BHA-382: a strong video of three weeks ago comes before a weak one of today's; one over OTHERS_WINDOW old comes
+    after them both, however strong. The fan's own players stay in their days."""
+    a = made_player(db, "Shreyas Iyer", served=False)
+    x = made_player(db, "Gukesh D", sport="chess", served=False)
+    y = made_player(db, "Magnus Carlsen", sport="chess", served=False)
+    z = made_player(db, "Hikaru Nakamura", sport="chess", served=False)
+    kept = {
+        a: [Candidate(item("a0", 2), score=0.2, channel="a0"), Candidate(item("a1", 24 * 21), score=0.9, channel="a1")],
+        x: [Candidate(item("x-weak-today", 2), score=0.3, channel="x0")],
+        y: [Candidate(item("y-strong-3wk", 24 * 21), score=0.8, channel="y0")],
+        z: [Candidate(item("z-old-best", 24 * 90), score=0.95, channel="z0")],
+    }  # fmt: skip
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {p: 0 for p in (x, y, z)})
+    follow(db, "fan", a)
+    mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
+    assert [e.item.title for e in mixed.items] == ["a0", "a1", "y-strong-3wk", "x-weak-today", "z-old-best"]
+    assert [e.day for e in mixed.items][2:] == [feed.THIS_MONTH, feed.TODAY, feed.EARLIER]  # each keeps its own day
