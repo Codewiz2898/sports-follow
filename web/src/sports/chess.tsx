@@ -1,12 +1,20 @@
+import { useState, type MouseEvent } from 'react'
+import { SwapIcon } from '../components/Icons'
 import './chess.css'
-import { chess as facts, chessMiddle, movesAbout, PIECES, position, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, followedSide, movesAbout, PIECES, position, type ChessColour, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
-/** The board from the position's FEN, from the followed player's side, with the last move marked. */
-function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
+/** The board from the position's FEN, with the last move marked: from the followed player's side (from White's
+ * with no one side of the fan's, followedSide), until the fan turns it, which holds while the page is open. */
+function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessState>) {
+  const [side, setSide] = useState<ChessColour | null>(null)
   if (!state.white || !state.black) return null
-  const { ranks, flip, moved } = position(state, live)
+  const { ranks, flip, moved } = position(state, live, (side ?? followedSide(live, lines)) === 'black')
+  const turn = (e: MouseEvent) => {
+    e.preventDefault()  // on Today the board is inside its card's link: turning it doesn't open the match page
+    setSide(flip ? 'white' : 'black')
+  }
   const player = (s: ChessSide, colour: 'white' | 'black') => (
     <div className="row" style={{ gap: 12 }}>
       <span className="stack" style={{ minWidth: 0 }}>
@@ -32,7 +40,15 @@ function ChessBoard({ state, clock, compact, live }: BoardProps<ChessState>) {
       {/* Compact (Today), the players can sit narrower beside a small board: Also live's card fits both in a row. */}
       <div className="stack" style={{ gap: 10, flex: 1, minWidth: compact ? 140 : 180 }}>
         {player(top, flip ? 'white' : 'black')}
-        <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{chessMiddle(state, clock)}</span>
+        {/* Between the players, the button that changes their places: not on Also live's small card (chess.css). */}
+        <span className="row">
+          <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{chessMiddle(state, clock)}</span>
+          {ranks.length === 8 && (
+            <button type="button" className="btn icon chess-turn" aria-label="Switch sides" title="Switch sides" onClick={turn}>
+              <SwapIcon width={18} height={18} />
+            </button>
+          )}
+        </span>
         {player(bottom, flip ? 'black' : 'white')}
         {(state.result || state.match) && clock && <span className="small muted">{clock}</span>}
       </div>

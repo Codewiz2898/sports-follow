@@ -207,7 +207,7 @@ export type { LatestMoment }
  * with a `seed` (its game key) the sport's line art sits faint behind it, and the player's line is one row
  * with the game's `latest` moment under it.
  */
-export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
+export function LiveScoreboard({ live, playerName, sport, teams, lines, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; lines?: Stat[][]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
   const key = sportKey(sport ?? live.state?.kind)
   return (
@@ -220,7 +220,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
       </div>
       {/* A state in a shape this app doesn't know shows as the plain score, not a blank page. A new card tries again. */}
       <ErrorBoundary fallback={<PlainScore live={live} />} resetKey={live}>
-        <GameBoard live={live} compact={compact} teams={teams} />
+        <GameBoard live={live} compact={compact} teams={teams} lines={lines} />
         {/* No player named (a campaign's game on now that the fan follows nobody in): the board alone. */}
         {playerName && (compact ? <LiveLine live={live} playerName={playerName} latest={latest} /> : <PlayerLine live={live} playerName={playerName} />)}
         {!compact && live.moments && live.moments.length > 0 && (
@@ -260,11 +260,12 @@ export function PlainScore({ live }: { live: LiveStatus }) {
 }
 
 /** A live game's score as its sport's view draws it (sports/), or the plain score where none draws this state.
- * `teams`: the followed player's, marked on a board that lists many (a battle royale lobby). */
-export function GameBoard({ live, compact, teams }: { live: LiveStatus; compact?: boolean; teams?: string[] }) {
+ * `teams`: the followed player's, marked on a board that lists many (a battle royale lobby); `lines`: each of
+ * the fan's players' numbers, on a card of several of theirs (BoardProps). */
+export function GameBoard({ live, compact, teams, lines }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][] }) {
   const state = live.state
   const view = viewOfKind(state?.kind)
-  return view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} live={live} /> : <PlainScore live={live} />
+  return view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} live={live} /> : <PlainScore live={live} />
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { LiveStatus } from '../../types'
+import type { LiveStatus, Stat } from '../../types'
 import type { SportFacts } from '.'
 
 export interface ChessSide { id: string; name: string; title?: string | null; rating?: number | null; fed?: string | null; clock?: string | null }
@@ -15,6 +15,7 @@ export interface ChessState {
   result?: string | null
   match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
 }
+export type ChessColour = 'white' | 'black'
 // A finished game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"), its opening, how it
 // ended where that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
 export interface ChessPage { moves?: string[]; opening?: string | null; ending?: string | null; game?: number | null }
@@ -26,10 +27,18 @@ export function movesAbout(page: ChessPage): string {
 
 export const PIECES: Record<string, string> = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
 
-/** The position from the followed player's side: its eight ranks of squares (a piece's FEN letter, or
- * null), whether the board is turned (they're Black), and the squares of the last move. */
-export function position(state: ChessState, live: LiveStatus): { ranks: { name: string; piece: string | null; dark: boolean }[][]; flip: boolean; moved: Set<string> } {
-  const flip = (live.player_stats ?? []).some((s) => s.label === 'Colour' && s.value === 'Black')
+/** The side a board is first seen from: the fan's player's (their Colour in `lines`, each of the fan's players'
+ * numbers on the card; by default the live block's own), or White where the card has no one side of theirs:
+ * both players followed, or neither (the match page of a game followed by itself). */
+export function followedSide(live: LiveStatus, lines: Stat[][] = [live.player_stats ?? []]): ChessColour {
+  const colours = new Set(lines.flatMap((stats) => stats.filter((s) => s.label === 'Colour').map((s) => s.value)))
+  return colours.size === 1 && colours.has('Black') ? 'black' : 'white'
+}
+
+/** The position from a side, the followed player's unless the fan turned the board (`flip`: from Black's): its
+ * eight ranks of squares (a piece's FEN letter, or null), whether the board is turned, and the squares of the
+ * last move. */
+export function position(state: ChessState, live: LiveStatus, flip = followedSide(live) === 'black'): { ranks: { name: string; piece: string | null; dark: boolean }[][]; flip: boolean; moved: Set<string> } {
   const rows = (state.fen ?? '').split(' ')[0].split('/')
   const squares: (string | null)[][] = rows.map((row) => row.split('').flatMap((c) => (/\d/.test(c) ? Array(Number(c)).fill(null) : [c])))
   const moved = new Set(state.last_move ? [state.last_move.slice(0, 2), state.last_move.slice(2, 4)] : [])
