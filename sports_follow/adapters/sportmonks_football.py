@@ -51,6 +51,10 @@ _FINAL = {"FT", "AET", "FT_PEN", "WO", "AWARDED"}
 _STOPPED = {"INTERRUPTED", "SUSPENDED"}
 STOPPED_FOR = timedelta(hours=6)
 _OFF = {"POSTPONED", "CANCELLED", "ABANDONED", "DELETED"}
+# Called off: cancelled, abandoned, deleted, or given to a side without being played out (a walkover, a result
+# awarded). The board says so (state's cancelled): a prediction on it is voided (sports.football), where a postponed
+# one waits; should the source finish it after all, a poll still settles it (predictions.settle).
+_CALLED_OFF = {"CANCELLED", "ABANDONED", "DELETED", "WO", "AWARDED"}
 _CLOCK = {"HT": "Half-time", "BREAK": "Break", "EXTRA_TIME_BREAK": "Extra-time break", "PEN_BREAK": "Before penalties", "INPLAY_PENALTIES": "Penalties",
           "INTERRUPTED": "Interrupted", "SUSPENDED": "Suspended",
           "FT": "Full time", "AET": "After extra time", "FT_PEN": "After penalties", "AWAITING_UPDATES": "Awaiting result"}
@@ -249,6 +253,7 @@ def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
         "home": {"id": str(home.get("id")), "name": home.get("name"), "abbr": home.get("short_code"), "score": goals.get("home", ""), "scorers": scorers(home.get("id"))},
         "away": {"id": str(away.get("id")), "name": away.get("name"), "abbr": away.get("short_code"), "score": goals.get("away", ""), "scorers": scorers(away.get("id"))},
         "detail": (x.get("state") or {}).get("name"),
+        "cancelled": (x.get("state") or {}).get("developer_name") in _CALLED_OFF,
     }
     return Snapshot(
         status=status,

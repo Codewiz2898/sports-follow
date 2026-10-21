@@ -2,12 +2,12 @@
 from the board its poller reads anyway, and friends see who called it best in small leagues joined by a link.
 Bragging rights only: no fee, no prize of any value (India's online gaming law, 2025), no odds anywhere.
 
-What's asked is each sport's (Sport.asks, read off a game's board): a chess game's result, each map of a team
-esports series. A question belongs to the game, whichever of its fixtures shows it (a chess board is one of each
-player's: Sport.board tells the game apart), and is made the first time its board is seen before the start: a
-poll of a followed game (structured.apply_poll), a look at its match page (match.view), or the worker's read of a
-fan's game coming up (prepare, made). It closes as the game, or its map, starts (a first question's start time
-closes it too, should a poll be late: sweep), and a pick after that is refused.
+What's asked is each sport's (Sport.asks, read off a game's board): a chess game's result, a football or cricket
+match's winner, each map of a team esports series. A question belongs to the game, whichever of its fixtures shows
+it (a chess board is one of each player's: Sport.board tells the game apart), and is made the first time its board
+is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
+or the worker's read of a fan's game coming up (prepare, made). It closes as the game, or its map, starts (a first
+question's start time closes it too, should a poll be late: sweep), and a pick after that is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
@@ -249,6 +249,22 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     counts: dict[str, int] = {option: n for option, n in db.execute(select(Pick.option, func.count()).where(Pick.question_id == q.id).group_by(Pick.option))}
     worth = points(counts.get(answer, 0), sum(counts.values()))
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
+
+
+def moved(db: Session, event: Event, start: datetime | None, now: datetime | None = None) -> None:
+    """A schedule read moved a game's start (structured.upsert_game), with no poll or read to make its questions
+    again (ensure): those still to settle start then, so a game put back weeks isn't voided by the sweep three days
+    after its old date, and a first one still open closes then (at once, for one brought forward to a time that's
+    passed). One closed stays closed (friends' picks may have shown)."""
+    if start is None:
+        return
+    now = now or _now()
+    theirs = or_(Question.event_id == event.id, Question.keys.contains(func.jsonb_build_array(event.key)))
+    db.execute(update(Question).where(theirs, Question.status.in_(UNSETTLED), Question.starts_at.is_distinct_from(start)).values(starts_at=start))
+    if start > now:
+        db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at.is_not(None), Question.locks_at != start).values(locks_at=start, reminded_at=None))
+    else:
+        db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at > start).values(locks_at=start))
 
 
 def sweep(db: Session, now: datetime) -> None:

@@ -547,6 +547,8 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
         # row, the other waits for it to commit and reads it back instead of failing on the key.
         db.execute(insert(Event).values(key=key, sport=sport, title=f.title, status=f.status).on_conflict_do_nothing(index_elements=[Event.key]))
         event = db.scalars(select(Event).where(Event.key == key)).one()
+    if event.start_utc is not None and f.start_utc is not None and f.start_utc != event.start_utc:
+        predictions.moved(db, event, f.start_utc)  # put back (or brought forward): its questions start then
     event.title = f.title
     event.competition = f.competition
     event.start_utc = f.start_utc

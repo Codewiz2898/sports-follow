@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
+from .base import ORDINAL, VOID, Ask, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -133,11 +133,17 @@ def _nth(n: int) -> tuple[str, str]:
     return f"i{n}:", f"{ORDINAL.get(n, f'{n}th')} innings"
 
 
+# The side a result names as the winner: "India won by 8 wkts", "Match tied (India won the Super Over)".
+_WON = re.compile(r"(?:^|\()([^()]+?) won\b", re.I)
+# A result with no winner: a predicted winner's question is voided (Cricket.answer).
+_NO_WINNER = re.compile(r"\b(?:tied|no result|drawn|abandoned)\b", re.I)
+
+
 def winner_outcome(summary: str, teams: list[str]) -> str | None:
     """The winner a result names ("India won by 8 wkts", "Match tied (India won the Super Over)"), as
     one of the player's teams by whole name: "India A" and "Mumbai Indians" aren't India. The app's
     outcome() in web/src/format.ts reads results the same way."""
-    winner = re.search(r"(?:^|\()([^()]+?) won\b", summary, re.I)
+    winner = _WON.search(summary)
     if not winner:
         return "D" if any(w in summary.lower() for w in ("drawn", "tied", "no result")) else None
     named = team_key(winner.group(1))
@@ -304,6 +310,36 @@ class Cricket(Sport):
                 poster = Poster(f"{_HAUL.get(int(m[1]), m[1])}-for", spaced(part, versus), priority=_haul(int(m[1])))
                 made.append(((poster.priority, 0, int(m[1]), -int(m[2])), poster))
         return max(made, key=lambda x: x[0], default=(None, None))[1]
+
+    # ---- predictions (predictions.py): who wins, called before the first ball
+
+    predicts = True
+
+    def asks(self, state: dict[str, Any]) -> list[Ask]:
+        """Who wins, between the board's two sides, each by its id at the source: a limited-overs match only. A Test
+        or a first-class match may be drawn, and lasts longer than a question waits for its answer (predictions.STALE)."""
+        teams = [t for t in state.get("teams") or [] if isinstance(t, dict)]
+        if len(teams) != 2 or overs_a_side(state.get("format")) is None or not all(t.get("id") and t.get("name") for t in teams) or str(teams[0]["id"]) == str(teams[1]["id"]):
+            return []
+        return [Ask("result", "Who wins?", tuple((str(t["id"]), str(t["name"])) for t in teams))]
+
+    def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
+        """The side the board marks the winner, else the one its summary says won: a tie a Super Over settles is its
+        winner's, as the result says ("Match tied (India won the Super Over)"). VOID for a tie nothing settled, no
+        result, or a match cancelled or washed out (the board's cancelled); None while its result is still to come."""
+        if state.get("cancelled"):
+            return VOID
+        if status != "final":
+            return None
+        teams = [t for t in state.get("teams") or [] if isinstance(t, dict) and t.get("id")]
+        marked = [t for t in teams if t.get("winner") is True]
+        if len(marked) == 1:
+            return str(marked[0]["id"])
+        summary = str(state.get("summary") or "")
+        if won := _WON.search(summary):
+            named = [t for t in teams if team_key(won[1]) in {team_key(str(t.get(k) or "")) for k in ("name", "abbr")} - {""}]
+            return str(named[0]["id"]) if len(named) == 1 else None
+        return VOID if _NO_WINNER.search(summary) else None
 
     def outcome(self, result: str, teams: list[str]) -> str | None:
         # "India won by 5 wickets": a win for an India player, a loss for their opponents'.
