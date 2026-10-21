@@ -1,7 +1,7 @@
 """Feed videos a fan's app said won't play inside it (BHA-380): when, so the Feed stops serving them.
 
 Revision ID: d3a9f6b1c8e4
-Revises: c8e1f4a7b2d9
+Revises: d3f7b1a9c5e2
 Create Date: 2026-10-21
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "d3a9f6b1c8e4"
-down_revision = "c8e1f4a7b2d9"
+down_revision = "d3f7b1a9c5e2"
 branch_labels = None
 depends_on = None
 

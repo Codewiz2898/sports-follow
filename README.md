@@ -585,7 +585,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
   with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
   hour from a fan, an address and everyone). It marks every row of the video (`unplayable_at`), no Feed serves
-  it again, and a fetch that finds it for another player keeps the mark.
+  it again, and a fetch that finds it for another player keeps the mark. The admin panel's Feed tab shows the
+  mark, and approving or pinning the video there says it plays after all. (Whether 101/150 can also mean a
+  block in the viewer's country alone isn't known; if it can, one fan abroad hides it from India too.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its

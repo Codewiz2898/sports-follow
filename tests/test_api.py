@@ -1443,28 +1443,33 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
 
 def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
     """A fan's app says a Feed video's player refused it (feed.unplayable, BHA-380): it leaves everyone's Feed, so a
-    fan, an address and everyone together say so of only so many an hour."""
-    said: list[tuple[int, str]] = []
+    fan says so only so many times an hour, and an address and everyone together mark only so many videos. Junk ids
+    and a video said of again count against the fan alone."""
+    marked: set[str] = set()
 
     def unplayable(db, player_id, item):
         if item == "not-an-item":
             raise ValueError("No such item.")
         if item == "0" * 16:
             raise LookupError("That video isn't in this player's feed.")
-        said.append((player_id, item))
-        return len(said) == 1
+        new = item not in marked
+        marked.add(item)
+        return new
+
+    def say(item: str, fan: str = "fan") -> httpx.Response:
+        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=PUBLIC)
 
     monkeypatch.setattr(feed, "unplayable", unplayable)
-    first = api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan="fan", address=PUBLIC)
+    first = say("0123456789abcdef")
     assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": True}
-    assert api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan="fan", address=PUBLIC).json()["marked"] is False
-    assert api.call("POST", "/api/players/7/feed/not-an-item/unplayable", fan="fan", address=PUBLIC).status_code == 422
-    assert api.call("POST", f"/api/players/7/feed/{'0' * 16}/unplayable", fan="fan", address=PUBLIC).status_code == 404
+    assert say("0123456789abcdef").json()["marked"] is False
+    assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404
     for _ in range(feed.UNPLAYABLE_PER_FAN - 4):
-        assert api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan="fan", address=PUBLIC).status_code == 200
-    assert api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan="fan", address=PUBLIC).status_code == 429
-    # Another fan on the same network, until the address has said it of as many as an address may.
-    for n in range(feed.UNPLAYABLE_PER_ADDRESS - feed.UNPLAYABLE_PER_FAN):
-        assert api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan=f"fan-{n // 5}", address=PUBLIC).status_code == 200
-    assert api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan="new-fan", address=PUBLIC).status_code == 429
-    assert len(said) == feed.UNPLAYABLE_PER_ADDRESS - 2  # the odd two never reached it
+        assert say("0123456789abcdef").status_code == 200
+    assert say("0123456789abcdef").status_code == 429  # the fan's hour
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one mark
+    # Other fans on the same network, until the address has marked as many videos as an address may.
+    for n in range(feed.UNPLAYABLE_PER_ADDRESS - 1):
+        assert say(f"{n + 1:016x}", fan=f"fan-{n}").json()["marked"] is True
+    assert say(f"{999:016x}", fan="new-fan").status_code == 429
+    assert len(marked) == feed.UNPLAYABLE_PER_ADDRESS

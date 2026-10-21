@@ -171,8 +171,7 @@ function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playe
   const heard = (data: string) => {
     let code: unknown
     try { code = (JSON.parse(data) as { error?: unknown }).error } catch { return }
-    if (code === undefined) return
-    if (!refusedHere(code)) { setFailed('load'); return }
+    if (!refusedHere(code)) return // another of the player's errors: YouTube's own message says it, as on the web
     setFailed('refused')
     if (told.has(item.id)) return
     told.add(item.id)

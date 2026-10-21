@@ -382,7 +382,8 @@ def test_a_stored_video_from_a_channel_the_sport_no_longer_lists_stops_being_ser
 
 def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_saying_it_again_changes_nothing(made):
     """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): the app's
-    player said so, so no fan is served it again, whatever an admin said of it, and the admin panel says why."""
+    player said so, so no fan is served it again, even one an admin pinned before, and the admin panel says why; an
+    admin approving or pinning it after says it plays."""
     pid = asha()
     with db_module.session() as s:
         p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
@@ -421,6 +422,11 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
         assert blocked in {c["id"] for c in admin.feed_page(s, "held")["candidates"]}
     finally:
         s.close()
+    # It does play after all: an admin approving it (or pinning it) says so, for every row of it.
+    admin.review_candidate(blocked, "approved")
+    rank.rescore()
+    assert all(r.unplayable_at is None for r in all_rows())
+    assert {i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"} == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
 
 
 def all_rows() -> list[FeedCandidate]:

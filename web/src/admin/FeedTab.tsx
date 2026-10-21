@@ -91,7 +91,8 @@ export function FeedTab() {
         lists (official ones and a few top creators), about the player, isn't paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said. Pinned ones go to the
         top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. A channel no sport lists
         serves nothing whatever its trust: only a video of it you approve or pin. Signed-in
-        fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is.
+        fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is. A video a fan's app said
+        won't play in the app (its owner keeps it off other sites) is held back for everyone: approve or pin it if it does play.
       </Note>
       <div className="stat-grid" aria-label="Candidates">
         <div className="stat"><span className="dsp num">{count(totals.all ?? 0)}</span><span className="tiny">Candidates</span></div>
@@ -173,6 +174,7 @@ function Verdict({ row }: { row: FeedCandidateRow }) {
     <>
       <div className="row" style={{ justifyContent: 'flex-start', flexWrap: 'wrap', gap: 6 }}>
         <span className={`pill ${row.served ? 'ink' : 'soft'}`}>{row.served ? `Served · ${row.score?.toFixed(2)}` : 'Held back'}</span>
+        {row.unplayable_at && <span className="pill danger">Won't play in the app · {relative(row.unplayable_at)}</span>}
         <span className={`pill ${v.about_player === 'no' ? 'danger' : 'soft'}`}>{v.about_player === 'subject' ? 'About them' : v.about_player === 'mention' ? 'Mentions them' : 'Not about them'}</span>
         <span className="pill soft">{v.kind.replace(/_/g, ' ')}</span>
         <span className="pill soft">by {v.by.replace(/_/g, ' ')}</span>
