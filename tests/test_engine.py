@@ -10,7 +10,8 @@ import threading
 
 import pytest
 
-from sports_follow import bus, engine
+from sports_follow import bus, engine, sports, structured
+from sports_follow.adapters import Snapshot
 
 
 class FakeRedis:
@@ -35,6 +36,17 @@ class FakeRedis:
 
     def hdel(self, name, key):
         self.hashes.get(name, {}).pop(key, None)
+
+    def hgetall(self, name):
+        return dict(self.hashes.get(name, {}))
+
+    def delete(self, *names):
+        for name in names:
+            self.kv.pop(name, None)
+            self.hashes.pop(name, None)
+
+    def expire(self, name, seconds):
+        pass
 
     def zadd(self, name, mapping, nx=False):
         z = self.zsets.setdefault(name, {})
@@ -123,6 +135,19 @@ def test_deepening_ends_once_deep_enough_or_nobody_polls_the_game():
     r.zadd(engine.DEEPEN, {"A": 101})
     engine.keep(r, E4, {"cp": 20, "mate": None, "depth": engine.DEPTH, "nodes": engine.NODES})
     assert engine.take_deeper(r, now=102) is None and r.zcard(engine.DEEPEN) == 0
+
+
+def test_a_position_dropped_after_a_gap_in_polling_is_deepened_again():
+    r = FakeRedis()
+    evaluated(r, "A", E4, at=100)
+    r.zadd(engine.DEEPEN, {"A": 100})
+    assert engine.take_deeper(r, now=101) is None  # not polled: out of the queue
+    engine.request("A", E4, r, now=500)  # polled again, on the same position
+    assert (engine.take_deeper(r, now=501) or ("",))[0] == "A"
+    engine.keep(r, E4, {"cp": 20, "mate": None, "depth": engine.DEPTH, "nodes": engine.NODES})
+    r.zrem(engine.DEEPEN, "A")
+    engine.request("A", E4, r, now=502)
+    assert r.zcard(engine.DEEPEN) == 0  # deep enough: not again
 
 
 def test_the_cache_keeps_the_deepest_look_and_counts_all_the_work():
@@ -249,6 +274,125 @@ def test_a_look_elsewhere_doesnt_give_the_deep_search_a_new_turn(monkeypatch, st
     # of its turn (one more slice, searched again from the hash), then B's turn.
     looked, started = run_lane(monkeypatch, stopping, r, [18, 20, 18, 21, 20, 22, 22], lambda n: n == 2 and engine.request("B", START, r))
     assert (looked, started) == ([E4, E4, START, E4, START, START, E4], [E4, E4, START, E4])
+
+
+def test_the_lane_stops_once_its_lock_has_gone(monkeypatch, stopping):
+    # Held up past its lock (a slow engine, a paused container): another lane may have the lock by now.
+    r, looked, freed = FakeRedis(), [], []
+
+    class Stockfish:
+        def evaluate(self, fen):
+            looked.append(fen)
+            return {"cp": 20, "mate": None, "depth": 18, "nodes": engine.NODES}
+
+        def close(self):
+            pass
+
+    engine.request("A", START, r)
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    monkeypatch.setattr(engine, "Engine", Stockfish)
+    monkeypatch.setattr(bus, "sync_redis", lambda: r)
+    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
+    monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: token != "token")
+    monkeypatch.setattr(bus, "release", lambda name, token=None: freed.append(token))
+    engine.run_lane()
+    assert looked == [] and r.zcard(engine.QUEUE) == 1 and freed == ["token"]  # left for the lane that has it
+
+
+def test_a_stuck_engine_is_killed_not_waited_on(tmp_path, monkeypatch):
+    stuck = tmp_path / "stuck-engine"
+    stuck.write_text("""#!/usr/bin/env python3
+# A UCI engine that starts a search and never ends it, "stop" or not.
+import sys
+for line in sys.stdin:
+    word = (line.split() or [""])[0]
+    if word in ("uci", "isready"):
+        print("uciok" if word == "uci" else "readyok", flush=True)
+    elif word == "quit":
+        break
+""")
+    stuck.chmod(0o755)
+    monkeypatch.setattr(engine, "HALT_SECONDS", 0.3)
+    e = engine.Engine(str(stuck))
+    e.search(MIDDLEGAME, depth=30, nodes=1_000_000)
+    e.run(0.05)
+    with pytest.raises(engine.EngineError):
+        e.halt()
+    assert e.proc.wait(timeout=2) != 0
+
+
+# ---------------------------------------------------------------- the poller's side (structured._evaluate)
+
+F30, F31, F32 = (f"8/8/8/8/8/8/8/8 w - - 0 {n}" for n in (30, 31, 32))
+
+
+@pytest.fixture
+def board(monkeypatch):
+    """Polls of one board (game g1) on FakeRedis: board.poll(event, fen, ...) evaluates it for one followed
+    player's event of it, against that event's last state, and returns the new state; board.reading(fen, cp,
+    at) is the engine's latest evaluation of it."""
+    r = FakeRedis()
+    monkeypatch.setattr(bus, "sync_redis", lambda: r)
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    monkeypatch.setattr(structured.matches, "rules", lambda db, event_id: [])
+    last: dict[int, dict] = {}
+
+    class Db:
+        def __init__(self, levels):
+            self.levels = levels
+
+        def scalars(self, query):
+            return type("Rows", (), {"all": lambda _: [{"level": level} for level in self.levels]})()
+
+    def poll(event: int, fen: str, result: str | None = None, levels: tuple[str, ...] = ("key",)) -> dict:
+        snap = Snapshot("live", "", "", {"kind": "chess", "game_id": "g1", "fen": fen, "result": result})
+        prev = last.get(event)
+        structured._evaluate(sports.get("chess"), Db(levels), event, snap, type("State", (), {"state": prev})() if prev else None, [event])
+        last[event] = snap.state
+        return snap.state
+
+    def reading(fen: str, cp: int, at: float) -> None:
+        r.set("engine:latest:g1", json.dumps({"cp": cp, "mate": None, "depth": 20, "fen": fen, "at": at, "first": at}))
+
+    return type("Board", (), {"r": r, "poll": staticmethod(poll), "reading": staticmethod(reading)})
+
+
+def test_a_decided_game_is_let_go_and_its_last_evaluation_stays(board):
+    board.reading(F31, 20, 1)
+    on = board.poll(1, F31)
+    board.r.zadd(engine.DEEPEN, {"g1": 1})  # its position being deepened
+    assert engine.polled(board.r, "g1")
+    # Decided, though a mini-match goes on live; a deeper reading lands after the result.
+    board.reading(F31, 900, 2)
+    over = board.poll(1, F31, result="1-0")
+    assert over["eval"] == on["eval"]  # nothing new folded in, so nothing turns after the result
+    assert not engine.polled(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0 and not engine.on_it(board.r, "g1", F31)
+
+
+def test_one_event_with_nobody_wanting_swings_doesnt_stop_the_other(board):
+    board.reading(F31, 20, 1)
+    board.poll(1, F31)
+    board.poll(2, F31, levels=("results",))  # the other player's fans hear results only
+    assert engine.polled(board.r, "g1")
+    board.poll(1, F31, levels=("results",))
+    assert not engine.polled(board.r, "g1")
+
+
+def test_both_events_of_a_board_settle_the_same(board):
+    def both(fen: str, meanwhile=None) -> list[int]:
+        bands = [board.poll(1, fen)["eval"]["band"]]
+        if meanwhile:
+            meanwhile()
+        return [*bands, board.poll(2, fen)["eval"]["band"]]
+
+    board.reading(F30, 20, 1)
+    assert both(F30) == [0, 0]
+    board.reading(F31, 340, 2)
+    assert both(F31) == [0, 0]
+    # Move 32 agrees with 31: winning. A deeper look at it lands between the two events' polls; the second takes
+    # the board's settled evaluation and holds it against that, as the first did, instead of its own last one.
+    board.reading(F32, 340, 3)
+    assert both(F32, meanwhile=lambda: board.reading(F32, 240, 4)) == [2, 2]
 
 
 def test_positions_from_games_nobody_polls_are_dropped():

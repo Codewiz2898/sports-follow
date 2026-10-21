@@ -805,21 +805,30 @@ def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> 
 
 def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
     """A sport our engine evaluates (chess): ask the engine for the game's position while it's on and a
-    follower wants to hear about swings, and put the game's latest evaluation (engine.py), settled by
-    the sport, into the state."""
+    follower wants to hear about swings, and put the game's latest evaluation (engine.py) into the state,
+    settled by the sport once for the board (each followed player's event of it takes the same). A game
+    with its result is evaluated no more: the engine lets go of it, and its last evaluation stays as it
+    was, so nothing turns after the result (a mini-match stays live after its game is decided)."""
     state = snap.state
     game, fen = state.get("game_id"), state.get("fen")
     if not (game and fen and engine.enabled()):
         return
-    if snap.status == "live" and not state.get("result"):
-        # Its followed players' fans, and the game's own (a game followed by itself).
-        wanted = [*db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all(), *matches.rules(db, event_id)]
-        if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in wanted):
-            engine.request(game, fen)
+    prev = latest.state if latest is not None and latest.state else {}
+    before = prev.get("eval") if prev.get("game_id") == game else None
+    if snap.status != "live" or state.get("result"):
+        engine.drop(game)
+        if before:
+            state["eval"] = before
+        return
+    # Its followed players' fans, and the game's own (a game followed by itself).
+    wanted = [*db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all(), *matches.rules(db, event_id)]
+    if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in wanted):
+        engine.request(game, fen, by=event_id)
+    else:
+        engine.drop(game, by=event_id)  # nobody here wants its swings; the other player's event may
     ev = engine.latest(game)
     if ev:
-        prev = latest.state if latest is not None and latest.state else {}
-        state["eval"] = rules.settle(prev.get("eval") if prev.get("game_id") == game else None, ev)
+        state["eval"] = engine.settled(game, ev, rules.settle, before)
 
 
 def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True) -> moments.Seen | None:

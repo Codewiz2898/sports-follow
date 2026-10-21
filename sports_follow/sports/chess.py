@@ -163,8 +163,8 @@ class Chess(Sport):
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         """A followed player's game turning, as the engine sees it (from their side)."""
         was, got = before.state.get("eval"), now.state.get("eval")
-        if now.status != "live" or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
-            return []
+        if now.status != "live" or now.state.get("result") or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
+            return []  # a decided game (a mini-match is live after it) turns no more
         colour = stat(now.line, "Colour")
         side = 1 if colour == "White" else -1 if colour == "Black" else 0
         old, new = was["band"] * side, got["band"] * side

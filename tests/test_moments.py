@@ -174,6 +174,8 @@ def test_chess_swings_from_the_players_side():
     assert detect("Chess", "Magnus Carlsen", "1503014", seen(2, 350, colour="White"), seen(1, 250, colour="White")) == []  # drifting back
     assert detect("Chess", "Magnus Carlsen", "1503014", seen(0, 0, game="g0"), white_winning) == []  # the next game of a match
     assert detect("Chess", "Magnus Carlsen", "1503014", Seen("live", state={"game_id": "g1"}), white_winning) == []  # first reading
+    decided = Seen("live", state={**white_winning.state, "result": "1-0"}, line=white_winning.line)  # a mini-match, live after its game
+    assert detect("Chess", "Magnus Carlsen", "1503014", level, decided) == []
 
 
 def test_a_swing_says_the_engine_score_as_the_board_does():

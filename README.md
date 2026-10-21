@@ -499,8 +499,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   anywhere goes first), to depth 30, so the evaluation beside the board gets deeper the longer a player
   thinks; with several boards on, they take turns. A band changes only when the evaluations of two
   positions in a row agree, so a board glitch isn't a swing, and a deeper look at the same position
-  never takes a swing back. The live state carries the latest evaluation (`eval`), and the board draws it
-  as a bar beside the board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
+  never takes a swing back. It's settled once a board, so both players' events of it agree, and a
+  decided game (a mini-match stays live after it) isn't evaluated any more. The live state carries the
+  latest evaluation (`eval`), and the board draws it as a bar beside the board, on the site and in the app,
+  White's share by Lichess's winning-chances curve (`whiteShare` in
   `web/src/sports/facts/chess.ts`).
 - **Play from here, on the fan's device.** A chess game's match page makes its board an analysis board
   where it is: the fan plays either side's legal moves from the game's position (or from any move of a
