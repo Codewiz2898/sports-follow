@@ -790,7 +790,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   head and campaign page). `tests/test_app_name.py` fails if any of them writes the name out itself, or if
   the app loads shared code that reads something only Vite fills in. Before the first Play upload, the
   Android app's package id and its own link's scheme go with the name (`mobile/app.config.ts`; the Kotlin
-  module says the scheme again, in `Cards.kt`); afterwards the package id can't change. The domain is a
+  module says the scheme again, in `Cards.kt`; then `npx expo prebuild --platform android --clean` once, as a
+  plain prebuild keeps the old Firebase setup); afterwards the package id can't change. The domain is a
   setting of its own: the server's `DOMAIN` (`deploy/compose.yaml`) and the mail addresses in
   `deploy/settings.env`, and in the app `SITE` in `app.config.ts`, `src/api.ts`'s default and the Kotlin
   module's (`Settings.kt`), which the same test keeps in step. Internal names keep the old ones, as
@@ -1033,7 +1034,9 @@ on, once:
    `GOOGLE_SERVICES_JSON` to its path, `~/.config/sports-follow/google-services.json` on Bharath's Mac), then
    build again with `npm run android`. It's not a secret, but it stays out of the repo with the project it
    names. A file with no app for the package in it (one downloaded before the rename) builds without
-   notifications, with a warning: download it again once the app is added, and it names both.
+   notifications, with a warning: download it again once the app is added, and it names both. After changing
+   the file or the package, prebuild with `--clean` once (`npx expo prebuild --platform android --clean`): a
+   plain prebuild never takes Firebase out of an `android/` that had it.
 3. **The server:** under Project settings, Service accounts, generate a private key and save it as
    `~/.config/sports-follow/fcm-service-account.json` (`chmod 600`; `SPORTS_FOLLOW_FCM_KEY_FILE` names
    another file). Restart the API and the worker: `GET /api/push` answers `"fcm": true`. For the server,

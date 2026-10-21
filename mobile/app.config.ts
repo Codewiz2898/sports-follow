@@ -37,7 +37,12 @@ function firebase(): boolean {
   const file = path.resolve(__dirname, GOOGLE_SERVICES)
   if (!fs.existsSync(file)) return false
   type Client = { client_info?: { android_client_info?: { package_name?: string } } }
-  const { client = [] } = JSON.parse(fs.readFileSync(file, 'utf8')) as { client?: Client[] }
+  let client: Client[]
+  try {
+    client = (JSON.parse(fs.readFileSync(file, 'utf8')) as { client?: Client[] }).client ?? []
+  } catch (e) {
+    throw new Error(`${GOOGLE_SERVICES} isn't a google-services.json Firebase gave: ${String(e)}`)
+  }
   if (client.some((c) => c.client_info?.android_client_info?.package_name === PACKAGE)) return true
   console.warn(`${GOOGLE_SERVICES} has no Android app ${PACKAGE}: building without notifications. Add the app to the Firebase project and download its google-services.json again (README.md, "Android app").`)
   return false

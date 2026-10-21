@@ -7,7 +7,8 @@ Expo (SDK 57) and React Native, in TypeScript. The README's "Android app" says h
   than memory. Add packages with `npx expo install <package>`, which picks versions that match the SDK.
 - **`mobile/android` is generated** (`npx expo prebuild`, which `npm run android` runs only while it's missing)
   and not committed. Native settings go in `app.config.ts` or a config plugin, never into `android/` by hand;
-  after changing them (or adding a route, which App Links read), `npx expo prebuild --platform android` first.
+  after changing them (or adding a route, which App Links read), `npx expo prebuild --platform android` first;
+  with `--clean` after the package id or the Firebase file changes, which a plain prebuild only adds to.
 - **Routes are files** in `src/app/` (Expo Router); everything else lives beside them in `src/`.
 - **It looks like the site.** Each page and block here is the twin of one in `web/src` (its comment names
   it); a change to the site's look is made in both. Values come from `web/src/styles.css` (`theme.ts`).
