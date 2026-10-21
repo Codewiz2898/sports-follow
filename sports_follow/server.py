@@ -2036,9 +2036,9 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
 
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
-    """Each followed player's top video or post (feed.shares_for), which the Android app's Today rail shows (the
-    web's Today shows the top of the fan's Feed instead, /api/me/feed/items). No news, which the Wire carries:
-    empty until the curator has judged and ranked something about a followed player."""
+    """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab
+    (BHA-346) show on Today; both apps now show the top of the fan's Feed there instead (/api/me/feed/items). No
+    news, which the Wire carries: empty until the curator has judged and ranked something about a followed player."""
     return {"shares": feed.shares_for(db, fan)}
 
 

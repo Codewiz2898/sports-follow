@@ -304,9 +304,6 @@ export interface FeedGroup { head: string; moment: boolean; when: string | null;
 
 export interface Feed { player_id: number; groups: FeedGroup[]; evergreen: FeedItem[]; count: number }
 
-/** The Android app's Today rail (GET /api/me/feed): a followed player's top video or post. */
-export interface FeedShare { player_id: number; item: FeedItem }
-
 /** Who an item of the fan's Feed is about: the card's head. */
 export interface FeedWho { id: number; name: string; sport: string | null; photo: Photo | null }
 
