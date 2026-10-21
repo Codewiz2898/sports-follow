@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, type Campaign, type SearchResult } from '../api'
 import { APP_NAME } from '../app'
 import { allFollowed, campaignLive, campaignRows, followAllFailed, followAllWords, keyAlertsLine, schedule } from '../campaign'
-import { LiveScoreboard } from '../components/Blocks'
+import { BoardLink, LiveScoreboard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { CheckIcon, PlusIcon } from '../components/Icons'
 import { CampaignCalls } from '../components/Picks'
@@ -77,9 +77,9 @@ function CampaignView({ c, reload }: { c: Campaign; reload: () => Promise<void> 
         <section className="section" aria-label="Live now">
           <ErrorBoundary fallback={<BlockError />} resetKey={live}>
             {mine.map((card) => (
-              <Link key={card.player_id} to={`/player/${card.player_id}`} className="stack">
+              <BoardLink key={card.player_id} to={`/player/${card.player_id}`} label={card.player.name}>
                 <LiveScoreboard live={card.live} playerName={card.player.name} sport={card.player.sport} teams={card.player.teams} compact seed={`${c.slug}:${card.live.event_id ?? card.player_id}`} />
-              </Link>
+              </BoardLink>
             ))}
             {others.map((g) => <LiveScoreboard key={g.key} live={g.live} playerName="" sport={c.sport} compact seed={g.key} />)}
           </ErrorBoundary>

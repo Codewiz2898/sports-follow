@@ -67,12 +67,15 @@ export function whiteShare(ev: ChessEval): number {
 }
 
 /** An evaluation's score from White's side, in pawns as Lichess gives it: "+1.4", "−0.6", "0.0"; past ten, in
- * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates. */
+ * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates.
+ * A tenth's half rounds away from zero, in whole centipawns, as a swing alert's score does (sports/chess.py's
+ * _score), so the bar and the alert agree. */
 export function evalScore(ev: ChessEval): string {
   if (ev.mate != null) return `${whiteShare(ev) < 50 ? '−' : ''}M${Math.abs(ev.mate)}`
-  const pawns = Math.round((ev.cp ?? 0) / 10) / 10
-  if (pawns === 0) return '0.0'
-  return `${pawns > 0 ? '+' : '−'}${Math.abs(pawns) >= 10 ? Math.round(Math.abs(pawns)) : Math.abs(pawns).toFixed(1)}`
+  const cp = Math.round(ev.cp ?? 0)
+  const tenths = Math.floor((Math.abs(cp) + 5) / 10)
+  if (!tenths) return '0.0'
+  return `${cp > 0 ? '+' : '−'}${tenths >= 100 ? Math.floor((tenths + 5) / 10) : `${Math.floor(tenths / 10)}.${tenths % 10}`}`
 }
 
 /** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */

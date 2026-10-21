@@ -235,9 +235,10 @@ export function MatchPage() {
         </div>
         {board && (
           <div className="match-board">
-            {/* A state in a shape this app doesn't know shows as the plain score. */}
+            {/* A state in a shape this app doesn't know shows as the plain score. The board's live block names no
+                player of the fan's: their lines in the game do (a chess board from their side). */}
             <ErrorBoundary fallback={<PlainScore live={board} />} resetKey={board}>
-              <GameBoard live={board} />
+              <GameBoard live={board} lines={yours.map((p) => p.stats)} />
             </ErrorBoundary>
           </div>
         )}

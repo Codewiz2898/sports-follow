@@ -68,11 +68,15 @@ def _fullmove(fen: str | None) -> int | None:
 
 
 def _score(ev: dict[str, Any], side: int) -> str:
-    """An evaluation from the player's side: "+3.6", "mate in 4", "facing mate in 4"."""
+    """An evaluation from the player's side: "+3.6", "mate in 4", "facing mate in 4". Pawns to a tenth, halves
+    away from zero, counted in whole centipawns as the app's evaluation bar counts them (evalScore in
+    web/src/sports/facts/chess.ts), so the two agree: a float's own rounding made -1.35 "-1.4" but 1.25 "+1.2"."""
     if ev.get("mate") is not None:
         mate = ev["mate"] * side
         return f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
-    return f"{(ev.get('cp') or 0) * side / 100:+.1f}"
+    cp = int(ev.get("cp") or 0) * side
+    tenths = (abs(cp) + 5) // 10
+    return f"{'-' if cp < 0 and tenths else '+'}{tenths // 10}.{tenths % 10}"
 
 
 def _points(result: str) -> tuple[float, float] | None:

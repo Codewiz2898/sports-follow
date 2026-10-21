@@ -237,7 +237,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
       </ErrorBoundary>
       <div className="row tiny muted">
         <span>{live.as_of ? `Updated ${relative(live.as_of, now)}` : 'Live'}{live.source ? ` · ${live.source}` : live.source_url ? ` · ${hostname(live.source_url)}` : ''}</span>
-        {/* Compact boards sit inside a link to their game's match page; a link can't hold another link. */}
+        {/* A compact board opens its game's match page as a whole (BoardLink): no links of its own. */}
         {!compact && (live.match || safeHref(live.source_url)) && (
           <span className="row" style={{ gap: 12 }}>
             {live.match && <Link to={`/match/${live.match}`} className="link" style={{ color: 'var(--text)' }}>The match</Link>}
@@ -246,6 +246,18 @@ export function LiveScoreboard({ live, playerName, sport, teams, lines, compact,
         )}
       </div>
     </section>
+  )
+}
+
+/** A live board that opens a page as a whole (Today's, a campaign's), with what's under it (who else of the fan's
+ * is in the game): the link lies under them (.card-link), as a live game's card's does (LiveNow.tsx), since a link
+ * can't hold the board's own buttons (a chess board's Switch sides). `label` names it, as such a card's does. */
+export function BoardLink({ to, label, children }: { to: string; label: string; children: ReactNode }) {
+  return (
+    <div className="board-link stack" style={{ gap: 8 }}>
+      <Link to={to} className="card-link" aria-label={label} />
+      {children}
+    </div>
   )
 }
 

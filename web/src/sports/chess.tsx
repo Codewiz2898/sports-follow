@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useState } from 'react'
 import { SwapIcon } from '../components/Icons'
 import './chess.css'
 import { chess as facts, chessMiddle, evalScore, followedSide, movesAbout, PIECES, position, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
@@ -26,17 +26,16 @@ function EvalBar({ ev, flip, compact }: { ev: ChessEval; flip: boolean; compact?
   )
 }
 
-/** The board from the position's FEN, with the last move marked and the engine's evaluation beside it when there
- * is one: from the followed player's side (from White's with no one side of the fan's, followedSide), until the
- * fan turns it, which holds while the page is open. */
+/** The board from the position's FEN, with the last move marked and, while the game's on, the engine's evaluation
+ * beside it when there is one: from the followed player's side (from White's with no one side of the fan's,
+ * followedSide), until the fan turns it, which holds while the page is open. */
 function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessState>) {
   const [side, setSide] = useState<ChessColour | null>(null)
   if (!state.white || !state.black) return null
   const { ranks, flip, moved } = position(state, live, (side ?? followedSide(live, lines)) === 'black')
-  const turn = (e: MouseEvent) => {
-    e.preventDefault()  // on Today the board is inside its card's link: turning it doesn't open the match page
-    setSide(flip ? 'white' : 'black')
-  }
+  // The live evaluation while the game's on: once it's over, the last one isn't what the result says (a draw
+  // agreed at +3.0).
+  const ev = state.result ? null : state.eval
   const player = (s: ChessSide, colour: 'white' | 'black') => (
     <div className="row" style={{ gap: 12 }}>
       <span className="stack" style={{ minWidth: 0 }}>
@@ -51,8 +50,8 @@ function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessStat
   return (
     <div className="chess" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
       {ranks.length === 8 && (
-        <div className={`chess-play${compact ? ' sm' : ''}${state.eval ? ' eval' : ''}`}>
-          {state.eval && <EvalBar ev={state.eval} flip={flip} compact={compact} />}
+        <div className={`chess-play${compact ? ' sm' : ''}${ev ? ' eval' : ''}`}>
+          {ev && <EvalBar ev={ev} flip={flip} compact={compact} />}
           <div className="chessboard" role="img" aria-label={`Position after move ${state.move ?? ''}`}>
             {ranks.flat().map((sq) => (
               <span key={sq.name} className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}`}>
@@ -69,7 +68,7 @@ function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessStat
         <span className="row">
           <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{chessMiddle(state, clock)}</span>
           {ranks.length === 8 && (
-            <button type="button" className="btn icon chess-turn" aria-label="Switch sides" title="Switch sides" onClick={turn}>
+            <button type="button" className="btn icon chess-turn" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
               <SwapIcon width={18} height={18} />
             </button>
           )}
