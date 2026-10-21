@@ -492,6 +492,7 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str,
         locator={"round": rnd["id"], "fide": fide_id},
         detail=rnd.get("name") if games else "Pairings not published yet",
         result=result,
+        board=str((current_game(games) or {}).get("id") or ""),  # the game parse_board will show, under each player's fixture
     )
 
 

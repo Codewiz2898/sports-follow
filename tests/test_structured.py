@@ -16,13 +16,14 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from sports_follow import bus, moments, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, espn_cricket, espn_soccer
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Snapshot, budget, espn_cricket, espn_soccer, lichess_chess
 from sports_follow.adapters.sportmonks_cricket import SportmonksCricket
 from sports_follow.adapters.sportmonks_football import SportmonksFootball
 from sports_follow.models import Event, EventState, Player, PlayerCard, PlayerLine, SourceBinding
 
 from .test_adapters import KOHLI, RONALDO, load
 from .test_new_adapters import CARLSEN, LAZAVIK
+from .test_new_adapters import load as recorded
 from .test_pipeline import FakeDb, FakeRedis
 from .test_predictions import board
 
@@ -120,6 +121,44 @@ def test_a_chess_board_is_one_game_under_each_players_fixture():
     assert c["live"]["event_id"] == 5 and c["live"]["game_key"] is None
     # Nor before the pairing's out, a round with no board yet.
     assert structured.game_key(f"lichess_chess:ohv5F74c-{CARLSEN}", {"kind": "chess", "round": "Grand Final"}) is None
+
+
+def test_a_chess_board_to_come_is_one_game_under_each_players_fixture(monkeypatch):
+    # Before a board has started there's none to read, but a round within 12 hours of its start is read and paired:
+    # each player's fixture of a board says the game it is, so Coming up shows it once to a fan who follows both
+    # (BHA-379), by the key their live cards and results will have (BHA-372), its questions' too.
+    data = recorded("lichess/round-final")
+    now = datetime.now(timezone.utc)  # the adapter reads its rounds against the clock
+    paired = {**data["round"], "finished": False, "ongoing": False, "startsAt": int((now + timedelta(hours=2)).timestamp() * 1000)}
+    later = {"id": "Rnd2Late", "name": "Round 2", "finished": False, "ongoing": False, "startsAt": int((now + timedelta(days=2)).timestamp() * 1000)}
+    answers = {f"{lichess_chess.API}broadcast/{data['tour']['id']}": {"rounds": [paired, later]},
+               f"{lichess_chess.API}broadcast/-/-/{paired['id']}": {**data, "round": paired, "games": [{**data["games"][0], "status": "*"}]}}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: answers[url])
+    monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [data["tour"]])
+    source = KNOWN["lichess_chess"]
+    coming, unpaired, lives = [], [], []
+    for event_id, (fide, name) in enumerate(((CARLSEN, "Magnus Carlsen"), (LAZAVIK, "Denis Lazavik")), start=11):
+        ref = PlayerRef("lichess_chess", fide, name, [fide], [name], None)
+        soon, late = structured.upcoming(source.fixtures(ref), now)
+        assert (soon.title, soon.status, late.detail) == ("Magnus Carlsen vs Denis Lazavik", "scheduled", "Pairings not published yet")
+        event = Event(id=event_id, key=f"lichess_chess:{soon.source_id}", title=soon.title, start_utc=soon.start_utc, status="scheduled")
+        coming.append(structured._upcoming_item(soon, event, ref))
+        unpaired.append(structured._upcoming_item(late, Event(id=event_id + 10, key=f"lichess_chess:{late.source_id}", title=late.title, status="scheduled"), ref))
+        # And once it's on, the live block the same board gives that player's card.
+        on = board(status="*", ongoing=True, fide=fide)
+        c = card()
+        structured._apply_snapshot(c, event, on, on.lines.get(fide), source, NOW)
+        lives.append(c["live"]["game_key"])
+    assert [u["event_id"] for u in coming] == [11, 12]  # an event of each player's
+    assert [u["game_key"] for u in coming] == lives == ["lichess_chess:mJnv1YBU"] * 2
+    assert [u["game_key"] for u in unpaired] == [None, None]
+    # A knockout round's mini-match too: its fixture says the board parse_board shows, the last game once it's over.
+    final = lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of(data, CARLSEN), CARLSEN, NOW)
+    assert structured.board_key(f"lichess_chess:{final.source_id}", final.board) == structured.game_key(f"lichess_chess:{final.source_id}", lichess_chess.parse_board(data, CARLSEN, NOW).state)
+    # Where the fixture is the game (a football match, one for both sides), its event says it: no key of its own.
+    ref = PlayerRef("sportmonks_football", "7", "Bukayo Saka", ["19"], ["Arsenal"], None)
+    match = Fixture(source_id="556", title="Chelsea vs Arsenal", competition="Premier League", start_utc=NOW, venue=None, status="scheduled", team_ids=["18", "19"], locator={})
+    assert structured._upcoming_item(match, Event(id=6, key="sportmonks_football:556", title=match.title, status="scheduled"), ref)["game_key"] is None
 
 
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():

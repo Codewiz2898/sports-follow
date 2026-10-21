@@ -100,10 +100,10 @@ def shares(counts: dict[str, int], keys: list[str]) -> dict[str, int]:
 # ---------------------------------------------------------------- making questions
 
 
-def game_key(system: str, fixture: str, rules: sports.Sport, state: dict[str, Any]) -> str:
-    """The game a question belongs to: its source, and the id its sport tells the game apart by (a chess board's,
-    the same under each player's fixture), else the fixture's own."""
-    return f"{system}:{rules.board(state) or fixture}"[:100]
+def game_key(system: str, fixture: str, board: str) -> str:
+    """The game a question belongs to: its source, and the id its sport tells the game apart by (Sport.board: a chess
+    board's, the same under each player's fixture), else the fixture's own."""
+    return f"{system}:{board or fixture}"[:100]
 
 
 def _rules(sport: str | None, state: dict[str, Any]) -> sports.Sport:
@@ -120,7 +120,7 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     questions."""
     now = now or _now()
     rules = _rules(sport, state)
-    game = game_key(system, fixture, rules, state)
+    game = game_key(system, fixture, rules.board(state))
     asks = {a.key: a for a in rules.asks(state)} if status in PRE_START else {}
     rows = list(db.scalars(select(Question).where(Question.game == game).order_by(Question.position, Question.id)))
     # Not one closed already: by its board, or a first one by its start time (a source late to say it began).

@@ -50,37 +50,48 @@ export function latestIn(items: ActivityItem[], group: Card[], seen: number): La
 export interface Coming { key: string; event: UpcomingEvent; players: Card[]; sport?: string; teams?: string[] }
 
 /** Every game of the fan's players and teams in the next two weeks, soonest first, each once with everyone of
- * theirs who plays in it, and the games they follow by themselves (`matches`) that none of those is in. One
- * that has started has left: it's live, or it's a result. */
+ * theirs who plays in it (a chess board two of their players are on too, a fixture of each player's), and the
+ * games they follow by themselves (`matches`) that none of those is in. One that has started has left: it's live,
+ * or it's a result. */
 export function comingUp(cards: Card[], now: number, matches: FollowedMatch[] = [], teams: FollowedTeam[] = []): Coming[] {
   const soon = (s: string | null | undefined) => {
     const start = parseDate(s)
     return start && ahead(s, now) && start.getTime() - now <= AHEAD_DAYS * 864e5 ? start : null
   }
   const merged = new Map<string, Coming>()
+  // Each game by every event it's under (a chess board's two): a team's game, or a game followed by itself, names one.
+  // And its players' match pages: a board followed by itself may be at the other player's until the tick moves it.
+  const events = new Map<number, Coming>()
+  const addresses = new Set<string>()
   for (const c of cards) {
     for (const u of c.upcoming ?? []) {
       const start = soon(u.start_utc)
       if (!start) continue
-      const key = u.event_id != null ? `event:${u.event_id}` : `${u.title.toLowerCase()}|${start.toDateString()}`
-      const found = merged.get(key)
-      if (!found) merged.set(key, { key, event: u, players: [c] })
-      else if (!found.players.includes(c)) found.players.push(c)
+      const key = gameOf(u) ?? `${u.title.toLowerCase()}|${start.toDateString()}`
+      let game = merged.get(key)
+      if (!game) merged.set(key, (game = { key, event: u, players: [] }))
+      if (!game.players.includes(c)) game.players.push(c)
+      if (u.event_id != null) events.set(u.event_id, game)
+      if (u.match) addresses.add(u.match)
     }
   }
   for (const t of teams) {
     for (const u of t.upcoming ?? []) {
       const start = soon(u.start_utc)
       if (!start || u.event_id == null) continue
-      const key = `event:${u.event_id}`
-      const found = merged.get(key)
-      if (!found) merged.set(key, { key, event: u, players: [], sport: t.sport, teams: [t.name] })
-      else if (!(found.teams ?? []).includes(t.name)) found.teams = [...(found.teams ?? []), t.name]
+      const found = events.get(u.event_id)
+      if (found) {
+        if (!(found.teams ?? []).includes(t.name)) found.teams = [...(found.teams ?? []), t.name]
+        continue
+      }
+      const game: Coming = { key: `event:${u.event_id}`, event: u, players: [], sport: t.sport, teams: [t.name] }
+      merged.set(game.key, game)
+      events.set(u.event_id, game)
     }
   }
   for (const m of matches) {
+    if (events.has(m.event_id) || (m.addresses ?? []).some((a) => addresses.has(a)) || !soon(m.start_utc) || !['scheduled', 'armed'].includes(m.status)) continue
     const key = `event:${m.event_id}`
-    if (merged.has(key) || !soon(m.start_utc) || !['scheduled', 'armed'].includes(m.status)) continue
     merged.set(key, { key, event: { title: m.title, competition: m.competition, start_utc: m.start_utc, status: m.status, event_id: m.event_id, match: m.match }, players: [], sport: m.sport })
   }
   return [...merged.values()].sort((a, b) => parseDate(a.event.start_utc)!.getTime() - parseDate(b.event.start_utc)!.getTime())

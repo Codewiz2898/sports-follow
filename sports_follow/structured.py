@@ -72,11 +72,16 @@ def game_key(key: str | None, state: dict[str, Any] | None) -> str | None:
     player's): its key, the same under each and its questions' (predictions.game_key), so Today shows the game once
     whichever of the fan's players it's under. None where the fixture is the game: its event says it."""
     state = state or {}
-    rules = sports.of_state(state)
-    if not rules.board(state):
+    return board_key(key, sports.of_state(state).board(state))
+
+
+def board_key(key: str | None, board: str) -> str | None:
+    """game_key by the board's id itself (Sport.board's), as a fixture says it before its game has a board to read
+    (Fixture.board: a chess round once it's paired), so a game to come is the same game it is once it's on."""
+    if not board:
         return None
     system, _, fixture = (key or "").partition(":")
-    return predictions.game_key(system, fixture, rules, state)
+    return predictions.game_key(system, fixture, board)
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:
@@ -603,6 +608,7 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
         "status": event.status,
         "event_id": event.id,
         "match": match_path(event.key),  # its match page's address
+        "game_key": board_key(event.key, f.board),  # the game it's one fixture of, as its live block and result say it
     }
 
 
