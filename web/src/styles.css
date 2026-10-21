@@ -884,7 +884,7 @@ div.result-main { cursor: default; }
 .feed-tabs button { height: 42px; padding: 0; margin-bottom: -1px; border: 0; border-bottom: 3px solid transparent; background: none; font-weight: 800; font-size: 14px; color: var(--muted); cursor: pointer; }
 .feed-tabs button[aria-pressed='true'] { color: var(--text); border-bottom-color: var(--text); }
 .feed-empty, .feed-done { margin-top: 4px; }
-.feed-done { padding: 8px 0 16px; }
+.feed-done { padding: 8px 0 16px; margin-inline: auto; }  /* centred in its reading width (.main p) */
 
 /* Edge to edge: full-width posts on a phone, paper between them; a column of rounded ones from a tablet up. */
 .edge { display: flex; flex-direction: column; margin: -16px calc(-1 * var(--gutter)) 0; }
