@@ -72,7 +72,8 @@ class Found:
     # A player's moment of a game under several fixtures (a chess board is one of each player's, and each finds
     # the moment from its own side): the player, by their id in the source, whose side tells it to a fan who
     # follows both (the side the game went toward, the winner; White where it went neither way, the start or a
-    # draw). The other side's word for it isn't sent them (alerts.voiced). "" where only its player says it.
+    # draw). The other side's word for it isn't sent them where this side's fixture is being polled to say it
+    # (alerts.voiced). "" where only its player says it.
     voice: str = ""
 
 
@@ -637,6 +638,12 @@ class Sport:
         each player's): an id they share, so its questions are one set whichever address asks, and Today shows it
         once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
+
+    def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
+        """Who's on a game under several fixtures (board), by their ids in the source, each with a fixture of their
+        own: its fixtures here are theirs, so alerts, live cards and mutes take them for one game (structured.boards).
+        () where the fixture is the game."""
+        return ()
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """The questions fans may call about this game, from its board before it starts: none, for a sport that

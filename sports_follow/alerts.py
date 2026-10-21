@@ -23,12 +23,13 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   stack. Moments found in one poll go as one push, led by the highest priority. News is one
   notification per player.
 - **A game under several fixtures is one game.** A chess board is a fixture of each of its players, so an
-  event of each, polled apart (BHA-378): its notification is the game's (Item.game), whichever finds the
-  moment, and each of its moments is found from both sides, "Gukesh D is winning" and "Sindarov is in
-  trouble". A fan who follows both hears it once, from the side the sport says tells it (voiced: the side
-  it went toward, the winner, White for the start); one who follows one of them hears it from their side.
-- **Muted games** ("Mute this game" on the notification) send nothing more: muting one of a game's
-  events mutes them all (structured.game_events).
+  event of each, polled apart (BHA-378): its notification is the game's first fixture's (Item.fixtures),
+  whichever finds the moment, all through a mini-match, and each of its moments is found from both sides,
+  "Gukesh D is winning" and "Sindarov is in trouble". A fan who follows both hears it once, from the side
+  the sport says tells it (voiced: the side it went toward, the winner, White for the start), where that
+  side's fixture is being polled to say it; one who follows one of them hears it from their side.
+- **Muted games** ("Mute this game" on the notification) send nothing more, a game under several
+  fixtures muted under any of them.
 - **Sound is rationed.** A game makes a sound at most once every GAME_COOLDOWN and a fan's phone at
   most LOUD_PER_HOUR times an hour; past either, the push still arrives, silently. A moment of
   BREAKTHROUGH priority (a hundred, a five-for, a late equaliser, an upset) always makes a sound. A
@@ -45,8 +46,6 @@ Quiet hours are per device, so notify.py applies them after this.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import zip_longest
@@ -93,12 +92,12 @@ class Item:
     # Its place among its game's moments of its kind about the same player (their 2nd goal; the game's 2nd goal
     # by them): the same play where one side names it by the source's id ("goal@501") and the other by count.
     nth: int = 0
-    # The game it's of, where one game is under several fixtures (a chess board, one of each player's: their events
-    # share it, structured.games), so it lands on one notification whichever of them found it. "" where its event is
-    # the game.
-    game: str = ""
+    # The events of its game where one game is under several fixtures (a chess board is one of each player's:
+    # structured.boards), its own among them, so it lands on one notification whichever of them found it. Empty
+    # where its event is the game.
+    fixtures: frozenset[int] = frozenset()
     # A player's moment of such a game: the player here whose side tells it to a fan who follows both (Found.voice),
-    # its own player or the other side's. None where only its player says it.
+    # its own player or the other side's, whose fixture is being polled to say it. None where only its player says it.
     voice: int | None = None
 
 
@@ -128,7 +127,6 @@ class Sent:
     lines: list[str]
     at: datetime
     moment_ids: list[int] = field(default_factory=list)  # each line's moment
-    game: str = ""  # the game its event is of, where one game is under several fixtures (Item.game)
 
 
 @dataclass
@@ -201,15 +199,13 @@ def voiced_by(item: Item, other: Item) -> bool:
     """Whether a player's moment is `other` told from the other side of its board: `other` is the moment of the player
     whose side tells it (voiced), of the same game and kind, found within PLAY_WINDOW of it."""
     return (item.voice is not None and item.voice != item.player_id and other.player_id == item.voice and other.kind == item.kind
-            and bool(item.game) and item.game == other.game and abs(item.created_at - other.created_at) <= PLAY_WINDOW)
+            and other.event_id in item.fixtures and abs(item.created_at - other.created_at) <= PLAY_WINDOW)
 
 
 def tag_of(item: Item) -> str:
-    """The notification a moment lands on: its game's, the same whichever of a game's fixtures found it (a digest of
-    a game under several: a Web Push topic is at most 32 URL-safe characters); a player's news, theirs."""
-    if item.game:
-        return "g" + base64.urlsafe_b64encode(hashlib.blake2b(item.game.encode(), digest_size=15).digest()).decode()  # 1 + 20 characters
-    return f"e{item.event_id}" if item.event_id else f"p{item.player_id}"
+    """The notification a moment lands on: its game's ("e{event}"; a game under several fixtures goes by its first
+    here, whichever of them found it, all through a mini-match's games); a player's news, theirs."""
+    return f"e{min(item.fixtures or {item.event_id})}" if item.event_id else f"p{item.player_id}"
 
 
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
@@ -226,7 +222,7 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
         if level is None:
             continue  # someone else's player, or game: a batch holds every player in the game, a sweep every game
         how = tier(level, item)
-        if how is None or item.event_id in muted or (now - item.created_at).total_seconds() > ttl(item.kind):
+        if how is None or item.event_id in muted or item.fixtures & muted or (now - item.created_at).total_seconds() > ttl(item.kind):
             continue
         if item.id in taken or (item.corrects is not None and item.corrects not in told):
             # Taken back before it went (a batch the tick swept up late), or the correction of something
@@ -260,11 +256,8 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     for tag, members in sorted(groups.items(), key=lambda g: -max(i.priority for i, _ in g[1])):
         members.sort(key=lambda m: (m[0].priority, m[0].id), reverse=True)
         lead = members[0][0]
-        # The game's earlier pushes: of its event, or of another fixture it's under; a player's news, theirs.
-        if lead.event_id:
-            of_it = [s for s in sent if s.event_id == lead.event_id or (bool(lead.game) and s.game == lead.game)]
-        else:
-            of_it = [s for s in sent if s.event_id is None and s.player_id == lead.player_id]
+        # The game's earlier pushes, of any of its fixtures; a player's news, theirs.
+        of_it = [s for s in sent if s.event_id == lead.event_id or s.event_id in lead.fixtures] if lead.event_id else [s for s in sent if s.event_id is None and s.player_id == lead.player_id]
         earlier = sorted(of_it, key=lambda s: s.at, reverse=True)
         noisy = [i for i, loud in members if loud]
         loud = bool(noisy)

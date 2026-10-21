@@ -18,7 +18,7 @@ notify.MAX_DEVICES each, as a moment's push goes, less a phone with live cards o
 stopped this game's (Stop live card on it): the app would throw its cards away (android). Each card names the
 fan's own players in the game, with their line so far. A game under several fixtures (a chess board is one of each
 player's, each polled as its own event) is one card a fan: one who follows players on more than one has it from
-their first player's fixture (by id), naming them all (BHA-378). A game's end goes to every fan who follows it any
+their first player's fixture (by id) that's being polled, naming them all (BHA-378). A game's end goes to every fan who follows it any
 of those ways, whatever their level, on the same phones: it only takes a card down.
 
 None of this is an alert: no notification rows, no sound, nothing in the push metrics. A device FCM says is gone
@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from . import bus, fcm, logs, notify, sports, structured
 from .db import session
-from .models import Event, EventPlayer, EventState, Follow, MatchFollow, NotificationMute, Player, PlayerIdentity, PlayerLine, PushSubscription
+from .models import Event, EventPlayer, EventState, Follow, MatchFollow, NotificationMute, Player, PlayerLine, PushSubscription
 from .moments import DEFAULT_LEVEL
 from .sports.base import Glance, Sport
 
@@ -259,8 +259,9 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: di
             made = {**shown.keys, "type": kind, "tag": tag(event_id), "event_id": event_id}
         if not live:
             made = {**made, "live": "0"}  # it's over, or no longer polled live, whatever its last poll said
-        on = _players_on(db, event_id, board) if live and board else {}
-        fans = audience(db, event_id, live, on)
+        found = structured.boards(db, [event_id]).get(event_id) if live and board else None
+        on = _players_on(event_id, board or {}, found) if found else {}
+        fans = audience(db, event_id, live, on, set(found.events.values()) if found else set())
         theirs = lines(db, event_id, fans, on) if live else {}
         devices = android(db, list(fans), event_id)
     futures = []
@@ -277,18 +278,18 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: di
     return sent
 
 
-def _players_on(db: Session, event_id: int, board: dict[str, str]) -> dict[int, str]:
-    """The players on Sports Follow of those on a game's board (on_board), by their ids here, each with their headline."""
-    event = db.get(Event, event_id)
-    system = (event.key if event is not None else "").partition(":")[0]
-    found = db.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id.in_(list(board))))
-    return {player_id: board[external] for player_id, external in found}
+def _players_on(event_id: int, board: dict[str, str], found: structured.Fixtures) -> dict[int, str]:
+    """The players here on a game's board (on_board), by their ids here, each with their headline: those whose own
+    fixture of it is this one, or another that's being polled (structured.polled_lately), so its card goes from there."""
+    lately = structured.polled_lately(e for e in found.events.values() if e != event_id)
+    return {player_id: board.get(external, "") for external, player_id in found.players.items() if found.events.get(player_id) == event_id or found.events.get(player_id) in lately}
 
 
-def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None) -> dict[str, list[int]]:
+def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None, fixtures: set[int] | None = None) -> dict[str, list[int]]:
     """The fans who should have a game's live card (live), or its end (the module docstring), each with the players
-    they follow in it, those set to off left out: whom their card names. `on`: the players on its board (_players_on)
-    where the game is under several fixtures, some of them under the others."""
+    they follow in it, those set to off left out: whom their card names. Where the game is under several fixtures,
+    `on` is the players on its board (_players_on), some of them under its other `fixtures`, and muting any of them
+    mutes its card."""
     from . import teams  # a team's games are followed games (teams reads the poller that calls here)
 
     levels: dict[str, set[str]] = {}
@@ -308,7 +309,7 @@ def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] |
     for fan, by_game in teams.watches(db, {event_id}).items():
         levels.setdefault(fan, set()).add(by_game[event_id][0])
     if live and levels:
-        muted = set(db.scalars(select(NotificationMute.fan_id).where(NotificationMute.event_id == event_id, NotificationMute.fan_id.in_(list(levels)))))
+        muted = set(db.scalars(select(NotificationMute.fan_id).where(NotificationMute.event_id.in_({event_id, *(fixtures or ())}), NotificationMute.fan_id.in_(list(levels)))))
         levels = {fan: theirs for fan, theirs in levels.items() if fan not in muted and theirs - set(QUIET)}
     if live and on and levels:
         # A game under several fixtures (a chess board is one of each player's, both polled): a fan who follows a

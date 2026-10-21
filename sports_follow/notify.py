@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, delete, func, or_, select, tuple_, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -244,7 +244,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         if not claimed:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
-        items = on_boards(db, rows)
+        items = on_boards(db, rows, polled=True)
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
         # The followed teams in each of the batch's games, for the app's toasts (below).
@@ -300,22 +300,30 @@ def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
                         frozenset(m.about or ()) if m.player_id is None else frozenset(), (m.key.split(":", 3)[3:] or [""])[0]) for m in rows]
 
 
-def on_boards(db: Session, rows: Sequence[Moment]) -> list[alerts.Item]:
-    """Moments as the planner sees them (as_items), each with the game its event is one fixture of where a game is
-    under several (structured.games: a chess board is one of each player's), and a player's there with the player
-    here whose side tells it (Item.voice), from its stored id in the source. Looked up only for such games."""
+def on_boards(db: Session, rows: Sequence[Moment], polled: bool = False) -> list[alerts.Item]:
+    """Moments as the planner sees them (as_items), each with its game's fixtures where a game is under several
+    (structured.boards: a chess board is one of each player's), and a player's there with the player here whose side
+    tells it (Item.voice), from its stored id in the source. With `polled`, a voice is kept only where that player's
+    own fixture of the game is being polled (structured.polled_lately), so their side will say it: else both sides
+    do, twice beating never. Looked up only for such games."""
     from . import structured  # an event's board (structured sends through here)
 
     items = as_items(rows)
-    games = structured.games(db, {i.event_id for i in items})
-    if not games:
+    found = structured.boards(db, {i.event_id for i in items})
+    if not found:
         return items
-    # Each player's moment there by its source and the id its voice has there.
-    systems = {event_id: key.partition(":")[0] for event_id, key in db.execute(select(Event.id, Event.key).where(Event.id.in_(list(games))))}
-    said = {m.id: (systems.get(m.event_id, ""), str(m.about[0])) for m in rows if m.player_id is not None and m.event_id in games and m.about}
-    found = select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(set(said.values())))
-    voices = {(system, external): player_id for player_id, system, external in db.execute(found)} if said else {}
-    return [replace(i, game=games.get(i.event_id or 0, ""), voice=voices.get(said.get(i.id, ("", "")))) for i in items]
+    lately = structured.polled_lately(e for f in found.values() for e in f.events.values()) if polled else set()
+    out = []
+    for m, i in zip(rows, items):
+        board = found.get(i.event_id or 0)
+        if board is None:
+            out.append(i)
+            continue
+        voice = board.players.get(str(m.about[0])) if m.player_id is not None and m.about else None
+        if polled and voice is not None and voice != i.player_id and board.events.get(voice) not in lately:
+            voice = None  # their fixture isn't here, or isn't being polled: this side says it too
+        out.append(replace(i, fixtures=frozenset({i.event_id or 0, *board.events.values()}), voice=voice))
+    return out
 
 
 def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
@@ -352,7 +360,7 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
 def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
-    from . import structured, teams  # an event's board; whose team is in a game (both read the pipeline that sends through here)
+    from . import teams  # whose team is in a game (teams reads the pipeline that sends through here)
 
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
@@ -387,17 +395,15 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             mine.append(d)
     if not devices:
         return []
+    # A game under several fixtures is muted, and its story told, under any of them (alerts.plan).
+    fixtures = events | {e for i in items for e in i.fixtures}
     muted: dict[str, set[int]] = {}
-    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(events))) if events else []:
+    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(fixtures))) if events else []:
         muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
-    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
-    notes = list(db.scalars(earlier))
-    # The games their events are of, where a game is under several fixtures: its earlier pushes from any of them are
-    # its story (alerts.plan).
-    boards = structured.games(db, {n.event_id for n in notes}) if any(i.game for i in items) else {}
-    for n in notes:
-        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or [], boards.get(n.event_id or 0, "")))
+    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(fixtures), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+    for n in db.scalars(earlier):
+        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
     # What earlier pushes of these games sent the fans who follow one by itself: a moment one side said there
     # isn't said again by the other (alerts.plan).

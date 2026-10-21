@@ -2,29 +2,32 @@
 each, polled apart, and each poll finds the board's moments from its own side. Alerts, live cards and mutes take the
 two for one game: a fan who follows both players hears each moment once, from the side it went toward, on one
 notification and one live card, and muting either event mutes the game; a fan who follows one of them hears it from
-their player's side, as before. The recorded Esports World Cup grand final (Carlsen v Lazavik, tests/test_predictions.py's
-board) through the poller, against a throwaway database at alembic head (skipped without one; see tests/test_players.py
-for setting it up)."""
+their player's side, as before. A side tells a moment for the other only where its own fixture is here and being
+polled; else both do, twice beating never. The recorded Esports World Cup grand final (Carlsen v Lazavik,
+tests/test_predictions.py's board) through the poller, against a throwaway database at alembic head (skipped without
+one; see tests/test_players.py for setting it up)."""
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, engine, livecards, notify, server, structured
-from sports_follow.adapters import KNOWN, Snapshot
+from sports_follow.adapters import KNOWN, Snapshot, lichess_chess
 from sports_follow.models import Event, EventPlayer, Follow, NotificationMute, Player, PlayerIdentity, PushSubscription
 
 from .test_fcm import fake_fcm  # noqa: F401  (the fixture)
 from .test_match_follow import Store
 from .test_new_adapters import CARLSEN, LAZAVIK, load
-from .test_predictions import board
+from .test_predictions import NOW, board
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -80,17 +83,29 @@ def binding(fide: str) -> dict:
 
 @pytest.fixture
 def polls(monkeypatch):
-    """Polls applied at once, polled all along, their moments sent in the foreground, the engine's evaluations as
-    each snapshot carries them; every push as (fan, title, tag, body), every toast's moment."""
+    """Polls applied at once, each noted when it ran as the poller notes it (polled all along), their moments sent in
+    the foreground, the engine's evaluations as each snapshot carries them; every push as (fan, title, tag, body),
+    every toast's moment, and Redis."""
     pushed: list[tuple[str, str, str, str]] = []
     toasts: list[dict] = []
-    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    redis = Store()
+
+    def polled(event_id: int, cadence: int) -> bool:
+        redis.set(f"polled_at:{event_id}", str(int(time.time())))
+        return True
+
+    monkeypatch.setattr(structured, "_polled", polled)
     monkeypatch.setattr(engine, "enabled", lambda: False)
     monkeypatch.setattr(notify, "dispatch", notify.send)
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: pushed.append((endpoint.rsplit("/", 1)[1], payload["title"], payload["tag"], payload["body"])))
     monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: toasts.append(event["moment"]))
-    monkeypatch.setattr(bus, "sync_redis", lambda: Store())
-    return pushed, toasts
+    monkeypatch.setattr(bus, "sync_redis", lambda: redis)
+    return SimpleNamespace(pushed=pushed, toasts=toasts, redis=redis)
+
+
+def quiet(redis: Store, event_id: int) -> None:
+    """A side's fixture not polled for longer than a poll gap (a restart, its source failing a while)."""
+    redis.set(f"polled_at:{event_id}", str(int(time.time()) - structured.POLL_GAP - 60))
 
 
 def poll(event_id: int, snap: Snapshot, band: int | None = None, move: int = 40) -> None:
@@ -121,7 +136,7 @@ def heard(pushed: list[tuple[str, str, str, str]]) -> dict[str, list[str]]:
 
 
 def test_a_fan_of_both_players_hears_each_moment_of_their_board_once_from_the_side_it_went_toward(db, polls):
-    pushed, toasts = polls
+    pushed, toasts = polls.pushed, polls.toasts
     phones(db)
     # The pairing's out; each side's fixture is polled before the round starts.
     for event_id in (2, 1):
@@ -146,10 +161,14 @@ def test_a_fan_of_both_players_hears_each_moment_of_their_board_once_from_the_si
     assert heard(pushed) == {"lazavik": ["Turnaround: Denis Lazavik is winning"], "both": ["Turnaround: Denis Lazavik is winning"]}
     [(_, _, tag, _)], [(_, _, again, body)] = winning, turned
     assert again == tag and body.split("\n")[1:] == ["Magnus Carlsen is winning", "Magnus Carlsen is playing"]
-    # The result (Carlsen won game 1): once, the winner's.
+    # The result (Carlsen won game 1), hours of a classical game later: once, the winner's, its story both sides' pushes.
+    db.execute(text("UPDATE notification SET created_at = created_at - interval '3 hours'"))
+    db.commit()
     poll(2, side(2, game=0))
     assert heard(pushed) == {"lazavik": ["Denis Lazavik: Lost with Black vs Magnus Carlsen"]}
     poll(1, side(1, game=0))
+    [(_, _, last, body)] = [p for p in pushed if p[0] == "both"]
+    assert last == tag and body.split("\n")[1:] == ["Turnaround: Denis Lazavik is winning", "Magnus Carlsen is winning", "Magnus Carlsen is playing"]
     assert heard(pushed) == {"carlsen": ["Magnus Carlsen: Won with White vs Denis Lazavik"], "both": ["Magnus Carlsen: Won with White vs Denis Lazavik"]}
 
     # The Alerts list says each once too, as the push did; a fan of one of them still sees all of their player's.
@@ -164,7 +183,7 @@ def test_a_fan_of_both_players_hears_each_moment_of_their_board_once_from_the_si
 
 
 def test_muting_either_fixture_of_a_board_mutes_the_game(db, polls):
-    pushed, _ = polls
+    pushed = polls.pushed
     phones(db)
     for event_id in (1, 2):
         poll(event_id, side(event_id, status="*"))
@@ -204,8 +223,72 @@ def test_a_fan_of_both_players_has_one_live_card_for_their_board(db, polls, fake
     # whichever side polled first.
     assert cards() == {"lazavik": [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])], "carlsen": [("1", ["Magnus Carlsen · White vs Denis Lazavik"])],
                        "both": [("1", ["Denis Lazavik · Black vs Magnus Carlsen", "Magnus Carlsen · White vs Denis Lazavik"])]}
+    # Where Carlsen's fixture has stopped being polled, theirs comes from Lazavik's: never none.
+    quiet(polls.redis, 1)
+    again(polls.redis)
+    poll(2, side(2, status="*", ongoing=True), band=0, move=41)
+    assert cards() == {"lazavik": [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])], "both": [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])]}
     # Muted from the other side's push, the game sends them no card at all.
     server.mute(2, "both", db)
-    poll(2, side(2, status="*", ongoing=True), band=2, move=41)
-    poll(1, side(1, status="*", ongoing=True), band=2, move=41)
+    again(polls.redis)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=42)
+    poll(1, side(1, status="*", ongoing=True), band=2, move=42)
     assert set(cards()) == {"lazavik", "carlsen"}
+
+
+def again(redis: Store) -> None:
+    """Forget what each game's live card last showed, so the next poll sends it again (as REFRESH would, later)."""
+    for key in [k for k in redis if k.startswith("livecard:")]:
+        del redis[key]
+
+
+def test_a_fan_of_both_hears_every_moment_where_only_one_sides_fixture_is_here(db, polls):
+    # Lazavik's fixture of the board isn't here (his tournaments weren't all found, or haven't been read yet): the
+    # moments his side would tell come from Carlsen's. Game 2 of the grand final: Lazavik had White, and it was drawn.
+    db.execute(text("DELETE FROM event WHERE id = 2"))
+    db.commit()
+    phones(db)
+    poll(1, side(1, game=1, status="*"))
+    poll(1, side(1, game=1, status="*", ongoing=True), band=0)  # White's to tell: Lazavik's
+    poll(1, side(1, game=1, status="*", ongoing=True), band=2, move=41)  # White winning: Lazavik's too
+    poll(1, side(1, game=1))  # a draw: White's
+    assert heard(polls.pushed)["both"] == ["Magnus Carlsen is playing", "Magnus Carlsen is in trouble", "Magnus Carlsen: Drew with Black vs Denis Lazavik"]
+
+
+def test_a_moment_whose_tellers_fixture_has_stopped_polling_still_arrives(db, polls):
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, side(event_id, status="*"))
+        poll(event_id, side(event_id, status="*", ongoing=True), band=0)
+    polls.pushed.clear()
+    # Carlsen's fixture hasn't been polled for a while: it may never find his side of what comes, so Lazavik's says it.
+    quiet(polls.redis, 1)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=41)
+    assert heard(polls.pushed) == {"lazavik": ["Denis Lazavik is in trouble"], "both": ["Denis Lazavik is in trouble"]}
+    assert polls.toasts[-1]["title"] == "Denis Lazavik is in trouble" and "voice" not in polls.toasts[-1]  # an open app shows it too
+
+
+def test_a_mini_match_is_one_notification_through_its_games(db, polls):
+    # A knockout's mini-match is several games on one board, each with an id of its own; its fixtures, one a player,
+    # last the whole match, and so does its notification.
+    def match(event_id: int, played: int, status: str = "live") -> Snapshot:
+        data = load("lichess/round-final")
+        games = [*data["games"][:played], {**data["games"][played], "status": "*"}]
+        to_come = status == "scheduled"
+        rnd = {**data["round"], "finished": False, "ongoing": not to_come, "startsAt": int((NOW + timedelta(days=1 if to_come else -1)).timestamp() * 1000)}
+        return lichess_chess.parse_board({**data, "round": rnd, "games": games}, SIDES[event_id][1], NOW)
+
+    phones(db)
+    for event_id in (1, 2):
+        poll(event_id, match(event_id, 0, "scheduled"))
+        poll(event_id, match(event_id, 0), band=0)
+    poll(1, match(1, 0), band=2, move=41)  # game 1: Carlsen, with White, pulls ahead
+    poll(2, match(2, 0), band=2, move=41)
+    for event_id in (1, 2):
+        poll(event_id, match(event_id, 1), band=0)  # game 2 starts: a new board id
+    poll(2, match(2, 1), band=-2, move=30)  # game 2: Carlsen, with Black, pulls ahead
+    poll(1, match(1, 1), band=-2, move=30)
+    tags = {(fan, title): tag for fan, title, tag, _ in polls.pushed}
+    assert {tags[("carlsen", "Magnus Carlsen is winning")], tags[("lazavik", "Denis Lazavik is in trouble")], tags[("both", "Magnus Carlsen is winning")]} == {"e1"}
+    assert [title for fan, title, *_ in polls.pushed if fan == "both"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Magnus Carlsen is winning"]
+    assert len({tag for *_, tag, _ in polls.pushed}) == 1  # every push of the match, either side's, on one notification

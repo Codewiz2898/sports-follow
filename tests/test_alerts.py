@@ -17,8 +17,8 @@ def item(id: int, kind: str, title: str, *, level: str = "key", priority: int = 
     return Item(id, player, event, kind, level, priority, title, body, f"/player/{player}", NOW - timedelta(seconds=ago), corrects)
 
 
-def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI, moments: list[int] | None = None, game: str = "") -> Sent:
-    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago), moments or [], game)
+def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI, moments: list[int] | None = None) -> Sent:
+    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago), moments or [])
 
 
 def test_levels_pick_what_reaches_the_phone():
@@ -143,14 +143,13 @@ def test_a_goal_taken_back_before_it_went_isnt_sent():
 # ---------------------------------------------------------------- a game under several fixtures (BHA-378)
 
 CARLSEN, LAZAVIK = 5, 6
-ON_CARLSENS, ON_LAZAVIKS = 21, 22  # the board under each player's fixture: an event each, polled apart
-BOARD = "lichess_chess:mJnv1YBU"  # the game both are (structured.games)
+ON_CARLSENS, ON_LAZAVIKS = 21, 22  # the board under each player's fixture: an event each, polled apart (structured.boards)
 
 
 def side(id: int, player: int, title: str, voice: int, *, kind: str = "swing", priority: int = 70) -> Item:
     """A chess board's moment as one side's fixture found it, naming whose side tells it (Found.voice)."""
     event = ON_CARLSENS if player == CARLSEN else ON_LAZAVIKS
-    return replace(item(id, kind, title, player=player, event=event, priority=priority, body="Engine +4.0 · move 40"), game=BOARD, voice=voice)
+    return replace(item(id, kind, title, player=player, event=event, priority=priority, body="Engine +4.0 · move 40"), fixtures=frozenset({ON_CARLSENS, ON_LAZAVIKS}), voice=voice)
 
 
 def test_a_fan_of_both_players_on_a_board_hears_each_moment_once_from_the_side_it_went_toward():
@@ -174,9 +173,10 @@ def test_a_board_under_two_fixtures_is_one_notification_with_one_story():
     # The turnaround is Lazavik's to tell, from his fixture; the game's notification is the one Carlsen's winning went on.
     turned = side(3, LAZAVIK, "Turnaround: Denis Lazavik is winning", LAZAVIK, priority=85)
     [winning] = plan([side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN)], {CARLSEN: "key"}, set(), [], NOW)
-    earlier = [sent(ON_CARLSENS, "Magnus Carlsen is winning", player=CARLSEN, moments=[2], game=BOARD, ago=900)]
+    earlier = [sent(ON_CARLSENS, "Magnus Carlsen is winning", player=CARLSEN, moments=[2], ago=900)]
     [p] = plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, set(), earlier, NOW)
-    assert p.tag == winning.tag and p.tag.startswith("g") and len(p.tag) <= 32  # a Web Push topic: at most 32 characters
-    assert p.story == ["Magnus Carlsen is winning"]
+    assert p.tag == winning.tag == f"e{ON_CARLSENS}" and p.story == ["Magnus Carlsen is winning"]  # the board's first fixture's
+    # Muted under either fixture, it's muted.
+    assert plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, {ON_CARLSENS}, earlier, NOW) == []
     # A game whose fixture is the game keeps its event's notification.
     assert plan([item(1, "fifty", "Virat Kohli reaches 50")], {KOHLI: "key"}, set(), [], NOW)[0].tag == "e10"

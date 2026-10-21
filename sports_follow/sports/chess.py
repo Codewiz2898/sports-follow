@@ -272,6 +272,10 @@ class Chess(Sport):
         """The game's id at its source: each player's fixture shows the same board, and asks one question."""
         return str(state.get("game_id") or "")
 
+    def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
+        """White and Black by their FIDE ids, the same all through a mini-match's games."""
+        return tuple(str(p["id"]) for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id"))
+
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A
         knockout round's mini-match (several games on one board) asks nothing: each of its games shows only once
