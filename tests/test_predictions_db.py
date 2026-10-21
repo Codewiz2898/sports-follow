@@ -326,6 +326,12 @@ def test_a_match_the_schedule_puts_back_keeps_its_question_till_its_new_date(db,
     poll(db.get(Question, gone.id).event_id, sm.parse_match(football_match("FT", 1, 0)), "sportmonks_football")
     db.expire_all()
     assert (db.get(Question, gone.id).status, db.get(Question, gone.id).answer, picks(db)) == ("settled", str(HOME), {"asha": (str(HOME), predictions.FLOOR)})
+    # Brought forward to a time that's passed (the read came late): its picks close now, not at the old time.
+    kicked_off = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
+    schedule("556", kicked_off, "scheduled")
+    with pytest.raises(predictions.Refused) as shut:
+        predictions.pick(db, "ravi", moved.id, str(AWAY))
+    assert shut.value.status == 409 and db.get(Question, moved.id).locks_at == kicked_off
 
 
 def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):
