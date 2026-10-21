@@ -14,7 +14,7 @@ own shares the Postgres container with it and nothing else:
 | Code | the main checkout | `<main checkout>/.claude/worktrees/<name>`, at the commit under test |
 | Database | `sports_follow` | `sports_follow_<name>`, a copy |
 | Redis | `sports-follow-redis`, :6380 | a container of its own, `sports-follow-redis-<name>`, :6381 |
-| API / web | :8421 / `http://localhost:5173` | :18421 / `http://<name>.localhost:15173` |
+| API / web | :8421 / `http://localhost:5173` | `http://<name>.localhost:18421` / `http://<name>.localhost:15173` |
 | Secrets, keys | `~/.config/sports-follow` | made fresh in your scratchpad; paid sources off |
 
 Pick a short `<name>` for the round (`r2`) and use it everywhere below. A second stack at the same time
@@ -25,7 +25,9 @@ Why each part is separate:
   the isolated stack publishes would stream to everyone with the main app open, and back.
 - **Its own host name** (`<name>.localhost`): browsers keep cookies per host, not per port, so the
   isolated app at localhost:15173 would replace the main app's fan cookie with one the main API rejects,
-  and that browser's fan would start over with nothing followed.
+  and that browser's fan would start over with nothing followed. The API's own port counts too: with a
+  web build in the worktree it serves the app, and `/api/me/following` and `/api/starters` set the fan
+  cookie on whatever host it was opened at.
 - **Paid sources off**: the API spends a source's key too (search, previews, follows), not just the
   worker, and counts it in its own Redis, where the main stack can't see it. Together the two can spend
   past a source's limit, and live games on the main stack pay for it.
@@ -77,17 +79,27 @@ Why each part is separate:
    own: `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password <venv>/bin/python -m sports_follow.admin password`,
    and set that same `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE=<scratch>/admin-password` in the environment above
    in place of `<scratch>/none`.
-6. **The API and web**, as preview servers: two entries in the worktree's `.claude/launch.json`, never
-   committed (they hold your scratchpad's paths):
+6. **The API and web**, as preview servers: two entries in a `.claude/launch.json`, never committed
+   (they hold your scratchpad's paths):
 
-       {"name": "<name>-api", "runtimeExecutable": "/usr/bin/env", "port": 18421,
+       {"name": "<name>-api", "runtimeExecutable": "/usr/bin/env", "port": 18421, "url": "http://<name>.localhost:18421",
         "runtimeArgs": [<the environment above, one "NAME=value" each>,
           "<venv>/bin/uvicorn", "sports_follow.server:app", "--app-dir", "<worktree>",
           "--port", "18421", "--timeout-graceful-shutdown", "3"]},
        {"name": "<name>-web", "runtimeExecutable": "/bin/sh", "port": 15173, "url": "http://<name>.localhost:15173",
         "runtimeArgs": ["-c", "cd <worktree>/web && SPORTS_FOLLOW_API=http://127.0.0.1:18421 PATH=$HOME/.local/node/bin:$PATH npm run dev -- --port 15173 --strictPort"]}
 
-   Open the app only at `http://<name>.localhost:15173`, never at localhost:15173.
+   **Which `launch.json`:** `preview_start` reads the one in your session's own folder, not the stack's
+   worktree. A session in the main checkout (where step 1 ran) gets the main checkout's file, which git
+   tracks and other sessions start their servers from. There, add the entries only to start the two
+   servers and put the file back at once: copy it to your scratchpad first, `preview_start` both, copy it
+   back, and check `cmp` against your copy and a clean `git status` for it. A session in a worktree of its
+   own does the same with that worktree's file.
+
+   **Both `url`s matter.** Without one, `preview_start` opens its tab at `http://localhost:<port>/`, and
+   the API's tab there sets a fan cookie on `localhost`, replacing the main app's in the browser pane (a
+   tab closed afterwards doesn't bring it back). After starting, `tabs_context` should show both tabs on
+   `<name>.localhost`. Open the app only at `http://<name>.localhost:15173`, never at localhost:15173.
 
 ## The worker: only if the round needs it
 
@@ -97,15 +109,59 @@ of the directory it starts in) with the environment above, as a background task:
 or PID in the board's header, and stop it the moment the round no longer needs it. (Round two's worker
 once ran all night.)
 
+## A Twitch player on the web
+
+Twitch's player takes a plain-http page as its parent only at exactly `localhost`. At
+`http://<name>.localhost` its CSP answers `frame-ancestors https://<name>.localhost` and the frame is
+blocked. To try it, run a second Vite on `localhost` (say :15184) from a scratch config whose `/api`
+proxy strips the cookie both ways, so the main app's `localhost` fan cookie is neither sent nor replaced:
+
+    // <scratch>/vite.nocookie.ts
+    import base from '<worktree>/web/vite.config.ts'
+
+    export default {
+      ...base,
+      server: {
+        proxy: {
+          '/api': {
+            target: 'http://127.0.0.1:18421',
+            changeOrigin: false,
+            configure: (proxy: { on: (e: string, f: (...a: any[]) => void) => void }) => {
+              proxy.on('proxyReq', (req: { removeHeader: (h: string) => void }) => req.removeHeader('cookie'))
+              proxy.on('proxyRes', (res: { headers: Record<string, unknown> }) => { delete res.headers['set-cookie'] })
+            },
+          },
+        },
+      },
+    }
+
+Start it from `<worktree>/web` with `PATH=$HOME/.local/node/bin:$PATH npx vite --config <scratch>/vite.nocookie.ts --port 15184 --strictPort`.
+Every page there is a fan with no cookie, so it's for the player, not for follows or sign-in.
+
+## The Android app against the stack
+
+- **A busy emulator stays theirs.** If another session's Metro runs, or the app's `debug_http_host` on
+  the running emulator points at a port that isn't yours (`adb -s <serial> shell run-as io.slam.app cat
+  shared_prefs/io.slam.app_preferences.xml`), boot the other AVD (`emulator -list-avds`)
+  headless on a port of its own: `~/.local/android-sdk/emulator/emulator -avd <avd> -port 5560 -no-window`,
+  as a background task. With two emulators attached, `adb` without `-s` fails ("more than one device"),
+  so pass `-s emulator-5560` to every `adb`. Run your own Metro on a free port with its own
+  `adb -s emulator-5560 reverse`, and afterwards uninstall what you installed, remove the reverses and
+  stop it (`adb -s emulator-5560 emu kill`).
+- **The `/watch` page is cached for an hour** (`Cache-Control: public, max-age=3600`), so the app's
+  WebView plays a stream it has loaded before even with the API stopped. To see "Couldn't load the
+  player", use a stream id it hasn't loaded yet.
+
 ## When the round ends
 
 Tear it all down; nothing of it should outlive the round:
 
-1. Stop its processes: `preview_stop` for the API and web, the worker's task, and any server a hunter
-   started. Then check nothing still runs from the worktree (the worker listens on no port):
-   `lsof -d cwd | grep '.claude/worktrees/<name>'` prints nothing.
+1. Stop its processes: `preview_stop` for the API and web, the worker's task, a cookie-free Vite, an
+   emulator and Metro of yours, and any server a hunter started. Then check nothing still runs from the
+   worktree (the worker listens on no port): `lsof -d cwd | grep '.claude/worktrees/<name>'` prints
+   nothing. Check the `launch.json` you started from is back as it was.
 2. Remove its Redis: `docker rm -f sports-follow-redis-<name>`. Never the main `sports-follow-redis`.
 3. Drop the database once nothing is connected to it:
    `docker exec sports-follow-postgres psql -U sports -d sports_follow -c "DROP DATABASE sports_follow_<name>;"`
-4. Remove the worktree: `git worktree remove <worktree>` (`--force` only for the uncommitted
-   `launch.json` entries, after checking that's all `git status` shows).
+4. Remove the worktree: `git worktree remove <worktree>` (`--force` only after checking `git status`
+   there shows nothing you need).
