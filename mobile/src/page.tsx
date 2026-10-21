@@ -2,8 +2,8 @@
 // tab bar covers nothing, and 16px between its blocks; what just happened to this phone's sign-in at its top,
 // on every page, as the web says it.
 
-import { useEffect, useRef, type ReactNode } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
+import { useEffect, useRef, type ReactElement, type ReactNode } from 'react'
+import { FlatList, RefreshControl, ScrollView, StyleSheet, View, type FlatListProps } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { AccountNotice, useAccount } from './account'
 import { colour, GUTTER } from './theme'
@@ -29,6 +29,26 @@ export function Page({ children, onRefresh, refreshing, top = true, bar = colour
       </ScrollView>
       {/* The status bar's own strip, of the page's ground (a band's colour on a player's page), over what scrolls under it. */}
       <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: bar }]} />
+    </View>
+  )
+}
+
+/** A page that's a long list (the Feed): the same paper, padding and notice, but only the rows near the screen
+ * are drawn, so their pictures load as they come near. `head` goes above the rows, `foot` below them. */
+export function PageList<T>({ head, foot, onRefresh, refreshing, ...list }: Omit<FlatListProps<T>, 'ListHeaderComponent' | 'ListFooterComponent' | 'refreshControl'> & { head: ReactElement; foot?: ReactElement; onRefresh?: () => void; refreshing?: boolean }) {
+  const insets = useSafeAreaInsets()
+  const { notice } = useAccount()
+  return (
+    <View style={s.page}>
+      <FlatList
+        {...list}
+        style={s.page}
+        contentContainerStyle={[s.content, { gap: 14, paddingTop: insets.top + 20, paddingBottom: 120 + insets.bottom }]}
+        ListHeaderComponent={<View style={{ gap: 16 }}>{notice ? <AccountNotice /> : null}{head}</View>}
+        ListFooterComponent={foot}
+        refreshControl={onRefresh ? <RefreshControl refreshing={Boolean(refreshing)} onRefresh={onRefresh} /> : undefined}
+      />
+      <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: colour.bg }]} />
     </View>
   )
 }

@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedPage, FeedShare, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedPage, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -64,11 +64,10 @@ export function endpoints(request: Request) {
     pushTest: () => request<{ sent: number }>('/api/push/test', { method: 'POST' }),
     activity: (before?: number | null) => request<{ items: ActivityItem[]; next: number | null }>(`/api/me/activity${before ? `?before=${before}` : ''}`),
     week: () => request<{ posters: WeekPoster[]; wire: WireRow[] }>('/api/me/week'),
-    // A player's Feed (sports_follow/feed.py), what the fan says about an item there, and the Android app's Today rail of it.
+    // A player's Feed (sports_follow/feed.py), and what the fan says about an item there.
     feed: (playerId: number) => request<Feed>(`/api/players/${playerId}/feed`),
     feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
       request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
-    myFeed: () => request<{ shares: FeedShare[] }>('/api/me/feed'),
     // The fan's own Feed, a page at a time (feed.page): the next after `cursor`, one player's with `player`; days are
     // the device's. limit 0: the circles, the count and the newest only.
     myFeedPage: ({ cursor, player, limit }: { cursor?: string | null; player?: number | null; limit?: number } = {}) => {

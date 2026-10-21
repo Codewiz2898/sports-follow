@@ -1,9 +1,9 @@
-// Dev only: made-up videos, posts and news for a player's Feed and the Android app's Today rail, to see the cards before the
+// Dev only: made-up videos, posts and news for a player's Feed, to see the cards before the
 // feed pipeline fills them (sports_follow/feed.py, `judged`). Loaded by components/Feed.tsx when the dev
 // server's page has ?feed-sample; a production build never includes it (import.meta.env.DEV is false there).
 // The YouTube ids name no real video: the cards fall back to their ink thumbnail.
 
-import type { Card, Feed, FeedItem, FeedShare } from '../types'
+import type { Feed, FeedItem } from '../types'
 import { shortName } from '../format'
 
 const HOUR = 36e5
@@ -47,14 +47,4 @@ export function sampleFeed(playerId: number, name: string): Feed {
     item('a1b2c3d4e5f60009', { kind: 'video', tag: 'Classic', title: 'At twelve: the year it started', source: 'Sample Creator', published_at: at(20000), video: { youtube_id: 'SAMPLEvid06', duration: 1210, views: 2200000 } }),
   ]
   return { player_id: playerId, groups, evergreen, count: groups.reduce((n, g) => n + g.items.length, 0) + evergreen.length }
-}
-
-/** Today's rail: a video for the first followed player, their own post for the second, a fan edit for the third. */
-export function sampleShares(cards: Card[]): FeedShare[] {
-  const kinds: Omit<FeedItem, 'id' | 'url' | 'reason'>[] = [
-    { kind: 'video', tag: 'Analysis', title: 'The last game, move by move: where it turned', source: 'Sample Creator', published_at: at(9), video: { youtube_id: 'SAMPLEvid01', duration: 1122, views: 41000 } },
-    { kind: 'post', tag: 'Post', title: 'Proud of the whole team. One more to go.', source: '@player', published_at: at(11), post: { platform: 'Instagram', own: true } },
-    { kind: 'video', tag: 'Fan edit', title: 'The run so far: every big moment', source: 'Sample Edits', published_at: at(26), video: { youtube_id: 'SAMPLEvid02', duration: 365, views: 412000 } },
-  ]
-  return cards.slice(0, kinds.length).map((c, n) => ({ player_id: c.player_id, item: item(`b1b2c3d4e5f6000${n}`, kinds[n]) }))
 }
