@@ -6,27 +6,30 @@
 // tapped, with its sound, or by itself (BHA-359), once more than half of it is on screen, as the fan's autoplay
 // setting allows (autoplay.ts): muted until the fan turns the sound on, then with it until they turn it off (BHA-381,
 // sound.ts; the sound button beside a playing video). One at a time, and it stops once it's off the screen, the Feed's
-// left or the app's behind another. An upright video (a Short) is framed and plays upright (BHA-358), clear of whatever is beside
-// it, as YouTube's rules want nothing over its player. Each card names its channel under whose it is. Items of
+// left or the app's behind another. An upright video (a Short) plays as Shorts do (BHA-384): full screen in the
+// full-screen layout, its frame as wide as the phone allows under the tabs and who and what in the strip below it
+// (ShortReel), and from edge to edge in a viewer of the Feed's Shorts over everything (ShortsViewer); never anything of
+// the app's over its player, as YouTube's rules want. Each card names its channel under whose it is. Items of
 // players the fan doesn't follow (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here". Also Today's "From your players" (the web's components/Feed.tsx),
 // in the edge layout's cards.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Image } from 'expo-image'
 import { router, useIsFocused } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { ActivityIndicator, AppState, FlatList, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewabilityConfigCallbackPairs, type ViewToken } from 'react-native'
+import { ActivityIndicator, AppState, FlatList, Linking, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewabilityConfigCallbackPairs, type ViewToken } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import { WebView } from 'react-native-webview'
-import { channelOf, duration, openLabel, refusedHere, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
+import { channelOf, duration, isShort, openLabel, refusedHere, shortFrame, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
 import { useTone } from './catalog'
 import { useAutoplay } from './autoplay'
 import { useFollowing } from './following'
-import { CheckIcon, MutedIcon, PlayIcon, PlusIcon, ShareIcon, SoundIcon } from './icons'
+import { BackIcon, CheckIcon, MutedIcon, PlayIcon, PlusIcon, ShareIcon, SoundIcon } from './icons'
 import { useMyFeed } from './myFeed'
 import { Face, ItemSheet, Picture } from './post'
 import { setSound, useSound } from './sound'
@@ -99,6 +102,12 @@ export function useFollows(): { follows: Follows; error: string | null } {
     busy: (e) => busy.has(e.player.id),
     toggle,
   }), [ids, loaded, busy, toggle])
+  // Said for a few seconds, then gone: over the full screen it sits above the tab bar, and shouldn't stay there.
+  useEffect(() => {
+    if (!error) return
+    const gone = setTimeout(() => setError(null), 5000)
+    return () => clearTimeout(gone)
+  }, [error])
   return { follows, error }
 }
 
@@ -186,8 +195,8 @@ const told = new Set<string>() // the videos this app has told the server won't 
  * (upright, as the phone is held). Drawn once a video (`key` it by the video). A link out of it opens in the YouTube
  * app or the browser. One that won't load says so, with the way to the video; one YouTube won't play here (its owner
  * keeps it off other sites: refusedHere) says that, and the server is told, once, so no fan's Feed serves it again
- * (BHA-380). */
-function InlineVideo({ item, playerId, onTouch }: { item: FeedItem; playerId: number; onTouch?: () => void }) {
+ * (BHA-380). `bare`: without YouTube's controls, a Short's (BHA-384). */
+function InlineVideo({ item, playerId, bare, onTouch }: { item: FeedItem; playerId: number; bare?: boolean; onTouch?: () => void }) {
   const [failed, setFailed] = useState<'load' | 'refused' | null>(null)
   const site = `${API_URL}/`
   const id = item.video?.youtube_id ?? ''
@@ -196,9 +205,9 @@ function InlineVideo({ item, playerId, onTouch }: { item: FeedItem; playerId: nu
   const web = useRef<WebView>(null)
   const html = useMemo(() => '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
     + '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body>'
-    + `<iframe id="v" src="${escape(youtubeEmbed(id, startMuted, API_URL))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
+    + `<iframe id="v" src="${escape(youtubeEmbed(id, startMuted, API_URL, bare))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
     + `<script>${PLAYER_SCRIPT.replace('START', String(startMuted))}</script><script src="https://www.youtube.com/iframe_api"></script>`
-    + '</body></html>', [id, startMuted, item.title])
+    + '</body></html>', [id, startMuted, item.title, bare])
   const tell = useCallback(() => web.current?.injectJavaScript(`window.sound && window.sound(${muted}); true;`), [muted])
   useEffect(() => { tell() }, [tell])
   const leave = (url: string) => { open(url)?.() }
@@ -402,14 +411,21 @@ export function EdgeSheetExtras({ entry, onGo }: { entry: FeedEntry; onGo: () =>
  * Following over the top. The next page loads three screens from the end (onNear), and `footer` is a last screen of
  * its own (the spinner, the end, why it's empty). A new tab, or the Feed read again from the top (`read`), starts
  * from its top. */
-export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore, onNear, footer }: {
+export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore, onNear, onShort, footer }: {
   entries: FeedEntry[]; now: number; tab: FeedTabKey; read: string | null; onTab: (tab: FeedTabKey) => void; follows: Follows
-  videos: ReturnType<typeof usePlaying>; onMore: (entry: FeedEntry) => void; onNear?: () => void; footer?: ReactElement | null
+  videos: ReturnType<typeof usePlaying>; onMore: (entry: FeedEntry) => void; onNear?: () => void
+  onShort?: (on: boolean) => void; footer?: ReactElement | null
 }) {
   const insets = useSafeAreaInsets()
   const [height, setHeight] = useState(0)
+  const [shown, setShown] = useState(0) // which screen it has settled on
   const list = useRef<FlatList<FeedEntry>>(null)
-  useEffect(() => { list.current?.scrollToOffset({ offset: 0, animated: false }) }, [tab, read])
+  useEffect(() => { list.current?.scrollToOffset({ offset: 0, animated: false }); setShown(0) }, [tab, read])
+  // A Short on screen: the tab bar over it turns dark and see-through, as Shorts' own (tabbar.tsx).
+  const short = isShort(entries[shown]?.item)
+  useEffect(() => { onShort?.(short) }, [short, onShort])
+  useEffect(() => () => onShort?.(false), [onShort])
+  const settled = (y: number) => { if (height > 0) setShown(Math.round(y / height)) }
   return (
     // Sideways is only ever the video player over it (watch.tsx): a screen that height would move the fan to another
     // item, so the reels keep their upright one.
@@ -420,8 +436,13 @@ export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore,
           data={entries}
           keyExtractor={(x) => x.item.id}
           renderItem={({ item: x }) => (
-            <Reel entry={x} now={now} height={height} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
-              onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} />
+            isShort(x.item) ? (
+              <ShortReel entry={x} now={now} height={height} foot={88 + insets.bottom} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
+                onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} />
+            ) : (
+              <Reel entry={x} now={now} height={height} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
+                onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} />
+            )
           )}
           extraData={videos.playing}
           viewabilityConfigCallbackPairs={videos.pairs}
@@ -433,6 +454,8 @@ export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore,
           showsVerticalScrollIndicator={false}
           overScrollMode="never"
           getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
+          onMomentumScrollEnd={(ev) => settled(ev.nativeEvent.contentOffset.y)}
+          onScrollEndDrag={(ev) => settled(ev.nativeEvent.contentOffset.y)}
           onEndReached={onNear}
           onEndReachedThreshold={3}
           initialNumToRender={2}
@@ -539,6 +562,131 @@ function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: 
   )
 }
 
+// ---------------------------------------------------------------- Shorts
+
+const SHORT_TOP = 58 // below the status bar: the tabs (or Back) and the sound button, level, above the Short
+const STRIP = { min: 72, room: 104 } // who and what under it: a row and a title line at least; room for two and the numbers
+
+/** A Short as Shorts play (BHA-384, the web's .reel.short): on black, its 9:16 frame under the tabs as wide as the
+ * phone allows once what's under it is clear (shortFrame), its picture there till it plays (so nothing moves as it
+ * starts), YouTube's player without its controls once it does; who, the channel, Follow, Share and More in a row
+ * under it, then the title, and the numbers when there's room. `foot`: what's below that strip (the tab bar, or
+ * the phone's own bar in the viewer), which nothing is drawn under. */
+function ShortReel({ entry, now, height, foot, roomy, follows, playing, onPlay, onKeep, onMore, onLeave }: {
+  entry: FeedEntry; now: number; height: number; foot: number; roomy?: boolean; follows: Follows; playing: Playing | null
+  onPlay: (item: FeedItem) => void; onKeep: () => void; onMore: () => void; onLeave?: () => void // onLeave: before the player's page opens
+}) {
+  const { player: who, item } = entry
+  const insets = useSafeAreaInsets()
+  const { width } = useWindowDimensions()
+  const [noPicture, setNoPicture] = useState(false)
+  useEffect(() => setNoPicture(false), [item.picture])
+  const picture = !noPicture && item.picture ? safeHref(item.picture) : undefined
+  const mine = follows.following(entry)
+  const channel = channelOf(item)
+  const box = shortFrame(width, height, insets.top + SHORT_TOP, foot + (roomy ? STRIP.room : STRIP.min))
+  const room = height - box.top - box.height - foot - 10 // the strip's, under the frame
+  const lines = room >= 36 + 4 + 40 ? 2 : room >= 36 + 4 + 20 ? 1 : 0
+  const numbers = room >= 36 + 4 + 40 + 4 + 16
+  const icon = (label: string, child: ReactNode, onPress: () => void) => (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} hitSlop={6} style={({ pressed }) => [sh.icon, pressed && { opacity: 0.6 }]}>{child}</Pressable>
+  )
+  return (
+    <View style={[sh.reel, { height }]} accessibilityLabel={item.title}>
+      {playing ? (
+        <View style={[sh.frame, box]}><InlineVideo key={item.video?.youtube_id} item={item} playerId={who.id} bare onTouch={onKeep} /></View>
+      ) : (
+        <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[sh.frame, box]}>
+          {/* The 16:9 thumbnail YouTube keeps of a Short, covering the 9:16 frame: its pillarbox cropped off. */}
+          {picture ? <Picture src={picture} onGone={() => setNoPicture(true)} /> : null}
+          <View style={r.bigplay}><PlayIcon size={24} color={colour.text} /></View>
+        </Pressable>
+      )}
+      <View style={[sh.strip, { top: box.top + box.height + 8 }]}>
+        <View style={sh.row}>
+          <Pressable onPress={() => { onLeave?.(); toPlayer(who.id) }} accessibilityRole="link" style={sh.who}>
+            <View style={sh.faceRing}><Face name={who.name} sport={who.sport} photo={who.photo} size={28} /></View>
+            <Text style={sh.name} numberOfLines={1}>{who.name}{channel ? <Text style={sh.chan}>{`  ·  ${channel}`}</Text> : null}</Text>
+          </Pressable>
+          {!entry.following || !mine ? (
+            <Pressable onPress={() => follows.toggle(entry)} disabled={follows.busy(entry)} accessibilityRole="button" accessibilityState={{ selected: mine, busy: follows.busy(entry) }}
+              accessibilityLabel={mine ? `Following ${who.name}` : `Follow ${who.name}`} hitSlop={6}
+              style={({ pressed }) => [sh.follow, mine && sh.following, (pressed || follows.busy(entry)) && { opacity: 0.6 }]}>
+              <Text style={[sh.followText, mine && { color: '#FFFFFF' }]}>{mine ? 'Following' : 'Follow'}</Text>
+            </Pressable>
+          ) : null}
+          {icon(shareFeedItem(who.id, item).label, <ShareIcon size={18} color="#FFFFFF" />, () => share(shareFeedItem(who.id, item)))}
+          {icon('More about this item', <Dots color="#FFFFFF" />, onMore)}
+        </View>
+        {lines > 0 ? <Text style={sh.title} numberOfLines={lines}>{item.title}</Text> : null}
+        {numbers ? <Text style={sh.src} numberOfLines={1}>{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</Text> : null}
+      </View>
+    </View>
+  )
+}
+
+/** The Feed's Shorts over everything, from edge to edge (BHA-384): opened at the one tapped, `start`, one a screen,
+ * snapping, the one on screen playing as the Feed's would (the fan's autoplay and sound), swiping through the rest of
+ * what the Feed has loaded (`entries`; `onNear` loads more as the end comes near). Back, or the arrow, closes it, and the
+ * Feed is where it was under it. No tab bar here: the strip under each has the room. Null `start`: closed. */
+export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onClose }: {
+  entries: FeedEntry[]; start: string | null; now: number; follows: Follows
+  onMore: (entry: FeedEntry) => void; onNear?: () => void; onClose: () => void
+}) {
+  const insets = useSafeAreaInsets()
+  const front = useInFront()
+  const [height, setHeight] = useState(0)
+  const [first] = useState(() => entries.filter((x) => isShort(x.item))) // as it opened, so what's under the thumb stays
+  const [list, setList] = useState(first)
+  useEffect(() => { // more of the Feed's Shorts as its pages come, after those it opened with; one hidden ("…") goes
+    setList((was) => [...was.filter((w) => entries.some((x) => x.item.id === w.item.id)),
+      ...entries.filter((x) => isShort(x.item) && !was.some((w) => w.item.id === x.item.id))])
+  }, [entries])
+  const at = Math.max(0, first.findIndex((x) => x.item.id === start))
+  const videos = usePlaying(start != null && front && height > 0)
+  // The one tapped plays as it opens (a tap: with its sound), once the list is drawn.
+  const { play } = videos
+  useEffect(() => { if (height > 0 && first[at]) play(first[at].item) }, [height > 0])
+  return (
+    <Modal visible={start != null} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+      <StatusBar style="light" />
+      <View style={sh.viewer} onLayout={(ev) => { const box = ev.nativeEvent.layout; if (box.height >= box.width) setHeight(Math.round(box.height)) }}>
+        {height > 0 ? (
+          <FlatList
+            key={height} // the Modal settles its height once it's up: the list starts again at the one tapped, lined up
+            data={list}
+            keyExtractor={(x) => x.item.id}
+            renderItem={({ item: x }) => (
+              <ShortReel entry={x} now={now} height={height} foot={insets.bottom + 12} roomy follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
+                onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} onLeave={onClose} />
+            )}
+            extraData={videos.playing}
+            viewabilityConfigCallbackPairs={videos.pairs}
+            initialScrollIndex={at}
+            snapToInterval={height}
+            snapToAlignment="start"
+            decelerationRate="fast"
+            disableIntervalMomentum
+            showsVerticalScrollIndicator={false}
+            overScrollMode="never"
+            getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
+            onEndReached={onNear}
+            onEndReachedThreshold={3}
+            initialNumToRender={2}
+            maxToRenderPerBatch={3}
+            windowSize={5}
+          />
+        ) : null}
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Back to the Feed" hitSlop={6}
+          style={({ pressed }) => [r.sound, sh.back, { top: insets.top + 11 }, pressed && { opacity: 0.6 }]}>
+          <BackIcon size={22} color="#FFFFFF" />
+        </Pressable>
+        {videos.playing ? <View style={[r.soundAt, { top: insets.top + 11 }]}><SoundButton onInk /></View> : null}
+      </View>
+    </Modal>
+  )
+}
+
 // ---------------------------------------------------------------- Today
 
 /** Today's "From your players" (the web's components/Feed.tsx): after Results, before Coming up; the two best of
@@ -625,6 +773,25 @@ const e = StyleSheet.create({
   src: { fontFamily: font[700], fontSize: 12, lineHeight: 16, color: colour.muted },
   extras: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   moreFrom: { marginLeft: 'auto', flexShrink: 1, fontFamily: font[800], fontSize: 13, lineHeight: 36, color: colour.text, textDecorationLine: 'underline', textAlign: 'right' },
+})
+
+const sh = StyleSheet.create({
+  reel: { backgroundColor: '#000000', overflow: 'hidden' },
+  viewer: { flex: 1, backgroundColor: '#000000' },
+  frame: { position: 'absolute', overflow: 'hidden', backgroundColor: '#000000', alignItems: 'center', justifyContent: 'center' },
+  strip: { position: 'absolute', left: 12, right: 12, gap: 4 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
+  who: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+  faceRing: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  name: { flexShrink: 1, fontFamily: font[800], fontSize: 14, color: '#FFFFFF' },
+  chan: { fontFamily: font[700], fontSize: 13, color: 'rgba(255,255,255,0.7)' },
+  follow: { height: 30, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#FFFFFF', justifyContent: 'center', flexShrink: 0 },
+  following: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)' },
+  followText: { fontFamily: font[800], fontSize: 12, color: colour.text },
+  icon: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  title: { fontFamily: font[700], fontSize: 15, lineHeight: 20, color: '#FFFFFF' },
+  src: { fontFamily: font[700], fontSize: 12, lineHeight: 16, color: 'rgba(255,255,255,0.7)' },
+  back: { position: 'absolute', left: 13 },
 })
 
 const r = StyleSheet.create({

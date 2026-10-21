@@ -416,7 +416,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Share and More down the right). A video taller than it's wide (a Short: `video.upright`, from the player part
   videos.list gives with `maxWidth`, `VideoSource.upright`) is framed 9:16, in the middle of a 4:5 band edge to edge
   and on a player's Feed, and full screen between the tabs and what's at its foot, so nothing sits over YouTube's
-  player (BHA-358). The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
+  player (BHA-358). Since BHA-384 a Short plays as Shorts do: in the full-screen layout on black, its frame under
+  the tabs as wide as the phone allows (`feed.shortFrame`, `.reel.short`), who and what in a strip under it, the tab bar
+  dark and see-through over that strip, YouTube's player without its controls; tapped from edge to edge, it opens a
+  viewer of the Feed's Shorts over the page (`?short=<id>` on the web, so Back closes it), swiping from one to the
+  next. Nothing of the app's goes over the player, as YouTube's rules want. The Android app plays a Feed video where its picture was too, YouTube's player in a WebView
   on the site's address (`feedLayouts.tsx` InlineVideo), the tab bar where it was; and by itself as it comes on
   screen (BHA-359): muted until the fan turns the sound on (the app's sound button beside the video, YouTube's own,
   or a tap to play one), then with it until they mute (BHA-381, `mobile/src/sound.ts`, kept for the day); one at a
