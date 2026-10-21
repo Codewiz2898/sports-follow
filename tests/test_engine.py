@@ -13,6 +13,8 @@ import pytest
 
 from sports_follow import bus, engine, sports, structured
 from sports_follow.adapters import Snapshot
+from sports_follow.moments import Seen
+from sports_follow.sports import chess
 
 
 class FakeRedis:
@@ -52,6 +54,14 @@ class FakeRedis:
     def exists(self, name):
         return int(name in self.kv or name in self.hashes)
 
+    def eval(self, script, numkeys, key, *args):
+        assert script == engine.SETTLE  # the one script: set it if it's still what it was settled from
+        was, new, seconds = args
+        if (self.kv.get(key) or "") == was:
+            self.kv[key] = new
+            return new
+        return self.kv.get(key)
+
     def zadd(self, name, mapping, nx=False):
         z = self.zsets.setdefault(name, {})
         for member, score in mapping.items():
@@ -69,6 +79,12 @@ class FakeRedis:
         return len(self.zsets.get(name, {}))
 
 
+def took(r: FakeRedis, now: float) -> tuple[str, str] | None:
+    """The game and position take() gives, without when it was asked for."""
+    job = engine.take(r, now)
+    return job[:2] if job else None
+
+
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 E4E5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
@@ -83,19 +99,19 @@ def test_newest_position_per_game_and_longest_wait_first():
     engine.request("A", START, r, now=100)
     engine.request("B", START, r, now=101)
     engine.request("A", E4, r, now=102)  # replaces A's waiting position, keeps A's place
-    assert engine.take(r, now=103) == ("A", E4)
-    assert engine.take(r, now=103) == ("B", START)
-    assert engine.take(r, now=103) is None
+    assert took(r, now=103) == ("A", E4)
+    assert took(r, now=103) == ("B", START)
+    assert took(r, now=103) is None
 
 
 def test_each_game_at_most_once_per_interval():
     r = FakeRedis()
     evaluated(r, "A", E4, at=100)
     engine.request("A", E4, r, now=105)  # already evaluated: nothing to do
-    assert engine.take(r, now=105) is None
+    assert took(r, now=105) is None
     engine.request("A", E4E5, r, now=106)
-    assert engine.take(r, now=100 + engine.GAME_INTERVAL - 1) is None
-    assert engine.take(r, now=100 + engine.GAME_INTERVAL) == ("A", E4E5)
+    assert took(r, now=100 + engine.GAME_INTERVAL - 1) is None
+    assert took(r, now=100 + engine.GAME_INTERVAL) == ("A", E4E5)
 
 
 def test_a_new_move_waits_the_interval_from_its_positions_first_look():
@@ -103,8 +119,8 @@ def test_a_new_move_waits_the_interval_from_its_positions_first_look():
     r = FakeRedis()
     r.set("engine:latest:A", json.dumps({"cp": 20, "mate": None, "depth": 26, "fen": E4, "at": 115, "first": 100}))
     engine.request("A", E4E5, r, now=116)
-    assert engine.take(r, now=100 + engine.GAME_INTERVAL - 1) is None
-    assert engine.take(r, now=100 + engine.GAME_INTERVAL) == ("A", E4E5)
+    assert took(r, now=100 + engine.GAME_INTERVAL - 1) is None
+    assert took(r, now=100 + engine.GAME_INTERVAL) == ("A", E4E5)
 
 
 def test_new_positions_go_before_deepening_and_games_take_turns_at_it():
@@ -114,7 +130,7 @@ def test_new_positions_go_before_deepening_and_games_take_turns_at_it():
         engine.request(game, E4, r, now=at + 1)  # still on it: polled, nothing new waiting
         r.zadd(engine.DEEPEN, {game: at})
     engine.request("C", START, r, now=102)
-    assert engine.take(r, now=103) == ("C", START)
+    assert took(r, now=103) == ("C", START)
     game, shown = engine.take_deeper(r, now=103) or ("", {})
     assert (game, shown["fen"]) == ("A", E4)  # the one that has waited longest
     r.zadd(engine.DEEPEN, {"A": 103})  # A had its turn
@@ -399,7 +415,7 @@ def board(monkeypatch):
     def reading(fen: str, cp: int, at: float) -> None:
         r.set("engine:latest:g1", json.dumps({"cp": cp, "mate": None, "depth": 20, "look": {"cp": cp, "mate": None, "depth": 20}, "fen": fen, "at": at, "first": at}))
 
-    return type("Board", (), {"r": r, "poll": staticmethod(poll), "reading": staticmethod(reading)})
+    return type("Board", (), {"r": r, "last": last, "poll": staticmethod(poll), "reading": staticmethod(reading)})
 
 
 def test_a_decided_game_is_let_go_and_its_last_evaluation_stays(board):
@@ -463,10 +479,74 @@ def test_both_events_of_a_board_settle_the_same(board):
     assert both(F32, meanwhile=lambda: board.reading(F33, 30, 4)) == [2, 2]
 
 
+def test_both_events_of_a_board_say_the_same_move_for_a_swing(board):
+    for at, (fen, cp) in enumerate([(F30, 20), (F31, 340)], 1):
+        board.reading(fen, cp, at)
+        board.poll(1, fen)
+        board.poll(2, fen)
+    # The first event's poll comes after move 32's look (winning); the second's after move 33's: the board's band
+    # moved at 32 for both.
+    board.reading(F32, 340, 3)
+    one = board.poll(1, F32)["eval"]
+    board.reading(F33, 345, 4)
+    two = board.poll(2, F33)["eval"]
+    assert (one["band"], one["since"]) == (two["band"], two["since"]) == (2, 32)
+
+
+def test_two_polls_settling_at_once_make_one_chain():
+    # Each event's poll is a job of its own: the other's settle lands between this one's read and its write.
+    r = FakeRedis()
+    look = lambda fen, cp, at: {"cp": cp, "mate": None, "depth": 20, "look": {"cp": cp, "mate": None, "depth": 20}, "fen": fen, "at": at}  # noqa: E731
+    start = engine.settled("g1", look(F30, 20, 1), chess.settle, r=r)
+    meanwhile = []
+
+    def settle(before, ev):
+        if not meanwhile:
+            meanwhile.append(engine.settled("g1", look(F31, 340, 2), chess.settle, r=r))
+        return chess.settle(before, ev)
+
+    late = engine.settled("g1", look(F32, 340, 3), settle, r=r)
+    one_after_the_other = chess.settle(chess.settle(start, look(F31, 340, 2)), look(F32, 340, 3))
+    assert late is not None and (late["band"], late["raw"], late["since"]) == (one_after_the_other["band"], one_after_the_other["raw"], 32)
+    assert json.loads(r.get("engine:settled:g1") or "{}")["at"] == 3 and late["chain"] == meanwhile[0]["chain"] == start["chain"]
+    # An older reading than the one kept, or one with no score, settles nothing.
+    assert engine.settled("g1", look(F31, 340, 2), chess.settle, r=r) == late
+    assert engine.settled("g1", {**look(F32, 0, 4), "cp": None}, chess.settle, r=r) == late
+
+
+def test_an_events_first_settle_from_the_boards_chain_tells_no_swing(board):
+    # A deploy mid-game: each event's last evaluation was its own. The first to poll starts the board's chain from
+    # its own; the other's band may jump once to the board's, which isn't a swing.
+    board.last[1] = {"kind": "chess", "game_id": "g1", "eval": {"cp": 30, "band": 0, "raw": 0, "told": 0, "move": 31, "fen": F31, "at": 1}}
+    board.last[2] = {"kind": "chess", "game_id": "g1", "eval": {"cp": 340, "band": 2, "raw": 2, "told": 2, "move": 31, "fen": F31, "at": 1}}
+    was = dict(board.last[2])
+    board.reading(F32, 30, 2)
+    one, two = board.poll(1, F32)["eval"], board.poll(2, F32)["eval"]
+    assert (one["band"], two["band"], one.get("joined"), two.get("joined")) == (0, 0, None, True)
+    line = {"headline": "", "stats": [{"label": "Colour", "value": "White"}, {"label": "Opponent", "value": "Gukesh D"}]}
+    assert sports.get("chess").during("Magnus Carlsen", "1503014", Seen("live", was, line), Seen("live", board.last[2], line)) == []
+    assert "joined" not in board.poll(2, F32)["eval"]  # from then on, one of the chain
+
+
+def test_the_interval_counts_from_when_the_polls_asked():
+    r = FakeRedis()
+    engine.request("A", E4, r, now=100)
+    engine.request("A", E4, r, now=110)  # asked again while it waits: asked at 100 still
+    assert engine.take(r, now=130) == ("A", E4, 100)  # the lane got to it late
+    r.set("engine:latest:A", json.dumps({"cp": 20, "mate": None, "depth": 18, "fen": E4, "at": 130, "first": 130, "asked": 100}))
+    engine.request("A", E4E5, r, now=131)
+    assert took(r, now=131) == ("A", E4E5)  # due 20 s after 100, not after 130
+
+
+def test_an_unknown_deepening_setting_is_watched(caplog):
+    assert [engine.deepening(x) for x in ("watched", "all", "off")] == ["watched", "all", "off"]
+    assert engine.deepening("sometimes") == "watched" and "SPORTS_FOLLOW_ENGINE_DEEPEN" in caplog.text
+
+
 def test_positions_from_games_nobody_polls_are_dropped():
     r = FakeRedis()
     engine.request("A", START, r, now=100)
-    assert engine.take(r, now=100 + engine.STALE + 1) is None
+    assert took(r, now=100 + engine.STALE + 1) is None
 
 
 def test_budget_and_position_keys():
@@ -560,30 +640,119 @@ def test_a_look_past_its_time_is_stopped_and_says_so(tmp_path, monkeypatch):
     assert (look["cp"], look["depth"], look["capped"]) == (31, 9, True)
 
 
-def test_a_look_stopped_by_the_clock_isnt_kept_as_the_positions(monkeypatch, stopping):
+def fake_lane(monkeypatch, r: FakeRedis, engine_class) -> None:
+    """The lane on r with a stand-in for the Engine class, its lock always its own."""
+    monkeypatch.setattr(engine, "enabled", lambda: True)
+    monkeypatch.setattr(engine, "Engine", engine_class)
+    monkeypatch.setattr(bus, "sync_redis", lambda: r)
+    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
+    monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: True)
+    monkeypatch.setattr(bus, "release", lambda name, token=None: None)
+    engine.run_lane()
+
+
+def test_a_look_the_clock_stopped_is_shown_with_no_look_and_one_with_no_score_isnt_shown(monkeypatch, stopping):
     r = FakeRedis()
+    looks = [{"cp": 31, "mate": None, "depth": 9, "nodes": 4000, "capped": True}, {"cp": None, "mate": None, "depth": 0, "nodes": 50, "capped": True}]
 
     class Stockfish:
         def __init__(self, *args, **kwargs):
             pass
 
         def evaluate(self, fen):
-            stopping.set()
-            return {"cp": 31, "mate": None, "depth": 9, "nodes": 4000, "capped": True}
+            if len(looks) == 1:
+                stopping.set()
+            return looks.pop(0)
 
         def close(self):
             pass
 
     engine.request("A", E4, r, deepen=False)
-    monkeypatch.setattr(engine, "enabled", lambda: True)
-    monkeypatch.setattr(engine, "Engine", Stockfish)
-    monkeypatch.setattr(bus, "sync_redis", lambda: r)
-    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
-    monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: True)
-    monkeypatch.setattr(bus, "release", lambda name, token=None: None)
-    engine.run_lane()
-    # The game's alerts go by it this once; the next game at this position gets a look of its own.
-    assert ((engine.latest("A", r) or {})["look"]["cp"], "look" in (engine.cached(r, E4) or {})) == (31, False)
+    engine.request("B", E4E5, r, deepen=False)
+    fake_lane(monkeypatch, r, Stockfish)
+    # A's is shown, with no first look: nothing alerts by it (chess.settle holds the band), and the next game at the
+    # position gets a look of its own. B's had no score at all: nothing shown.
+    shown = engine.latest("A", r) or {}
+    assert (shown["cp"], "look" in shown, "look" in (engine.cached(r, E4) or {})) == (31, False, False)
+    assert engine.latest("B", r) is None
+
+
+def test_the_deep_engine_is_closed_when_nothing_has_been_deepened_a_while(monkeypatch, stopping):
+    monkeypatch.setattr(engine, "DEEP_IDLE", 0)
+    r, made, closed = FakeRedis(), [], []
+
+    class Stockfish:
+        def __init__(self, path=None, hash_mb=engine.HASH_MB):
+            self.deep = hash_mb != engine.LOOK_HASH_MB
+            made.append(self.deep)
+
+        def evaluate(self, fen):
+            return {"cp": 20, "mate": None, "depth": 18, "nodes": engine.NODES}
+
+        def search(self, fen, depth, nodes):
+            self.fen = fen
+
+        def run(self, seconds):
+            return {"cp": 20, "mate": None, "depth": engine.DEPTH, "nodes": engine.NODES}, True  # deep enough at once
+
+        def halt(self):
+            return {}
+
+        def close(self):
+            closed.append(self.deep)
+
+    idle = []
+
+    def sleep(seconds):
+        if seconds != 1:
+            return not stopping.is_set()  # a rest after work
+        idle.append(seconds)  # the lane with nothing to do
+        if len(idle) == 1:
+            engine.request("B", START, r)  # once the deep engine has gone, another game to deepen
+        if len(idle) > 3:
+            stopping.set()
+        return not stopping.is_set()
+
+    monkeypatch.setattr(engine.shutdown, "sleep", sleep)
+    monkeypatch.setattr(engine, "IDLE_EXIT", 60)
+    engine.request("A", E4, r)
+    fake_lane(monkeypatch, r, Stockfish)
+    # Looks' engine, A's deep one (closed once A was deep enough and nothing waited), then a new one for B.
+    assert made == [False, True, True] and closed[0] is True
+
+
+def test_the_lane_goes_on_when_the_deep_engine_dies(monkeypatch, stopping):
+    monkeypatch.setattr(engine, "DEEP_IDLE", 0)
+    r, made, looked = FakeRedis(), [], []
+
+    class Stockfish:
+        def __init__(self, path=None, hash_mb=engine.HASH_MB):
+            made.append(hash_mb != engine.LOOK_HASH_MB)
+            self.dies = made.count(True) == 1  # the first deep engine dies at its first slice
+
+        def evaluate(self, fen):
+            looked.append(fen)
+            return {"cp": 20, "mate": None, "depth": 18, "nodes": engine.NODES}
+
+        def search(self, fen, depth, nodes):
+            pass
+
+        def run(self, seconds):
+            if self.dies:
+                raise BrokenPipeError("the engine exited")
+            stopping.set()
+            return {"cp": 25, "mate": None, "depth": 24, "nodes": engine.NODES}, False
+
+        def halt(self):
+            return {"cp": 25, "mate": None, "depth": 24, "nodes": engine.NODES}
+
+        def close(self):
+            pass
+
+    engine.request("A", E4, r)
+    fake_lane(monkeypatch, r, Stockfish)
+    # Its engine died: the lane went on, and A was deepened on a new one.
+    assert made == [False, True, True] and (engine.latest("A", r) or {})["depth"] == 24
 
 
 def test_the_lane_stops_when_the_worker_does(monkeypatch, stopping):
@@ -605,7 +774,7 @@ def test_the_lane_stops_when_the_worker_does(monkeypatch, stopping):
 
     monkeypatch.setattr(engine, "enabled", lambda: True)
     monkeypatch.setattr(engine, "Engine", Stockfish)
-    monkeypatch.setattr(engine, "take", lambda r, now: ("game", START))  # positions keep coming
+    monkeypatch.setattr(engine, "take", lambda r, now: ("game", START, now))  # positions keep coming
     monkeypatch.setattr(bus, "sync_redis", lambda: r)
     monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
     monkeypatch.setattr(bus, "extend", lambda name, seconds, token=None: True)

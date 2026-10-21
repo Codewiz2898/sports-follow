@@ -43,23 +43,27 @@ def band(ev: dict[str, Any], current: int = 0) -> int:
 def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
     """An evaluation with its settled band. The band goes by each position's first look ("look", the quick
     one every position gets; engine.py) and moves only when the first looks of two positions in a row
-    agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing.
+    agree, so a broadcast glitch (a board sending a wrong move for a few seconds) isn't a swing. "since" is
+    the move it last moved at, so a swing is the same swing whichever poll of the board first sees it.
 
     While someone has the game open, the engine goes on deepening the position it's on. A deeper reading of
     the same position is shown (cp, mate and depth, for the board's bar) but never moves the band, nor what
-    the next position is held against ("raw"): a game's alerts are the same whether anyone watches it, and
-    don't hang on how far a search had got when a poll came.
+    the next position is held against ("raw"), and neither does a reading with no first look (one the
+    engine had to stop: its score is the machine's). A position scores the same whether anyone watches the
+    game, and alerts don't hang on how far a search had got when a poll came.
 
     "told" is the winning band (2 or -2) the game last moved into, kept until it's level again or the
     other side is better: an evaluation hovering on the winning line (+2.6, +3.4, +2.7…) moves the band
     back and forth, and the player is winning once, not at every climb."""
     if before and before.get("at") == ev.get("at"):
         return before
-    if before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen"):
-        # A deeper reading of the position: shown, and the band as its first look settled it.
-        return {**ev, "move": before.get("move"), "raw": before.get("raw"), "band": before.get("band", 0), "told": before.get("told", 0)}
+    move = _fullmove(ev.get("fen"))
+    if not ev.get("look") or (before is not None and ev.get("fen") is not None and before.get("fen") == ev.get("fen")):
+        # Shown, and the band as the last first look settled it.
+        held = before or {}
+        return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0), "since": held.get("since")}
     settled = before.get("band", 0) if before else 0
-    raw = band(ev.get("look") or ev, settled)
+    raw = band(ev["look"], settled)
     moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
     told = before.get("told", 0) if before else 0
@@ -67,7 +71,8 @@ def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         told = new
     elif new * told <= 0:
         told = 0
-    return {**ev, "move": _fullmove(ev.get("fen")), "raw": raw, "band": new, "told": told}
+    since = move if before is None or new != settled else before.get("since")
+    return {**ev, "move": move, "raw": raw, "band": new, "told": told, "since": since}
 
 
 def _fullmove(fen: str | None) -> int | None:
@@ -164,6 +169,8 @@ class Chess(Sport):
         was, got = before.state.get("eval"), now.state.get("eval")
         if now.status != "live" or now.state.get("result") or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
             return []  # a decided game (a mini-match is live after it) turns no more
+        if got.get("joined"):
+            return []  # its first evaluation from the board's settles (engine.settled): its band may jump once to the board's
         colour = stat(now.line, "Colour")
         side = 1 if colour == "White" else -1 if colour == "Black" else 0
         old, new = was["band"] * side, got["band"] * side

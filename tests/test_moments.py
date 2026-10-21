@@ -148,14 +148,19 @@ def test_chess_bands_need_a_margin_to_change():
     assert chess.band({"cp": -20, "mate": 4}) == 2 and chess.band({"mate": -2}) == -2
 
 
+def look(cp: int, at: int, fen: str) -> dict:
+    """A position's first look, as the engine's latest has it (engine.py): shown, and what the band goes by."""
+    return {"cp": cp, "mate": None, "look": {"cp": cp, "mate": None, "depth": 20}, "at": at, "fen": fen}
+
+
 def test_a_chess_swing_counts_once_two_evaluations_agree():
-    first = chess.settle(None, {"cp": 20, "fen": "8/8/8/8/8/8/8/8 w - - 0 30", "at": 1})
-    glitch = chess.settle(first, {"cp": 520, "fen": "8/8/8/8/8/8/8/8 b - - 0 31", "at": 2})
+    first = chess.settle(None, look(20, 1, "8/8/8/8/8/8/8/8 w - - 0 30"))
+    glitch = chess.settle(first, look(520, 2, "8/8/8/8/8/8/8/8 b - - 0 31"))
     assert (first["band"], glitch["band"]) == (0, 0)  # one reading isn't enough
-    back = chess.settle(glitch, {"cp": 30, "fen": "8/8/8/8/8/8/8/8 w - - 0 32", "at": 3})
+    back = chess.settle(glitch, look(30, 3, "8/8/8/8/8/8/8/8 w - - 0 32"))
     assert back["band"] == 0
-    real = chess.settle(chess.settle(back, {"cp": 480, "at": 4, "fen": "8/8/8/8/8/8/8/8 w - - 0 33"}), {"cp": 510, "at": 5, "fen": "8/8/8/8/8/8/8/8 w - - 0 34"})
-    assert real["band"] == 2 and real["move"] == 34
+    real = chess.settle(chess.settle(back, look(480, 4, "8/8/8/8/8/8/8/8 w - - 0 33")), look(510, 5, "8/8/8/8/8/8/8/8 w - - 0 34"))
+    assert real["band"] == 2 and real["move"] == 34 and real["since"] == 34
     assert chess.settle(real, {"cp": 510, "at": 5}) is real  # the same evaluation again: unchanged
 
 
@@ -193,7 +198,7 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     def titles(colour: str, cps: list[int]) -> list[str]:
         ev, found = None, []
         for at, cp in enumerate(cps, 1):
-            new = chess.settle(ev, {"cp": cp, "mate": None, "at": at, "fen": f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"})
+            new = chess.settle(ev, look(cp, at, f"8/8/8/8/8/8/8/8 w - - 0 {30 + at}"))
             if ev is not None:
                 before, now = (Seen("live", state={"game_id": "g1", "eval": e}, line=line(f"{colour} vs Gukesh D", Colour=colour, Opponent="Gukesh D")) for e in (ev, new))
                 found += detect("Chess", "Magnus Carlsen", "1503014", before, now)
@@ -210,7 +215,7 @@ def test_winning_is_told_once_while_the_evaluation_hovers_on_the_line():
     assert titles("White", turned) == ["Magnus Carlsen is winning", "Turnaround: Magnus Carlsen is in trouble"]
     # An evaluation stored before "told" was kept counts as nothing told yet: told once more, then kept.
     old = {"cp": 340, "at": 0, "band": 2, "raw": 2, "move": 40}
-    assert chess.settle(old, {"cp": 260, "at": 1})["told"] == 0
+    assert chess.settle(old, look(260, 1, "8/8/8/8/8/8/8/8 w - - 0 41"))["told"] == 0
 
 
 def reading(move: int, cp: int, at: int, look: int | None = None, depth: int = 20) -> dict:

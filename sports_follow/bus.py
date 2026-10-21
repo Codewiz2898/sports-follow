@@ -44,7 +44,7 @@ def publish_match(event_id: int, event: dict[str, Any]) -> None:
     sync_redis().publish(match_channel(event_id), json.dumps(event, default=str))
 
 
-WATCH_SECONDS = 45  # an open match page asks for its game again every 30 s, on the web and on Android
+WATCH_SECONDS = 90  # an open match page asks for its game again 30 s after each answer (web and Android): one missed is a minute
 
 
 def watching_key(event_id: int) -> str:

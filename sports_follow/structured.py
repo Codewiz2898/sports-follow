@@ -827,8 +827,8 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
     else:
         engine.drop(game, by=event_id)  # nobody here wants its swings; the other player's event may
     ev = engine.latest(game)
-    if ev:
-        state["eval"] = engine.settled(game, ev, rules.settle, before)
+    if ev and (settled := engine.settled(game, ev, rules.settle, before)):
+        state["eval"] = settled
 
 
 def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True) -> moments.Seen | None:
