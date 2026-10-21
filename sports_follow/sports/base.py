@@ -69,6 +69,11 @@ class Found:
     # A game's own moment (Sport.game_moments): the players it's about, by their ids in the source (a goal's
     # scorer, both players of a chess board), or "*", the whole game (its start, its result, a map).
     about: tuple[str, ...] = ()
+    # A player's moment of a game under several fixtures (a chess board is one of each player's, and each finds
+    # the moment from its own side): the player, by their id in the source, whose side tells it to a fan who
+    # follows both (the side the game went toward, the winner; White where it went neither way, the start or a
+    # draw). The other side's word for it isn't sent them (alerts.voiced). "" where only its player says it.
+    voice: str = ""
 
 
 @dataclass(frozen=True)

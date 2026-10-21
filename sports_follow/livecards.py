@@ -16,8 +16,10 @@ off) by a player in it they follow, by the game itself (matches.py, not lapsed) 
 and haven't muted it; on their Android devices only (a browser's push can't be updated in place), the newest
 notify.MAX_DEVICES each, as a moment's push goes, less a phone with live cards off (Alerts' Live scores) or that
 stopped this game's (Stop live card on it): the app would throw its cards away (android). Each card names the
-fan's own players in the game, with their line so far. A game's end goes to every fan who follows it any of
-those ways, whatever their level, on the same phones: it only takes a card down.
+fan's own players in the game, with their line so far. A game under several fixtures (a chess board is one of each
+player's, each polled as its own event) is one card a fan: one who follows players on more than one has it from
+their first player's fixture (by id), naming them all (BHA-378). A game's end goes to every fan who follows it any
+of those ways, whatever their level, on the same phones: it only takes a card down.
 
 None of this is an alert: no notification rows, no sound, nothing in the push metrics. A device FCM says is gone
 is removed, as after a moment's push (notify.settle), but another failure isn't counted against it: cards come
@@ -41,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from . import bus, fcm, logs, notify, sports, structured
 from .db import session
-from .models import Event, EventPlayer, EventState, Follow, MatchFollow, NotificationMute, Player, PlayerLine, PushSubscription
+from .models import Event, EventPlayer, EventState, Follow, MatchFollow, NotificationMute, Player, PlayerIdentity, PlayerLine, PushSubscription
 from .moments import DEFAULT_LEVEL
 from .sports.base import Glance, Sport
 
@@ -64,7 +66,7 @@ OVER = ("final", "postponed")  # a poll's statuses that end a game's card (a gam
 # an end is never sent before the card it takes down, nor a score that's been passed. Each card's pushes go at once
 # (_wire). The worker gives each a connection.
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="livecard")
-_waiting: dict[int, tuple[str, dict[str, Any] | None]] = {}  # each game's newest card or end not yet sent
+_waiting: dict[int, tuple[str, dict[str, Any] | None, dict[str, str]]] = {}  # each game's newest card or end not yet sent, and its board
 _sending: set[int] = set()  # the games a thread is sending for
 _lock = threading.Lock()
 # One card to one device: apart from a moment's pushes (notify._wire), so a goal never waits behind a card.
@@ -189,7 +191,16 @@ def _live(event: Event, snap: Snapshot) -> None:
     if last.get("sides") == made["sides"] and now - float(last.get("at") or 0) < THROTTLE:
         return  # only the clock moved, and a card went out a moment ago: a later poll sends it
     redis.set(_key(event.id), json.dumps({"at": now, "sides": made["sides"], "shows": shows}), ex=KEEP)
-    _queue(event.id, "live", made)
+    _queue(event.id, "live", made, on_board(event, snap))
+
+
+def on_board(event: Event, snap: Snapshot) -> dict[str, str]:
+    """Who's on a game's board, by their ids in its source, each with their line's headline, where the game is under
+    several fixtures (a chess board is one of each player's): a fan who follows players on more than one has its card
+    from one of them (audience). {} where its fixture is the game."""
+    if not structured.game_key(event.key, snap.state):
+        return {}
+    return {athlete: line.headline for athlete, line in snap.lines.items()}
 
 
 def ended(event_ids: list[int]) -> None:
@@ -206,10 +217,10 @@ def ended(event_ids: list[int]) -> None:
         log.exception("ending live cards for events %s failed", event_ids)
 
 
-def _queue(event_id: int, kind: str, made: dict[str, Any] | None) -> None:
+def _queue(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None) -> None:
     """Send a game's card or end once its last one has gone, in place of any of its own still waiting."""
     with _lock:
-        _waiting[event_id] = (kind, made)
+        _waiting[event_id] = (kind, made, board or {})
         if event_id in _sending:
             return  # the thread sending this game's last one sends this one next
         _sending.add(event_id)
@@ -227,28 +238,30 @@ def _drain(event_id: int) -> None:
         _send_safely(event_id, *job)
 
 
-def _send_safely(event_id: int, kind: str, made: dict[str, Any] | None) -> None:
+def _send_safely(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None) -> None:
     try:
-        send(event_id, kind, made)
+        send(event_id, kind, made, board)
     except Exception:
         log.exception("sending event %s's %s card failed", event_id, kind)
 
 
-def send(event_id: int, kind: str, made: dict[str, Any] | None = None) -> int:
+def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: dict[str, str] | None = None) -> int:
     """A game's live card ("live", as polled: card()) or its end ("end", its board read back) to the Android devices
-    of every fan who should have it (the module docstring); each live card with the fan's own players' lines. Each
-    device's health is settled as after a moment's push. Returns how many devices took it."""
+    of every fan who should have it (the module docstring); each live card with the fan's own players' lines, the
+    board's players (on_board) where it's under several fixtures. Each device's health is settled as after a moment's
+    push. Returns how many devices took it."""
     live = kind == "live"
     with session() as db:
         if made is None:
-            board = boards(db, [event_id]).get(event_id)
-            if board is None:
+            shown = boards(db, [event_id]).get(event_id)
+            if shown is None:
                 return 0
-            made = {**board.keys, "type": kind, "tag": tag(event_id), "event_id": event_id}
+            made = {**shown.keys, "type": kind, "tag": tag(event_id), "event_id": event_id}
         if not live:
             made = {**made, "live": "0"}  # it's over, or no longer polled live, whatever its last poll said
-        fans = audience(db, event_id, live)
-        theirs = lines(db, event_id, fans) if live else {}
+        on = _players_on(db, event_id, board) if live and board else {}
+        fans = audience(db, event_id, live, on)
+        theirs = lines(db, event_id, fans, on) if live else {}
         devices = android(db, list(fans), event_id)
     futures = []
     for fan, mine in devices.items():
@@ -264,19 +277,31 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None) -> int:
     return sent
 
 
-def audience(db: Session, event_id: int, live: bool = True) -> dict[str, list[int]]:
+def _players_on(db: Session, event_id: int, board: dict[str, str]) -> dict[int, str]:
+    """The players on Sports Follow of those on a game's board (on_board), by their ids here, each with their headline."""
+    event = db.get(Event, event_id)
+    system = (event.key if event is not None else "").partition(":")[0]
+    found = db.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id.in_(list(board))))
+    return {player_id: board[external] for player_id, external in found}
+
+
+def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None) -> dict[str, list[int]]:
     """The fans who should have a game's live card (live), or its end (the module docstring), each with the players
-    they follow in it, those set to off left out: whom their card names."""
+    they follow in it, those set to off left out: whom their card names. `on`: the players on its board (_players_on)
+    where the game is under several fixtures, some of them under the others."""
     from . import teams  # a team's games are followed games (teams reads the poller that calls here)
 
     levels: dict[str, set[str]] = {}
     players: dict[str, list[int]] = {}
+    hearing: dict[str, list[int]] = {}  # theirs here at a level that has the card
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).join(EventPlayer, EventPlayer.player_id == Follow.player_id)
                                             .where(EventPlayer.event_id == event_id).order_by(Follow.id)):
         level = (rules or {}).get("level", DEFAULT_LEVEL)
         levels.setdefault(fan, set()).add(level)
         if level != "off":
             players.setdefault(fan, []).append(player_id)
+        if level not in QUIET:
+            hearing.setdefault(fan, []).append(player_id)
     games = select(MatchFollow.fan_id, MatchFollow.alert_rules).where(MatchFollow.event_id == event_id)
     for fan, rules in db.execute(games.where(MatchFollow.until.is_(None)) if live else games):
         levels.setdefault(fan, set()).add((rules or {}).get("level", DEFAULT_LEVEL))
@@ -285,18 +310,33 @@ def audience(db: Session, event_id: int, live: bool = True) -> dict[str, list[in
     if live and levels:
         muted = set(db.scalars(select(NotificationMute.fan_id).where(NotificationMute.event_id == event_id, NotificationMute.fan_id.in_(list(levels)))))
         levels = {fan: theirs for fan, theirs in levels.items() if fan not in muted and theirs - set(QUIET)}
+    if live and on and levels:
+        # A game under several fixtures (a chess board is one of each player's, both polled): a fan who follows a
+        # player on it under another has its card from their first player's (by id), whichever polls first, so their
+        # phone shows one card; that card names all of theirs.
+        here = set(db.scalars(select(EventPlayer.player_id).where(EventPlayer.event_id == event_id)))
+        rows = select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(set(on) - here), Follow.fan_id.in_(list(levels))).order_by(Follow.id)
+        for fan, player_id, rules in db.execute(rows):
+            level = (rules or {}).get("level", DEFAULT_LEVEL)
+            first = min(hearing.get(fan, []), default=None)
+            if level not in QUIET and (first is None or player_id < first):
+                levels.pop(fan, None)  # their card comes from that player's fixture
+            elif level != "off" and fan in levels:
+                players.setdefault(fan, []).append(player_id)
     return {fan: players.get(fan, []) for fan in levels}
 
 
-def lines(db: Session, event_id: int, fans: dict[str, list[int]]) -> dict[str, list[str]]:
+def lines(db: Session, event_id: int, fans: dict[str, list[int]], on: dict[int, str] | None = None) -> dict[str, list[str]]:
     """Each fan's own players in a game as their card lists them, at most MAX_PLAYERS, those with a line first: their
-    name and their line's headline so far ("Bukayo Saka · 1 goal, 1 assist"), or their name alone before they have one."""
+    name and their line's headline so far ("Bukayo Saka · 1 goal, 1 assist"), or their name alone before they have one.
+    A player on its board under another of its fixtures (`on`) has their line from this poll."""
     ids = sorted({p for mine in fans.values() for p in mine})
     if not ids:
         return {}
     names = {player_id: name for player_id, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(ids)))}
     latest = select(PlayerLine.player_id, PlayerLine.stats).where(PlayerLine.event_id == event_id, PlayerLine.player_id.in_(ids))
     heads = {player_id: str((stats or {}).get("headline") or "") for player_id, stats in db.execute(latest.ext(distinct_on(PlayerLine.player_id)).order_by(PlayerLine.player_id, PlayerLine.as_of.desc()))}
+    heads = {**{p: head for p, head in (on or {}).items() if p in names}, **heads}
     out = {}
     for fan, mine in fans.items():
         ranked = sorted((p for p in dict.fromkeys(mine) if names.get(p)), key=lambda p: (not heads.get(p), names[p]))

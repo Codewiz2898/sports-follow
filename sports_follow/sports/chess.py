@@ -91,6 +91,15 @@ def _points(result: str) -> tuple[float, float] | None:
     return value(match.group(1)), value(match.group(2))
 
 
+def _sides(now: Seen) -> tuple[str, str, str]:
+    """The board's players by their FIDE ids, as the player's line puts them: theirs, their opponent's, and White's
+    ("" before the pairing's out)."""
+    white, black = (str((now.state.get(c) or {}).get("id") or "") for c in ("white", "black"))
+    colour = stat(now.line, "Colour")
+    mine, theirs = (white, black) if colour == "White" else (black, white) if colour == "Black" else ("", "")
+    return mine, theirs, white
+
+
 def _won(text: str, priority: int = 0) -> Poster | None:
     """A win as a poster, from a result's line at the end of `text` ("Won with Black vs Firouzja", or a
     moment's "Gukesh D: Won the match 2–1 vs So")."""
@@ -138,14 +147,20 @@ class Chess(Sport):
     def starts_unlisted(self, now: Seen) -> bool:
         return True
 
+    # A board is a fixture of each of its players, so each of its moments is found twice, once from each side; a fan
+    # who follows both hears it from one (Found.voice): a swing from the side it went toward, the result from the
+    # winner's, the start and a draw from White's.
+
     def start(self, who: str, now: Seen) -> Found:
         rnd = now.state.get("round") or "Their game"
         opp = stat(now.line, "Opponent")
-        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}")
+        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}", voice=_sides(now)[2])
 
     def final(self, who: str, now: Seen) -> Found:
         head = (now.line or {}).get("headline") or ""
-        return Found("final", "key", f"{who}: {head or 'result'}", now.score)
+        mine, theirs, white = _sides(now)
+        voice = mine if head.startswith("Won") else theirs if head.startswith("Lost") else white
+        return Found("final", "key", f"{who}: {head or 'result'}", now.score, voice=voice)
 
     def settle(self, before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return settle(before, ev)
@@ -179,7 +194,9 @@ class Chess(Sport):
             title, level = f"Turnaround: {title}", "key"
         opponent = stat(now.line, "Opponent")
         body = " · ".join(x for x in (f"Engine {_score(got, side)}", f"move {got['move']}" if got.get("move") else None, f"vs {opponent}" if opponent else None) if x)
-        return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30)]
+        mine, theirs, _ = _sides(now)
+        return [Found("swing", level, title, body, f"b{new}m{got.get('move') or 0}", 85 if turnaround else 70 if level == "key" else 30,
+                      voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """The board turning, as the engine sees it, told once, in during's words from the side it moved

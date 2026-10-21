@@ -3,6 +3,7 @@ make a sound."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from sports_follow.alerts import BREAKTHROUGH, LIVE_TTL, LOUD_PER_HOUR, Item, Sent, plan
@@ -16,8 +17,8 @@ def item(id: int, kind: str, title: str, *, level: str = "key", priority: int = 
     return Item(id, player, event, kind, level, priority, title, body, f"/player/{player}", NOW - timedelta(seconds=ago), corrects)
 
 
-def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI, moments: list[int] | None = None) -> Sent:
-    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago), moments or [])
+def sent(event: int | None, *lines: str, loud: bool = True, ago: int = 600, player: int = KOHLI, moments: list[int] | None = None, game: str = "") -> Sent:
+    return Sent(event, player, loud, list(lines), NOW - timedelta(seconds=ago), moments or [], game)
 
 
 def test_levels_pick_what_reaches_the_phone():
@@ -137,3 +138,45 @@ def test_a_goal_taken_back_before_it_went_isnt_sent():
     assert plan([goal], {KOHLI: "key"}, set(), [], NOW, {5}) == []
     # The sweep found both in one batch: neither goes.
     assert plan([goal, correction], {KOHLI: "key"}, set(), [], NOW) == []
+
+
+# ---------------------------------------------------------------- a game under several fixtures (BHA-378)
+
+CARLSEN, LAZAVIK = 5, 6
+ON_CARLSENS, ON_LAZAVIKS = 21, 22  # the board under each player's fixture: an event each, polled apart
+BOARD = "lichess_chess:mJnv1YBU"  # the game both are (structured.games)
+
+
+def side(id: int, player: int, title: str, voice: int, *, kind: str = "swing", priority: int = 70) -> Item:
+    """A chess board's moment as one side's fixture found it, naming whose side tells it (Found.voice)."""
+    event = ON_CARLSENS if player == CARLSEN else ON_LAZAVIKS
+    return replace(item(id, kind, title, player=player, event=event, priority=priority, body="Engine +4.0 · move 40"), game=BOARD, voice=voice)
+
+
+def test_a_fan_of_both_players_on_a_board_hears_each_moment_once_from_the_side_it_went_toward():
+    trouble, winning = side(1, LAZAVIK, "Denis Lazavik is in trouble", CARLSEN), side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN)
+    both = {CARLSEN: "key", LAZAVIK: "key"}
+    assert plan([trouble], both, set(), [], NOW) == []  # Lazavik's fixture found it first: nothing, and nothing waits for Carlsen's
+    [p] = plan([winning], both, set(), [], NOW)
+    assert (p.title, p.player_id, p.event_id) == ("Magnus Carlsen is winning", CARLSEN, ON_CARLSENS)
+    # A fan of one of them hears it from their player's side, as before.
+    assert [q.title for q in plan([trouble], {LAZAVIK: "key"}, set(), [], NOW)] == ["Denis Lazavik is in trouble"]
+    assert [q.title for q in plan([winning], {CARLSEN: "key"}, set(), [], NOW)] == ["Magnus Carlsen is winning"]
+    # And so does one who set the other side to results only: its words wouldn't reach them.
+    assert [q.title for q in plan([trouble], {CARLSEN: "results", LAZAVIK: "key"}, set(), [], NOW)] == ["Denis Lazavik is in trouble"]
+    # The start and the result: once each, White's start and the winner's result.
+    starts = [side(3, CARLSEN, "Magnus Carlsen is playing", CARLSEN, kind="start"), side(4, LAZAVIK, "Denis Lazavik is playing", CARLSEN, kind="start")]
+    finals = [side(5, LAZAVIK, "Denis Lazavik: Lost with Black vs Magnus Carlsen", CARLSEN, kind="final"), side(6, CARLSEN, "Magnus Carlsen: Won with White vs Denis Lazavik", CARLSEN, kind="final")]
+    assert [[q.title for q in plan([m], both, set(), [], NOW)] for m in [*starts, *finals]] == [["Magnus Carlsen is playing"], [], [], ["Magnus Carlsen: Won with White vs Denis Lazavik"]]
+
+
+def test_a_board_under_two_fixtures_is_one_notification_with_one_story():
+    # The turnaround is Lazavik's to tell, from his fixture; the game's notification is the one Carlsen's winning went on.
+    turned = side(3, LAZAVIK, "Turnaround: Denis Lazavik is winning", LAZAVIK, priority=85)
+    [winning] = plan([side(2, CARLSEN, "Magnus Carlsen is winning", CARLSEN)], {CARLSEN: "key"}, set(), [], NOW)
+    earlier = [sent(ON_CARLSENS, "Magnus Carlsen is winning", player=CARLSEN, moments=[2], game=BOARD, ago=900)]
+    [p] = plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, set(), earlier, NOW)
+    assert p.tag == winning.tag and p.tag.startswith("g") and len(p.tag) <= 32  # a Web Push topic: at most 32 characters
+    assert p.story == ["Magnus Carlsen is winning"]
+    # A game whose fixture is the game keeps its event's notification.
+    assert plan([item(1, "fifty", "Virat Kohli reaches 50")], {KOHLI: "key"}, set(), [], NOW)[0].tag == "e10"

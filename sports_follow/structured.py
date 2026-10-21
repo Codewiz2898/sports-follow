@@ -16,13 +16,14 @@ import copy
 import json
 import logging
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, livecards, matches, metrics, moments, naming, notify, predictions, registry, shutdown, sports, tracing
@@ -82,6 +83,30 @@ def board_key(key: str | None, board: str) -> str | None:
         return None
     system, _, fixture = (key or "").partition(":")
     return predictions.game_key(system, fixture, board)
+
+
+def games(db: Session, event_ids: Iterable[int | None]) -> dict[int, str]:
+    """The game each of these events is one fixture of, by its latest board (game_key), where a game is under
+    several: the same for each of them, so alerts, live cards and mutes take them for one game (BHA-378). An event
+    whose fixture is the game, or that has no board yet, isn't in it."""
+    ids = sorted({e for e in event_ids if e})
+    if not ids:
+        return {}
+    latest = (select(EventState.event_id, Event.key, EventState.state).join(Event, Event.id == EventState.event_id).where(EventState.event_id.in_(ids))
+              .ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))
+    return {event_id: game for event_id, key, state in db.execute(latest) if (game := game_key(key, state))}
+
+
+def game_events(db: Session, event_id: int) -> list[int]:
+    """Every event of the game an event is of, itself first: the others its game is under (a chess board is a fixture
+    of each player's, both starting with the round) by their latest boards, else itself alone."""
+    game = games(db, [event_id]).get(event_id)
+    event = db.get(Event, event_id)
+    if not game or event is None or event.start_utc is None:
+        return [event_id]
+    system = (event.key or "").partition(":")[0]
+    near = select(Event.id).where(Event.id != event_id, Event.key.startswith(f"{system}:", autoescape=True), Event.start_utc.between(event.start_utc - timedelta(days=1), event.start_utc + timedelta(days=1)))
+    return [event_id, *sorted(e for e, g in games(db, db.scalars(near).all()).items() if g == game)]
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:

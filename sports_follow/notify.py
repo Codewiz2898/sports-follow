@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -143,7 +143,8 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
         key = _key(event_id, player_id, f"{f.kind}:{f.detail}")
         new_id = db.scalar(
             insert(Moment)
-            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects)
+            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects,
+                    about=[f.voice] if f.voice else None)
             .on_conflict_do_nothing()
             .returning(Moment.id)
         )
@@ -243,7 +244,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         if not claimed:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
-        items = as_items(rows)
+        items = on_boards(db, rows)
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
         # The followed teams in each of the batch's games, for the app's toasts (below).
@@ -262,6 +263,8 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             told_by.setdefault(item.event_id, set()).update(alerts.sided(item))
     for item in shown:
         moment: dict[str, Any] = {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}
+        if item.voice is not None and item.voice != item.player_id:
+            moment["voice"] = item.voice  # a board's other side tells it: a fan who follows them too sees theirs (alerts.voiced)
         if item.player_id is None and item.event_id is not None:
             sides = alerts.sided(item)
             moment["teams"] = followed.get(item.event_id, [])
@@ -295,6 +298,24 @@ def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
     its key. A player's says whom it's about, and each its place among its kind, once for_games() has looked them up."""
     return [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects,
                         frozenset(m.about or ()) if m.player_id is None else frozenset(), (m.key.split(":", 3)[3:] or [""])[0]) for m in rows]
+
+
+def on_boards(db: Session, rows: Sequence[Moment]) -> list[alerts.Item]:
+    """Moments as the planner sees them (as_items), each with the game its event is one fixture of where a game is
+    under several (structured.games: a chess board is one of each player's), and a player's there with the player
+    here whose side tells it (Item.voice), from its stored id in the source. Looked up only for such games."""
+    from . import structured  # an event's board (structured sends through here)
+
+    items = as_items(rows)
+    games = structured.games(db, {i.event_id for i in items})
+    if not games:
+        return items
+    # Each player's moment there by its source and the id its voice has there.
+    systems = {event_id: key.partition(":")[0] for event_id, key in db.execute(select(Event.id, Event.key).where(Event.id.in_(list(games))))}
+    said = {m.id: (systems.get(m.event_id, ""), str(m.about[0])) for m in rows if m.player_id is not None and m.event_id in games and m.about}
+    found = select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(set(said.values())))
+    voices = {(system, external): player_id for player_id, system, external in db.execute(found)} if said else {}
+    return [replace(i, game=games.get(i.event_id or 0, ""), voice=voices.get(said.get(i.id, ("", "")))) for i in items]
 
 
 def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
@@ -331,13 +352,19 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
 def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
     """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
     device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
-    from . import teams  # whose team is in a game (teams reads the pipeline that sends through here)
+    from . import structured, teams  # an event's board; whose team is in a game (both read the pipeline that sends through here)
 
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
+    # And these fans' levels for the players whose side tells a moment of theirs (a chess board's other side, whose own
+    # fixture finds it too): one who follows both hears it from there (alerts.voiced).
+    voices = {i.voice for i in items if i.voice is not None} - players
+    theirs = select(Follow.fan_id).where(Follow.player_id.in_(players))
+    for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(voices), Follow.fan_id.in_(theirs))) if voices and levels else []:
+        levels[fan][player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
     # The batch's games that fans follow by themselves, lapsed or not: plan() keeps a lapsed follow's moments
     # found before it lapsed (the result), and a player's moment one of them already said isn't said again.
     games: dict[str, dict[int, alerts.Watch]] = {}
@@ -365,8 +392,12 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
         muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
     earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
-    for n in db.scalars(earlier):
-        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
+    notes = list(db.scalars(earlier))
+    # The games their events are of, where a game is under several fixtures: its earlier pushes from any of them are
+    # its story (alerts.plan).
+    boards = structured.games(db, {n.event_id for n in notes}) if any(i.game for i in items) else {}
+    for n in notes:
+        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or [], boards.get(n.event_id or 0, "")))
 
     # What earlier pushes of these games sent the fans who follow one by itself: a moment one side said there
     # isn't said again by the other (alerts.plan).
