@@ -116,6 +116,7 @@ export interface FeedCandidateRow {
   score: number | null
   review: Review | null
   moment_id: number | null
+  unplayable_at: string | null // when a fan's app said it won't play inside it (approving or pinning it says it does)
   served: boolean
 }
 /** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */

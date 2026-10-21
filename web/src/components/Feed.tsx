@@ -8,6 +8,7 @@ import { useMyFeed } from '../myFeed'
 import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
 import { EdgePost, EdgeSheetExtras } from './FeedLayouts'
+import { FeedPlayer } from './FeedPlayer'
 import { FeedPost } from './FeedPost'
 
 /**
@@ -71,8 +72,8 @@ function More({ onClick }: { onClick: () => void }) {
   return <button type="button" className="feed-more" aria-label="Why this is here, and feedback" onClick={onClick}>{dots}</button>
 }
 
-/** A video: YouTube's thumbnail and a play button; a tap swaps in YouTube's no-cookie player, playing. */
-export function VideoCard({ item, now, onMore }: { item: FeedItem; now: number; onMore?: () => void }) {
+/** A video: YouTube's thumbnail and a play button; a tap swaps in YouTube's no-cookie player, playing (FeedPlayer). */
+export function VideoCard({ item, playerId, now, onMore }: { item: FeedItem; playerId: number; now: number; onMore?: () => void }) {
   const [playing, setPlaying] = useState(false)
   const id = item.video?.youtube_id
   if (!id) return null
@@ -81,8 +82,7 @@ export function VideoCard({ item, now, onMore }: { item: FeedItem; now: number; 
     <article className="card feed-card video">
       <div className="feed-thumb">
         {playing ? (
-          <iframe src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1`} title={item.title}
-            allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
+          <FeedPlayer item={item} playerId={playerId} />
         ) : (
           <>
             <Thumb id={id} size="hqdefault" />
@@ -139,8 +139,8 @@ export function NewsCard({ item, now, onMore }: { item: FeedItem; now: number; o
   )
 }
 
-function ItemCard({ item, name, now, onMore }: { item: FeedItem; name: string; now: number; onMore?: () => void }) {
-  if (item.kind === 'video') return <VideoCard item={item} now={now} onMore={onMore} />
+function ItemCard({ item, playerId, name, now, onMore }: { item: FeedItem; playerId: number; name: string; now: number; onMore?: () => void }) {
+  if (item.kind === 'video') return <VideoCard item={item} playerId={playerId} now={now} onMore={onMore} />
   if (item.kind === 'post') return <PostCard item={item} name={name} now={now} onMore={onMore} />
   return <NewsCard item={item} now={now} onMore={onMore} />
 }
@@ -285,7 +285,7 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
       </SectionHead>
       {/* Beside each other on a desktop, as the Feed's columns are. */}
       <div className="feed-grid">
-        <ItemCard item={top} name={name} now={now} />
+        <ItemCard item={top} playerId={feed.player_id} name={name} now={now} />
         {line && (
           <button type="button" className="card feed-line" onClick={onAll}>
             {line.post?.own ? <span className="pill ink">From {shortName(name)}</span> : <span className="pill feed-fan">Fan</span>}

@@ -2184,6 +2184,38 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
     return {"item_id": item_id, "hidden": True}
 
 
+@app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
+async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it
+    (feed.unplayable). It leaves every fan's Feed; the app opens it on its site instead, and an admin approving or
+    pinning it brings it back. Saying it again changes nothing. A fan says so only so many times an hour, and an
+    address and everyone together mark only so many videos: past either, a 429. Only a mark counts against the
+    address's and everyone's, so junk ids and a video said of again don't use up what a real one needs."""
+    refused = "That's a lot of videos that won't play for one hour. Try again later."
+    redis = state["redis"]
+    mine = f"feed:unplayable:fan:{fan}"
+    used = await redis.incr(mine)
+    await redis.expire(mine, 3600, nx=True)  # the hour's end, set once
+    if used > feed.UNPLAYABLE_PER_FAN:
+        raise HTTPException(429, refused)
+    address = client_address(request)
+    shared = [("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)] + ([(f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS)] if address else [])
+    for key, limit in shared:
+        if int(await redis.get(key) or 0) >= limit:
+            raise HTTPException(429, refused)
+    try:
+        marked = await in_db(feed.unplayable, player_id, item_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if marked:
+        for key, _ in shared:
+            await redis.incr(key)
+            await redis.expire(key, 3600, nx=True)
+    return {"item_id": item_id, "unplayable": True, "marked": marked}
+
+
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
     """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab

@@ -5,13 +5,14 @@ import { duration, fromLine, openLabel, upright, views } from '../feed'
 import { initials, safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
+import { FeedPlayer } from './FeedPlayer'
 import { ShareButton } from './Share'
 
 /**
  * The Feed's cards, one shape for every kind (the InstaCards board): who it's about with their photo, where it's
  * from and when, what it is, a picture, the words, then Share and the way to the source; the "…" opens "Why this
  * is here". A video is YouTube's thumbnail and nothing of YouTube's loads until play is tapped, then its no-cookie
- * player takes the picture's place. A story shows the image its publisher's feed attaches, as they serve it, or
+ * player takes the picture's place (FeedPlayer). A story shows the image its publisher's feed attaches, as they serve it, or
  * without one its headline on the sport's colour. A post is words only, opened where it was posted.
  */
 
@@ -62,8 +63,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
     media = (
       <div className={upright(item) ? 'post-media video upright' : 'post-media video'}>
         {playing ? (
-          <iframe src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1`} title={item.title}
-            allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
+          <FeedPlayer item={item} playerId={who.id} />
         ) : (
           <>
             {picture && <Picture src={picture} onGone={() => setNoPicture(true)} />}

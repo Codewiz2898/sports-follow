@@ -52,7 +52,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select, update
+from sqlalchemy import not_, select, update
 from sqlalchemy.orm import Session
 
 from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
@@ -518,12 +518,18 @@ def cards(now: datetime | None = None) -> dict[str, int]:
 
 def review(session: Session, row_id: int, said: str | None) -> bool:
     """An admin's word on a row (REVIEWS, or None to take it back); False for no such row. Its score follows
-    at the row's next rescore, which the caller runs."""
+    at the row's next rescore, which the caller runs. Approving or pinning one a fan's app said won't play inside
+    it (feed.unplayable) says it does: every row of the video is served again."""
     if said is not None and said not in REVIEWS:
         raise ValueError(f"not a review: {said!r}")
-    return bool(session.execute(update(FeedCandidate).where(FeedCandidate.id == row_id).values(review=said).returning(FeedCandidate.id)).first())
+    found = session.execute(update(FeedCandidate).where(FeedCandidate.id == row_id).values(review=said)
+                            .returning(FeedCandidate.source, FeedCandidate.external_id)).first()  # fmt: skip
+    if found is not None and said in ("approved", "pinned"):
+        session.execute(update(FeedCandidate).where(FeedCandidate.source == found.source, FeedCandidate.external_id == found.external_id,
+                                                    FeedCandidate.unplayable_at.is_not(None)).values(unplayable_at=None))  # fmt: skip
+    return found is not None
 
 
 def unserved() -> Any:
-    """The SQL condition for a row the Feed never shows."""
-    return or_(FeedCandidate.score.is_(None), FeedCandidate.review == "hidden")
+    """The SQL condition for a row the Feed never shows (FeedCandidate.served's opposite)."""
+    return not_(FeedCandidate.served())

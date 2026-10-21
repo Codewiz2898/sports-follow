@@ -171,7 +171,7 @@ def channel_yield(session: Session, channels: Iterable[str], listed: Iterable[st
         return out
     since = now - timedelta(days=YIELD_DAYS)
     cid = FeedCandidate.candidate["channel_id"].astext
-    servable = FeedCandidate.score.is_not(None) & FeedCandidate.review.is_distinct_from("hidden")
+    servable = FeedCandidate.served()
     for channel, kept, served in session.execute(
         select(cid, func.count(distinct(FeedCandidate.external_id)), func.count(distinct(FeedCandidate.external_id)).filter(servable))
         .where(cid.in_(wanted), FeedCandidate.fetched_at >= since).group_by(cid)
@@ -229,8 +229,7 @@ def covered(session: Session, players: Iterable[int], now: datetime | None = Non
         return set()
     rows = session.execute(
         select(FeedCandidate.player_id, FeedCandidate.candidate["published"].astext, FeedCandidate.review)
-        .where(FeedCandidate.player_id.in_(wanted), FeedCandidate.source.not_in(list(NEWS)), FeedCandidate.score.is_not(None),
-               FeedCandidate.review.is_distinct_from("hidden")))
+        .where(FeedCandidate.player_id.in_(wanted), FeedCandidate.source.not_in(list(NEWS)), FeedCandidate.served()))
     out: set[int] = set()
     for pid, published, review in rows:
         at = when(published)

@@ -47,7 +47,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -60,6 +60,9 @@ log = logging.getLogger("sports_follow.feed")
 
 # What a fan can say about an item from its "…" sheet. Each hides it from them; the judge reads all three later.
 VERDICTS = ("not_interested", "not_about_player", "report")
+# Videos a fan's app may say in an hour won't play inside it (unplayable), from one fan, one address and everyone:
+# a video it says so of goes from everyone's Feed, so one app (or a script) can't empty the Feed in an hour.
+UNPLAYABLE_PER_FAN, UNPLAYABLE_PER_ADDRESS, UNPLAYABLE_PER_HOUR = 10, 30, 200
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
@@ -220,7 +223,7 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
             rows = db.execute(
                 select(FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features, FeedCandidate.verdict,
                        FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review, FeedCandidate.judged_at, FeedCandidate.fetched_at)
-                .where(FeedCandidate.player_id.in_(sorted(set(player_ids))), FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"))
+                .where(FeedCandidate.player_id.in_(sorted(set(player_ids))), FeedCandidate.served())
             ).all()  # fmt: skip
             names = tuple(n for n in db.scalars(select(Player.name).where(Player.id.in_(sorted(set(player_ids))))) if n)
         out: dict[int, list[Candidate]] = {}
@@ -455,8 +458,7 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
     (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
     BIG_MOMENT or more, not taken back), then the most followed on the app. The tier is the first two of those
     (0: the fan's sport with a big moment, up to 3: neither): For you serves a tier's videos before the next's."""
-    served = (select(FeedCandidate.player_id).where(FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"),
-                                                    FeedCandidate.source.in_(list(VIDEOS))).distinct().subquery())  # fmt: skip
+    served = select(FeedCandidate.player_id).where(FeedCandidate.served(), FeedCandidate.source.in_(list(VIDEOS))).distinct().subquery()
     rows = db.execute(select(Player.id, Player.sport, func.count(Follow.id)).join(served, served.c.player_id == Player.id)
                       .outerjoin(Follow, Follow.player_id == Player.id).group_by(Player.id, Player.sport)).all()  # fmt: skip
     mine = set(followed)
@@ -639,6 +641,30 @@ def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> 
         raise LookupError("That item isn't in this player's feed any more.")
     row = insert(FeedFeedback).values(fan_id=fan, player_id=player_id, item_id=item, verdict=verdict)
     db.execute(row.on_conflict_do_update(index_elements=["fan_id", "player_id", "item_id"], set_={"verdict": verdict}))
+
+
+def unplayable(db: Session, player_id: int, item: str, now: datetime | None = None) -> bool:
+    """A fan's app said this video of the player's feed won't play inside it: its source's player refused it (its
+    owner keeps it off other sites, which the source's facts didn't say). It's marked on every player's row of it,
+    so no Feed serves it again, and a fetch that finds it again for someone else keeps the mark (candidates.keep).
+    An admin's approving or pinning it stands over that (rank.review): such a video is never marked. True when this
+    marked it, False when it was already or an admin vouched for it. ValueError for an item id this never makes;
+    LookupError for no such video of the player's."""
+    if not ITEM_ID.fullmatch(item):
+        raise ValueError("No such item.")
+    rows = db.execute(select(FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url)
+                      .where(FeedCandidate.player_id == player_id, FeedCandidate.source.in_(list(VIDEOS)))).all()  # fmt: skip
+    found = next(((r.source, r.external_id) for r in rows if item_id(r.url) == item), None)
+    if found is None:
+        raise LookupError("That video isn't in this player's feed.")
+    video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
+    if db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))):
+        return False
+    marked = db.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_(None))
+                        .values(unplayable_at=now or datetime.now(timezone.utc)).returning(FeedCandidate.id)).all()  # fmt: skip
+    if marked:
+        log.info("feed: %s %s won't play inside the app, a fan's app said: no longer served (%d row(s))", found[0], found[1], len(marked))
+    return bool(marked)
 
 
 # ---------------------------------------------------------------- inside

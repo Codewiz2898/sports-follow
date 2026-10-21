@@ -583,6 +583,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
   again for its pace, and every stored video is read again weekly and dropped once removed, private, no
   longer embeddable or blocked in India; while one is under two days old it's read again every six hours.
+  Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
+  the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
+  says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
+  with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
+  hour from a fan, an address and everyone). It marks every row of the video (`unplayable_at`), no Feed serves
+  it again, and a fetch that finds it for another player keeps the mark. The admin panel's Feed tab shows the
+  mark, and approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can also mean a
+  block in the viewer's country alone isn't known; if it can, one fan abroad hides it from India too.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its

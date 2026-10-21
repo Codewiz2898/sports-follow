@@ -446,7 +446,7 @@ def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]
     query = select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
     where = {
         "unjudged": FeedCandidate.verdict.is_(None),
-        "served": FeedCandidate.score.is_not(None) & FeedCandidate.review.is_distinct_from("hidden"),
+        "served": FeedCandidate.served(),
         "held": FeedCandidate.verdict.is_not(None) & rank.unserved(),
         "reviewed": FeedCandidate.review.is_not(None),
     }.get(show)
@@ -457,7 +457,7 @@ def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]
     totals = {
         "all": db.scalar(select(func.count()).select_from(FeedCandidate)) or 0,
         "unjudged": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.verdict.is_(None))) or 0,
-        "served": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"))) or 0,
+        "served": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.served())) or 0,
         **{f"review_{k}": v for k, v in counts.items()},
     }
     return {"candidates": [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], "next": offset + PAGE if len(rows) > PAGE else None,
@@ -485,7 +485,7 @@ def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:
         "published": kept.get("published"), "fetched_at": _iso(c.fetched_at), "judged_at": _iso(c.judged_at),
         "views": rank.whole(numbers.get("views")), "likes": rank.whole(numbers.get("likes")), "seconds": rank.whole(numbers.get("seconds")),
         "verdict": verdict, "passes": rank.passes(verdict), "score": c.score, "review": c.review, "moment_id": c.moment_id,
-        "served": c.score is not None and c.review != "hidden",
+        "unplayable_at": _iso(c.unplayable_at), "served": c.score is not None and c.review != "hidden" and c.unplayable_at is None,
     }  # fmt: skip
 
 
