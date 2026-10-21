@@ -6,8 +6,9 @@ What's asked is each sport's (Sport.asks, read off a game's board): a chess game
 match's winner, each map of a team esports series. A question belongs to the game, whichever of its fixtures shows
 it (a chess board is one of each player's: Sport.board tells the game apart), and is made the first time its board
 is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
-or the worker's read of a fan's game coming up (prepare, made). It closes as the game, or its map, starts (a first
-question's start time closes it too, should a poll be late: sweep), and a pick after that is refused.
+or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made). It closes as the game,
+or its map, starts (a first question's start time closes it too, should a poll be late: sweep), and a pick after that
+is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
@@ -31,6 +32,7 @@ from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session, aliased
 
 from . import bus, sports
+from . import league as big_games  # Today's big games (league.py): `league` here is a friends' league's page
 from .adapters import ADAPTERS
 from .config import APP_NAME
 from .db import session
@@ -48,6 +50,7 @@ AHEAD = timedelta(hours=26)  # prepare reads a fan's game coming up this far ahe
 PREPARE_EVERY = 2 * 3600  # and each game at most this often till its board asks (a chess round's pairings come late)
 PREPARE_MOST = 10  # games read a run
 RECENT = timedelta(hours=36)  # Today lists a fan's picks settled since
+OPEN_MOST = 60  # and this many questions still open at most: their games' and Today's big games'
 LEAGUES = 20  # leagues a fan is in at most
 MEMBERS = 50  # fans in a league at most
 NAME = 40  # a member's name, in characters
@@ -176,20 +179,34 @@ def _read(db: Session, system: str, fixture: str, game: dict[str, Any], keys: li
 
 
 def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
-    """The games of fans' players, teams and followed games coming up within AHEAD, in a sport that asks, with no
-    questions yet: the reads to ask for (worker.prepare_questions), whose boards make them (made). A game is asked
-    for at most every PREPARE_EVERY, PREPARE_MOST a run, soonest first."""
+    """The games coming up within AHEAD, in a sport that asks, with no questions yet: those of fans' players, teams
+    and followed games, and Today's big games (league.coming), whoever follows them, so a fan who follows nobody can
+    call those too; and a big game whose start the league's read has moved since its questions were made, while
+    nothing polls them (moved, for an event's), so they move with it. The reads to ask for (worker.prepare_questions),
+    whose boards make them, or move them (made). A game is asked for at most every PREPARE_EVERY, PREPARE_MOST a
+    run, soonest first."""
     from . import match  # the match page's reads (match reads Live now, which reads search, which reads the pipeline)
 
     now = now or _now()
     asked = exists().where(Question.keys.contains(func.jsonb_build_array(Event.key)))
+    coming = [(datetime.fromisoformat(g["start_utc"]), g["key"], g["sport"]) for g in big_games.coming(now)]  # the league's last reads: no source asked
+    big = [game for game in coming if game[0] <= now + AHEAD]
     with session() as db:
-        rows = db.execute(select(Event.key, Event.sport).where(Event.id.in_(_fans_events()), Event.status.in_(PRE_START), Event.start_utc.is_not(None),
-                                                               Event.start_utc > now, Event.start_utc <= now + AHEAD, ~asked)
-                          .order_by(Event.start_utc)).all()
+        theirs = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(_fans_events()), Event.status.in_(PRE_START), Event.start_utc.is_not(None),
+                                                                                 Event.start_utc > now, Event.start_utc <= now + AHEAD, ~asked)).all()
+        made = db.execute(select(Question.keys, Question.starts_at, Question.status, Question.event_id)
+                          .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
+    unpolled: dict[str, set[datetime | None]] = {}  # each big game asked of: the starts of its open questions nothing polls
+    for keys, starts_at, status, event_id in made:
+        for key in keys or []:
+            unpolled.setdefault(key, set()).update([starts_at] if status == OPEN and event_id is None else [])
+    # A start the league's read and the game's own disagree on (an older league read) is read again every
+    # PREPARE_EVERY till the league's next read: a few reads a game at most, in the refresh lane.
+    due = [game for game in big if game[1] not in unpolled or unpolled[game[1]] - {game[0]}]
+    games = {key: (start, key, sport) for start, key, sport in [*theirs, *due]}  # a fan's game that's a big one, once
     out: list[tuple[str, str]] = []
     redis = bus.sync_redis()
-    for key, sport in rows:
+    for _, key, sport in sorted(games.values()):
         system, _, fixture = key.partition(":")
         if not (sports.of(sport).predicts and sports.on(sport) and match.reader(system) and match.ID.fullmatch(fixture)):
             continue
@@ -445,14 +462,17 @@ def _fans_events(fan: str | None = None) -> Any:
 
 def today(db: Session, fan: str, now: datetime | None = None) -> dict[str, Any]:
     """Today's (GET /api/me/predictions): the questions still open on the games of the fan's players, teams and
-    followed games (a series under way has its maps to come), and on any they've picked, soonest first; and their picks settled in the last RECENT, newest
-    first."""
+    followed games (a series under way has its maps to come), on Today's big games coming up (league.coming: whoever
+    follows them, so a fan who follows nobody has them to call), and on any they've picked, soonest first, OPEN_MOST
+    at most: every game's first question comes before any later map (which has no start time of its own), so the cut
+    takes later maps first. And their picks settled in the last RECENT, newest first."""
     now = now or _now()
     keys = [k for (k,) in db.execute(select(Event.key).where(Event.id.in_(_fans_events(fan)), Event.status.in_((*PRE_START, "live")))).all()]
+    keys += [g["key"] for g in big_games.coming(now)]
     picked = select(Pick.question_id).where(Pick.fan_id == fan)
     theirs = or_(Question.keys.has_any(array(keys)), Question.id.in_(picked)) if keys else Question.id.in_(picked)
     coming = list(db.scalars(select(Question).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > now), theirs)
-                             .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(30)))
+                             .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(OPEN_MOST)))
     settled = list(db.scalars(select(Question).where(Question.id.in_(picked), Question.status.in_((SETTLED, VOIDED)), Question.settled_at >= now - RECENT)
                               .order_by(Question.settled_at.desc()).limit(20)))
     return {"open": shown(db, fan, coming, now), "settled": shown(db, fan, settled, now)}

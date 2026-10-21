@@ -584,7 +584,7 @@ export interface Prediction {
   waiting?: string[]  // and who hasn't yet, while it's open
 }
 
-/** Today's calls (GET /api/me/predictions): open questions on the fan's games, soonest first, and their picks settled lately. */
+/** Today's calls (GET /api/me/predictions): open questions on the fan's games and Today's big games, soonest first, and their picks settled lately. */
 export interface MyPredictions { open: Prediction[]; settled: Prediction[] }
 
 /** A league of friends calling games together (needs an account to make or join): its invite code, its table (members'

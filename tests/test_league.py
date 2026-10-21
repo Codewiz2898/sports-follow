@@ -175,6 +175,18 @@ def test_coming_up_is_the_next_fortnight_biggest_first_then_soonest(sources, red
     assert [g["key"] for g in served["coming"]["games"]] == ["pitch:c", "pitch:b", "pitch:a"]
 
 
+def test_the_big_games_coming_up_are_the_ones_served_whoever_follows_them(sources, redis, monkeypatch):
+    """What fans are asked to call ahead (predictions.prepare, today): Coming up's games, from the last reads, with
+    no events looked up."""
+    keep(redis, "pitch", [game("pitch:done", "final", NOW - timedelta(hours=3), 90), game("pitch:a", "scheduled", NOW + timedelta(hours=5), 40),
+                          game("pitch:far", "scheduled", NOW + timedelta(days=15), 99)])
+    keep(redis, "arena", [game("arena:b", "scheduled", NOW + timedelta(hours=2), 70, "valorant")])
+    keep(redis, "lobby", [game("lobby:old", "scheduled", NOW + timedelta(hours=1), 70, "pubg")], as_of=NOW - timedelta(seconds=league.SERVE + 60))  # a source down for days
+    assert [g["key"] for g in league.coming(NOW)] == [g["key"] for g in league.offer(Db(), NOW)[0]["coming"]["games"]] == ["arena:b", "pitch:a"]
+    monkeypatch.setattr(league, "sources", lambda: [])  # no source lists a schedule
+    assert league.coming(NOW) == []
+
+
 def test_each_list_is_cut_at_its_most(sources, redis, monkeypatch):
     monkeypatch.setattr(league, "RESULTS", 2)
     monkeypatch.setattr(league, "COMING", 1)

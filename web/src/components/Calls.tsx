@@ -7,8 +7,8 @@ import { CheckIcon } from './Icons'
 const EVERY = 5 * 60_000  // questions open a day before a game and close as it starts: a look this often keeps up
 
 /**
- * The fan's calls (GET /api/me/predictions): the questions still open on their games and on any they've picked,
- * and their picks settled lately. One look for every card showing them (shared.ts): Today's games and the side
+ * The fan's calls (GET /api/me/predictions): the questions still open on their games, on Today's big games and on
+ * any they've picked, and their picks settled lately. One look for every card showing them (shared.ts): Today's games and the side
  * column's. Calling a game (PickCard) looks again, and so does a change in the fan's games (`theirs`, Today's key
  * of their events, as useLeague's).
  */

@@ -277,8 +277,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   one postponed waits for its new date. Other sports ask nothing yet. A question (`prediction_question`)
   belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
-  game, a look at its match page (which lists its questions), or the worker's read of a fan's game coming up
-  within a day (`prepare_questions`, every ten minutes, at most once every two hours a game till its board asks). It
+  game, a look at its match page (which lists its questions), or the worker's read of a fan's game, or one of
+  Today's big games, coming up within a day (`prepare_questions`, every ten minutes, at most once every two hours a
+  game till its board asks: a big game's card says "Call it" to a fan who follows nobody). It
   closes as its game or map starts (`Sport.closed`; a first question's start time closes it too, and the server
   refuses a pick after that) and settles from the board (`Sport.answer`): a right pick scores 100 less the share of
   fans who picked the same, at least 10; a wrong one 0; a map the series didn't need is voided, as is a question

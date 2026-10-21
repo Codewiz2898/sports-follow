@@ -237,8 +237,8 @@ async def read_match(ctx, system: str, game: str) -> None:
 
 
 async def prepare_questions(ctx) -> None:
-    """The questions of fans' games coming up within a day, made ahead from a read of each (predictions.prepare):
-    every ten minutes, so a fan can call a game, and be asked to, before its poller arms it."""
+    """The questions of fans' games and Today's big games coming up within a day, made ahead from a read of each
+    (predictions.prepare): every ten minutes, so a fan can call a game, and be asked to, before its poller arms it."""
     if await _missed(ctx, "prepare_questions"):
         return
     for system, game in await asyncio.to_thread(predictions.prepare):
