@@ -20,7 +20,9 @@ many games doesn't fill it either. Today shows Coming up's first few soonest fir
 Each game says which of Sports Follow's events it is (event_ids, by the source's fixture id), so Today
 shows a game a fan's player is in once, as theirs; and its match page's address (match), where it has one: a
 game its source can read on its own (an adapter's match()), or one of those events. A game listed here counts
-as named for its match page (match.py), so opening it may cost its source a read, once.
+as named for its match page (match.py), so opening it may cost its source a read, once. A big game coming
+up within a day, in a sport that asks fans to call it, is read ahead for its questions (predictions.prepare),
+so a fan who follows nobody can call it from its card.
 """
 
 from __future__ import annotations
@@ -205,6 +207,13 @@ def _with_events(db: Session, ranked: dict[str, Any]) -> dict[str, Any]:
     events = {key: event_id for key, event_id in db.execute(select(Event.key, Event.id).where(Event.key.in_(keys)))} if keys else {}
     return {"results": {"day": ranked["day"], "games": [_shown(g, events) for g in ranked["results"]]},
             "coming": {"games": [_shown(g, events) for g in ranked["coming"]]}}
+
+
+def coming(now: datetime | None = None) -> list[dict[str, Any]]:
+    """The big games coming up as the API serves them, without their events: the games whose questions are made
+    ahead (predictions.prepare) and that Today's calls cover (predictions.today), whoever follows them."""
+    now = now or datetime.now(timezone.utc)
+    return _coming(_gather(now)[0], now)
 
 
 def offer(db: Session, now: datetime | None = None, tz: int = 0) -> tuple[dict[str, Any], list[str]]:

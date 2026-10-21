@@ -705,7 +705,7 @@ def take_back_pick(question_id: RowId, fan: str = Depends(fan_id), db: Session =
 @app.get("/api/me/predictions")
 def my_predictions(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Today's calls: the questions still open on this fan's games (their players', teams', games they follow, and
-    any they've picked), soonest first, and their picks settled lately."""
+    any they've picked) and on Today's big games coming up, soonest first, and their picks settled lately."""
     return predictions.today(db, fan)
 
 
