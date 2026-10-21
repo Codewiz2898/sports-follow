@@ -10,9 +10,11 @@ import { engineLook, type EngineLook } from './chessLine'
 const BUILT_FROM = '93c994592dcf3b4b21052ab925e9b534df9c0918'
 export const ENGINE_SOURCE = `https://github.com/nmrugg/stockfish.js/tree/${BUILT_FROM}`
 export const ENGINE_LICENCE = `https://github.com/nmrugg/stockfish.js/blob/${BUILT_FROM}/Copying.txt`
-// How deep it looks at a position: to depth 18 and no other limit, so every device ends on the same result (one
-// thread, the hash cleared before each position: ucinewgame), a slow phone later rather than shallower. Its look
-// at each depth reaches the bar as it comes, so the fan sees one at once. This is the lite build's smaller
+// How deep it looks at a position: to depth 18 and no other limit, so every device ends on the same result
+// (one thread, the hash cleared before each position: ucinewgame, and the same number of lines: talkToEngine's
+// `lines`, which changes the search too), a slow phone later rather than shallower. The web's board looks for
+// 3 lines; the Android app's for its best alone until its own board shows lines (BHA-403), so the two can
+// differ a little meanwhile. Its look at each depth reaches the bar as it comes, so the fan sees one at once. This is the lite build's smaller
 // network, not the server's full engine (sports_follow/engine.py): the two can differ on the same position.
 const LOOK = 'go depth 18'
 // A build that can't start says nothing (a page that doesn't allow WebAssembly rejects a promise inside the
@@ -25,8 +27,8 @@ const QUIET = 15_000
 const OWED = 5_000
 
 export interface Engine {
-  /** Look at a position (a FEN), each look at it, deeper as it goes, to `seen`; a new position stops the last,
-   * whose looks stop coming. */
+  /** Look at a position (a FEN), each look at it, deeper as it goes, to `seen` (with several lines asked for,
+   * each line's, by its number); a new position stops the last, whose looks stop coming. */
   look: (fen: string, seen: (look: EngineLook) => void) => void
   /** Stop looking (a position that has ended): the search stops, and its looks with it. */
   stop: () => void
@@ -51,8 +53,9 @@ interface Search { fen: string; seen: (look: EngineLook) => void }
 
 /** The conversation over a transport: `tell` gives the engine a line, `end` closes the transport (on quitting,
  * or failing). `ready`: the engine answers; `failed`: it couldn't start, it stopped answering, or the transport
- * went. */
-export function talkToEngine(transport: { tell: (line: string) => void; end: () => void }, on: { ready: () => void; failed: () => void }): Talk {
+ * went. `lines`: how many of its best lines it looks for (MultiPV), its best alone by default; more take it
+ * longer to reach its depth. */
+export function talkToEngine(transport: { tell: (line: string) => void; end: () => void }, on: { ready: () => void; failed: () => void }, lines = 1): Talk {
   let ready = false
   let over = false
   let owed: ReturnType<typeof setTimeout> | undefined
@@ -109,7 +112,10 @@ export function talkToEngine(transport: { tell: (line: string) => void; end: () 
   const heard = (line: string) => {
     if (over) return
     stirred()
-    if (line === 'uciok') tell('isready')
+    if (line === 'uciok') {
+      if (lines > 1) tell(`setoption name MultiPV value ${lines}`)
+      tell('isready')
+    }
     else if (line === 'readyok' && !ready) {
       ready = true
       clearTimeout(quiet)

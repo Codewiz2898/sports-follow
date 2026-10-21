@@ -29,6 +29,13 @@ export const SparkIcon = (p: SVGProps<SVGSVGElement>) => (
 export const ChevronIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><path d="m9 6 6 6-6 6" /></svg>
 )
+// An analysis board's steps to the start of its line and to the end (sports/chessAnalysis.tsx).
+export const FirstIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M6 5v14M17 5l-7 7 7 7" /></svg>
+)
+export const LastIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M18 5v14M7 5l7 7-7 7" /></svg>
+)
 export const UserIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
 )
