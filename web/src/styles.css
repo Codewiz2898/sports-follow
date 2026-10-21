@@ -382,7 +382,7 @@ a.photo-credit:hover { text-decoration: underline; }
 /* All of them at once: posters stay poster-sized, two across on a phone. */
 .week .rail.open { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 
-/* The Wire (Wire.tsx): an ink card of rows, each a tag in the player's sport colour (outlined for a player the
+/* The Wire (Wire.tsx): a white card of rows, each a tag in the player's sport colour (outlined for a player the
    fan doesn't follow, as Today's other cards are), one line, and when. */
 .wire { list-style: none; margin: 0; padding: 4px 16px; border-radius: 18px; background: var(--surface); color: var(--text); }
 .wire li + li { border-top: 1px solid var(--line); }
@@ -807,9 +807,6 @@ div.result-main { cursor: default; }
 .pick-card.settled.right .pick-head { font-size: 40px; }
 .pick-points { font-size: 44px; }
 .btn.on-sport { align-self: flex-start; border-color: var(--on-sport); background: var(--on-sport); color: var(--sport); }
-.btn.on-ink { border-color: var(--bg); color: var(--bg); }
-.btn.on-ink:hover { background: rgba(243, 243, 239, 0.12); }
-.btn.on-ink.primary { background: var(--bg); color: var(--text); }
 .league-band { display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 26px; background: var(--surface); color: var(--text); }
 .league-name { font-size: 52px; overflow-wrap: anywhere; }
 .invite-box { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 18px; background: var(--surface); }
