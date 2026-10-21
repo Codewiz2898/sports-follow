@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { SwapIcon } from '../components/Icons'
 import './chess.css'
-import { chess as facts, chessMiddle, evalScore, followedSide, movesAbout, PIECES, position, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, movesAbout, PIECES, position, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
@@ -13,8 +13,8 @@ function EvalBar({ ev, flip, compact }: { ev: ChessEval; flip: boolean; compact?
   const share = whiteShare(ev)
   const score = evalScore(ev)
   const white = share >= 50  // White ahead, or level
-  const depth = ev.depth ? `depth ${ev.depth}` : null
-  const words = `Engine evaluation ${score}, from White's side${depth ? `, ${depth}` : ''}`
+  const depth = evalDepth(ev)
+  const words = evalWords(ev)
   return (
     <>
       <div className={`chess-eval${flip ? ' flip' : ''}`} role="img" aria-label={words} title={words}>

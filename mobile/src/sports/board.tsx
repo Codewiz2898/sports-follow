@@ -5,7 +5,7 @@
 
 import { useState, type ReactNode } from 'react'
 import { StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from 'react-native'
-import type { LiveStatus } from '../api'
+import type { LiveStatus, Stat } from '../api'
 import type { Tone } from '../catalog'
 import { colour, font, num, t } from '../theme'
 import { alpha } from '../ui'
@@ -46,6 +46,10 @@ export interface BoardProps<S = unknown> {
   compact?: boolean
   teams?: string[] // the followed player's teams: their row in a lobby
   live: LiveStatus
+  // Each of the fan's players' numbers in the game, on a card with several (Today's, of a game two of theirs play
+  // each other in) or a match page; without it, the live block's own. A board drawn from their side (chess) has
+  // none to take when they're on both.
+  lines?: Stat[][]
   pal: Palette
 }
 

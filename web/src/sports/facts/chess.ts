@@ -78,6 +78,19 @@ export function evalScore(ev: ChessEval): string {
   return `${cp > 0 ? '+' : '−'}${tenths >= 100 ? Math.floor((tenths + 5) / 10) : `${Math.floor(tenths / 10)}.${tenths % 10}`}`
 }
 
+/** How deep the engine looked ("depth 28"), under a big board's bar and in every bar's words; none for a depth of
+ * 0 or none. */
+export function evalDepth(ev: ChessEval): string | null {
+  return ev.depth ? `depth ${ev.depth}` : null
+}
+
+/** An evaluation bar's words, for a screen reader and a small board's title: "Engine evaluation +1.4, from White's
+ * side, depth 28". */
+export function evalWords(ev: ChessEval): string {
+  const depth = evalDepth(ev)
+  return `Engine evaluation ${evalScore(ev)}, from White's side${depth ? `, ${depth}` : ''}`
+}
+
 /** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */
 export function chessMiddle(state: ChessState, clock?: string | null): string | null | undefined {
   return state.match ? `Match ${state.match.score}` : state.result ? state.result.replace('-', '–') : clock
