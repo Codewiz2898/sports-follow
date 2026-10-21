@@ -32,12 +32,14 @@
 	# feed attaches to a story, which lives on the publisher's own image hosts, not the feed's), and, once
 	# a fan taps play, YouTube's no-cookie player, with YouTube's IFrame Player API (its two scripts on www.youtube.com)
 	# listening to it (web/src/components/FeedPlayer.tsx: a video it won't play here); on a match page's
-	# Watch live, once tapped, Twitch's or Kick's player.
+	# Watch live, once tapped, Twitch's or Kick's player. Scripts from here (and those two), and WebAssembly
+	# compiled from them: a chess game's analysis board runs its engine in the fan's browser (web/public/engine/).
+	# The engine's worker gets this policy with its script, so it needs 'wasm-unsafe-eval' too.
 	# No other site may put them in a frame (until there's a real domain, every *.sslip.io server is
 	# the same site, so SameSite cookies alone don't stop a sibling from framing the app).
 	# A /watch/ page (one stream's player alone, which the Android app shows: sports_follow/watch.py) has a
 	# stricter one of its own from the API, its player's frame and its one style; this would replace it.
 	@app not path /watch/*
-	header @app Content-Security-Policy "default-src 'self'; script-src 'self' https://www.youtube.com/iframe_api https://www.youtube.com/s/player/; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://player.kick.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	header @app Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com/iframe_api https://www.youtube.com/s/player/; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; frame-src https://www.youtube-nocookie.com https://player.twitch.tv https://player.kick.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 	log
 }

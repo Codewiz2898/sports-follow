@@ -498,6 +498,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The live state carries the latest evaluation (`eval`), and the board draws it as a bar beside the
   board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
   `web/src/sports/facts/chess.ts`).
+- **Play from here, on the fan's device.** A chess game's match page makes its board an analysis board
+  where it is: the fan plays either side's legal moves from the game's position (or from any move of a
+  finished game's list), steps along their line, and Back to live returns to the game. Its bar comes from
+  Stockfish 18 (the lite single-threaded WebAssembly build, GPL-3.0, vendored in `web/public/engine/` with
+  its source, licence and checksums) in a Web Worker of the page, loaded only when a fan opens the board,
+  and kept by the service worker only once they have. Moves come from chess.js in a chunk of its own
+  (`web/src/sports/facts/chessLine.ts`, `chessAnalysis.tsx`). Nothing the fan plays reaches the server, so it
+  never reaches an alert. The Caddyfile's Content-Security-Policy allows WebAssembly (`'wasm-unsafe-eval'`).
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 - **Adding or removing a data source** is one module and one line (a source with a key of its own also

@@ -222,6 +222,14 @@ def test_the_builds_own_files_are_served_as_they_are(built):
     assert "og:title" in built.call("GET", "/index.html").text  # the page itself is the app's, with its tags
 
 
+def test_the_chess_engine_comes_as_webassembly(built, tmp_path):
+    """An analysis board's engine (web/public/engine/): a browser compiles it as it streams in only as application/wasm."""
+    (tmp_path / "engine").mkdir()
+    (tmp_path / "engine" / "engine.wasm").write_bytes(b"\0asm\1\0\0\0")
+    got = built.call("GET", "/engine/engine.wasm")
+    assert got.status_code == 200 and got.headers["content-type"] == "application/wasm" and got.content == b"\0asm\1\0\0\0"
+
+
 @pytest.mark.parametrize("path", ["/api", "/api/", "/api/admin", "/api/me/nothing", "/api/players/1/nothing"])
 def test_an_api_path_that_isnt_one_is_a_json_404_not_the_app(built, path):
     got = built.call("GET", path)

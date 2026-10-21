@@ -67,10 +67,12 @@ export function whiteShare(ev: ChessEval): number {
 }
 
 /** An evaluation's score from White's side, in pawns as Lichess gives it: "+1.4", "−0.6", "0.0"; past ten, in
- * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates.
+ * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates,
+ * and "#" for mate on the board (an analysis board's checkmate).
  * A tenth's half rounds away from zero, in whole centipawns, as a swing alert's score does (sports/chess.py's
  * _score), so the bar and the alert agree. */
 export function evalScore(ev: ChessEval): string {
+  if (ev.mate === 0) return '#'
   if (ev.mate != null) return `${whiteShare(ev) < 50 ? '−' : ''}M${Math.abs(ev.mate)}`
   const cp = Math.round(ev.cp ?? 0)
   const tenths = Math.floor((Math.abs(cp) + 5) / 10)
@@ -89,6 +91,19 @@ export function evalDepth(ev: ChessEval): string | null {
 export function evalWords(ev: ChessEval): string {
   const depth = evalDepth(ev)
   return `Engine evaluation ${evalScore(ev)}, from White's side${depth ? `, ${depth}` : ''}`
+}
+
+/** A finished game's moves (ChessPage.moves, in pairs: "1. d4 Nf6") one by one in SAN, to replay from the
+ * start: the position after the nth is the nth ply's. Null for moves that don't run from the first on (a list
+ * that starts with Black's, "1... e5", or skips a number), which can't be replayed from the start. */
+export function gameMoves(pairs: string[]): string[] | null {
+  const sans: string[] = []
+  for (const [i, pair] of pairs.entries()) {
+    const m = /^(\d+)\.\s+(\S+)(?:\s+(\S+))?$/.exec(pair.trim())
+    if (!m || Number(m[1]) !== i + 1 || (!m[3] && i < pairs.length - 1)) return null
+    sans.push(m[2], ...(m[3] ? [m[3]] : []))
+  }
+  return sans.length ? sans : null
 }
 
 /** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */

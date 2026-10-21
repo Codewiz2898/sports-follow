@@ -2568,7 +2568,9 @@ def watch_page(player: str, plays: str, request: Request) -> Response:
 # Served fresh every time, so a new build reaches installed apps: the page, the service worker that
 # caches everything else, and the manifest.
 NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest"}
-MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png"}
+# .wasm: the chess engine of a match page's analysis board (web/public/engine/), which browsers compile as it
+# streams in only when it comes as application/wasm.
+MEDIA = {".webmanifest": "application/manifest+json", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".wasm": "application/wasm"}
 
 # A player's page, and a game of theirs (?g=<event id>): served with their own link preview.
 PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
