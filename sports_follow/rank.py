@@ -390,7 +390,9 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     for r in rows:
         key = _team_share(r)
         if key is not None and key in before:
-            known.append({"id": r.id, "verdict": _for_teammate(before[key]), "judged_at": now})
+            known.append({"id": r.id, "verdict": _for_teammate(before[key], about_team(r.candidate)), "judged_at": now})
+            for step in ("judged", "passed") if passes(known[-1]["verdict"]) else ("judged",):
+                metrics.feed_step(step, stream(r.source, r.candidate), [who[r.player_id].sport])
         elif key is not None and key in shared:
             shared[key].append(r)
         else:
@@ -413,7 +415,7 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
                 continue
             said = v.model_dump(mode="json")
             for each in [r, *shared.get(_team_share(r) or ("", "", ""), [])]:
-                done.append({"id": each.id, "verdict": said if each is r else _for_teammate(said), "judged_at": now})
+                done.append({"id": each.id, "verdict": said if each is r else _for_teammate(said, about_team(r.candidate)), "judged_at": now})
                 for step in ("judged", "passed") if passes(done[-1]["verdict"]) else ("judged",):
                     metrics.feed_step(step, stream(each.source, each.candidate), [who[each.player_id].sport])
         if done:
@@ -429,10 +431,12 @@ def _team_share(r: Any) -> tuple[str, str, str] | None:
     return (r.source, r.external_id, naming.team_key(team)) if team else None
 
 
-def _for_teammate(verdict: dict[str, Any]) -> dict[str, Any]:
+def _for_teammate(verdict: dict[str, Any], team: str) -> dict[str, Any]:
     """A team share's verdict for another of the team's players: one the judge found was about the first player after
-    all is their team's for the rest."""
-    return {**verdict, "about_player": "team"} if verdict.get("about_player") == "subject" else verdict
+    all is their team's for the rest, with a line that names no player."""
+    if verdict.get("about_player") != "subject":
+        return verdict
+    return {**verdict, "about_player": "team", "reason": f"A video about {team}." if team else verdict.get("reason")}
 
 
 def _team_verdicts(session: Session, rows: Sequence[Any]) -> dict[tuple[str, str, str], dict[str, Any]]:

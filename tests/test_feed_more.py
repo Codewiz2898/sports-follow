@@ -16,8 +16,40 @@ KOHLI = Followed(1, "cricket", "Virat Kohli", ["King Kohli"], squads=["India", "
 
 
 def found(uploads, players):
-    names = candidates.phrases(players)
+    names = candidates.names_for(players)
     return [(f.player_id, f.name, f.where, f.team) for f in candidates.match(uploads, players, names, candidates.sides(players, names))]
+
+
+def test_a_followed_players_names_are_theirs_as_before_whoever_is_in_the_pool():
+    """Following doesn't change with the pool: a pool player sharing a followed one's surname never takes it."""
+    rohit, ishant = Followed(2, "cricket", "Rohit Sharma"), Followed(3, "cricket", "Ishant Sharma", pooled=True)
+    video = up("Sharma hundred seals the series")
+    assert found([video], [rohit]) == found([video], [rohit, ishant]) == [(2, "sharma", "title", "")]
+    assert candidates.names_for([rohit, ishant])[2] == candidates.phrases([rohit])[2]
+    assert ("sharma",) not in candidates.names_for([rohit, ishant])[3]  # a followed player's: never the pool's
+    # Rohit's surname still names him, as it did before the pool (the judge tells them apart).
+    assert found([up("Ishant Sharma's spell")], [rohit, ishant]) == [(2, "sharma", "title", ""), (3, "ishant sharma", "title", "")]
+
+
+def test_on_a_channel_every_game_lists_a_team_is_matched_only_in_the_game_the_video_names():
+    falcons_val = Followed(30, "valorant", "Shao", squads=["Team Falcons"], pooled=True)
+    group = [NIKO, ZYWOO, falcons_val]
+    assert found([up("Falcons vs Vitality | EWC Grand Final")], group) == []  # which Falcons? no game named: none
+    assert found([up("Falcons vs Vitality | CS2 Major Grand Final")], group) == [(10, "falcons", "title", "Team Falcons"), (12, "vitality", "title", "Team Vitality")]
+    assert found([up("Falcons beat Paper Rex | VALORANT Masters Toronto")], group) == [(30, "falcons", "title", "Team Falcons")]
+    # A game's own players alone: no game needs naming.
+    assert found([up("Falcons vs Vitality | EWC Grand Final")], [NIKO, ZYWOO])[0] == (10, "falcons", "title", "Team Falcons")
+
+
+def test_a_teams_short_name_inside_another_of_these_teams_longer_name_isnt_it():
+    milan = Followed(40, "football", "Rafael Leao", squads=["AC Milan"])
+    inter = Followed(41, "football", "Lautaro Martinez", squads=["Inter Milan"])
+    assert found([up("Inter Milan 2-0 Lecce | Highlights")], [milan, inter]) == [(41, "inter milan", "title", "Inter Milan")]
+    assert found([up("Milan 1-1 Napoli | Highlights")], [milan, inter]) == [(40, "milan", "title", "AC Milan")]
+    # An esports event's name is no other side: Masters is VALORANT's.
+    prx = Followed(42, "valorant", "f0rsakeN", squads=["Paper Rex"])
+    assert found([up("Paper Rex Masters Toronto run")], [prx]) == [(42, "paper rex", "title", "Paper Rex")]
+    assert found([up("India Legends vs Australia Legends")], [KOHLI]) == []  # cricket's retired sides
 
 
 def test_a_team_is_named_as_its_sports_titles_write_it():
@@ -60,7 +92,7 @@ def test_a_name_two_teams_share_a_players_name_or_one_short_word_names_no_team()
         Followed(3, "lol", "Faker", squads=["T1"]), Followed(4, "cs2", "Gamma Three", squads=["GG Esports"]),
         Followed(5, "cs2", "Sentinel", squads=["Sentinel"]),  # a pro named as their team
     ]
-    names = candidates.phrases(group)
+    names = candidates.names_for(group)
     by = {s.name: s.phrases for s in candidates.sides(group, names)}
     assert by["Team Liquid"] == [("team", "liquid")] and by["Liquid Gaming"] == [("liquid", "gaming")]  # "liquid" alone is both's
     assert by["T1"] == [("t1",)]  # two letters with a digit: a name
@@ -100,3 +132,27 @@ def test_the_judge_is_told_a_share_was_found_as_the_players_teams_and_only_that_
     # The rules' own verdict (a promo) says the team's for one found as the team's.
     promo = curate.rules(candidate("Falcons vs Vitality, use code FALCONS20", team="Team Falcons")).final
     assert promo is not None and promo.about_player == "team" and not rank.passes(promo.model_dump())
+
+
+def test_a_curator_starting_without_a_pool_queues_its_refresh_and_one_with_a_pool_doesnt(monkeypatch):
+    import asyncio
+
+    from sports_follow import curator, db, feedpool, metrics
+
+    monkeypatch.setattr(db, "size_pool", lambda n: None)
+    monkeypatch.setattr(metrics, "feed_seed", lambda: None)
+
+    class Redis:
+        def __init__(self, keys):
+            self.keys, self.queued = keys, []
+
+        async def exists(self, key):
+            return key in self.keys
+
+        async def enqueue_job(self, name, **kw):
+            self.queued.append((name, kw.get("_queue_name")))
+
+    empty, kept = Redis(set()), Redis({feedpool.POOL_KEY})
+    for redis in (empty, kept):
+        asyncio.run(curator.startup({"redis": redis}))
+    assert empty.queued == [("refresh_pool", curator.QUEUE)] and kept.queued == []

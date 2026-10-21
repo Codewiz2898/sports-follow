@@ -697,8 +697,8 @@ class Sport:
     # (candidates.py, BHA-382).
     team_affixes: tuple[str, ...] = ()
     # Words that, right after a team's name, make it another side ("India Women", "Liverpool U21"): such a mention
-    # isn't the player's team.
-    other_sides: tuple[str, ...] = ("women", "womens", "w", "u17", "u18", "u19", "u20", "u21", "u23", "academy", "legends", "masters", "b", "ii")
+    # isn't the player's team. A sport adds its own (cricket's "Legends").
+    other_sides: tuple[str, ...] = ("women", "womens", "w", "u17", "u18", "u19", "u20", "u21", "u23", "academy", "b", "ii")
 
     def team_names(self, name: str) -> list[str]:
         """A team's names as its videos' titles write them, each as plain words (naming.words) joined by spaces: its

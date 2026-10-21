@@ -152,6 +152,20 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
     return out
 
 
+def names_for(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
+    """phrases() for followed and pool players together, with the followed players' worked out among themselves
+    alone, as they were before the pool (BHA-382): a pool player sharing a surname never takes it from a followed one.
+    A pool player's are theirs among everyone, less any a followed player holds."""
+    mine = [p for p in players if not p.pooled]
+    out = phrases(mine)
+    if len(mine) < len(players):
+        held = {phrase for theirs in out.values() for phrase in theirs}
+        for pid, theirs in phrases(players).items():
+            if pid not in out:
+                out[pid] = {phrase for phrase in theirs if phrase not in held}
+    return out
+
+
 def search_name(player: Followed, names: dict[int, set[tuple[str, ...]]]) -> str:
     """The name a search asks for a player by (sweeps.py, searches.py): the one fans and titles write, "Jasprit Bumrah"
     for the registry's "Jasprit Jasbirsingh Bumrah". Of their own name and the aliases with fewer words than it, the
@@ -228,8 +242,9 @@ class Side:
 
 def sides(players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Side]:
     """The teams of these players' (Followed.squads), with the names their sport's titles write them by
-    (Sport.team_names): a name two of the teams share names neither, nor does one that's a player's name (names:
-    phrases()), nor one word of under three letters but with a digit in it ("T1", "G2")."""
+    (Sport.team_names): a name two of a sport's teams share names neither, nor does one that's a player's name
+    (names: phrases()), nor one word of under three letters but with a digit in it ("T1", "G2"). Two sports' teams
+    may share a name (Falcons in CS2 and in Valorant): which game a video is about tells them apart (teams_named)."""
     by: dict[tuple[str, str], Side] = {}
     pooled: dict[tuple[str, str], int] = {}
     for p in players:
@@ -242,10 +257,10 @@ def sides(players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> li
                 continue
             pooled[key] = pooled.get(key, 0) + p.pooled
             by[key].players.append(p.player_id)
-    owners: dict[tuple[str, ...], set[tuple[str, str]]] = {}
+    owners: dict[tuple[str, tuple[str, ...]], set[tuple[str, str]]] = {}
     for key, side in by.items():
         for phrase in side.phrases:
-            owners.setdefault(phrase, set()).add(key)
+            owners.setdefault((side.sport, phrase), set()).add(key)
     theirs = {phrase for held in names.values() for phrase in held}
 
     def fits(phrase: tuple[str, ...]) -> bool:
@@ -253,22 +268,45 @@ def sides(players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> li
         return len(phrase) > 1 or len(first) >= 3 or (len(first) == 2 and any(c.isdigit() for c in first))
 
     for key, side in by.items():
-        side.phrases = [ph for ph in side.phrases if owners[ph] == {key} and ph not in theirs and fits(ph)]
+        side.phrases = [ph for ph in side.phrases if owners[(side.sport, ph)] == {key} and ph not in theirs and fits(ph)]
     return [side for side in by.values() if side.phrases and side.players]
 
 
-def side_named(side: Side, read: Texts) -> tuple[str, str] | None:
-    """The name a video's title, else its description's opening, names this team by, and where; None if neither does.
-    Not when the next word makes it another side of that name ("India Women": Sport.other_sides)."""
-    other = set(sports.of(side.sport).other_sides)
+def _games(upload: Upload, among: set[str]) -> set[str]:
+    """Which of these sports a video's title or description's opening names (Sport.pattern: "VALORANT", "CS2")."""
+    text = f"{upload.title}\n{naming.lead(upload.description)}".lower()
+    return {key for key in among if (pattern := sports.of(key).pattern) and re.search(pattern, text)}
+
+
+def teams_named(teams: list[Side], upload: Upload, read: Texts) -> dict[int, tuple[str, str]]:
+    """The teams (by their place in teams) a video's title, else its description's opening, names, each with the name
+    it's named by and where. Not a name the next word makes another side of ("India Women": Sport.other_sides), nor
+    one inside another of these teams' longer names ("Milan" in "Inter Milan"). When these teams are of more than one
+    sport (a channel every esports game lists), only those of the sport the video names (_games): with none named, none."""
+    of_sports = {side.sport for side in teams}
+    if len(of_sports) > 1:
+        told = _games(upload, of_sports)
+        teams_in = [i for i, side in enumerate(teams) if side.sport in told]
+    else:
+        teams_in = list(range(len(teams)))
+    out: dict[int, tuple[str, str]] = {}
     for where, words, present in read:
-        for phrase in side.phrases:
-            if phrase[0] not in present:
-                continue
-            n = len(phrase)
-            if any(tuple(words[i:i + n]) == phrase and (i + n == len(words) or words[i + n] not in other) for i in range(len(words) - n + 1)):
-                return " ".join(phrase), where
-    return None
+        spans: list[tuple[int, int, int, tuple[str, ...]]] = []  # (start, end, team, name)
+        for i in teams_in:
+            other = set(sports.of(teams[i].sport).other_sides)
+            for phrase in teams[i].phrases:
+                if phrase[0] not in present:
+                    continue
+                n = len(phrase)
+                spans += [(k, k + n, i, phrase) for k in range(len(words) - n + 1)
+                          if tuple(words[k:k + n]) == phrase and (k + n == len(words) or words[k + n] not in other)]
+        for start, end, i, phrase in spans:
+            inside = any(j != i and s <= start and end <= e and (e - s) > (end - start) for s, e, j, _ in spans)
+            if not inside and i not in out:
+                out[i] = (" ".join(phrase), where)
+        if out:
+            break
+    return out
 
 
 # ---------------------------------------------------------------- channels, and the hard filters
@@ -413,12 +451,11 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
             if hit:
                 out.append(Found(p.player_id, p.sport, upload, *hit))
                 hit_ids.add(p.player_id)
-        for side in teams:
-            said = side_named(side, read) if any(pid not in hit_ids for pid in side.players) else None
-            for pid in side.players if said else ():
+        for i, (name, where) in teams_named(teams, upload, read).items() if teams else ():
+            for pid in teams[i].players:
                 if pid not in hit_ids:
                     hit_ids.add(pid)
-                    out.append(Found(pid, sport_of[pid], upload, *said, team=side.name))  # type: ignore[misc]  # said is set here
+                    out.append(Found(pid, sport_of[pid], upload, name, where, team=teams[i].name))
     return out
 
 
@@ -521,7 +558,7 @@ def poll(now: datetime | None = None) -> dict[str, int]:
             keys = frozenset(listed[channel])
             if keys not in by_sports:
                 group = [p for p in players if p.sport in keys]
-                names = phrases(group)
+                names = names_for(group)
                 by_sports[keys] = (group, names, sides(group, names))
             matched = match(theirs, *by_sports[keys])
             feedstats.read_channel(channel, keys, theirs, matched, now)

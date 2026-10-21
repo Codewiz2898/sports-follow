@@ -86,7 +86,7 @@ export interface AccountDetail extends AccountRow {
 
 /** What the Feed's judge said of a candidate (sports_follow/curate.py's Verdict). */
 export interface FeedVerdict {
-  about_player: 'subject' | 'mention' | 'no'
+  about_player: 'subject' | 'team' | 'mention' | 'no'
   by: string
   kind: string
   interest: number

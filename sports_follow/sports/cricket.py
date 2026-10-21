@@ -394,6 +394,8 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
     # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
     # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
+    # "India Legends", "India Masters": retired players' sides, not the player's (BHA-382).
+    other_sides = (*Sport.other_sides, "legends", "masters", "a")
     video_channels = (
         "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC
         "UC0oyi_CF3v9fsKmBM2m6wPA",  # IPL: its feed answers, with no public uploads on 21 Oct

@@ -105,7 +105,7 @@ FEED_WIDE_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_WIDE_SEARCHES
 FEED_FAMOUS_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES", 35)))
 # The feed's pool of top players (feedpool.py, BHA-382): besides followed players, the curator fetches for this many
 # of each running sport's best known (for a group of sports, each of its running sports' share: esports' games), the
-# most followed first; their videos fill For you's others. 0 turns the pool off.
+# by Wikipedia editions, then their team's tier; their videos fill For you's others. 0 turns the pool off.
 FEED_POOL_SIZE = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_SIZE", 50)))
 # Pool players made a day at most, each found in their sport's live source as a fan's follow would (a request or a
 # few each): the pool fills over days, and a source's allowance never pays for it all at once.

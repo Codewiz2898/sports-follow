@@ -93,7 +93,7 @@ def run(now: datetime | None = None) -> dict[str, int]:
     names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
     for p in everyone:
         if p.sport not in names:
-            names[p.sport] = candidates.phrases([q for q in everyone if q.sport == p.sport])
+            names[p.sport] = candidates.names_for([q for q in everyone if q.sport == p.sport])
     if (_sweep(GAP, gaps, now - GAP_DAYS, now, sources, names, counts) and _sweep(WIDE, wide, now - WIDE_DAYS, now, sources, names, counts)
             and _sweep(FAMOUS, famous, None, now, sources, names, counts)):  # fmt: skip
         _sweep(POOL, pooled, now - POOL_DAYS, now, sources, names, counts)
