@@ -122,7 +122,7 @@ export function playerLine(live: LiveStatus): { lead: Stat; rest: Stat[]; headli
 
 /** One finished game on Today: each of the fan's players in it, the one with the biggest line first. */
 export interface GameResult {
-  key: string  // the game: its event id, else its title and day
+  key: string  // the game: the one its fixtures share (a chess board's), else its event id, else its title and day
   // The fan's players in it, each with their result; a team of theirs stands in as one, by its id (`team`), its
   // result from its side and its name as the player's.
   players: { result: LatestResult; sport?: string | null; teams?: string[]; team?: number }[]

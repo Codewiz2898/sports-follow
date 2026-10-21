@@ -22,7 +22,9 @@ from sports_follow.adapters.sportmonks_football import SportmonksFootball
 from sports_follow.models import Event, EventState, Player, PlayerCard, PlayerLine, SourceBinding
 
 from .test_adapters import KOHLI, RONALDO, load
+from .test_new_adapters import CARLSEN, LAZAVIK
 from .test_pipeline import FakeDb, FakeRedis
+from .test_predictions import board
 
 NOW = datetime(2026, 9, 29, 13, 45, tzinfo=timezone.utc)
 
@@ -87,6 +89,37 @@ def test_a_result_and_a_game_to_come_name_their_match_pages():
     structured._apply_snapshot(c, event, Snapshot(status="final", score_label="Arsenal 2 – 1 Chelsea", clock_label="FT", state={"kind": "football"}), None, source, NOW)
     assert c["recent_results"][0]["match"] == "sportmonks_football/555"
     assert structured.match_path("0123abcd" * 8) is None  # an event the research agent wrote up: no source has it
+
+
+def test_a_chess_board_is_one_game_under_each_players_fixture():
+    # A board is a fixture of each player's, so an event of each: their cards say the one game it is, so Today
+    # shows it once to a fan who follows both (BHA-372), as its questions are one set (predictions.game_key).
+    source = KNOWN["lichess_chess"]
+    sides = [(CARLSEN, Event(id=11, key=f"lichess_chess:ohv5F74c-{CARLSEN}", title="Magnus Carlsen vs Denis Lazavik", start_utc=NOW, status="live")),
+             (LAZAVIK, Event(id=12, key=f"lichess_chess:ohv5F74c-{LAZAVIK}", title="Magnus Carlsen vs Denis Lazavik", start_utc=NOW, status="live"))]
+    lives, finals, refreshed = [], [], []
+    for fide, event in sides:
+        on = board(status="*", ongoing=True, fide=fide)
+        c = card()
+        structured._apply_snapshot(c, event, on, on.lines.get(fide), source, NOW)
+        lives.append(c["live"])
+        over = board(0, fide=fide)
+        structured._apply_snapshot(c, event, over, over.lines.get(fide), source, NOW)
+        finals.append(c["recent_results"][0])
+        ref = PlayerRef("lichess_chess", fide, "", [fide], [], None)
+        fixture = Fixture(source_id=event.key.partition(":")[2], title=event.title, competition="", start_utc=NOW, venue=None, status="final", team_ids=[fide], locator={})
+        refreshed.append(structured.result_item(source, fixture, over, event, ref))
+    assert [x["event_id"] for x in lives] == [11, 12]
+    assert {x["game_key"] for x in [*lives, *finals, *refreshed]} == {"lichess_chess:mJnv1YBU"}
+    # A refresh that couldn't read the scorecard keeps the key an earlier one gave the result.
+    assert structured.merged_result(refreshed[0], {**refreshed[0], "game_key": None}, scorecard=False)["game_key"] == "lichess_chess:mJnv1YBU"
+    # Where the fixture is the game (a football match, one for both sides), its event says it: no key of its own.
+    event = Event(id=5, key="sportmonks_football:555", title="Arsenal vs Chelsea", notes=None, competition="Premier League", start_utc=NOW, status="live")
+    c = card()
+    structured._apply_snapshot(c, event, Snapshot(status="live", score_label="Arsenal 1 – 0 Chelsea", clock_label="12'", state={"kind": "football"}), None, KNOWN["sportmonks_football"], NOW)
+    assert c["live"]["event_id"] == 5 and c["live"]["game_key"] is None
+    # Nor before the pairing's out, a round with no board yet.
+    assert structured.game_key(f"lichess_chess:ohv5F74c-{CARLSEN}", {"kind": "chess", "round": "Grand Final"}) is None
 
 
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():
@@ -516,10 +549,14 @@ def test_recent_results_keep_their_order_and_a_failed_read_only_its_scorecard(mo
     # BHA-283: answers coming back in any order still make the card newest first; a read that failed leaves
     # that game's result without the player's line, and the others stand.
     source, card_row, polls = five_finals(monkeypatch)
+    card_row.card["recent_results"] = [{"event_id": 13, "game_key": "fake_source:board3"}, {"event_id": 12, "game_key": "fake_source:board2"}]
     structured.refresh(1)
     results = card_row.card["recent_results"]
     assert [r["result"] for r in results] == ["Won game 5", "Won game 4", "Won game 3", "Won game 2", "Won game 1"]
     assert [r["player_contribution"] for r in results] == ["Scored in game 5", "Scored in game 4", None, "Scored in game 2", "Scored in game 1"]
+    # And it's still the game an earlier read said (a chess board under each player's fixture: BHA-372), so it
+    # stays one card on Today; a read that worked says it afresh (this source's boards name no shared game).
+    assert [r["game_key"] for r in results] == [None, None, "fake_source:board3", None, None]
     assert source.stats_from == ["1", "2", "4", "5"]
     assert polls == [(15, "final", "A 5 – 0 B")]  # game 5, which the poller didn't see finish, gets its final poll
 

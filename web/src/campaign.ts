@@ -2,6 +2,7 @@
 // its zone and the fan's own, and which games on now are its. Shared by the web app and the Android app
 // (mobile/): no browser here.
 
+import { gameOf } from './today'
 import type { Campaign, CampaignGame, CampaignTeam, Card, LiveGame, LiveSport, SearchResult, SportInfo } from './types'
 
 /** Every row a campaign offers to follow: its own players, then each team's. */
@@ -56,21 +57,24 @@ export function schedule(c: Campaign, now: number, here: string): ScheduledGame[
 }
 
 /**
- * The campaign's games on now: the fan's own live cards of its players, one per game (by its event: two of
- * them in one game are one board), then the games on anywhere (GET /api/live) that a player it offers is in,
- * by the source's id or as a player on Sports Follow, never by a name, less those the fan's cards show.
+ * The campaign's games on now: the fan's own live cards of its players, one per game (as Today has it: two of
+ * them in one game are one board, a chess board under each player's event too), then the games on anywhere
+ * (GET /api/live) that a player it offers is in, by the source's id or as a player on Sports Follow, never by a
+ * name, less those the fan's cards show (by any of their events).
  */
 export function campaignLive(c: Campaign, cards: Card[], sports: LiveSport[]): { mine: Card[]; others: LiveGame[] } {
   const rows = campaignRows(c)
   const keys = new Set(rows.map((r) => r.key))
   const ids = new Set(rows.flatMap((r) => (r.player_id != null ? [r.player_id] : [])))
+  const games = new Set<string>()
   const seen = new Set<number>()
   const mine = cards.filter((card) => {
     if (!ids.has(card.player_id) || !card.live?.is_live) return false
-    const event = card.live.event_id
-    if (event == null) return true
-    if (seen.has(event)) return false
-    seen.add(event)
+    if (card.live.event_id != null) seen.add(card.live.event_id)
+    const game = gameOf(card.live)
+    if (game == null) return true
+    if (games.has(game)) return false
+    games.add(game)
     return true
   })
   // A campaign of a group (esports, an event of several games) takes the live games of each of its sports.
