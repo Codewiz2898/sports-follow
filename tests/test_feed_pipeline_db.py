@@ -375,3 +375,54 @@ def test_a_stored_video_from_a_channel_the_sport_no_longer_lists_stops_being_ser
     assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma's hundred"]
     admin.review_candidate(dropped, "approved")
     assert rows()["unlisted001"].score is not None and rows()["listed00001"].id == kept
+
+
+# ---------------------------------------------------------------- a video that won't play inside the app (BHA-380)
+
+
+def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_saying_it_again_changes_nothing(made):
+    """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): the app's
+    player said so, so no fan is served it again, whatever an admin said of it, and the admin panel says why."""
+    pid = asha()
+    with db_module.session() as s:
+        p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
+        s.add(p)
+        s.flush()
+        s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
+        other = p.id
+    blocked = stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    asha_too = stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    admin.review_candidate(blocked, "pinned")
+    assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma's hundred, every boundary", "Verma talks through the hundred"]
+    item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
+    s = made()
+    try:
+        assert feed.unplayable(s, pid, item, NOW) is True
+        assert feed.unplayable(s, pid, item) is False  # already: nothing changes
+        with pytest.raises(ValueError):
+            feed.unplayable(s, pid, "not an id")
+        with pytest.raises(LookupError):
+            feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=nobody00000"))
+        s.commit()
+    finally:
+        s.close()
+    got = {r.id: r for r in all_rows()}
+    assert got[blocked].unplayable_at == NOW and got[asha_too].unplayable_at == NOW  # every player's row of it
+    rank.rescore()
+    assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma talks through the hundred"]
+    s = made()
+    try:
+        assert feed.judged(s, [other]) == {}
+        marked = next(c for c in admin.feed_page(s)["candidates"] if c["id"] == blocked)
+        assert not marked["served"] and marked["unplayable_at"] == NOW.isoformat()
+        assert blocked not in {c["id"] for c in admin.feed_page(s, "served")["candidates"]}
+        assert blocked in {c["id"] for c in admin.feed_page(s, "held")["candidates"]}
+    finally:
+        s.close()
+
+
+def all_rows() -> list[FeedCandidate]:
+    with db_module.session() as s:
+        return list(s.scalars(select(FeedCandidate)))

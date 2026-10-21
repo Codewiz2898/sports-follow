@@ -357,10 +357,13 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     stored: dict[str, dict[str, Any]] = {}
     have: set[tuple[int, str]] = set()
     with db.session() as session:
-        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
-                               .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))
-        for pid, vid, url, kept, numbers in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}})
+        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
+                                      FeedCandidate.unplayable_at)
+                               .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
+        for pid, vid, url, kept, numbers, unplayable in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable})
+            if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
+                stored[vid]["unplayable_at"] = unplayable
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -380,7 +383,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 continue
             if vid in stored:
                 same = stored[vid]
-                values = {"url": same["url"], "features": same["features"],
+                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"],
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {},
                                         "paid": same["candidate"].get("paid") is True}}
             else:

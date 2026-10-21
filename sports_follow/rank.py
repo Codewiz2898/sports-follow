@@ -52,7 +52,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select, update
+from sqlalchemy import not_, select, update
 from sqlalchemy.orm import Session
 
 from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
@@ -525,5 +525,5 @@ def review(session: Session, row_id: int, said: str | None) -> bool:
 
 
 def unserved() -> Any:
-    """The SQL condition for a row the Feed never shows."""
-    return or_(FeedCandidate.score.is_(None), FeedCandidate.review == "hidden")
+    """The SQL condition for a row the Feed never shows (FeedCandidate.served's opposite)."""
+    return not_(FeedCandidate.served())

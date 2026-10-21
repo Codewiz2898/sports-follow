@@ -12,7 +12,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import create_engine, delete, func, select, text, update
 
-from sports_follow import bus, candidates, db as db_module, metrics
+from sports_follow import bus, candidates, db as db_module, feed as feed_module, metrics
 from sports_follow.adapters import VIDEOS, Upload
 from sports_follow.models import FeedCandidate, Follow, Player, PlayerAlias
 from tests.test_feed_fetch import CHANNEL, NOW, Fake, feed, listing, video
@@ -281,3 +281,18 @@ def test_reading_a_stored_video_again_learns_its_shape_and_the_feed_serves_an_up
         assert row is not None and row.candidate["details"]["player"] == {"width": 1280, "height": 2276}
         [after] = feed.judged(s, [kohli], NOW)[kohli]
         assert after.item.video is not None and after.item.video.upright
+
+
+def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_for_another_player(world):
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed_xml = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.videos["kohlibumrah"] = video("kohlibumrah")
+    candidates.poll(NOW)
+    with db_module.session() as s:
+        assert feed_module.unplayable(s, kohli, feed_module.item_id("https://www.youtube.com/watch?v=kohlibumrah"), NOW)
+    bumrah = player("Jasprit Bumrah")
+    world.feeds[CHANNEL] = feed_xml
+    assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
+    with db_module.session() as s:
+        marks = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at)).all())
+    assert marks == {kohli: NOW, bumrah: NOW}

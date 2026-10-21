@@ -21,10 +21,12 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -448,6 +450,15 @@ class FeedCandidate(Base):
     moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
     # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
     review: Mapped[str | None] = mapped_column(String(10))
+    # When a fan's app said its source's player won't play it inside the app (feed.unplayable): its owner keeps it
+    # off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
+    unplayable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @classmethod
+    def served(cls) -> ColumnElement[bool]:
+        """The SQL condition for a row the Feed shows: scored, not hidden by an admin, and not one a fan's app
+        said won't play inside it."""
+        return and_(cls.score.is_not(None), cls.review.is_distinct_from("hidden"), cls.unplayable_at.is_(None))
 
 
 class FeedSearch(Base):

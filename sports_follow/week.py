@@ -236,8 +236,7 @@ def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime,
         select(FeedCandidate, Player)
         .join(Follow, and_(Follow.player_id == FeedCandidate.player_id, Follow.fan_id == fan))
         .join(Player, Player.id == FeedCandidate.player_id)
-        .where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.score.is_not(None), FeedCandidate.review.is_distinct_from("hidden"),
-               FeedCandidate.fetched_at >= now - timedelta(days=NEWS_DAYS))
+        .where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.served(), FeedCandidate.fetched_at >= now - timedelta(days=NEWS_DAYS))
         .order_by(FeedCandidate.score.desc(), FeedCandidate.id.desc())
     ).all()  # fmt: skip
     found: list[tuple[datetime, int, dict[str, Any]]] = []

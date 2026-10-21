@@ -2184,6 +2184,29 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
     return {"item_id": item_id, "hidden": True}
 
 
+@app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
+async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it
+    (feed.unplayable). It leaves every fan's Feed; the app opens it on its site instead. Saying it again changes
+    nothing. A fan, an address and everyone together say so of only so many an hour: past that, a 429."""
+    address = client_address(request)
+    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN), ("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)]
+    if address:
+        limits.insert(1, (f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
+    for key, limit in limits:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once
+        if used > limit:
+            raise HTTPException(429, "That's a lot of videos that won't play for one hour. Try again later.")
+    try:
+        marked = await in_db(feed.unplayable, player_id, item_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"item_id": item_id, "unplayable": True, "marked": marked}
+
+
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
     """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab
