@@ -22,9 +22,9 @@ from sqlalchemy import case, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import matches, notify, predictions, teams
+from . import clips, matches, notify, predictions, teams
 from .db import session
-from .models import Account, AccountSession, Event, FanSource, FeedFeedback, Follow, MatchFollow, Notification, NotificationMute, PushSubscription, TeamFollow
+from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, MatchFollow, Notification, NotificationMute, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 SESSION_COOKIE = "sf_session"
@@ -212,6 +212,7 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
     teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
     predictions.merge(db, anon, fan)  # the games called (predictions.py): a question both picked keeps the account's pick
+    clips.merge(db, anon, fan)  # clips reported (clips.py): one each
     muted = insert(NotificationMute).from_select(
         ["fan_id", "event_id", "created_at"],
         select(literal(fan), NotificationMute.event_id, NotificationMute.created_at).where(NotificationMute.fan_id == anon),
@@ -266,7 +267,7 @@ def delete_account(db: Session, account_id: int) -> Deleted | None:
     if account is None:
         return None
     hashes = list(db.scalars(select(AccountSession.token_hash).where(AccountSession.account_id == account_id)))
-    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback):
+    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport):
         db.execute(delete(model).where(model.fan_id == account.fan_id))
     predictions.forget(db, account.fan_id)  # picks and places in leagues; a league they made stays its other members'
     db.execute(delete(Account).where(Account.id == account_id))  # its sessions go with it

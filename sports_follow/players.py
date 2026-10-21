@@ -154,6 +154,9 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
             _decide(db, f"player:{p.id}", sports.family(p.sport) or "other", "remove", p.name, _source_ids(db, p.id), note)
     gone = [p.id for p in found.players]
     if gone:
+        from . import clips  # clips reads match pages, which read this
+
+        clips.forget_players(db, gone)  # tags are ids in a list: no cascade takes them
         db.execute(delete(Player).where(Player.id.in_(gone)))
     return gone
 

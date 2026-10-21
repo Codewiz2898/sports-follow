@@ -40,12 +40,12 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
-from .models import Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
+from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
 tracing.setup("sports-follow-api")
@@ -1504,6 +1504,94 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
         await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
 
 
+# ---------------------------------------------------------------- clips (clips.py)
+
+
+def publisher(request: Request, db: Session = Depends(get_db)) -> ClipKey:
+    """The publishing key a request carries (Authorization: Bearer slam_pk_…): the Mac recorder, for an admin."""
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    key = clips.key_from(db, token) if token else None
+    if key is None:
+        raise HTTPException(401, "Send a publishing key: Authorization: Bearer slam_pk_…")
+    return key
+
+
+@app.post("/api/clips")
+def publish_clip(body: dict[str, Any] = Body(...), key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Start publishing a clip: its row, and URLs to put its video and poster frame at, signed for a few minutes.
+    Refused (400/403/404) for a source that mayn't be published, a clip too long or big, or an unknown game."""
+    try:
+        up = clips.create(db, key, body)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+    return {"id": up.clip.slug, "video_put": up.video_put, "poster_put": up.poster_put, "video_type": clips.VIDEO_TYPE,
+            "poster_type": clips.POSTER_TYPE, "expires_in": clipstore.SIGNED_FOR}
+
+
+@app.post("/api/clips/{slug}/done")
+def clip_uploaded(slug: str, key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The uploader put both files: checked, and the clip goes live (its public form back); else 422, the clip
+    failed and its files gone, to start again."""
+    try:
+        clip = clips.finish(db, key, slug)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+    if clip.status != "live":
+        raise HTTPException(422, "The files didn't arrive, or are too big: start the upload again.")
+    return clips.public(clip, clips.store())
+
+
+@app.delete("/api/clips/{slug}", status_code=204)
+def unpublish_clip(slug: str, key: ClipKey = Depends(publisher), db: Session = Depends(get_db)) -> None:
+    """Its uploader takes a clip down: files deleted."""
+    try:
+        clips.remove(db, slug, key)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message)
+    db.commit()
+
+
+@app.get("/api/clips")
+def clips_list(match: str | None = None, competition: str | None = None, player: int | None = None, before: str | None = None,
+               db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Live clips, newest first: a game's (?match=<its match page's address>, its game feed), a competition's
+    (?competition=…, the tournament feed), a player's (?player=…), or everyone's. ?before= (a clip's
+    `published`) pages back."""
+    since = None
+    if before:
+        try:
+            since = datetime.fromisoformat(before.replace(" ", "+"))  # a "+" sent unencoded arrives as a space
+        except ValueError:
+            since = None
+        if since is None or since.tzinfo is None:
+            raise HTTPException(400, "before must be a clip's published time, with its zone.")
+    return {"clips": clips.listed(db, match_=match, competition=competition, player=player, before=since)}
+
+
+@app.get("/api/clips/{slug}")
+def clip_page(slug: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    clip = clips.one(db, slug)
+    if clip is None:
+        raise HTTPException(404, "No such clip.")
+    return clip
+
+
+@app.post("/api/clips/{slug}/report")
+def report_clip(slug: str, body: dict[str, Any] = Body(default={}), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A fan says a clip shouldn't be up: once each, flagging it for the admin panel."""
+    hidden = clips.report(db, slug, fan, str(body.get("reason") or ""))
+    if hidden is None:
+        raise HTTPException(404, "No such clip.")
+    db.commit()
+    return {"reported": True}
+
+
 # ---------------------------------------------------------------- the admin panel (admin.py)
 
 admin_log = logging.getLogger("sports_follow.admin")
@@ -1529,6 +1617,54 @@ async def require_admin(request: Request) -> admin.Keys:
 
 
 AdminOnly = [Depends(require_admin)]
+
+
+@app.get("/api/admin/clips", dependencies=AdminOnly)
+def admin_clips(status: str | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Clips, whatever their status, newest first, with their reports; and the publishing keys."""
+    return {"clips": clips.for_admin(db, status), "keys": clips.keys(db), "set_up": clipstore.STORE is not None}
+
+
+@app.post("/api/admin/clips/{slug}", dependencies=AdminOnly)
+def admin_clip(slug: str, body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Hide a clip ({"hidden": true}), or put a hidden one back ({"hidden": false}; its reports start again)."""
+    hidden = _switch(body, "hidden")
+    clip = clips.set_hidden(db, slug, hidden)
+    if clip is None:
+        raise HTTPException(404, "No live or hidden clip by that id.")
+    db.commit()
+    admin_log.info("admin: clip %s %s", slug, "hidden" if hidden else "shown")
+    return {"id": slug, "status": clip.status}
+
+
+@app.delete("/api/admin/clips/{slug}", status_code=204, dependencies=AdminOnly)
+def admin_remove_clip(slug: str, db: Session = Depends(get_db)) -> None:
+    """Take a clip down for good: its files deleted."""
+    try:
+        found = clips.remove(db, slug)
+    except clips.Refused as refused:
+        raise HTTPException(refused.status, refused.message)
+    if not found:
+        raise HTTPException(404, "No such clip.")
+    db.commit()
+    admin_log.info("admin: clip %s removed", slug)
+
+
+@app.post("/api/admin/clip-keys", dependencies=AdminOnly)
+def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A new publishing key for the Mac app: shown this once."""
+    row, token = clips.new_key(db, str(body.get("name") or ""))
+    db.commit()
+    admin_log.info("admin: publishing key %s made for %r", row.id, row.name)
+    return {"id": row.id, "name": row.name, "key": token}
+
+
+@app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
+def admin_revoke_clip_key(key_id: int, db: Session = Depends(get_db)) -> None:
+    if not clips.revoke(db, key_id):
+        raise HTTPException(404, "No such key, or revoked already.")
+    db.commit()
+    admin_log.info("admin: publishing key %s revoked", key_id)
 
 
 def _switch(body: dict, field: str) -> bool:
