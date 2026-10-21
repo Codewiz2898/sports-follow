@@ -58,7 +58,17 @@ def _off(kind: dict[str, Any], played: bool) -> bool:
     words = f"{kind.get('name') or ''} {kind.get('description') or ''}".upper()
     if str(kind.get("id")) == _POSTPONED or "POSTPONE" in words or "CANCEL" in words:
         return True
-    return (str(kind.get("id")) == _ABANDONED or "ABANDON" in words) and not played
+    return _abandoned(kind) and not played
+
+
+def _abandoned(kind: dict[str, Any]) -> bool:
+    return str(kind.get("id")) == _ABANDONED or "ABANDON" in f"{kind.get('name') or ''} {kind.get('description') or ''}".upper()
+
+
+def _called_off(kind: dict[str, Any]) -> bool:
+    """A match cancelled, or abandoned (washed out, before play or after it): it won't be finished, and a prediction
+    on it is voided (sports.cricket), where a postponed one waits."""
+    return "CANCEL" in f"{kind.get('name') or ''} {kind.get('description') or ''}".upper() or _abandoned(kind)
 
 
 # ---------------------------------------------------------------- parsers (pure)
@@ -159,6 +169,7 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
             "summary": _text(status_obj.get("summary")),
             "format": (comp.get("class") or {}).get("generalClassCard"),
             "player_of_match": next((f["athlete"].get("displayName") for f in status_obj.get("featuredAthletes") or [] if f.get("name") == "playerOfTheMatch" and f.get("athlete")), None),
+            "cancelled": _called_off(kind),
         },
         lines=parse_lines(data),
         moments=[],

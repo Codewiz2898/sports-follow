@@ -157,6 +157,8 @@ class Glance:
 
 # The answer to a question that won't have one (Sport.answer): a map never played, a game called off.
 VOID = "void"
+# A question's answer beside its two sides' ids where a game can end level (Sport.asks): a chess game, a football match.
+DRAW = "draw"
 
 
 @dataclass(frozen=True)

@@ -5,12 +5,11 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
+from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
 
-DRAW = "draw"  # a game's question's third answer, beside its two players' ids
 RESULTS = {"1-0": "white", "0-1": "black", "½-½": DRAW}  # a board's result: whose id answers it
 
 TITLES = {

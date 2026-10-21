@@ -48,6 +48,14 @@ def _status(status: dict[str, Any]) -> str:
     return _STATUS.get(kind.get("state"), "scheduled")
 
 
+def _called_off(status: dict[str, Any]) -> bool:
+    """A match called off for good (cancelled, abandoned, forfeited), which ESPN may still call over ("post"): a
+    prediction on it is voided (sports.football), where a postponed one waits."""
+    kind = status.get("type") or {}
+    words = f"{kind.get('name') or ''} {kind.get('description') or ''}".upper()
+    return any(w in words for w in ("CANCEL", "ABANDON", "FORFEIT"))
+
+
 def _home_away(competitors: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
     home = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
     away = next((c for c in competitors if c.get("homeAway") == "away"), competitors[-1])
@@ -151,6 +159,7 @@ def parse_summary(data: dict[str, Any], league: str) -> Snapshot:
         "home": {"id": str(home["team"]["id"]), "name": home["team"]["displayName"], "abbr": home["team"].get("abbreviation"), "score": _score(home), "scorers": scorers(str(home["team"]["id"]))},
         "away": {"id": str(away["team"]["id"]), "name": away["team"]["displayName"], "abbr": away["team"].get("abbreviation"), "score": _score(away), "scorers": scorers(str(away["team"]["id"]))},
         "detail": kind.get("description"),
+        "cancelled": _called_off(comp.get("status") or {}),
     }
 
     lines: dict[str, Line] = {}

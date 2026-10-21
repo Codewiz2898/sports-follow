@@ -19,13 +19,15 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, engine, live, match, notify, pipeline, predictions, server, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, LiveGame, pandascore_esports as ps
+from sports_follow.adapters import ADAPTERS, KNOWN, LiveGame, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
 from sports_follow.models import Account, Event, EventPlayer, Follow, League, LeagueMember, Pick, Player, Question
 
 from .test_match_follow import Store
 from .test_new_adapters import CARLSEN, LAZAVIK, load
 from .test_pandascore import FINAL, NRG, SEN, _game, _match
 from .test_predictions import board
+from .test_sportmonks import AWAY, HOME, _match as football_match
+from .test_sportmonks_cricket import IND, _match as cricket_match
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -87,10 +89,10 @@ def redis(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def running(monkeypatch):
-    """Both sources run here, as in production: a pick needs its game's source on, to be settled."""
-    for system in ("lichess_chess", "pandascore_esports"):
+    """The sources run here, as in production: a pick needs its game's source on, to be settled."""
+    for system, sport in (("lichess_chess", "chess"), ("pandascore_esports", "valorant"), ("sportmonks_football", "football"), ("sportmonks_cricket", "cricket")):
         if system not in ADAPTERS:
-            monkeypatch.setitem(ADAPTERS, system, SimpleNamespace(system=system, sports=("chess",) if system == "lichess_chess" else ("valorant",)))
+            monkeypatch.setitem(ADAPTERS, system, SimpleNamespace(system=system, sports=(sport,)))
 
 
 def source(system: str) -> SimpleNamespace:
@@ -187,6 +189,41 @@ def test_a_series_settles_map_by_map_and_a_map_never_played_is_voided(db, redis)
     assert [(db.get(Question, qs[k].id).status, db.get(Question, qs[k].id).answer) for k in ("map2", "map3")] == [("settled", str(SEN)), ("void", "void")]
     assert {p.points for p in db.scalars(select(Pick).where(Pick.question_id == qs["map3"].id))} == {None}
     assert db.scalar(select(Pick.points).where(Pick.question_id == qs["map2"].id)) == 0  # a picked NRG
+
+
+def test_a_football_match_and_a_t20i_are_asked_and_settled_by_their_polls(db, redis):
+    start = soon()
+    for event_id, system, sport, title in ((7, "sportmonks_football", "Football", "Trabzonspor vs Galatasaray"), (8, "sportmonks_cricket", "Cricket", "India v Afghanistan")):
+        fixture = "555" if sport == "Football" else "71215"
+        db.add(Event(id=event_id, key=f"{system}:{fixture}", sport=sport, title=title, start_utc=start, status="armed",
+                     live_binding={"adapter": system, "locator": {"fixture": fixture}, "cadence": 10}))
+    db.commit()
+    poll(7, sm.parse_match(football_match("NS", 0, 0)), "sportmonks_football")
+    poll(8, sc.parse_match(cricket_match("NS", [])), "sportmonks_cricket")
+    qs = {q.game: q for q in db.scalars(select(Question))}
+    football, t20i = qs["sportmonks_football:555"], qs["sportmonks_cricket:71215"]
+    assert (football.ask, football.title, football.status, football.locks_at, [o["key"] for o in football.options]) == ("result", "Who wins?", "open", start, [str(HOME), "draw", str(AWAY)])
+    assert (t20i.sport, [o["label"] for o in t20i.options]) == ("cricket", ["India", "Afghanistan"])
+    for fan, option in (("asha", str(HOME)), ("ravi", "draw"), ("meera", str(AWAY))):
+        predictions.pick(db, fan, football.id, option)
+    predictions.pick(db, "asha", t20i.id, str(IND))
+    db.commit()
+    assert sorted(db.scalars(predictions.watched()).all()) == [7, 8]
+
+    poll(7, sm.parse_match(football_match("INPLAY_2ND_HALF", 1, 1)), "sportmonks_football")  # kicked off: closed
+    db.expire_all()
+    assert db.get(Question, football.id).status == "closed"
+    poll(7, sm.parse_match(football_match("FT", 2, 1)), "sportmonks_football")
+    db.expire_all()
+    assert (db.get(Question, football.id).status, db.get(Question, football.id).answer) == ("settled", str(HOME))
+    scored = {fan: points for fan, points in db.execute(select(Pick.fan_id, Pick.points).where(Pick.question_id == football.id))}
+    assert scored == {"asha": 67, "ravi": 0, "meera": 0}  # one of three called the home win
+    # Washed out without a ball bowled: no result, so no points either way.
+    poll(8, sc.parse_match(cricket_match("Aban.", [])), "sportmonks_cricket")
+    db.expire_all()
+    assert (db.get(Question, t20i.id).status, db.get(Question, t20i.id).answer) == ("void", "void")
+    assert db.scalar(select(Pick.points).where(Pick.question_id == t20i.id)) is None
+    assert db.scalars(predictions.watched()).all() == []
 
 
 def test_a_pick_waiting_keeps_its_game_polled_and_the_tick_closes_and_voids(db, redis, monkeypatch):

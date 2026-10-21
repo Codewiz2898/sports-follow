@@ -2,12 +2,12 @@
 from the board its poller reads anyway, and friends see who called it best in small leagues joined by a link.
 Bragging rights only: no fee, no prize of any value (India's online gaming law, 2025), no odds anywhere.
 
-What's asked is each sport's (Sport.asks, read off a game's board): a chess game's result, each map of a team
-esports series. A question belongs to the game, whichever of its fixtures shows it (a chess board is one of each
-player's: Sport.board tells the game apart), and is made the first time its board is seen before the start: a
-poll of a followed game (structured.apply_poll), a look at its match page (match.view), or the worker's read of a
-fan's game coming up (prepare, made). It closes as the game, or its map, starts (a first question's start time
-closes it too, should a poll be late: sweep), and a pick after that is refused.
+What's asked is each sport's (Sport.asks, read off a game's board): a chess game's result, a football or cricket
+match's winner, each map of a team esports series. A question belongs to the game, whichever of its fixtures shows
+it (a chess board is one of each player's: Sport.board tells the game apart), and is made the first time its board
+is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
+or the worker's read of a fan's game coming up (prepare, made). It closes as the game, or its map, starts (a first
+question's start time closes it too, should a poll be late: sweep), and a pick after that is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
