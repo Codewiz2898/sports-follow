@@ -20,7 +20,9 @@ fix anything.
 ## What you're given
 
 Your area, the commit under test, and an isolated stack: the worktree it runs from, its exact
-environment, its ports and its web address (`http://<name>.localhost:15173`). Read the area's code in that
+environment, its ports and its addresses (web `http://<name>.localhost:15173`, API
+`http://<name>.localhost:18421`; never `localhost:<port>` in the browser pane, where the main app's fan
+cookie lives). Read the area's code in that
 worktree, so your file:line references match the commit under test, then the tests around it, then try
 to break it.
 
