@@ -13,7 +13,7 @@ second run in the day only does what a missed first one didn't):
   serves it (feed.py). Each player at most once in WIDE_EVERY, a seventh of them a day (so the week's
   searches spread over it), up to FEED_WIDE_SEARCHES in any 24 hours, the longest unswept first (never, first),
   the most followed of those: when the cap binds it gets round everyone before anyone's searched again. A player
-  the same run gap-searches waits for a later day: the two would find much the same.
+  the same run gap-searches waits for a later day (the two would find much the same), a week at most.
 - The famous sweep: each followed player's most watched videos ever, with no date limit, for "The ones everyone's
   seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
   more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
@@ -123,23 +123,34 @@ def gap_due(session: Session, players: list[candidates.Followed], followers: dic
     return _ranked(due, followers, {pid: at for pid, (at, _) in last.items()})[:left]
 
 
-def _last(session: Session, stream: str) -> dict[int, datetime]:
-    """Each player's latest sweep of this stream."""
-    return {pid: at for pid, at in session.execute(select(FeedSweep.player_id, func.max(FeedSweep.ran_at)).where(FeedSweep.stream == stream)
-                                                   .group_by(FeedSweep.player_id))}  # fmt: skip
+def _last(session: Session, stream: str, first: bool = False) -> dict[int, datetime]:
+    """Each player's latest sweep of this stream (with first, their earliest still kept)."""
+    at = func.min(FeedSweep.ran_at) if first else func.max(FeedSweep.ran_at)
+    return {pid: when for pid, when in session.execute(select(FeedSweep.player_id, at).where(FeedSweep.stream == stream).group_by(FeedSweep.player_id))}
 
 
 def wide_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime,
               gap_searched: Iterable[int] = ()) -> list[candidates.Followed]:
-    """The players the wide sweep is for now, in order: every one not searched for in the last WIDE_EVERY but
-    those this run gap-searches, as many as FEED_WIDE_SEARCHES leaves in the last DAY and no more than a seventh
-    of the players a day."""
+    """The players the wide sweep is for now, in order: every one not searched for in the last WIDE_EVERY, as many
+    as FEED_WIDE_SEARCHES leaves in the last DAY and no more than a seventh of the players a day. One this run
+    gap-searches waits, a week at most past when it was due (or, never wide-searched, past their first gap search),
+    so a player gap-searched every day still gets theirs."""
     today = _since(session, WIDE, now - DAY)
     left = min(FEED_WIDE_SEARCHES, math.ceil(len(players) / 7)) - today
     if left <= 0:
         return []
     last, skip = _last(session, WIDE), set(gap_searched)
-    due = [p for p in players if p.player_id not in skip and (p.player_id not in last or last[p.player_id] <= now - WIDE_EVERY)]
+    first_gap = _last(session, GAP, first=True) if skip else {}
+
+    def is_due(pid: int) -> bool:
+        if pid in last and last[pid] > now - WIDE_EVERY:
+            return False
+        if pid not in skip:
+            return True
+        due_since = last[pid] + WIDE_EVERY if pid in last else first_gap.get(pid, now)
+        return due_since <= now - WIDE_EVERY
+
+    due = [p for p in players if is_due(p.player_id)]
     return _rotated(due, followers, last)[:left]
 
 

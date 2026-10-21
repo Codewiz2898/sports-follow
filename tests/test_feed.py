@@ -73,11 +73,11 @@ def test_this_month_is_eight_to_thirty_days_old_and_a_pin_stays_in_this_week():
     eight = Candidate(video("https://youtu.be/8", "Eight days on", days_ago=8))
     thirty = Candidate(video("https://youtu.be/30", "A month on", days_ago=30))
     older = Candidate(video("https://youtu.be/31", "Over a month on", days_ago=31))
-    pinned = Candidate(video("https://youtu.be/p", "Pinned, from spring", days_ago=200), pinned=True)
+    pinned = Candidate(video("https://youtu.be/p", "Pinned, from spring", days_ago=200), pinned=True, score=10.0)
     seven = Candidate(video("https://youtu.be/7", "Six days on", days_ago=6.9))
     groups = feed._arrange([eight, thirty, older, pinned, seven], {}, NOW)  # pyright: ignore[reportPrivateUsage]
     assert [(g.head, [i.title for i in g.items]) for g in groups] == [
-        ("This week", ["Six days on", "Pinned, from spring"]), ("This month", ["Eight days on", "A month on"]), ("Earlier", ["Over a month on"])]
+        ("This week", ["Pinned, from spring", "Six days on"]), ("This month", ["Eight days on", "A month on"]), ("Earlier", ["Over a month on"])]
 
 
 def test_videos_around_a_moment_come_first_and_the_judges_score_leads_within_a_group():
@@ -93,16 +93,25 @@ def test_videos_around_a_moment_come_first_and_the_judges_score_leads_within_a_g
     ]
 
 
-def worth(days_old: float, views: int, interest: float) -> float:
-    """A made-up video's place in the Feed: its stored score (rank.score, read a day ago, a 3% like ratio, a channel a
-    sport lists), faded for its age as the Feed serves it."""
+def served(days_old: float, views: int, interest: float, channel: str = "UCchannel", score: float | None = None) -> Candidate:
+    """A made-up video as the Feed serves it (feed._video): its stored score (rank.score: read once, a day after it
+    came out or at half its age if younger, a 3% like ratio, a channel a sport lists) unless given, faded for its age."""
+    from types import SimpleNamespace
+
     from sports_follow import rank
 
     published = NOW - timedelta(days=days_old)
-    read_at = NOW - timedelta(days=min(1.0, days_old / 2))
+    read_at = published + timedelta(days=min(1.0, days_old / 2))
     features = {"views": views, "likes": views * 3 // 100, "reads": [{"at": read_at.isoformat(), "views": views, "likes": views * 3 // 100}]}
-    verdict = {"about_player": "subject", "interest": interest}
-    return rank.score(verdict, features, rank.LISTED, published) * feed.fade(published, NOW)
+    verdict = {"about_player": "subject", "interest": interest, "kind": "match_moment"}
+    stored = rank.score(verdict, features, rank.LISTED, published) if score is None else score
+    vid = f"{int(days_old):03d}{views % 100_000_000:08d}"[:11]
+    row = SimpleNamespace(url=f"https://www.youtube.com/watch?v={vid}", candidate={"published": published.isoformat(), "title": f"{days_old}d {views} {interest}",
+                                                                                     "channel": "Made-up", "channel_id": channel},
+                          features=features, verdict=verdict, score=stored, moment_id=None, review=None)  # fmt: skip
+    c = feed._video({"youtube_id": vid}, "YouTube", row, NOW)  # pyright: ignore[reportPrivateUsage]
+    assert c is not None and not c.evergreen
+    return c
 
 
 @pytest.mark.parametrize(("ahead", "behind"), [
@@ -111,10 +120,31 @@ def worth(days_old: float, views: int, interest: float) -> float:
     ((90, 6_000_000, 0.9), (1, 500, 0.2)),  # a strong one from three months ago outranks a weak one from yesterday
     ((90, 6_000_000, 0.9), (30, 200_000, 0.5)),  # and a middling one from last month
     ((1, 500, 0.2), (90, 200_000, 0.5)),  # a middling old one doesn't outrank yesterday's weak one
-    ((1, 20_000, 0.6), (5, 20_000, 0.6)),  # alike but for age: newer first
 ])  # fmt: skip
 def test_recency_is_weighed_as_the_feed_serves_so_this_weeks_good_ones_lead_and_a_strong_old_one_beats_a_weak_new_one(ahead, behind):
-    assert worth(*ahead) > worth(*behind)
+    first, second = served(*ahead, channel="UCa"), served(*behind, channel="UCb")
+    assert [c.item.title for c in feed._ranked([second, first])] == [first.item.title, second.item.title]  # pyright: ignore[reportPrivateUsage]
+
+
+def test_alike_but_for_age_the_newer_one_leads():
+    newer, older = served(1, 20_000, 0.6, score=0.6), served(5, 20_000, 0.6, score=0.6)
+    assert feed._ranked([older, newer])[0] is newer  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_channels_strong_old_video_never_takes_this_weeks_place_on_the_page():
+    week, old = served(5, 5_000, 0.5), served(60, 2_000_000, 0.8)  # one channel; the old one's faded score is higher
+    assert old.score > week.score
+    shown = feed._page([old, week], NOW)  # pyright: ignore[reportPrivateUsage]
+    assert [(g.head, len(g.items)) for g in feed._arrange(shown, {}, NOW)] == [("This week", 1), ("Earlier", 1)]  # pyright: ignore[reportPrivateUsage]
+    again = served(6, 3_000, 0.4)  # a second of the channel's this week: one a group
+    assert len(feed._page([old, week, again], NOW)) == 2  # pyright: ignore[reportPrivateUsage]
+
+
+def test_todays_rail_takes_this_weeks_best_over_a_stronger_old_one():
+    week, old = served(6, 2_000, 0.4, channel="UCa"), served(120, 3_000_000, 0.8, channel="UCb")
+    assert old.score > week.score
+    assert feed._rail([old, week], NOW)[0] is week  # pyright: ignore[reportPrivateUsage]
+    assert feed._rail([old], NOW)[0] is old  # nothing this week: the best there is
 
 
 def test_the_fade_falls_over_the_first_days_and_levels_off():

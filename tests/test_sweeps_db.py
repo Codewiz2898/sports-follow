@@ -204,6 +204,18 @@ def test_what_the_famous_sweep_stored_isnt_kept_again_by_the_wide_one(world, mon
     assert [(p, s, kept) for p, s, _, _, _, kept in swept()] == [(iyer, "famous", 1), (iyer, "wide", 0)]
 
 
+def test_a_player_gap_searched_every_day_still_gets_a_wide_search_a_week_on(world, monkeypatch):
+    only(monkeypatch, gap=20, famous=0, wide=14)
+    iyer = player("Shreyas Iyer")
+    for day in range(9):  # each day's gap search keeps something new, which the judge never serves: still a gap
+        world.found["Shreyas Iyer cricket"] = [hit(f"iyerclip{day:03d}", f"Shreyas Iyer clip {day}")]
+        world.videos[f"iyerclip{day:03d}"] = video(f"iyerclip{day:03d}")
+        sweeps.run(NOW + day * DAY)
+    streams = [(s, at) for p, s, _, at, _, _ in swept() if p == iyer]
+    assert [s for s, _ in streams].count("gap") == 9
+    assert [at for s, at in streams if s == "wide"] == [NOW + 7 * DAY]  # a week after his first gap search
+
+
 def squad(n: int) -> list[int]:
     """n followed players, the first the most followed."""
     return [player(f"Player {chr(65 + i)}{chr(65 + i)}", followers=n - i) for i in range(n)]

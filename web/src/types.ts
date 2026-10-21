@@ -296,7 +296,7 @@ export interface FeedItem {
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
 
-/** Items around one of the player's moments (`match` its game's page), or "This week" and "Earlier". */
+/** Items around one of the player's moments (`match` its game's page), or "This week", "This month" and "Earlier". */
 export interface FeedGroup { head: string; moment: boolean; when: string | null; match: string | null; items: FeedItem[] }
 
 export interface Feed { player_id: number; groups: FeedGroup[]; evergreen: FeedItem[]; count: number }
