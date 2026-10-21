@@ -170,11 +170,12 @@ HOST = re.compile(r"[A-Za-z0-9.:-]{1,253}")  # a page's host, as Twitch's player
 
 def page(player: str, plays: str, host: str) -> tuple[str, str] | None:
     """The site's /watch page of a stream the app plays (its `embed`: which player, and what that plays), served at
-    `host`: the player alone, over the whole page, playing at once (with no full screen of its own: the page is the
-    whole screen already, and the app's WebView would turn it upright), and the page's Content-Security-Policy, which
-    lets it hold that player's frame and nothing else (no script of its own, its one style by its hash, no other
-    site's frame around it). The Android app shows it in a WebView over the whole screen, as Twitch's player must sit
-    in a page on the site it's told (its `parent`), which an app isn't. None for a player the app doesn't have, what
+    `host`: the player alone, over the whole page, playing at once (with no full screen of its own: the app's Expand
+    is the way to a bigger one, and its WebView's own full screen would turn the screen upright), and the page's
+    Content-Security-Policy, which lets it hold that player's frame and nothing else (no script of its own, its one
+    style by its hash, no other site's frame around it). The Android app shows it in a WebView in its match page, and
+    over the whole screen once expanded, as Twitch's player must sit in a page on the site it's told (its `parent`),
+    which an app isn't. None for a player the app doesn't have, what
     isn't of the shape its player plays, or a host that isn't one."""
     found = PLAYERS.get(player)
     if found is None or not found.ids.fullmatch(plays) or not HOST.fullmatch(host):

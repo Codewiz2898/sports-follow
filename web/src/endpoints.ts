@@ -126,5 +126,5 @@ export function endpoints(request: Request) {
 }
 
 /** The site's page of a stream's player alone (sports_follow/watch.py's page), for a stream's `embed`: the Android
- * app shows it over the whole screen, as Twitch's player must sit in a page on the site it's told. */
+ * app plays it in its match page, as Twitch's player must sit in a page on the site it's told. */
 export const watchPage = (embed: { player: string; id: string }) => `/watch/${encodeURIComponent(embed.player)}/${encodeURIComponent(embed.id)}`

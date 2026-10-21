@@ -511,10 +511,10 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 @media (min-width: 640px) { .match-verdict { font-size: 44px; } }
 .match-sides { gap: 16px; }
 .match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }
-/* Watch live (components/Watch.tsx): the first stream a block of the sport's colour, its player a tap away (16:9, and
-   Twitch's never under 300px tall: its rule), or a link to it; the others rows of links. */
+/* Watch live (components/Watch.tsx): the first stream a block of the sport's colour, its player a tap away (16:9 at
+   the column's width, a phone's too, though that's under Twitch's stated 400×300), or a link to it; the others rows
+   of links. */
 .watch-player { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius-tile); overflow: hidden; background: var(--sport); color: var(--on-sport); }
-.watch-player.tall { min-height: 300px; }
 .watch-player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
 .watch-start { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 16px 18px; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
 .watch-play { display: flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 50%; background: var(--on-sport); color: var(--sport); transition: transform 0.12s; }
@@ -526,16 +526,6 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .watch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); }
 .watch-row svg { flex-shrink: 0; color: var(--muted); }
 @media (min-width: 640px) { .watch-big { font-size: 40px; } }
-/* A player too wide for a phone's column, over the whole screen: sideways while the phone is held upright, so it's
-   never narrower than its platform allows (Twitch: 400×300), whichever way the phone is turned. */
-.watch-whole { position: fixed; inset: 0; z-index: 50; background: #000; color: #fff; }
-.watch-whole-frame { position: absolute; inset: 0; display: flex; }
-@media (orientation: portrait) {
-  .watch-whole-frame { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; width: 100dvh; height: 100dvw; transform: translate(-50%, -50%) rotate(90deg); }
-}
-.watch-whole-side { flex-shrink: 0; width: 52px; padding: 8px; }  /* beside the player, which keeps the screen's whole height */
-.watch-whole-side .btn.icon { width: 36px; height: 36px; background: #fff; color: #0d0d0d; }
-.watch-whole iframe { flex: 1; height: 100%; min-width: 0; border: 0; }
 /* A football timeline: the home side's on the left, the away side's on the right. */
 .timeline > li { display: flex; align-items: baseline; gap: 10px; }
 .timeline > li .num { font-size: 17px; min-width: 44px; }
