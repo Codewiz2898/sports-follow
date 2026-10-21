@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ringed } from '../../../web/src/feed'
 import type { FeedCircle, FeedEntry, FeedTabKey } from '../api'
 import { useNow } from '../clock'
-import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, useFeedLayout, useFollows, useVideo } from '../feedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, useFeedLayout, useFollows, usePlaying } from '../feedLayouts'
 import { feedHasNew, markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
 import { useFollowing } from '../following'
 import { SearchIcon } from '../icons'
@@ -24,6 +24,7 @@ import { useMyFeed } from '../myFeed'
 import { PageList } from '../page'
 import { Circles, ItemSheet } from '../post'
 import { useTabBarOverInk } from '../tabbar'
+import { useInFront } from '../watch'
 import { colour, dsp, GUTTER, t } from '../theme'
 import { Btn, Card, ErrorBox, Eyebrow, Spinner } from '../ui'
 
@@ -48,7 +49,9 @@ export default function FeedScreen() {
   const { page, error, failed, loading, more, hide } = useMyFeed(player, undefined, read, tab)
   const layout = useFeedLayout(page?.layout, focused)
   const { follows, error: followError } = useFollows()
-  const video = useVideo()
+  // Its videos play in their cards, by themselves too (autoplay.ts), while it's in front and the app is.
+  const front = useInFront()
+  const videos = usePlaying(focused && front)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   const [circles, setCircles] = useState<FeedCircle[]>([])
   const [refreshing, setRefreshing] = useState(false)
@@ -120,7 +123,7 @@ export default function FeedScreen() {
     return (
       <>
         <Reels
-          entries={items} now={now} tab={tab} read={read} onTab={showTab} follows={follows} onPlay={video.play} onMore={setOpened}
+          entries={items} now={now} tab={tab} read={read} onTab={showTab} follows={follows} videos={videos} onMore={setOpened}
           onNear={error ? undefined : more}
           footer={error ? (
             <View style={s.done}>
@@ -132,7 +135,6 @@ export default function FeedScreen() {
         {followError ? <View style={[s.reelsError, { top: insets.top + 64 }]}><ErrorBox>{followError}</ErrorBox></View> : null}
         {reels ? <StatusBar style="light" /> : null}
         {sheet}
-        {video.player}
       </>
     )
   }
@@ -169,7 +171,11 @@ export default function FeedScreen() {
         key={read ?? ''} // read again from the top (a pull, the dot, other players): shown from the top
         data={items}
         keyExtractor={(x) => x.item.id}
-        renderItem={({ item: x }) => <EdgePost entry={x} now={now} follows={follows} onPlay={video.play} onMore={() => setOpened(x)} />}
+        renderItem={({ item: x }) => (
+          <EdgePost entry={x} now={now} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onMore={() => setOpened(x)} />
+        )}
+        extraData={videos.playing}
+        viewabilityConfigCallbackPairs={videos.pairs}
         head={head}
         foot={foot}
         gap={8}
@@ -182,7 +188,6 @@ export default function FeedScreen() {
         refreshing={refreshing}
       />
       {sheet}
-      {video.player}
     </>
   )
 }
