@@ -8,7 +8,7 @@ import {
   type MapDetail, type MapMark, type PageTeam, type Reading,
 } from '../../../web/src/sports/facts/esports'
 import type { Tone } from '../catalog'
-import { colour, dsp, font, num, t } from '../theme'
+import { colour, dsp, dspInk, font, num, t } from '../theme'
 import { alpha, Card, Dsp, Eyebrow, ListCard, LiveBadge, s as ui } from '../ui'
 import { Clock, INK, LineRow, LOBBY_COLUMNS, Muted, Note, Score, Sides, Title, type Board, type BoardProps, type MatchPart, type MatchProps, type Palette } from './board'
 import { MatchSection } from './section'
@@ -514,7 +514,7 @@ function SeriesDetail({ maps, teams, yours, live, tone }: { maps: MapDetail[]; t
                   const mine = isYours(row.name, yours)
                   return (
                     <View key={row.name} style={[s.rule, mine && [s.whoYours, { backgroundColor: tint(tone) }]]}>
-                      <Text style={{ paddingTop: 8, paddingBottom: 3 }}>
+                      <Text style={[{ paddingTop: 8 }, dspInk(16, { paddingBottom: 3 })]}>
                         <Text style={dsp(16)}>{row.name}</Text>
                         {mine ? <Text style={[t.tiny, t.muted]}> · you follow</Text> : null}
                       </Text>
