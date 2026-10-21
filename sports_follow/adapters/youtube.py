@@ -297,6 +297,12 @@ class YouTube(VideoSource):
         """The app plays YouTube's own embedded player (youtube-nocookie.com), by the video's id."""
         return {"youtube_id": video_id} if VIDEO_ID.fullmatch(video_id) else None
 
+    def picture(self, video_id: str) -> str | None:
+        """YouTube's own thumbnail of the video, from its image host (the Content-Security-Policy allows it):
+        hqdefault, 480x360, the biggest it makes for every video (maxresdefault and sddefault only exist for some),
+        the 16:9 picture letterboxed in it, so a 16:9 frame that covers crops the bars off exactly."""
+        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if VIDEO_ID.fullmatch(video_id) else None
+
     @classmethod
     def available(cls) -> bool:
         return bool(key())

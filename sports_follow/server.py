@@ -2036,9 +2036,31 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
 
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
-    """Today's "From your players": each followed player's top video or post (feed.shares_for). No news, which
-    the Wire carries: empty until the curator has judged and ranked something about a followed player."""
+    """Each followed player's top video or post (feed.shares_for), which the Android app's Today rail shows (the
+    web's Today shows the top of the fan's Feed instead, /api/me/feed/items). No news, which the Wire carries:
+    empty until the curator has judged and ranked something about a followed player."""
     return {"shares": feed.shares_for(db, fan)}
+
+
+@app.get("/api/me/feed/items")
+def my_feed_items(
+    response: Response,
+    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
+    limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
+    tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
+    fan: str = Depends(fan_id),
+    db: Session = Depends(get_db),
+) -> feed.Page:
+    """The fan's Feed (feed.page): every followed player's videos, posts and news, by day where the fan is (tz:
+    minutes east of UTC), players taking turns; ?player=<id> for one of them; ?cursor= for the next page. Read from
+    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's dot)."""
+    try:
+        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})
+    return found
 
 
 @app.delete("/api/follows/{player_id}")

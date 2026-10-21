@@ -1,22 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Card, type Feed, type FeedItem, type FeedShare, type FeedVerdict } from '../api'
+import { api, type Feed, type FeedEntry, type FeedItem, type FeedVerdict, type Photo } from '../api'
 import { ago, duration, feedOf, fromTheFans, outlets, postFrom, views, without, type FeedKind } from '../feed'
 import { safeHref, shortName } from '../format'
 import { useFollowing } from '../following'
+import { useMyFeed } from '../myFeed'
 import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
-import { Rail } from './Rail'
+import { FeedPost } from './FeedPost'
 
 /**
  * A player's Feed (sports_follow/feed.py): what fans, creators and the player share about them, judged first.
  * Three homes: the Feed tab on the player's page, "From the fans" on its Overview, and "From your players" on
- * Today. A video is YouTube's thumbnail behind a play button, and nothing of YouTube's player loads until it's
+ * Today (the top of the fan's own Feed, in the Feed tab's cards: FeedPost.tsx). A video is YouTube's thumbnail behind a play button, and nothing of YouTube's player loads until it's
  * tapped; a post is a snippet and a link to where it was posted; news is a headline. Each card's "…" says why
  * it's here and takes the fan's word on it, which hides it from them at once.
  */
 
-/** Dev only: ?feed-sample on a player's page or Today shows made-up videos and posts (dev/feedSample.ts). */
+/** Dev only: ?feed-sample on a player's page shows made-up videos and posts (dev/feedSample.ts). */
 const SAMPLE = import.meta.env.DEV && typeof location !== 'undefined' && new URLSearchParams(location.search).has('feed-sample')
 
 /** The player's feed, again when their card's news changes (`news`: its stories' addresses), and a way to hide an item now. */
@@ -144,7 +145,7 @@ function ItemCard({ item, name, now, onMore }: { item: FeedItem; name: string; n
 }
 
 /** The "…" sheet: why the item is here, and the three things a fan can tell the judge about it. */
-function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; name: string; onClose: () => void; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
+export function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; name: string; onClose: () => void; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -181,13 +182,15 @@ function ItemSheet({ item, name, onClose, onHide }: { item: FeedItem; name: stri
   )
 }
 
-/** The Feed tab: what kind (a filter, never a sort), the groups in the order things happened, the famous ones last. */
-export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed | null; error: string | null; name: string; sport: string; now: number; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
+/** The Feed tab: what kind (a filter, never a sort), the groups in the order things happened, the famous ones last.
+ * Each item in the Feed's cards (FeedPost.tsx), as on the fan's own Feed. */
+export function FeedTab({ feed, error, name, sport, photo, now, onHide }: { feed: Feed | null; error: string | null; name: string; sport: string; photo?: Photo | null; now: number; onHide: (item: FeedItem, verdict: FeedVerdict) => Promise<void> }) {
   const [kind, setKind] = useState<FeedKind | null>(null)
   const [open, setOpen] = useState<FeedItem | null>(null)
   if (!feed) return error ? <div className="error-box">{error}</div> : <div className="row" style={{ justifyContent: 'flex-start' }}><span className="spinner" /><span className="muted">Loading…</span></div>
 
   const { present, shown, groups, evergreen } = feedOf(feed, kind)  // shown: none once its last item was hidden
+  const who = { id: feed.player_id, name, sport, photo: photo ?? null }
 
   return (
     <div className="section feed" data-sport={sportKey(sport)}>
@@ -204,7 +207,7 @@ export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed 
         const order = new Map(g.items.map((i, n) => [i.id, n]))
         const card = (i: FeedItem) => (
           <div key={i.id} style={{ order: order.get(i.id) } as CSSProperties}>
-            <ItemCard item={i} name={name} now={now} onMore={() => setOpen(i)} />
+            <FeedPost who={who} item={i} now={now} more={false} onMore={() => setOpen(i)} />
           </div>
         )
         const videos = g.items.filter((i) => i.kind === 'video')
@@ -293,45 +296,24 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
-/** Today's shares (GET /api/me/feed), loaded with the follow list, each with its player's card. */
-export function useShares(): { card: Card; item: FeedItem }[] {
+/** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed right now in its
+ * cards, and the way to the rest. Absent while their Feed is empty. */
+export function FromYourPlayers({ now }: { now: number }) {
   const { cards, loaded } = useFollowing()
-  const [rows, setRows] = useState<FeedShare[]>([])
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  useEffect(() => {
-    if (!loaded) return
-    let stale = false
-    const load = SAMPLE ? import('../dev/feedSample').then((m) => m.sampleShares(cards)) : api.myFeed().then((r) => r.shares)
-    load.then((r) => { if (!stale) setRows(r) }).catch(() => {})
-    return () => { stale = true }
-  }, [loaded, who])  // who stands for cards
-  return useMemo(() => {
-    const byId = new Map(cards.map((c) => [c.player_id, c]))
-    return rows.flatMap((r) => { const card = byId.get(r.player_id); return card ? [{ card, item: r.item }] : [] })
-  }, [rows, cards])
-}
-
-/** Today's "From your players": after Results, before Coming up; a poster per player, in their sport's colour. */
-export function FromYourPlayers({ shares: rows, now }: { shares: { card: Card; item: FeedItem }[]; now: number }) {
-  if (!rows.length) return null
+  const { page, hide } = useMyFeed(null, 2, loaded ? who : undefined)
+  const [open, setOpen] = useState<FeedEntry | null>(null)
+  if (!loaded || !page?.items.length) return null
   return (
-    <Rail title="From your players" note={`Today · ${rows.length}`}>
-      {rows.map(({ card, item }) => {
-        const name = shortName(card.player.name)
-        const own = item.kind === 'post' && item.post?.own
-        const from = item.kind === 'post' ? postFrom(item) : item.source
-        return (
-          <Link key={`${card.player_id}:${item.id}`} to={`/player/${card.player_id}?tab=feed`} className="feed-share" data-sport={sportKey(card.player.sport)}>
-            {item.kind === 'video' && <span className="feed-share-play" aria-hidden="true">{play(16)}</span>}
-            <span className="poster-tag">{own ? `From ${name}` : item.tag}</span>
-            <span className="stack" style={{ gap: 6 }}>
-              <span className="dsp who">{name}</span>
-              <span className={`line${item.kind === 'post' ? ' said' : ''}`}>{item.title}</span>
-              <span className="from">{[from, ago(item.published_at, now, true)].filter(Boolean).join(' · ')}</span>
-            </span>
-          </Link>
-        )
-      })}
-    </Rail>
+    <section className="section from-players" aria-label="From your players">
+      <SectionHead title="From your players">
+        <Link to="/me/feed" className="eyebrow link" style={{ color: 'var(--text)' }}>All {page.count}</Link>
+      </SectionHead>
+      <div className="posts">
+        {page.items.map((e) => <FeedPost key={e.item.id} who={e.player} item={e.item} moment={e.moment} now={now} onMore={() => setOpen(e)} />)}
+      </div>
+      <Link to="/me/feed" className="btn all">All {page.count} in your Feed</Link>
+      {open && <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_, verdict) => hide(open, verdict)} />}
+    </section>
   )
 }
