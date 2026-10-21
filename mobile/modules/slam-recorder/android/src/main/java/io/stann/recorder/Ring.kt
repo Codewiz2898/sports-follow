@@ -54,11 +54,12 @@ class Ring(private val keepUs: Long) {
     video.clear(); audio.clear(); bytes = 0
   }
 
-  @Synchronized private fun snapshot(): Pair<List<Sample>, List<Sample>> = video.toList() to audio.toList()
+  /** What's held right now: taken when the player taps Save, written after (saves queue behind each other). */
+  @Synchronized fun snapshot(): Pair<List<Sample>, List<Sample>> = video.toList() to audio.toList()
 
-  /** Writes what's held to an MP4 (no re-encoding: a remux, so it's fast). Returns its length in µs. */
-  fun write(file: File): Long {
-    val (v, a) = snapshot()
+  /** Writes [held] to an MP4 (no re-encoding: a remux, so it's fast). Returns its length in µs. */
+  fun write(held: Pair<List<Sample>, List<Sample>>, file: File): Long {
+    val (v, a) = held
     val vf = checkNotNull(videoFormat) { "no video yet" }
     check(v.isNotEmpty()) { "nothing buffered yet" }
     val af = audioFormat

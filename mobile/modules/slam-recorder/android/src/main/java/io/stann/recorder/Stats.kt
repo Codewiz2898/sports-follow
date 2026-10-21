@@ -32,6 +32,16 @@ class Stats(private val context: Context, private val sample: () -> Map<String, 
   )
   private var header = false
 
+  // The phone's skin and CPU temperature, where the kernel lets an app read them (vivo: skin-therm, cpuss-0-usr).
+  private val zones: Map<String, File> = runCatching {
+    File("/sys/class/thermal").listFiles().orEmpty().mapNotNull { z ->
+      val type = runCatching { File(z, "type").readText().trim() }.getOrNull() ?: return@mapNotNull null
+      if (type in setOf("skin-therm", "cpuss-0-usr", "gpuss-0-usr", "battery")) type to File(z, "temp") else null
+    }.toMap()
+  }.getOrDefault(emptyMap())
+
+  private fun zone(type: String): Double? = zones[type]?.let { f -> runCatching { f.readText().trim().toDouble() / 1000 }.getOrNull() }
+
   private val tick = object : Runnable {
     override fun run() {
       runCatching { line() }.onFailure { Log.w(TAG, "stats", it) }
@@ -61,6 +71,9 @@ class Stats(private val context: Context, private val sample: () -> Map<String, 
       "batt_temp_c" to battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)?.div(10.0),
       "current_ma" to bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) / 1000,
       "charge_mah" to bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER) / 1000,
+      "skin_c" to zone("skin-therm"),
+      "cpu_c" to zone("cpuss-0-usr"),
+      "gpu_c" to zone("gpuss-0-usr"),
       "thermal" to pm.currentThermalStatus,
       "headroom" to "%.2f".format(pm.getThermalHeadroom(10)),
       "cpu_pct_core" to "%.1f".format(100.0 * (cpu - lastCpu) / (now - lastWall).coerceAtLeast(1)),

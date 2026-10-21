@@ -81,6 +81,7 @@ class ReplayService : Service() {
   private var lastTick = SystemClock.elapsedRealtime()
   private var startedAt = 0L
   @Volatile private var saving = false
+  private val queued = java.util.concurrent.atomic.AtomicInteger()
   @Volatile private var saves = 0
   @Volatile private var lastSave: Map<String, Any?>? = null
   @Volatile private var visible: Boolean? = null
@@ -196,7 +197,8 @@ class ReplayService : Service() {
 
   private fun save() {
     if (projection == null) return
-    if (saving) { bubble?.flash("WAIT"); return }
+    val held = ring.snapshot() // the 30 s before this tap, even if another save is still being written
+    queued.incrementAndGet()
     saving = true
     bubble?.flash("SAVING")
     val tapped = SystemClock.elapsedRealtime()
@@ -206,7 +208,7 @@ class ReplayService : Service() {
         val dir = File(cacheDir, "clips").apply { mkdirs() }
         val stamp = System.currentTimeMillis()
         val raw = File(dir, "raw-$stamp.mp4")
-        val durUs = ring.write(raw)
+        val durUs = ring.write(held, raw)
         val muxMs = SystemClock.elapsedRealtime() - tapped
         var final = raw
         var cardMs = 0L
@@ -245,7 +247,7 @@ class ReplayService : Service() {
         lastSave = result
         bubble?.flash("ERROR")
       } finally {
-        saving = false
+        saving = queued.decrementAndGet() > 0
         changed()
       }
     }
