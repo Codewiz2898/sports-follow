@@ -988,6 +988,13 @@ that build too: turn them on under Alerts. Always pass
 One server runs the whole app with Docker Compose, with HTTPS from Caddy: see
 [deploy/README.md](deploy/README.md). The public build runs licensed sources, plus OpenDota by choice (BHA-208); never a development-only one (ESPN).
 
+## Mac app
+
+`desktop/mac/` is Slam for Mac (BHA-366): a menu-bar app that records a game's window (Dota 2), keeps the last
+30 s, cuts a moment into a clip with Slam's overlays and end card on ⌃⇧S, and publishes it to Slam (the clips
+API, BHA-364). It builds with the Command Line Tools alone (`./build.sh`, `swift test`); its README has the flow,
+the publishing key and the developer tools. For Bharath's Mac only for now (ad-hoc signed).
+
 ## Android app
 
 `mobile/` is the Android app (package `io.slam.app`; `io.stann.app` before the rename to Slam): React
