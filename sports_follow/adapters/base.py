@@ -503,9 +503,10 @@ class VideoSource:
         None if it can't: a video the player can't play isn't served."""
         return None
 
-    def picture(self, video_id: str) -> str | None:
+    def picture(self, video_id: str, details: dict[str, Any] | None = None) -> str | None:
         """The address of a still of one of its videos for the card to show before play is tapped (the Feed's
-        picture), one the source serves for every video; None: the card draws the title on the sport's colour."""
+        picture), the biggest the source has for it (details: what facts said of it, as the candidate keeps it:
+        VideoFacts.raw without the numbers); None: the card draws the title on the sport's colour."""
         return None
 
     @classmethod

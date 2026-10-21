@@ -481,16 +481,30 @@ moment: a clutch, an ace or pentakill, a team wipe, a chicken dinner. Roster mov
 sponsor's peripheral or energy drink held up in a clip is a promo. Full VOD re-uploads of a broadcast are \
 restreams; a player's own stream highlights aren't."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its pros, every game's (each feed answered,
-    # 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UCfeeUuW7edMxF3M_cyxGT8Q",  # Thooorin: CS2 and League interviews, history
-        "UCXbsUubmNPK8XJFbkmlMcMg",  # HLTV: CS2 interviews, news
-        "UC9k--dE_UE0Faxzgb_DDkYQ",  # BLAST Premier: CS2 interviews, features
-        "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports: League highlights, interviews
-        "UCnMM5HJs5y6qCKqnefg8Oig",  # Upthrust Esports: BGMI scrims, players
+        "UCENNtCRTPTdH_IGXs42LuHQ",  # Esports World Cup
+        "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports
+        "UCA1d3HFGFUmkKr2JIUA5Vlw",  # VALORANT Champions Tour
+        "UC9k--dE_UE0Faxzgb_DDkYQ",  # BLAST Premier
+        "UCPq2ETz4aAGo2Z-8JisDPIA",  # ESL Counter-Strike
+        "UC5jpxDZx4yoBo324pMQ91Ww",  # PGL
+        "UCXbsUubmNPK8XJFbkmlMcMg",  # HLTV
+        "UCTQKT5QqO3h7y32G8VzuySQ",  # Dota 2: Valve's, The International
+        "UCaYLBJfw6d8XqmNlL204lNg",  # ESL Dota 2
+        "UCugG6-k5QGbq_iDEPAnG4NQ",  # KRAFTON INDIA ESPORTS: BGMI
+        "UCmeeY9kzNswUpbYyJntb3Aw",  # PUBG MOBILE Esports
+        "UCuLq0ME8tqK6pzCm9rpkwjQ",  # Red Bull Gaming
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "VALORANT", "Valorant", "VCT", "LoL", "League of Legends", "CS2", "CS:GO", "Counter-Strike",
+        "Dota 2", "Dota", "BGMI", "MVP", "LCK", "LPL", "LEC", "LCS", "EWC", "TI", "IEM", "ESL", "BLAST",
+        "HLTV", "PGL", "Masters", "Worlds", "NAVI", "G2", "T1", "FNATIC", "Sentinels", "Team Liquid",
+        "Gen.G", "Vitality", "FaZe", "MOUZ", "Paper Rex", "PRX")
     news_feeds = {  # for every game, as the channels are: HLTV is Counter-Strike's, VLR.gg Valorant's
         "https://www.dexerto.com/feed/category/esports/": "Dexerto",
         "https://www.hltv.org/rss/news": "HLTV",

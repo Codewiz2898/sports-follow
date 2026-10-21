@@ -15,6 +15,13 @@ from sports_follow.adapters import VIDEOS, AdapterError, Upload, VideoFacts, bud
 from sports_follow.candidates import Followed
 
 CHANNEL = "UC" + "a" * 22
+
+
+def listing(monkeypatch, *channels: str) -> None:
+    """Every sport lists these made-up channels too, as its module would (Sport.video_channels): the feed keeps
+    videos only from a channel the player's sport lists (candidates.on_list)."""
+    for sport in (*sports.ALL, *sports.GROUPS):
+        monkeypatch.setattr(sport, "video_channels", (*sport.video_channels, *channels))
 NOW = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
 
 
@@ -173,7 +180,7 @@ def test_a_video_is_read_as_its_facts(fake):
     f = facts["abcdefghijk"]
     assert (f.seconds, f.views, f.likes, f.embeddable, f.public, f.live, f.blocked) == (3723, 5000, 300, True, True, False, ("IN", "PK"))
     assert not f.plays_in("IN") and f.plays_in("GB") and "missing0000" not in facts
-    assert f.raw["status"]["privacyStatus"] == "public" and f.raw["snippet"] == {"liveBroadcastContent": "none", "categoryId": "17", "tags": ["cricket"]}
+    assert f.raw["status"]["privacyStatus"] == "public" and f.raw["snippet"] == {"liveBroadcastContent": "none", "categoryId": "17", "tags": ["cricket"], "thumbnails": []}
     assert not f.paid
 
 

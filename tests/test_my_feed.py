@@ -165,7 +165,7 @@ def test_the_fans_feed_is_by_day_with_players_taking_turns_and_pages_with_a_curs
 
 @needs_db
 def test_the_route_refuses_a_cursor_it_never_made_and_answers_no_follows_with_nothing(db):  # noqa: F811
-    assert server.my_feed_items(server.Response(), fan="nobody", db=db).model_dump() == {"items": [], "cursor": None, "count": 0, "newest": None, "players": []}
+    assert server.my_feed_items(server.Response(), fan="nobody", db=db).model_dump() == {"items": [], "cursor": None, "count": 0, "newest": None, "players": [], "tab": "following", "layout": "edge"}
     with pytest.raises(server.HTTPException) as refused:
         server.my_feed_items(server.Response(), cursor="bogus", fan="nobody", db=db)
     assert refused.value.status_code == 422

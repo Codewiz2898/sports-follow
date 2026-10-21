@@ -129,13 +129,23 @@ A milestone: a title, a Grand Slam, a first, a ranking landmark (career high, No
 moment: a match point, a tweener, a long rally, a comeback from a set down. Full-match uploads are restreams; \
 tournament and tour channels' highlights are official."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UCbcxFkd6B9xUU54InHv4Tig",  # Tennis TV: the ATP's highlights, interviews
-        "UCaBIVVpHjq6j3tSyxwTE-8Q",  # WTA: highlights, interviews
-        "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel: analysis
+        "UCbcxFkd6B9xUU54InHv4Tig",  # Tennis TV: the ATP's
+        "UCaBIVVpHjq6j3tSyxwTE-8Q",  # WTA
+        "UCeTKJSW1NTAkf27nNmjWt5A",  # Australian Open
+        "UCF3K1Jf8hjFW8qliei8fQ3A",  # Roland-Garros
+        "UCNa8NxMgSm7m4Ii9d4QGk1Q",  # Wimbledon
+        "UCXbboag48Qlr78zzz6SkzkQ",  # US Open
+        "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "ATP", "WTA", "ITF", "US Open", "Australian Open", "Roland Garros", "Roland-Garros",
+        "French Open", "Wimbledon", "Davis Cup", "Laver Cup", "Masters", "Grand Slam")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.theguardian.com/sport/tennis/rss": "The Guardian",

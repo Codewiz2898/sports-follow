@@ -12,11 +12,15 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import create_engine, delete, func, select, text, update
 
-from sports_follow import bus, candidates, db as db_module
+from sports_follow import bus, candidates, db as db_module, metrics
+from sports_follow.adapters import VIDEOS, Upload
 from sports_follow.models import FeedCandidate, Follow, Player, PlayerAlias
-from tests.test_feed_fetch import CHANNEL, NOW, Fake, feed, video
+from tests.test_feed_fetch import CHANNEL, NOW, Fake, feed, listing, video
+from tests.test_feed_metrics import counts
+from tests.test_metrics import measured  # noqa: F401  (the fixture)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
+SOURCE = VIDEOS["youtube"]
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 
 
@@ -55,6 +59,7 @@ def world(monkeypatch):
     monkeypatch.setattr(youtube, "_client", httpx.Client(transport=httpx.MockTransport(made)))
     monkeypatch.setattr(youtube, "key", lambda: "test-key")
     monkeypatch.setattr(candidates, "channels", lambda source: {CHANNEL: {"cricket"}})
+    listing(monkeypatch, CHANNEL)
     monkeypatch.setattr(bus, "sync_redis", lambda: made.redis)
     made.redis = Redis()
     yield made
@@ -221,3 +226,20 @@ def test_a_row_no_check_could_read_for_a_month_goes(world, monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)  # the key taken away: nothing can read it again
     assert candidates.check(NOW + timedelta(days=29)) == {"read": 0, "dropped": 0} and len(rows()) == 1
     assert candidates.check(NOW + timedelta(days=31)) == {"read": 0, "dropped": 1} and rows() == []
+
+
+@pytest.mark.parametrize("stream", metrics.STREAMS)
+def test_every_stream_keeps_a_video_only_from_a_channel_the_players_sport_lists(world, stream, measured):  # noqa: F811
+    """A channel's poll, a moment's search and each sweep all keep through candidates.keep: what's from a channel the
+    player's sport doesn't list is dropped there, before YouTube is asked about it (BHA-349)."""
+    kohli = player("Virat Kohli")
+    off = "UC" + "z" * 22  # a small channel no sport lists
+    uploads = [Upload("listedvid01", CHANNEL, "Made-up Cricket", "Kohli's hundred", "", "https://www.youtube.com/watch?v=listedvid01"),
+               Upload("offlistvid1", off, "Sports Yaari", "KOHLI'S HUNDRED 🔥", "", "https://www.youtube.com/watch?v=offlistvid1")]  # fmt: skip
+    world.videos.update({v["id"]: v for v in (video("listedvid01"), video("offlistvid1"))})
+    got = candidates.keep(SOURCE, [candidates.Found(kohli, "cricket", u, "kohli", "title") for u in uploads], NOW, stream=stream)
+    assert got == {"kept": 1, "refused": 0, "off_list": 1}
+    assert rows() == [(kohli, "listedvid01")]
+    [asked] = [r for r in world.asked if r.url.path == "/youtube/v3/videos"]
+    assert asked.url.params["id"] == "listedvid01"
+    assert counts(measured, "sports_follow.feed.refused") == {("cricket", stream, "off_list"): 1}

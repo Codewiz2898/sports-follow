@@ -1,5 +1,6 @@
-"""What the admin panel changes on the running app (admin.py): the sports and sources turned off, and what
-each source may spend (its allowance a window, the reserve kept for live games, the fans' share).
+"""What the admin panel changes on the running app (admin.py): the sports and sources turned off, what each
+source may spend (its allowance a window, the reserve kept for live games, the fans' share), each video channel's
+trust, and how the apps draw the fan's Feed (its layout).
 
 The server's settings stay the ceiling: SPORTS_FOLLOW_SPORTS and SPORTS_FOLLOW_SOURCES say what this
 build may run, and a licensed source still needs its token. The panel turns things off within that, and
@@ -26,6 +27,8 @@ SPORTS_OFF = "sports_off"  # [sport key, …]
 SOURCES_OFF = "sources_off"  # [adapter system, …]
 BUDGET = "budget:"  # + a budget's name: what the panel changed of it (budget.effective)
 CHANNEL_TRUST = "channel_trust"  # {video channel id: trust, 0 to 1}: the Feed's ranking (rank.trust); 0 hides it
+FEED_LAYOUT = "feed_layout"  # "edge" or "full": how the apps draw the fan's Feed (feed.layout); unset, config.FEED_LAYOUT
+FEED_LAYOUTS = ("edge", "full")
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ class Controls:
     sources_off: frozenset[str] = frozenset()
     budgets: dict[str, dict[str, Any]] = field(default_factory=dict)  # by budget name
     channel_trust: dict[str, float] = field(default_factory=dict)  # by video channel id
+    feed_layout: str | None = None  # one of FEED_LAYOUTS, or None for the server's setting
 
 
 def parse(rows: dict[str, Any]) -> Controls:
@@ -45,7 +49,9 @@ def parse(rows: dict[str, Any]) -> Controls:
     budgets = {k[len(BUDGET):]: v for k, v in rows.items() if k.startswith(BUDGET) and isinstance(v, dict)}
     trusts = rows.get(CHANNEL_TRUST)
     trust = {k: float(v) for k, v in trusts.items() if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1} if isinstance(trusts, dict) else {}
-    return Controls(sports_off=names(rows.get(SPORTS_OFF)), sources_off=names(rows.get(SOURCES_OFF)), budgets=budgets, channel_trust=trust)
+    layout = rows.get(FEED_LAYOUT)
+    return Controls(sports_off=names(rows.get(SPORTS_OFF)), sources_off=names(rows.get(SOURCES_OFF)), budgets=budgets, channel_trust=trust,
+                    feed_layout=layout if layout in FEED_LAYOUTS else None)
 
 
 # ---------------------------------------------------------------- where they're kept
@@ -235,4 +241,13 @@ def set_channel_trust(channel: str, trust: float | None) -> None:
         return out or None
 
     STORE.change(CHANNEL_TRUST, fn)
+    load()
+
+
+def set_feed_layout(layout: str | None) -> None:
+    """How the apps draw the fan's Feed, one of FEED_LAYOUTS; None goes back to the server's setting (config.FEED_LAYOUT).
+    ValueError for one that isn't."""
+    if layout is not None and layout not in FEED_LAYOUTS:
+        raise ValueError(f"The feed's layout is one of {', '.join(FEED_LAYOUTS)}, or null for the server's.")
+    STORE.change(FEED_LAYOUT, lambda _: layout)
     load()
