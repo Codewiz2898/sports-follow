@@ -194,7 +194,7 @@ def set_sport(key: str, on: bool) -> None:
 
 
 def _windows(b: budget.Budget) -> list[dict[str, Any]]:
-    return [{"seconds": w.seconds, "requests": w.requests, "margin": w.margin} for w in b.windows]
+    return [{"seconds": w.seconds, "requests": w.requests, "margin": w.margin, "zone": w.zone} for w in b.windows]
 
 
 def _limits(b: budget.Budget) -> dict[str, Any]:

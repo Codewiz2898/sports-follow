@@ -472,7 +472,8 @@ class FeedSearch(Base):
 
 class FeedSweep(Base):
     """One search for videos about a followed player that no moment asked for (sweeps.py): a gap search (nothing
-    of theirs to watch this week) or the famous sweep (their most watched ever), with what it found and kept. A
+    of theirs to watch this week), the wide sweep (their six months' most watched) or the famous sweep (their most
+    watched ever), with what it found and kept. A
     candidate it kept names it (candidate["swept"]), which says what it served. It goes with the player."""
 
     __tablename__ = "feed_sweep"
@@ -480,7 +481,7 @@ class FeedSweep(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"))
-    stream: Mapped[str] = mapped_column(String(10))  # "gap" or "famous" (metrics.STREAMS)
+    stream: Mapped[str] = mapped_column(String(10))  # "gap", "wide" or "famous" (metrics.STREAMS)
     query: Mapped[str] = mapped_column(String(300))  # the player's name and their sport's words (Sport.video_words)
     ran_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     found: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # results naming the player

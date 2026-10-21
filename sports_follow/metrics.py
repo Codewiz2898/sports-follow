@@ -156,9 +156,10 @@ def feed(result: str, by: int = 1) -> None:
 # ---------------------------------------------------------------- the feed's funnel, judge and coverage (BHA-326)
 
 # Where a video came from: a trusted channel's uploads (candidates.poll), a moment's search (searches.run), a search
-# for a player with nothing to watch this week (gap), or for their most watched ever (famous; both sweeps.py). A
+# for a player with nothing to watch this week (gap), for their six months' most watched (wide), or for their most
+# watched ever (famous; all three sweeps.py). A
 # publisher's story (news.py) is judged, passed and served as "news" too.
-STREAMS = ("channels", "search", "gap", "famous")
+STREAMS = ("channels", "search", "gap", "wide", "famous")
 # Each step of the funnel, as sports_follow.feed.<step>: uploads read, those naming a followed player (one for each
 # player named), kept (a row stored), judged, passed by the judge, and served (a row's score set, newly).
 FEED_STEPS = {
@@ -224,10 +225,10 @@ def _judge_seconds() -> Any:
 
 def feed_search(sport: str | None, units: int, stream: str = "search") -> None:
     """A search one source answered, a moment's (searches.run) or a sweep's (sweeps.py: its stream), and what it
-    spent of the source's allowance."""
+    spent of the source's searches (VideoSource.search_cost: YouTube's 1 of its 100 a day)."""
     labels = {"sport": sport_label(sport), "stream": stream}
     _instrument("counter", "sports_follow.feed.searches", "{search}", "Searches a source answered, by sport and stream").add(1, labels)
-    _instrument("counter", "sports_follow.feed.search_units", "{unit}", "What searches spent of their sources' allowances, by sport and stream").add(units, labels)
+    _instrument("counter", "sports_follow.feed.search_units", "{unit}", "What searches spent of their sources' search allowances, by sport and stream").add(units, labels)
 
 
 def feed_coverage(by_sport: dict[str, tuple[int, int]]) -> None:

@@ -272,7 +272,7 @@ def candidate(found: Linked) -> dict[str, Any]:
     """What a story's row keeps: never more of the story than the feed said."""
     a = found.article
     return {
-        "title": a.title, "description": a.description, "channel": a.outlet, "channel_id": a.feed,
+        "title": a.title, "description": a.description, "channel": a.outlet, "channel_id": a.feed, "image": a.image,
         "published": a.published.isoformat() if a.published else None, "named": found.name, "where": found.where, "sport": found.sport,
     }  # fmt: skip
 

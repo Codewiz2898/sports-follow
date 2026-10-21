@@ -1,5 +1,6 @@
 """The feed's sweeps against Postgres (sweeps.py): a gap search for each followed player with nothing to watch this
-week, the most followed first under the day's cap, once a day and less often while it keeps nothing; the famous
+week, the most followed first under the day's cap, once a day and less often while it keeps nothing; the wide
+sweep's for every followed player, weekly, under its own cap, keeping only what the gap search hadn't; the famous
 sweep's search with no date limit, each player at most monthly, spread over the week under its own cap; what's
 stored already isn't kept again; and each search is recorded with what it found, kept and serves. Skipped without a
 throwaway database at alembic head (tests/test_corrections_db.py says how to make one)."""
@@ -14,10 +15,11 @@ import pytest
 from sqlalchemy import create_engine, delete, select, text, update
 
 from sports_follow import bus, db as db_module, sweeps
-from sports_follow.models import FeedCandidate, FeedSweep, Follow, Player
+from sports_follow.models import FeedCandidate, FeedSweep, Follow, Player, PlayerAlias
 from tests.test_feed_fetch import NOW, video
+from tests.test_feed_metrics import counts, measured  # noqa: F401
 from tests.test_feed_fetch_db import Redis
-from tests.test_moment_search import Searching, hit
+from tests.test_moment_search import Searching, asked_for, hit
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -61,7 +63,7 @@ def served(pid: int, vid: str, published=NOW - timedelta(days=2)) -> None:
 
 def searched(world: Searching) -> list[tuple[str, str | None]]:
     """Each search asked of YouTube: its query and the date it looked from."""
-    return [(r.url.params["q"], r.url.params.get("publishedAfter")) for r in world.asked if r.url.path == "/youtube/v3/search"]
+    return [(asked_for(r), r.url.params.get("publishedAfter")) for r in world.asked if r.url.path == "/youtube/v3/search"]
 
 
 def swept() -> list[tuple]:
@@ -70,8 +72,9 @@ def swept() -> list[tuple]:
                                             .order_by(FeedSweep.id)).all()]
 
 
-def only(monkeypatch, gap: int, famous: int) -> None:
+def only(monkeypatch, gap: int, famous: int, wide: int = 0) -> None:
     monkeypatch.setattr(sweeps, "FEED_GAP_SEARCHES", gap)
+    monkeypatch.setattr(sweeps, "FEED_WIDE_SEARCHES", wide)
     monkeypatch.setattr(sweeps, "FEED_FAMOUS_SEARCHES", famous)
 
 
@@ -86,7 +89,7 @@ def test_a_followed_player_with_nothing_to_watch_this_week_gets_a_gap_search_in_
     old = player("Rohit Sharma")
     served(old, "rohitlastyr", published=NOW - timedelta(days=20))  # served, but not this week: a gap
     player("Nobody Follows", followers=0)
-    world.found["Shreyas Iyer cricket"] = [hit("iyerknock01", "Shreyas Iyer 90 vs Australia | highlights"), hit("iyershort01", "Iyer #shorts"),
+    world.found["Shreyas Iyer cricket"] = [hit("iyerknock01", "Shreyas Iyer 90 vs Australia | highlights"), hit("iyershort01", "Iyer 🔥"),
                                            hit("otherplayer", "Rahul's fifty")]  # fmt: skip
     world.videos.update({v["id"]: v for v in (video("iyerknock01"), video("iyershort01", duration="PT30S"))})
     done = sweeps.run(NOW)
@@ -99,6 +102,35 @@ def test_a_followed_player_with_nothing_to_watch_this_week_gets_a_gap_search_in_
         assert row is not None and row.player_id == iyer and row.verdict is None  # the judge's, next
         sweep_id = s.scalar(select(FeedSweep.id).where(FeedSweep.player_id == iyer))
         assert (row.candidate["stream"], row.candidate["swept"], row.moment_id) == ("gap", sweep_id, None)
+
+
+def test_a_sweep_asks_for_the_player_by_the_name_fans_write_but_never_one_another_player_shares(world, monkeypatch):
+    only(monkeypatch, gap=20, famous=0)
+    bumrah, rohit, namesake = player("Jasprit Jasbirsingh Bumrah", followers=3), player("Rohit Gurunath Sharma", followers=2), player("Rohit Sharma")
+    with db_module.session() as s:
+        s.add_all([PlayerAlias(alias="jasprit-bumrah", player_id=bumrah), PlayerAlias(alias="rohit-sharma-cricket", player_id=rohit)])
+        s.add(PlayerAlias(alias="rohit-sharma", player_id=rohit))  # "Rohit Sharma" is the namesake's own name too: never his search
+    world.found["jasprit bumrah cricket"] = [hit("bumrahyork1", "Jasprit Bumrah's yorkers"), hit("bumrahfull1", "Jasprit Jasbirsingh Bumrah profile")]
+    world.videos.update({v: video(v) for v in ("bumrahyork1", "bumrahfull1")})
+    assert sweeps.run(NOW)["kept"] == 2  # matched by any of his names, as before
+    assert [q for q, _ in searched(world)] == ["jasprit bumrah cricket", "Rohit Gurunath Sharma cricket", "Rohit Sharma cricket"]
+    assert [p for p, *_ in swept()] == [bumrah, rohit, namesake]
+
+
+def test_a_search_asks_for_fifty_leaving_out_tagged_shorts_but_not_the_short_highlight_clips(world, monkeypatch, measured):  # noqa: F811
+    only(monkeypatch, gap=20, famous=0)
+    player("Shreyas Iyer")
+    results = {"iyertag0001": ("Iyer six #shorts", "PT25S"), "iyertag0002": ("Iyer catch", "PT40S"),  # tagged in the description below
+               "iyerplain01": ("Iyer's reaction", "PT30S"),  # a Short no tag gives away: still refused, as before
+               "iyerclip001": ("Shreyas Iyer 3 sixes in an over", "PT1M50S"), "iyerclip002": ("Shreyas Iyer run out", "PT3M10S"),
+               "iyerhigh001": ("Shreyas Iyer 90 highlights", "PT9M")}
+    world.found["Shreyas Iyer cricket"] = [hit(v, f"Shreyas {t}", "#Shorts #cricket" if v == "iyertag0002" else "") for v, (t, _) in results.items()]
+    world.videos.update({v: video(v, duration=d) for v, (_, d) in results.items()})
+    assert sweeps.run(NOW)["kept"] == 3
+    [asked] = [r for r in world.asked if r.url.path == "/youtube/v3/search"]
+    assert asked.url.params["maxResults"] == "50"
+    assert counts(measured, "sports_follow.feed.refused") == {("cricket", "gap", "too_short"): 1}  # the untagged Short only
+    assert counts(measured, "sports_follow.feed.kept") == {("cricket", "gap"): 3}  # both 1-4 minute clips and the highlights
 
 
 def test_the_days_cap_takes_the_most_followed_and_a_search_runs_once_a_day(world, monkeypatch):
@@ -148,8 +180,8 @@ def test_no_room_left_in_the_days_quota_holds_the_sweeps(world, monkeypatch):
 
     only(monkeypatch, gap=20, famous=35)
     player("Shreyas Iyer")
-    budget.take(youtube.BUDGET, cost=4000)  # 5,000 of the 9,000 spendable left: a search would leave less than half
-    assert sweeps.run(NOW) == {"gap searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
+    budget.take(youtube.SEARCH_BUDGET, cost=55)  # 40 of the 95 spendable searches left: the moment searches' cap
+    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
     assert searched(world) == [] and swept() == []
 
 
@@ -161,6 +193,96 @@ def test_a_removed_player_takes_their_sweeps(world, monkeypatch):
     with db_module.session() as s:
         s.execute(delete(Player).where(Player.id == iyer))
     assert swept() == []
+
+
+# ---------------------------------------------------------------- the wide sweep
+
+
+def test_every_followed_player_gets_a_wide_search_but_one_gap_searched_waits_and_whats_stored_isnt_kept_again(world, monkeypatch):
+    only(monkeypatch, gap=20, famous=0, wide=14)
+    iyer = player("Shreyas Iyer", followers=4)
+    kohli = player("Virat Kohli", followers=9)
+    served(kohli, "kohlirecent")  # covered this week: no gap search, but the wide sweep's
+    world.found["Shreyas Iyer cricket"] = [hit("iyerknock01", "Shreyas Iyer 90 vs Australia"), hit("iyerknock02", "Shreyas Iyer's catch")]
+    world.found["Virat Kohli cricket"] = [hit("kohliwide01", "Virat Kohli's season in the nets")]
+    world.videos.update({v: video(v) for v in ("iyerknock01", "iyerknock02", "kohliwide01")})
+    done = sweeps.run(NOW)
+    gap, wide = ((NOW - d).strftime("%Y-%m-%dT%H:%M:%SZ") for d in (sweeps.GAP_DAYS, sweeps.WIDE_DAYS))
+    assert searched(world) == [("Shreyas Iyer cricket", gap), ("Virat Kohli cricket", wide)]  # Iyer's gap search stands for today
+    assert (done["gap searched"], done["wide searched"], done["kept"]) == (1, 1, 3)
+    with db_module.session() as s:  # the judge served one of Iyer's: covered, so tomorrow it's his wide search
+        s.execute(update(FeedCandidate).where(FeedCandidate.external_id == "iyerknock01").values(score=0.5, verdict={"about_player": "subject"}))
+    done = sweeps.run(NOW + DAY)
+    assert (done["gap searched"], done["wide searched"], done["found"], done["kept"]) == (0, 1, 2, 0)  # what the gap search stored
+    assert [(p, s, found, kept) for p, s, _, _, found, kept in swept()] == [(iyer, "gap", 2, 2), (kohli, "wide", 1, 1), (iyer, "wide", 2, 0)]
+    with db_module.session() as s:
+        streams = {vid: stream for vid, stream in s.execute(select(FeedCandidate.external_id, FeedCandidate.candidate["stream"].astext))}
+    assert streams == {"iyerknock01": "gap", "iyerknock02": "gap", "kohliwide01": "wide", "kohlirecent": None}
+
+
+def test_what_the_famous_sweep_stored_isnt_kept_again_by_the_wide_one(world, monkeypatch):
+    only(monkeypatch, gap=0, famous=35, wide=0)
+    iyer = player("Shreyas Iyer")
+    world.found["Shreyas Iyer cricket"] = [hit("iyerfamous1", "Shreyas Iyer's 105 against New Zealand")]
+    world.videos["iyerfamous1"] = video("iyerfamous1", views=4_000_000)
+    assert sweeps.run(NOW)["kept"] == 1
+    only(monkeypatch, gap=0, famous=35, wide=14)
+    calls = world.api_calls("/videos")
+    done = sweeps.run(NOW + DAY)  # the famous sweep isn't due for a month; the wide one finds the same video
+    assert (done["wide searched"], done["famous searched"], done["found"], done["kept"]) == (1, 0, 1, 0)
+    assert world.api_calls("/videos") == calls  # stored already: not asked about again
+    assert [(p, s, kept) for p, s, _, _, _, kept in swept()] == [(iyer, "famous", 1), (iyer, "wide", 0)]
+
+
+def test_a_player_gap_searched_every_day_still_gets_a_wide_search_a_week_on(world, monkeypatch):
+    only(monkeypatch, gap=20, famous=0, wide=14)
+    iyer = player("Shreyas Iyer")
+    for day in range(9):  # each day's gap search keeps something new, which the judge never serves: still a gap
+        world.found["Shreyas Iyer cricket"] = [hit(f"iyerclip{day:03d}", f"Shreyas Iyer clip {day}")]
+        world.videos[f"iyerclip{day:03d}"] = video(f"iyerclip{day:03d}")
+        sweeps.run(NOW + day * DAY)
+    streams = [(s, at) for p, s, _, at, _, _ in swept() if p == iyer]
+    assert [s for s, _ in streams].count("gap") == 9
+    assert [at for s, at in streams if s == "wide"] == [NOW + 7 * DAY]  # a week after his first gap search
+
+
+def squad(n: int) -> list[int]:
+    """n followed players, the first the most followed."""
+    return [player(f"Player {chr(65 + i)}{chr(65 + i)}", followers=n - i) for i in range(n)]
+
+
+def test_the_wide_sweep_spreads_the_week_over_its_days_under_its_cap(world, monkeypatch):
+    only(monkeypatch, gap=0, famous=0, wide=14)
+    ids = squad(14)  # two a day
+    sweeps.run(NOW)
+    assert [p for p, *_ in swept()] == ids[:2]
+    sweeps.run(NOW + timedelta(hours=12))
+    assert len(swept()) == 2  # the day's share is spent
+    for day in range(1, 7):
+        sweeps.run(NOW + day * DAY)
+    assert [p for p, *_ in swept()] == ids  # all fourteen in the week, the most followed first
+    only(monkeypatch, gap=0, famous=0, wide=1)
+    sweeps.run(NOW + 7 * DAY - timedelta(seconds=1))  # a run a moment earlier than last week's: due again, under the cap
+    assert [p for p, *_ in swept()] == [*ids, ids[0]]
+
+
+def test_when_the_wide_cap_binds_everyone_is_searched_before_anyone_again(world, monkeypatch):
+    only(monkeypatch, gap=0, famous=0, wide=2)  # 2 a day of 14: a week gets round only half
+    ids = squad(14)
+    sweeps.run(NOW)
+    sweeps.run(NOW + 7 * DAY)  # the first two are due again, but twelve have never been searched
+    assert [p for p, *_ in swept()] == [ids[0], ids[1], ids[2], ids[3]]
+
+
+def test_no_room_after_the_gap_searches_holds_the_wide_sweep(world, monkeypatch):
+    from sports_follow.adapters import budget, youtube
+
+    only(monkeypatch, gap=20, famous=35, wide=14)
+    player("Shreyas Iyer")
+    player("Virat Kohli")
+    budget.take(youtube.SEARCH_BUDGET, cost=54)  # 41 left: room for one search before the moment searches' cap
+    done = sweeps.run(NOW)
+    assert (done["gap searched"], done["wide searched"], done["famous searched"]) == (1, 0, 0)
 
 
 # ---------------------------------------------------------------- the famous sweep

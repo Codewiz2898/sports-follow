@@ -24,11 +24,11 @@ import logging
 import os
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .. import bus, naming, sports
 from . import budget, dota, opendota, pandascore
-from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam
+from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam, Stream
 
 log = logging.getLogger("sports_follow.esports")
 
@@ -155,6 +155,17 @@ def _start(m: dict[str, Any], status: str) -> datetime | None:
     return _time(m.get(first) or m.get(then))
 
 
+def _streams(m: dict[str, Any]) -> list[Stream]:
+    """Where the series can be watched (its streams_list), in PandaScore's order: each stream's own page
+    ("https://www.twitch.tv/riotgames"), not PandaScore's player for it, as the app makes its own (watch.py)."""
+    out = []
+    for s in m.get("streams_list") or []:
+        url = (s.get("raw_url") or "").strip() if isinstance(s, dict) else ""
+        if url:
+            out.append(Stream(url=url, language=(s.get("language") or "").strip().lower(), official=bool(s.get("official")), main=bool(s.get("main"))))
+    return out
+
+
 # ---------------------------------------------------------------- parsers (pure)
 
 
@@ -188,6 +199,7 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             detail=" · ".join(x for x in (_stage(m), _format(m)) if x) or None,
             result=result,
             sport=GAMES.get((m.get("videogame") or {}).get("slug") or "", ""),
+            streams=_streams(m),
         ))
     return out
 
@@ -580,6 +592,21 @@ class PandascoreEsports(Adapter):
         except Exception:  # Redis down: no memory, the fallback still works
             return {}
 
+    @staticmethod
+    def _lead_line(game: dict[str, Any]) -> list[list[int]]:
+        """The live map's gold line so far, with this reading (dota.add_reading), kept in Redis for the worker
+        and the API alike: each one that reads the live list adds to it."""
+        key = f"dota:lead:{game.get('match_id')}"
+        try:
+            r = bus.sync_redis()
+            line = json.loads(cast(str | None, r.get(key)) or "[]")
+            updated = dota.add_reading(line, game.get("game_time"), game.get("radiant_lead"))
+            if updated is not line:
+                r.set(key, json.dumps(updated), ex=86400)
+            return updated
+        except Exception:  # Redis down: no line, the rest still shows
+            return []
+
     def _dota(self, m: dict[str, Any], snap: Snapshot, detail: bool = False) -> bool:
         """A Dota 2 series on now (or just over) gains what OpenDota knows inside its maps: the map being
         played, and each finished map's numbers for both rosters' players. Anything OpenDota can't say
@@ -587,8 +614,10 @@ class PandascoreEsports(Adapter):
         finished map's numbers are missing (OpenDota down, or the map not parsed yet).
 
         With detail (the match page's own read, not a poll, whose every state is stored and sent to each
-        card), each finished map's part of the page as well (dota.map_detail), as the state's "page_detail": the
-        same OpenDota matches, so no more requests but the item names, kept a week."""
+        card), each finished map's part of the page as well (dota.map_detail), and the live map's (its gold
+        line so far, buildings and ten heroes: dota.live_detail), as the state's "page_detail": the same
+        OpenDota matches and live list, so no more requests but the item names, kept a week. Every read of a
+        live map adds to its gold line, a poll's too."""
         if not opendota.ENABLED or (m.get("videogame") or {}).get("slug") != "dota-2" or snap.status not in ("live", "final"):
             return True
         teams = snap.state.get("teams") or []
@@ -621,12 +650,14 @@ class PandascoreEsports(Adapter):
                     if part:
                         parts.append(part)
             live = dota.live_map(game, teams, players, heroes, len(finished) + 1) if game else None
+            line = self._lead_line(game) if game else []
+            now = dota.live_detail(game, teams, players, names, heroes, len(finished) + 1, line) if game and detail else None
         except AdapterError as exc:
             log.info("dota %s: no OpenDota data: %s", m.get("id"), exc)
             return False
         snap.state["dota"] = {"maps": maps, "live": live}
-        if parts:
-            snap.state["page_detail"] = {"teams": [{"id": t["id"], "name": t["name"], "short": dota.short(t["name"])} for t in teams], "maps": parts}
+        if parts or now:
+            snap.state["page_detail"] = {"teams": [{"id": t["id"], "name": t["name"], "short": dota.short(t["name"])} for t in teams], "maps": parts, "live": now}
         snap.lines.update(dota.lines(maps, live, final=snap.status == "final"))
         if live:
             snap.clock_label = f"Map {live['n']} · {live['clock']}"
@@ -656,7 +687,8 @@ class PandascoreEsports(Adapter):
 
     def match(self, source_id: str) -> LiveGame | None:
         """One series by its id, whoever follows it, for its match page: map by map, and inside a Dota 2 map what
-        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows). One request; a
+        OpenDota knows; its teams, not its players (match.py offers the pros the registry knows); where it's streamed
+        (its fixture's streams). One request; a
         Dota 2 series on now or just over costs what a live poll's does besides (_dota): its two teams' rosters
         (kept a day) and OpenDota's live games, pro matches and each finished map, most of them kept a while."""
         if not self._on():
@@ -676,7 +708,7 @@ class PandascoreEsports(Adapter):
         partial = snap.status == "final" and not whole and (ended is None or datetime.now(timezone.utc) - ended < timedelta(seconds=DOTA_WAIT))
         return LiveGame(source_id=f.source_id, title=f.title, competition=f.competition, start_utc=f.start_utc, snapshot=snap, teams=f.team_names,
                         league=(m.get("videogame") or {}).get("slug"), tier=LIVE_TIERS.get((m.get("tournament") or {}).get("tier") or "", 0), sport=f.sport,
-                        partial=partial)
+                        partial=partial, streams=f.streams)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         """The series of the plan's games' big events (SCHEDULE_TIERS) between two days, each with its

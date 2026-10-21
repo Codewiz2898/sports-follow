@@ -1,24 +1,23 @@
 // A player's Feed, the web's components/Feed.tsx: what fans, creators and the player share about them, judged
 // first. Three homes: the Feed tab on the player's page, "From the fans" on its Overview, and "From your players"
-// on Today. A video is its thumbnail behind a play button, and a tap opens it where it plays (the video app when
+// on Today (the top of the fan's own Feed, in the Feed tab's cards: post.tsx). A video is its thumbnail behind a play button, and a tap opens it where it plays (the video app when
 // the phone has it, else the browser): nothing of a player loads before that. A post is a snippet and the way to
 // where it was posted; news is a headline. Each card's "…" says why it's here and takes the fan's word on it,
 // which hides it from them at once. What the Feed shows is decided in web/src/feed.ts; only the drawing is here.
 
 import { Image } from 'expo-image'
 import { router } from 'expo-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import Svg, { Circle, Path } from 'react-native-svg'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import Svg, { Circle } from 'react-native-svg'
 import { ago, duration, feedOf, fromTheFans, postFrom, views, without, type FeedKind } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
-import { api, type Card, type Feed, type FeedGroup, type FeedItem, type FeedShare, type FeedVerdict } from './api'
+import { api, type Feed, type FeedGroup, type FeedItem, type FeedVerdict, type Photo } from './api'
 import { matchHref } from './blocks'
 import { useTone, type Tone } from './catalog'
-import { useFollowing } from './following'
-import { Rail, type RailCard } from './rail'
-import { colour, dsp, font, RADIUS_CARD, RADIUS_TILE, t } from './theme'
+import { PlayIcon } from './icons'
+import { FeedPost, ItemSheet } from './post'
+import { colour, font, RADIUS_CARD, t } from './theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner } from './ui'
 
 /** Dev only: EXPO_PUBLIC_FEED_SAMPLE=1 when Metro starts shows the web's made-up videos and posts
@@ -27,7 +26,7 @@ function sample(): typeof import('../../web/src/dev/feedSample') | null {
   return __DEV__ && process.env.EXPO_PUBLIC_FEED_SAMPLE === '1' ? require('../../web/src/dev/feedSample') : null
 }
 
-type Hide = (item: FeedItem, verdict: FeedVerdict) => Promise<void>
+export type Hide = (item: FeedItem, verdict: FeedVerdict) => Promise<void>
 
 /** The player's feed, again when their card's news changes (`news`: its stories' addresses), and a way to hide an item now. */
 export function useFeed(playerId: number, name: string, news: string) {
@@ -64,10 +63,6 @@ export function useFeed(playerId: number, name: string, news: string) {
 const open = (url?: string | null) => {
   const href = safeHref(url)
   return href ? () => { Linking.openURL(href).catch(() => {}) } : undefined
-}
-
-function Play({ size, color }: { size: number; color: string }) {
-  return <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
 }
 
 /** The "…" that opens an item's sheet (.feed-more). */
@@ -118,7 +113,7 @@ export function VideoCard({ item, tone, now, onMore }: { item: FeedItem; tone: T
     <Surface style={s.video}>
       <Pressable onPress={play} disabled={!play} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={s.thumb}>
         <Thumb id={id} size="hqdefault" />
-        <View style={s.play}><Play size={22} color={colour.text} /></View>
+        <View style={s.play}><PlayIcon size={22} color={colour.text} /></View>
         {length ? <Text style={s.dur}>{length}</Text> : null}
       </Pressable>
       <View style={s.body}>
@@ -174,51 +169,6 @@ function ItemCard({ item, name, tone, now, onMore }: { item: FeedItem; name: str
   return <NewsCard item={item} tone={tone} now={now} onMore={onMore} />
 }
 
-/** The "…" sheet (.feed-sheet): why the item is here, and the three things a fan can tell the judge about it.
- * Back, or a tap above it, closes it. */
-function ItemSheet({ item: asked, name, onClose, onHide }: { item: FeedItem | null; name: string; onClose: () => void; onHide: Hide }) {
-  const insets = useSafeAreaInsets()
-  const last = useRef(asked)
-  if (asked) last.current = asked
-  const item = asked ?? last.current // still drawn while the sheet slides away
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { if (asked) { setError(null); setBusy(false) } }, [asked])
-  const say = async (verdict: FeedVerdict) => {
-    if (!asked) return
-    setBusy(true)
-    setError(null)
-    try {
-      await onHide(asked, verdict)
-      onClose()
-    } catch (e) {
-      setError((e as Error).message)
-      setBusy(false)
-    }
-  }
-  const choice = (label: string, verdict: FeedVerdict) => (
-    <Btn label={label} disabled={busy} colours={{ border: colour.line }} style={s.say} onPress={() => { say(verdict) }} />
-  )
-  return (
-    <Modal visible={asked != null} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
-      <Pressable style={s.backdrop} onPress={onClose} accessibilityLabel="Close" />
-      {item ? (
-        <View style={[s.sheet, { paddingBottom: 28 + insets.bottom }]} accessibilityViewIsModal>
-          <Eyebrow>Why this is here</Eyebrow>
-          <Text style={s.reason}>{item.reason}</Text>
-          {error ? <ErrorBox>{error}</ErrorBox> : null}
-          <View style={{ gap: 8, marginTop: 4 }}>
-            {choice('Not interested', 'not_interested')}
-            {choice(`Not about ${shortName(name)}`, 'not_about_player')}
-            {choice('Report', 'report')}
-            <Btn kind="primary" label="Close" style={s.sheetBtn} onPress={onClose} />
-          </View>
-        </View>
-      ) : null}
-    </Modal>
-  )
-}
-
 /** A kind to show (.feed-chip): ink outlined, filled when it's the one. */
 function KindChip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
   return (
@@ -246,8 +196,9 @@ function GroupHead({ group, tone, now }: { group: FeedGroup; tone: Tone; now: nu
 }
 
 /** The Feed tab: what kind (a filter, never a sort), the groups in the order things happened, the famous ones
- * last. On a phone a group is one column in its own order, as the site's is at a phone's width. */
-export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed | null; error: string | null; name: string; sport: string; now: number; onHide: Hide }) {
+ * last. On a phone a group is one column in its own order, as the site's is at a phone's width. Each item in the
+ * Feed's cards (post.tsx), as on the fan's own Feed. */
+export function FeedTab({ feed, error, name, sport, photo, now, onHide }: { feed: Feed | null; error: string | null; name: string; sport: string; photo?: Photo | null; now: number; onHide: Hide }) {
   const tone = useTone(sport)
   const [kind, setKind] = useState<FeedKind | null>(null)
   const [opened, setOpened] = useState<FeedItem | null>(null)
@@ -255,6 +206,7 @@ export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed 
     return error ? <ErrorBox>{error}</ErrorBox> : <View style={s.row}><Spinner /><Text style={[t.body, t.muted]}>Loading…</Text></View>
   }
   const { present, shown, groups, evergreen } = feedOf(feed, kind)
+  const who = { id: feed.player_id, name, sport, photo: photo ?? null }
 
   return (
     <View style={{ gap: 16 }}>
@@ -270,7 +222,7 @@ export function FeedTab({ feed, error, name, sport, now, onHide }: { feed: Feed 
         <View key={`${g.head}:${g.when ?? ''}`} style={{ gap: 10 }} accessibilityLabel={g.head}>
           <GroupHead group={g} tone={tone} now={now} />
           <View style={{ gap: 12 }}>
-            {g.items.map((i) => <ItemCard key={i.id} item={i} name={name} tone={tone} now={now} onMore={() => setOpened(i)} />)}
+            {g.items.map((i) => <FeedPost key={i.id} who={who} item={i} now={now} more={false} onMore={() => setOpened(i)} />)}
           </View>
         </View>
       ))}
@@ -306,7 +258,7 @@ function Evergreen({ item, last, onMore }: { item: FeedItem; last: boolean; onMo
       <Pressable onPress={go} disabled={!go} accessibilityRole="link" style={[s.row, { flex: 1, gap: 12 }]}>
         <View style={s.everThumb}>
           {id ? <Thumb id={id} size="mqdefault" /> : null}
-          <Play size={18} color={colour.bg} />
+          <PlayIcon size={18} color={colour.bg} />
         </View>
         <View style={{ gap: 3, flex: 1 }}>
           <Text style={[t.title, { fontSize: 14, lineHeight: 18 }]} numberOfLines={2}>{item.title}</Text>
@@ -339,65 +291,6 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
-/** Today's shares (GET /api/me/feed), each with its player's card: loaded with the follow list, and again when
- * it comes back changed, when Today is pulled (`again`) and when the app comes back to the front, since Today
- * stays open where the web's page would be loaded anew. */
-export function useShares(again = 0): { card: Card; item: FeedItem }[] {
-  const { cards, loaded, heard } = useFollowing()
-  const [rows, setRows] = useState<FeedShare[]>([])
-  const [back, setBack] = useState(0)
-  const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') setBack((n) => n + 1) })
-    return () => sub.remove()
-  }, [])
-  useEffect(() => {
-    if (!loaded) return
-    let stale = false
-    const made = sample()
-    const load = made ? Promise.resolve(made.sampleShares(cards)) : api.myFeed().then((r) => r.shares)
-    load.then((r) => { if (!stale) setRows(r) }).catch(() => {})
-    return () => { stale = true }
-  }, [loaded, who, heard, again, back]) // who stands for cards
-  return useMemo(() => {
-    const byId = new Map(cards.map((c) => [c.player_id, c]))
-    return rows.flatMap((r) => { const card = byId.get(r.player_id); return card ? [{ card, item: r.item }] : [] })
-  }, [rows, cards])
-}
-
-/** One of Today's shares (.feed-share): a poster in the player's sport colour, opening their Feed. */
-function Share({ card, item, now, fill }: { card: Card; item: FeedItem; now: number } & RailCard) {
-  const tone = useTone(card.player.sport)
-  const name = shortName(card.player.name)
-  const own = item.kind === 'post' && item.post?.own
-  const from = item.kind === 'post' ? postFrom(item) : item.source
-  return (
-    <Pressable
-      onPress={() => router.push({ pathname: '/player/[id]', params: { id: String(card.player_id), tab: 'feed' } })}
-      accessibilityRole="link"
-      style={[s.share, { backgroundColor: tone.sport }, fill && { width: undefined }]}
-    >
-      {item.kind === 'video' ? <View style={s.sharePlay}><Play size={16} color={colour.bg} /></View> : null}
-      <Pill small label={own ? `From ${name}` : item.tag} bg={colour.text} color={colour.bg} />
-      <View style={{ gap: 6 }}>
-        <Text style={[dsp(30), { color: tone.on }]}>{name}</Text>
-        <Text style={[s.shareLine, { color: tone.on }, item.kind === 'post' && s.said]} numberOfLines={2}>{item.title}</Text>
-        <Text style={[t.tag, { color: tone.onSoft }]} numberOfLines={1}>{[from, ago(item.published_at, now, true)].filter(Boolean).join(' · ')}</Text>
-      </View>
-    </Pressable>
-  )
-}
-
-/** Today's "From your players": after Results, before Coming up; a poster per player, in their sport's colour. */
-export function FromYourPlayers({ shares: rows, now }: { shares: { card: Card; item: FeedItem }[]; now: number }) {
-  if (!rows.length) return null
-  return (
-    <Rail title="From your players" note={`Today · ${rows.length}`}>
-      {rows.map(({ card, item }) => <Share key={`${card.player_id}:${item.id}`} card={card} item={item} now={now} />)}
-    </Rail>
-  )
-}
-
 const s = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   title: { fontSize: 16, lineHeight: 21 },
@@ -420,14 +313,5 @@ const s = StyleSheet.create({
   ever: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   everLine: { borderBottomWidth: 1, borderBottomColor: colour.line },
   everThumb: { width: 96, height: 56, borderRadius: 10, overflow: 'hidden', backgroundColor: colour.text, alignItems: 'center', justifyContent: 'center' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(13,13,13,0.4)' },
-  sheet: { gap: 12, paddingTop: 18, paddingHorizontal: 18, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: colour.surface },
-  reason: { fontFamily: font[600], fontSize: 15, lineHeight: 21, color: colour.text },
-  say: { height: 48, justifyContent: 'flex-start' },
-  sheetBtn: { height: 48 },
   line: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 18, borderRadius: RADIUS_CARD },
-  share: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, width: 204, minHeight: 196, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE },
-  shareLine: { fontFamily: font[700], fontSize: 13, lineHeight: 17 },
-  said: { fontFamily: font[600], fontStyle: 'italic' },
-  sharePlay: { position: 'absolute', right: 12, top: 12, width: 36, height: 36, borderRadius: 18, backgroundColor: colour.text, alignItems: 'center', justifyContent: 'center' },
 })

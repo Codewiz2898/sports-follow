@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
@@ -2040,9 +2040,31 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
 
 @app.get("/api/me/feed")
 def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, list[feed.Share]]:
-    """Today's "From your players": each followed player's top video or post (feed.shares_for). No news, which
-    the Wire carries: empty until the curator has judged and ranked something about a followed player."""
+    """Each followed player's top video or post (feed.shares_for), which Android builds from before its Feed tab
+    (BHA-346) show on Today; both apps now show the top of the fan's Feed there instead (/api/me/feed/items). No
+    news, which the Wire carries: empty until the curator has judged and ranked something about a followed player."""
     return {"shares": feed.shares_for(db, fan)}
+
+
+@app.get("/api/me/feed/items")
+def my_feed_items(
+    response: Response,
+    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
+    limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
+    tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
+    fan: str = Depends(fan_id),
+    db: Session = Depends(get_db),
+) -> feed.Page:
+    """The fan's Feed (feed.page): every followed player's videos, posts and news, by day where the fan is (tz:
+    minutes east of UTC), players taking turns; ?player=<id> for one of them; ?cursor= for the next page. Read from
+    rows only, never a model or a source. limit=0 answers only the circles, the count and the newest (the Feed tab's dot)."""
+    try:
+        found = feed.page(db, fan, player=player, cursor=cursor, limit=limit, tz=tz)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    response.headers.update({"Cache-Control": "private, no-cache", "Vary": "Cookie"})
+    return found
 
 
 @app.delete("/api/follows/{player_id}")
@@ -2342,6 +2364,22 @@ def _route_of(method: str, path: str) -> str | None:
         if isinstance(route, APIRoute) and route.path.startswith("/api/") and route.matches({"type": "http", "path": path, "method": method})[0] == Match.FULL:
             return route.path
     return None
+
+
+# ---------------------------------------------------------------- a stream's player alone (the Android app's)
+
+
+@app.get("/watch/{player}/{plays}", include_in_schema=False)
+def watch_page(player: str, plays: str, request: Request) -> Response:
+    """A match page's stream played by the app's own player, alone on a page of the site (watch.page): what the
+    Android app shows over the whole screen, as Twitch's player must sit in a page on the site it's told. It brings
+    its own Content-Security-Policy, which the Caddyfile leaves it. No such player, or what it plays of another
+    shape, is a 404; nothing else is read."""
+    made = watch.page(player, plays, request.url.hostname or "")
+    if made is None:
+        raise HTTPException(404, "Not Found")
+    body, policy = made
+    return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
 # ---------------------------------------------------------------- the built frontend (production)

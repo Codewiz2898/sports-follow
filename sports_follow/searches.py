@@ -3,7 +3,7 @@ post edits of a hundred or a brace within hours of it, mostly on channels no spo
 those), so each big moment is searched for on the video sources that can search (VideoSource.search_cost).
 
 Which moments, and in which words, is the sport's to say (Sport.search_words): "hundred Lord's", "brace Liverpool vs
-Everton", "wins game 4", after the player's name. A followed player's key moment the sport has words for is queued
+Everton", "wins game 4", after the player's name as fans write it (candidates.search_name). A followed player's key moment the sport has words for is queued
 (queue), one search per player and game: a later moment of theirs in the game takes it over (the brace over the goal)
 until its last run, and it looks for videos published since the first.
 
@@ -14,9 +14,10 @@ it again. What it finds goes the way a channel's uploads go: kept where it names
 passes the hard filters (candidates.keep), unless it's stored for them already, with the moment it was searched for;
 then judged and ranked with the rest (curator.rank_new).
 
-A search costs a hundred reads of a source's allowance, so they're capped: FEED_MOMENT_SEARCHES runs in any 24 hours
-(so a source's own quota day, wherever it starts, holds no more), the biggest moments first when there are more, and none while less than KEEP_SHARE of the source's tightest window is
-left, which is the channel poll's and the weekly check's. They run in the feed's lane, a background one
+A source's searches are scarce (a hundred a day, say, in an allowance of their own: VideoSource.search_budgets), so they're
+capped: FEED_MOMENT_SEARCHES runs in any 24 hours (so a source's own quota day, wherever it starts, holds no more), the
+biggest moments first when there are more, and none once the searches' allowance is spent. Moment searches have first
+claim on it: the sweeps (sweeps.py) leave what this cap may still spend. They run in the feed's lane, a background one
 (adapters/budget.py). With no source that can search running (no key), nothing is queued or run.
 """
 
@@ -41,7 +42,6 @@ SECOND_AFTER = timedelta(hours=24)  # and its last, a day on
 RUNS_APART = timedelta(hours=8)  # a search the cap held back runs its last no sooner than this after its first
 DAY = timedelta(hours=24)  # the cap's window, rolling
 GIVE_UP = timedelta(hours=48)  # a search not run by then (the cap bound for two days) isn't: its moment is old news
-KEEP_SHARE = 0.25  # searches stop while less than this share of a source's tightest window is left
 
 
 def searching() -> list[VideoSource]:
@@ -75,6 +75,8 @@ def queue(now: datetime | None = None) -> dict[str, int]:
         have = {(s.player_id, s.event_id): s for s in session.scalars(select(FeedSearch).where(FeedSearch.player_id.in_({p for p, _ in pairs})))
                 if (s.player_id, s.event_id) in pairs}
         seen: dict[tuple[int, int, str], int] = {}  # each kind's moments so far, by player and game: a second goal is 2
+        players = {p.player_id: p for p in candidates.followed(session)}
+        names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
         for r in rows:
             kind, detail = notify.kind_detail(r.key, r.event_id, r.player_id)
             n = seen[(r.player_id, r.event_id, kind)] = seen.get((r.player_id, r.event_id, kind), 0) + 1
@@ -84,7 +86,10 @@ def queue(now: datetime | None = None) -> dict[str, int]:
             said = sports.of(r.sport).search_words(fired)
             if not said:
                 continue
-            query = words(r.name, said)[:300]
+            target = players.get(r.player_id)
+            if target is not None and target.sport not in names:
+                names[target.sport] = candidates.phrases([p for p in players.values() if p.sport == target.sport])
+            query = words(candidates.search_name(target, names[target.sport]) if target else r.name, said)[:300]
             row = have.get((r.player_id, r.event_id))
             if row is None:
                 new = session.scalar(insert(FeedSearch).values(player_id=r.player_id, event_id=r.event_id, moment_id=r.id, query=query, priority=r.priority,
@@ -98,14 +103,15 @@ def queue(now: datetime | None = None) -> dict[str, int]:
     return counts
 
 
-def room(source: VideoSource, share: float = KEEP_SHARE) -> bool:
-    """Whether a search leaves the source more than this share of each budget's tightest window (a sweep's is more:
-    sweeps.KEEP_SHARE)."""
-    for b in source.budgets():
+def room(source: VideoSource, keep: int = 0) -> bool:
+    """Whether what a search spends (VideoSource.search_budgets) has room for one now, with keep left over (a sweep's:
+    what moment searches may still spend, sweeps._room), and the source's other budgets room to read what it finds
+    (budget.spare): a search whose finds can't be read is spent for nothing, and its run counted."""
+    for b in source.search_budgets():
         left = budget.room(b)
-        if left is not None and left[0] - (source.search_cost or 0) < share * left[1]:
+        if left is not None and left[0] - (source.search_cost or 0) < keep:
             return False
-    return True
+    return all(budget.spare(b, lane_name="feed") for b in source.budgets() if b not in source.search_budgets())
 
 
 def spent(since: datetime) -> int:

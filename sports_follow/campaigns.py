@@ -56,7 +56,9 @@ SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
 TAKEN = frozenset({
     "api", "admin", "assets", "icons", "welcome", "following", "live", "match", "search", "player", "team", "athlete", "notifications", "credits", "account",
     "privacy", "go",  # BHA-239's short links
+    "watch",  # a stream's player alone, for the Android app (watch.page)
     "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
+    "feed",  # the Android app's Feed tab (the web's is /me/feed)
 })
 NEAR = timedelta(hours=3)  # a player's game this close to one on their campaign's schedule is that game (player_ids)
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in

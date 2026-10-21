@@ -156,7 +156,7 @@ async def check_videos(ctx) -> None:
 
 async def sweep(ctx) -> None:
     """Daily, just after YouTube's quota day starts: a search for each followed player with nothing to watch this
-    week, and the famous sweep's share of the week (sweeps.py); then what's new is judged and everything ranked.
+    week, the wide sweep's (six months) for those not searched this week, and the famous sweep's share of the week (sweeps.py); then what's new is judged and everything ranked.
     It runs again in the evening, which does only what a missed morning run (a deploy, a restart) didn't: the caps
     and each player's once a day hold the rest."""
     if await _missed(ctx, "feed_sweep"):
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     again = sub.add_parser("rescore", help="work every stored candidate's score out again, fetching nothing")
     again.add_argument("--rejudge", action="store_true", help="ask the judge about every candidate again first (a model call each the rules don't settle)")
     sub.add_parser("news", help="read the publishers' feeds once, judge and rank what's new, and say what it did for each sport")
-    swept = sub.add_parser("sweeps", help="list the last week's sweeps (gap searches, the famous sweep): what each found, kept and serves")
+    swept = sub.add_parser("sweeps", help="list the last week's sweeps (gap searches, the wide and famous sweeps): what each found, kept and serves")
     swept.add_argument("--run", action="store_true", help="run the day's sweeps first, within their caps, then judge and rank what's new")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "news":

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine, delete, select, text, update
 
 from sports_follow import bus, db as db_module, notify, searches
-from sports_follow.models import Event, FeedCandidate, FeedSearch, Follow, Moment, Player
+from sports_follow.models import Event, FeedCandidate, FeedSearch, Follow, Moment, Player, PlayerAlias
 from sports_follow.sports.base import Found
 from tests.test_feed_fetch import NOW, video
 from tests.test_feed_fetch_db import Redis
@@ -96,6 +96,15 @@ def test_a_big_moment_of_a_followed_player_queues_one_search_in_its_sports_words
     assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 0, "taken over": 0, "taken back": 0}  # once
 
 
+def test_a_moment_search_asks_for_the_player_by_the_name_fans_write(world):
+    bumrah = player("Jasprit Jasbirsingh Bumrah")
+    with db_module.session() as s:
+        s.add(PlayerAlias(alias="jasprit-bumrah", player_id=bumrah))
+    mid = fire(bumrah, game("England vs India", venue="Lord's, London"), Found("wickets", "key", "Bumrah takes 5", "5/31", "w5", 95))
+    searches.queue(NOW + timedelta(minutes=5))
+    assert queued() == [(bumrah, mid, "jasprit bumrah 5 wickets Lord's", 95, None, None)]
+
+
 def test_a_later_moment_in_the_game_takes_its_search_over_until_its_last_run(world):
     salah = player("Mohamed Salah", sport="football")
     derby = game("Liverpool vs Everton", sport="football")
@@ -114,7 +123,7 @@ def test_a_queued_search_runs_a_few_hours_on_and_again_a_day_on_keeping_what_nam
     mid = fire(kohli, game("England vs India", venue="Lord's"), hundred())
     searches.queue(NOW + timedelta(minutes=5))
     query = "Virat Kohli century Lord's"
-    world.found[query] = [hit("kohliedit01", "Virat Kohli 100 at Lord's | fan edit"), hit("shortclip01", "Kohli century #shorts"),
+    world.found[query] = [hit("kohliedit01", "Virat Kohli 100 at Lord's | fan edit"), hit("shortclip01", "Kohli century 🔥"),
                           hit("otherplayer", "Root's hundred at Lord's"), hit("blockedin01", "Kohli: the hundred")]  # fmt: skip
     world.videos.update({v["id"]: v for v in (video("kohliedit01"), video("shortclip01", duration="PT30S"), video("blockedin01", region={"blocked": ["IN"]}))})
     assert searches.run(NOW + timedelta(hours=2))["searched"] == 0  # too soon
@@ -243,7 +252,7 @@ def test_no_room_left_in_the_days_quota_holds_the_searches(world):
 
     fire(player("Virat Kohli"), game("England vs India", venue="Lord's"), hundred())
     searches.queue(NOW + timedelta(minutes=5))
-    budget.take(youtube.BUDGET, cost=6500)
+    budget.take(youtube.SEARCH_BUDGET, cost=youtube.SEARCHES_PER_DAY - youtube.SEARCH_MARGIN)
     assert searches.run(FIRST)["searched"] == 0 and world.api_calls("/search") == 0
     assert queued()[0][4] is None  # still due
 

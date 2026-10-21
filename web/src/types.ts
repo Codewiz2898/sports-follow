@@ -292,17 +292,35 @@ export interface FeedItem {
   reason: string
   summary?: string | null
   outlets?: number | null  // a story's: how many outlets ran it, when more than one
+  // The card's picture, an https address loaded as served: a video's thumbnail, a story's image from the publisher's
+  // feed. None: a story's headline on the sport's colour; a post is words only.
+  picture?: string | null
   video?: { youtube_id: string; duration: number | null; views: number | null } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
 
-/** Items around one of the player's moments (`match` its game's page), or "This week" and "Earlier". */
+/** Items around one of the player's moments (`match` its game's page), or "This week", "This month" and "Earlier". */
 export interface FeedGroup { head: string; moment: boolean; when: string | null; match: string | null; items: FeedItem[] }
 
 export interface Feed { player_id: number; groups: FeedGroup[]; evergreen: FeedItem[]; count: number }
 
-/** Today's "From your players" (GET /api/me/feed): a followed player's top video or post. */
-export interface FeedShare { player_id: number; item: FeedItem }
+/** Who an item of the fan's Feed is about: the card's head. */
+export interface FeedWho { id: number; name: string; sport: string | null; photo: Photo | null }
+
+/** A player across the top of the fan's Feed. `newest`: when the newest of theirs came in, which rings them while
+ * it's after the fan last looked at them. */
+export interface FeedCircle extends FeedWho { count: number; newest: string | null }
+
+/** An item of the fan's Feed, under its day ("Today", "Yesterday", "This week", "This month", "Earlier"), with the
+ * moment it's about when it is one (`match`: its game in the app). */
+export interface FeedEntry { day: string; player: FeedWho; item: FeedItem; arrived: string | null; moment: string | null; match: string | null }
+
+/**
+ * A page of the fan's Feed (GET /api/me/feed/items?cursor=&player=&limit=&tz=, sports_follow/feed.py `page`):
+ * every followed player's items by day, players taking turns. `cursor` asks for the next page (null: the last);
+ * `count` is every item (of the player picked); `newest` when the newest of anyone's came in (the tab's dot).
+ */
+export interface FeedPage { items: FeedEntry[]; cursor: string | null; count: number; newest: string | null; players: FeedCircle[] }
 
 /** What a fan can say about an item from its "…" sheet. */
 export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
@@ -455,6 +473,20 @@ export interface Match {
   refreshing: boolean  // a newer read is on its way: look again in a moment
   follow?: MatchFollowState
   predictions?: Prediction[]  // what fans call before it starts (sports_follow/predictions.py); a server before them sends none
+  streams?: MatchStream[]  // where it can be watched, in the order to offer them (sports_follow/watch.py); a server before them sends none
+}
+
+/** One broadcast of a game (sports_follow/watch.py): its page, the platform it's on and the language it's called in,
+ * whether the event's organiser runs it (and it's their main one), and, where the app plays it inside the page,
+ * which of its players and what that plays: "twitch" and a channel, "youtube" and a video. */
+export interface MatchStream {
+  url: string
+  platform: string  // "Twitch", "Kick"
+  language: string  // "en"; "" where its source doesn't say
+  language_name: string  // "English"
+  official: boolean
+  main: boolean
+  embed: { player: string; id: string } | null
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.

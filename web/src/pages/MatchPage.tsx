@@ -10,9 +10,10 @@ import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
 import { FollowPills } from '../components/LiveNow'
 import { Picks } from '../components/Picks'
 import { useFollowToggle } from '../components/Starters'
+import { Watch } from '../components/Watch'
 import { dateTime, relative } from '../format'
 import { useFollowing } from '../following'
-import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn } from '../match'
+import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn, watchable } from '../match'
 import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
@@ -147,7 +148,8 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
 /**
  * One game, whoever follows anyone in it, live, to come or over (sports_follow/match.py): a head in its sport's
  * colour with the competition and its board (the sides and the big score, as its sport draws them), and over
- * a finished game's board who won, big; a game to come has its countdown there instead. Then what its sport
+ * a finished game's board who won, big; a game to come has its countdown there instead. Then where to watch it,
+ * while it's on or about to be, where its source says (an esports series' streams). Then what its sport
  * shows under the board (a timeline, a scorecard, its maps, a chess game's moves), the fan's players in it with
  * their lines, its teams to follow, what was found for the players followed in it, and both sides' players to
  * follow with a tap.
@@ -159,6 +161,8 @@ export function MatchPage() {
   const follow = useFollowToggle()
   const watch = useFollowGame(match)
   const now = useNow()
+  const [playing, setPlaying] = useState<string | null>(null)  // the stream a fan has started here (Watch), by its address
+  useEffect(() => { setPlaying(null) }, [source, game])
   const back = <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
 
   if (!match) {
@@ -172,6 +176,9 @@ export function MatchPage() {
   const board = boardOf(match)
   const soon = startsIn(match, now)
   const events = keyEvents(match)
+  // Where to watch it: while it's on or about to be, and while a fan's player is on though it's been called over.
+  const streams = watchable(match, now)
+  const watching = streams.length > 0 ? streams : playing ? match.streams ?? [] : []
   const yours = match.yours ?? []
   const { state, followed } = watch
   const head = followHead(match, state)
@@ -240,6 +247,13 @@ export function MatchPage() {
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
       {head.note && <p className="small muted" role="status">{head.note}</p>}
       {failed && <div className="notice" role="status">Couldn't update this game: {failed}</div>}
+
+      {/* Where to watch it, while it's on or about to be (sports_follow/watch.py). */}
+      {watching.length > 0 && (
+        <ErrorBoundary fallback={<BlockError />} resetKey={match.streams}>
+          <Watch streams={watching} title={match.title ?? ''} sport={key} playing={playing} onPlay={setPlaying} />
+        </ErrorBoundary>
+      )}
 
       {/* What fans call before it starts (sports_follow/predictions.py): none for a sport that asks nothing. */}
       <ErrorBoundary fallback={<BlockError />} resetKey={match.predictions}>

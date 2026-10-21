@@ -56,6 +56,19 @@ class PlayerRef:
 
 
 @dataclass
+class Stream:
+    """One broadcast of a game, where its source lists them (an esports series' streams): its page, in the
+    language it's called in (ISO 639-1, "en"; "" where the source doesn't say), whether the event's organiser
+    runs it, and whether it's the organiser's main one. Which platform it's on, and whether the app can play it
+    in the page, its address says (watch.py)."""
+
+    url: str
+    language: str = ""
+    official: bool = False
+    main: bool = False
+
+
+@dataclass
 class Fixture:
     """One event involving one of the player's teams, upcoming or finished."""
 
@@ -79,6 +92,8 @@ class Fixture:
     facts: dict[str, Any] = field(default_factory=dict)
     # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
     sport: str = ""
+    # Where it can be watched, where the source lists its broadcasts, in the source's order.
+    streams: list[Stream] = field(default_factory=list)
 
 
 @dataclass
@@ -138,6 +153,8 @@ class LiveGame:
     # it couldn't read, or a round with more games to come; a Dota 2 map OpenDota hasn't parsed yet. Its match
     # page reads it again later instead of keeping it as the game's last word (match.read).
     partial: bool = False
+    # Where it can be watched (Fixture.streams), as its fixture has them: its match page's Watch live (watch.py).
+    streams: list[Stream] = field(default_factory=list)
 
 
 @dataclass
@@ -486,11 +503,16 @@ class VideoSource:
     platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
     kind = "video"  # what its rows are, as the Feed's judge knows kinds (curate.Kind)
     batch = 50  # the most videos one facts() call asks about
-    search_cost: int | None = None  # what one search() spends of its budget; None: it can't search
+    search_cost: int | None = None  # what one search() spends of each of its search_budgets(); None: it can't search
 
     def embed(self, video_id: str) -> dict[str, str] | None:
         """How the app's video player plays one of its videos (feed.Video's fields, past duration and views), or
         None if it can't: a video the player can't play isn't served."""
+        return None
+
+    def picture(self, video_id: str) -> str | None:
+        """The address of a still of one of its videos for the card to show before play is tapped (the Feed's
+        picture), one the source serves for every video; None: the card draws the title on the sport's colour."""
         return None
 
     @classmethod
@@ -501,6 +523,11 @@ class VideoSource:
     def budgets(self) -> tuple[Budget, ...]:
         """What its requests spend (adapters/budget.py)."""
         return self.provider.budgets
+
+    def search_budgets(self) -> tuple[Budget, ...]:
+        """What a search() spends (search_cost of each): all its budgets, unless the source counts searches apart. The
+        gates (searches.room, sweeps._room) take a search's reads of what it found to spend the other budgets."""
+        return self.budgets()
 
     def uploads(self, channel_id: str) -> list[Upload]:
         raise NotImplementedError
@@ -528,6 +555,7 @@ class Article:
     outlet: str  # the publisher, as the feed names itself ("BBC Sport")
     feed: str  # the feed it was listed in, as a sport lists it
     published: datetime | None = None
+    image: str | None = None  # the picture the feed attaches to the story (https), shown as the publisher serves it
 
 
 class NewsSource:

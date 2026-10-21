@@ -50,6 +50,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.endsWith('/stream') || (req.headers.get('accept') || '').includes('text/event-stream')) return
 
   if (url.origin === self.location.origin) {
+    if (url.pathname.startsWith('/watch/')) return  // a stream's player alone (the Android app's), never the app's page
     if (req.mode === 'navigate') return event.respondWith(networkFirst(req, SHELL, '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, FILES))
     // A player's photo: its address is its content, so the copy kept is always right.

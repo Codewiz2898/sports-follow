@@ -5,7 +5,8 @@ A feed is read at most every FEED_TTL through the source cache (cache.py), and a
 and Last-Modified its last answer gave, so a feed that hasn't changed answers 304 and nothing. RSS 2.0, RSS 1.0
 (RDF) and Atom are read alike. Of a story only what the feed says of it is kept, never the page itself: the
 description is cut to a sentence or two (DESCRIPTION_MAX) and the full text some feeds carry (content:encoded) is
-never read. Addresses are written one way (canonical), so a story two feeds list, or one feed lists with tracking
+never read. The picture a feed attaches to a story is kept as its address (image), which the app loads from the
+publisher as they serve it; nothing of it is fetched or copied here. Addresses are written one way (canonical), so a story two feeds list, or one feed lists with tracking
 parameters, is one story.
 
 No key and no published limit: each request is counted (the publisher-rss budget), in the curator's feed lane.
@@ -36,6 +37,12 @@ FEED = re.compile(r"https://[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?/[^\s]*")
 TRACKING = re.compile(r"^(?:utm_.*|at_.*|mc_.*|ex_cid|ocid|cmp|icid|ito|fbclid|gclid|ref|ref_src|src|from|rss|partner|source|feed|ftag)$", re.I)
 # Zones feeds write by name that email.utils doesn't know (it reads GMT, UT and the US ones): Sky's BST, VLR's IST.
 ZONES = {"BST": 1.0, "IST": 5.5, "CET": 1.0, "CEST": 2.0, "EET": 2.0, "EEST": 3.0, "AEST": 10.0, "AEDT": 11.0, "JST": 9.0, "SGT": 8.0}
+# A picture's address as kept: https (an http one is asked for over https, as the app's pages are), no spaces or quotes.
+IMAGE = re.compile(r"https://[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?/[^\s\"'<>]*", re.I)
+IMAGE_MAX = 1000  # characters of a picture's address; a longer one isn't kept
+_IMAGE_FILE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])", re.I)
+_IMG = re.compile(r"<img\b[^>]*>", re.I)
+_ATTR = re.compile(r"""\b(src|width|height)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.I)
 _TAG = re.compile(r"<[^>]+>")
 _SPACE = re.compile(r"\s+")
 
@@ -125,9 +132,61 @@ def _link(item: ET.Element) -> str:
     return text if guid is not None and guid.get("isPermaLink") != "false" and text.startswith(("http://", "https://")) else ""
 
 
+def _picture(url: str | None) -> str | None:
+    """A picture's address as kept (IMAGE), or None: one written //host/… or http://… is asked for over https."""
+    url = html.unescape((url or "").strip())
+    if url.startswith("//"):
+        url = "https:" + url
+    elif url.lower().startswith("http://"):
+        url = "https://" + url[7:]
+    return url if len(url) <= IMAGE_MAX and IMAGE.fullmatch(url) else None
+
+
+def _an_image(node: ET.Element, url: str) -> bool:
+    """Whether a media:content or an enclosure is a picture: by what it says it is, else by its file's name."""
+    medium, kind = (node.get("medium") or "").lower(), (node.get("type") or "").lower()
+    if medium or kind:
+        return medium == "image" or kind.startswith("image/")
+    return bool(_IMAGE_FILE.search(url))
+
+
+def _width(node: ET.Element) -> int:
+    try:
+        return int(node.get("width") or 0)
+    except ValueError:
+        return 0
+
+
+def image(item: ET.Element, description: str = "") -> str | None:
+    """The picture a feed attaches to a story, as an https address: Media RSS's media:content that's an image (the
+    widest of several, a media:group's too), else its media:thumbnail (the widest), else an image <enclosure> (Atom's
+    <link rel="enclosure">), else the first <img> in the description that isn't a 1-pixel counter. None without one."""
+    contents: list[tuple[int, str]] = []
+    thumbs: list[tuple[int, str]] = []
+    enclosures: list[str] = []
+    for node in item.iter():
+        name = _local(node.tag)
+        url = (node.get("url") or "").strip()
+        if name == "content" and url and _an_image(node, url):
+            contents.append((_width(node), url))
+        elif name == "thumbnail" and url:
+            thumbs.append((_width(node), url))
+        elif name == "enclosure" and url and _an_image(node, url):
+            enclosures.append(url)
+        elif name == "link" and node.get("rel") == "enclosure" and node.get("href") and _an_image(node, node.get("href") or ""):
+            enclosures.append(node.get("href") or "")
+    ordered = [u for _, u in sorted(contents, key=lambda c: -c[0])] + [u for _, u in sorted(thumbs, key=lambda c: -c[0])] + enclosures
+    for tag in _IMG.findall(html.unescape(description)):
+        attrs = {m[1].lower(): m[2] or m[3] or m[4] for m in _ATTR.finditer(tag)}
+        if attrs.get("width") == "1" or attrs.get("height") == "1":
+            continue
+        ordered.append(attrs.get("src") or "")
+    return next((p for p in map(_picture, ordered) if p), None)
+
+
 def parse(text: str, feed: str, outlet: str) -> list[Article]:
-    """A feed (RSS 2.0, RSS 1.0 or Atom) as its stories, in the feed's order; a story with no headline or no web
-    link is left out."""
+    """A feed (RSS 2.0, RSS 1.0 or Atom) as its stories, in the feed's order, each with the picture the feed attaches
+    to it (image); a story with no headline or no web link is left out."""
     try:
         root = ET.fromstring(re.sub(r"^\s*<\?xml[^>]*\?>", "", text))
     except ET.ParseError as exc:
@@ -140,9 +199,10 @@ def parse(text: str, feed: str, outlet: str) -> list[Article]:
         title, link = plain(_text(item, "title")), _link(item)
         if not title or not link.startswith(("http://", "https://")):
             continue
+        description = _text(item, "description", "summary")
         out.append(Article(
-            url=canonical(link), title=title, description=plain(_text(item, "description", "summary"), DESCRIPTION_MAX),
-            outlet=outlet, feed=feed, published=when(_text(item, "pubDate", "published", "date", "updated", "issued")),
+            url=canonical(link), title=title, description=plain(description, DESCRIPTION_MAX),
+            outlet=outlet, feed=feed, published=when(_text(item, "pubDate", "published", "date", "updated", "issued")), image=image(item, description),
         ))  # fmt: skip
     return out
 

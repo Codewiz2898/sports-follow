@@ -6,7 +6,7 @@ import { APP_NAME } from '../app'
 import { useNow } from '../clock'
 import { ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
-import { FromYourPlayers, useShares } from '../components/Feed'
+import { FromYourPlayers } from '../components/Feed'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { TodayCalls } from '../components/Picks'
 import { PlayersStrip } from '../components/PlayersStrip'
@@ -128,7 +128,6 @@ export function TodayPage() {
   const { cards, loaded, failed, matches, matchesLoaded, teams } = useFollowing()
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
-  const shares = useShares()
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
@@ -241,8 +240,8 @@ export function TodayPage() {
       </ErrorBoundary>
 
       {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
-      <ErrorBoundary fallback={<BlockError />} resetKey={shares}>
-        <FromYourPlayers shares={shares} now={now} />
+      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+        <FromYourPlayers now={now} />
       </ErrorBoundary>
 
       <SaveNudge />
