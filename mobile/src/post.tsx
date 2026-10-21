@@ -12,7 +12,7 @@ import { router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import Svg, { Circle, Path } from 'react-native-svg'
+import Svg, { Circle } from 'react-native-svg'
 import { duration, fromLine, openLabel, views } from '../../web/src/feed'
 import { initials, safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
@@ -20,6 +20,7 @@ import { absolute, type FeedCircle, type FeedEntry, type FeedItem, type FeedVerd
 import { useTone } from './catalog'
 import type { Hide } from './feed'
 import { useFollowing } from './following'
+import { PlayIcon } from './icons'
 import { useMyFeed } from './myFeed'
 import { ShareButton } from './share'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
@@ -58,10 +59,6 @@ function Dots() {
   return <Svg width={20} height={20} viewBox="0 0 24 24" fill={colour.muted}><Circle cx="5" cy="12" r="2" /><Circle cx="12" cy="12" r="2" /><Circle cx="19" cy="12" r="2" /></Svg>
 }
 
-function Play() {
-  return <Svg width={22} height={22} viewBox="0 0 24 24" fill={colour.text}><Path d="M8 5v14l11-7z" /></Svg>
-}
-
 /** A picture as its host serves it, into the box it's given; nothing once it fails, or for YouTube's grey 120×90
  * stand-in for a video it has none for. */
 function Picture({ src, onGone }: { src: string; onGone: () => void }) {
@@ -91,7 +88,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
     media = (
       <Pressable onPress={go} disabled={!go} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[s.media, { backgroundColor: colour.text }]}>
         {picture ? <Picture src={picture} onGone={gone} /> : null}
-        <View style={s.play}><Play /></View>
+        <View style={s.play}><PlayIcon size={22} color={colour.text} /></View>
         {length ? <Text style={s.chip}>{length}</Text> : null}
       </Pressable>
     )

@@ -7,38 +7,54 @@ order a fan wants them: the organiser's main broadcasts first, then those in Eng
 organiser's before others', each as the source listed it.
 
 Where the app can play a platform's broadcast inside the page, a stream says which of its players (`embed.player`)
-and what that plays (`embed.id`: a Twitch or Kick channel, a YouTube video). The app makes the player's address
-itself, as only it knows the page's host, which Twitch's player must be told. Every other is a link: "Watch on
-Douyu". A platform is one entry in PLATFORMS; an address on none is named by its host.
+and what that plays (`embed.id`: a Twitch or Kick channel, a YouTube video). The web app makes the player's address
+itself, as only it knows the page's host, which Twitch's player must be told. The Android app can't be that host,
+so it shows the site's own page of the player alone (page, at /watch/<player>/<id>) in a WebView. Every other is a
+link: "Watch on Douyu". A platform is one entry in PLATFORMS; an address on none is named by its host.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import html
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from .adapters import Stream
+from .config import APP_NAME
 
 SHOWN = 8  # the most of a game's streams a page lists: a world final has dozens of co-streams
 
-YOUTUBE_VIDEO = re.compile(r"[A-Za-z0-9_-]{11}")
-Play = Callable[[str, list[str], dict[str, list[str]]], str | None]  # (host, path, query) -> what the player plays
+
+@dataclass(frozen=True)
+class Player:
+    """The app's own player for a platform's broadcasts, inside a page: what it plays, where it's served from, and
+    its address, playing at once, in a page at a host (the web app makes the same address, components/Watch.tsx)."""
+    name: str  # "twitch": a stream's embed.player, and its /watch page's
+    ids: re.Pattern[str]  # what it plays (a channel's name, a video's id), as a stream's address and /watch take it
+    origin: str  # "https://player.twitch.tv": the one frame its /watch page may hold
+    address: Callable[[str, str], str]  # (what it plays, the page's host) -> the player's address
 
 
-def _channel(site: str, name: re.Pattern[str], pages: set[str]) -> Play:
+# (its platform's player, and a stream's host, path and query) -> what that player plays
+Play = Callable[[Player, str, list[str], dict[str, list[str]]], str | None]
+
+
+def _channel(site: str, pages: set[str]) -> Play:
     """A platform whose player plays a channel by its name, from the channel's page on its own site ("twitch.tv/
     riotgames", with "www." or "m." or neither): not another of its sites' ("clips.twitch.tv/…"), one of the site's
     own pages (pages), nor any page deeper than a channel's ("twitch.tv/riotgames/videos")."""
     own = {f"{sub}{site}" for sub in ("", "www.", "m.")}
 
-    def play(host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
-        return path[0] if host in own and len(path) == 1 and name.fullmatch(path[0]) and path[0].lower() not in pages else None
+    def play(player: Player, host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
+        return path[0] if host in own and len(path) == 1 and player.ids.fullmatch(path[0]) and path[0].lower() not in pages else None
     return play
 
 
-def _youtube(host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
+def _youtube(player: Player, host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
     """A YouTube video's page ("watch?v=…", "/live/…", "youtu.be/…") -> the video; a channel's ("/@lolesports/live",
     or an old one by its name, "youtube.com/OGNEsports1"), which names no video, none."""
     if path == ["watch"]:
@@ -49,24 +65,33 @@ def _youtube(host: str, path: list[str], query: dict[str, list[str]]) -> str | N
         found = path[0]
     else:
         return None
-    return found if YOUTUBE_VIDEO.fullmatch(found) else None
+    return found if player.ids.fullmatch(found) else None
 
 
 @dataclass(frozen=True)
 class Platform:
     name: str  # "Twitch", as a fan knows it
     hosts: tuple[str, ...]  # its sites, a subdomain of any as well ("www.twitch.tv", "m.twitch.tv")
-    player: str = ""  # the app's own player for its broadcasts inside the page ("twitch"); "" for a link only
+    player: Player | None = None  # the app's own player for its broadcasts inside the page; None for a link only
     # What that player plays, from a stream's address (its host, path and query); None where it can't (a link).
     play: Play | None = None
 
 
 PLATFORMS = (
-    Platform("Twitch", ("twitch.tv",), "twitch", _channel("twitch.tv", re.compile(r"[A-Za-z0-9_]{1,25}"), {
+    Platform("Twitch", ("twitch.tv",), Player(
+        "twitch", re.compile(r"[A-Za-z0-9_]{1,25}"), "https://player.twitch.tv",
+        lambda plays, host: "https://player.twitch.tv/?" + urlencode({"channel": plays, "parent": host, "autoplay": "true"}),
+    ), _channel("twitch.tv", {
         "directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet",
         "drops", "login", "signup", "friends", "messages", "store", "prime", "bits"})),
-    Platform("YouTube", ("youtube.com", "youtu.be"), "youtube", _youtube),
-    Platform("Kick", ("kick.com",), "kick", _channel("kick.com", re.compile(r"[A-Za-z0-9_-]{1,40}"), {
+    Platform("YouTube", ("youtube.com", "youtu.be"), Player(
+        "youtube", re.compile(r"[A-Za-z0-9_-]{11}"), "https://www.youtube-nocookie.com",
+        lambda plays, host: f"https://www.youtube-nocookie.com/embed/{quote(plays)}?autoplay=1&rel=0&playsinline=1",
+    ), _youtube),
+    Platform("Kick", ("kick.com",), Player(
+        "kick", re.compile(r"[A-Za-z0-9_-]{1,40}"), "https://player.kick.com",
+        lambda plays, host: f"https://player.kick.com/{quote(plays)}?autoplay=true",
+    ), _channel("kick.com", {
         "browse", "categories", "category", "following", "search", "video", "clips", "dashboard", "settings", "about", "help",
         "community-guidelines", "terms-of-service", "privacy-policy", "dmca-policy", "careers", "contact", "brand", "login", "signup"})),
     Platform("Bilibili", ("bilibili.com",)),
@@ -77,6 +102,7 @@ PLATFORMS = (
     Platform("TikTok", ("tiktok.com",)),
     Platform("Trovo", ("trovo.live",)),
 )
+PLAYERS = {p.player.name: p.player for p in PLATFORMS if p.player}  # the app's own players, by name
 
 # The languages broadcasts are called in, by ISO 639-1 code; another shows as its code.
 LANGUAGES = {
@@ -123,7 +149,7 @@ def offer(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         parts = urlsplit(s.url)
         host = parts.hostname or ""
         found = platform(host)
-        play = found.play(host.lower(), [p for p in parts.path.split("/") if p], parse_qs(parts.query)) if found and found.play else None
+        play = found.play(found.player, host.lower(), [p for p in parts.path.split("/") if p], parse_qs(parts.query)) if found and found.player and found.play else None
         out.append({
             "url": s.url,
             "platform": found.name if found else host.removeprefix("www."),
@@ -131,6 +157,33 @@ def offer(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "language_name": language(s.language),
             "official": s.official,
             "main": s.main,
-            "embed": {"player": found.player, "id": play} if found and found.player and play else None,
+            "embed": {"player": found.player.name, "id": play} if found and found.player and play else None,
         })
     return out
+
+
+# The /watch page: its player over the whole of it, on black. Its one style, allowed by its hash (POLICY).
+STYLE = "html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}"
+STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
+HOST = re.compile(r"[A-Za-z0-9.:-]{1,253}")  # a page's host, as Twitch's player is told it (an IPv6 one has colons)
+
+
+def page(player: str, plays: str, host: str) -> tuple[str, str] | None:
+    """The site's /watch page of a stream the app plays (its `embed`: which player, and what that plays), served at
+    `host`: the player alone, over the whole page, playing at once (with no full screen of its own: the page is the
+    whole screen already, and the app's WebView would turn it upright), and the page's Content-Security-Policy, which
+    lets it hold that player's frame and nothing else (no script of its own, its one style by its hash, no other
+    site's frame around it). The Android app shows it in a WebView over the whole screen, as Twitch's player must sit
+    in a page on the site it's told (its `parent`), which an app isn't. None for a player the app doesn't have, what
+    isn't of the shape its player plays, or a host that isn't one."""
+    found = PLAYERS.get(player)
+    if found is None or not found.ids.fullmatch(plays) or not HOST.fullmatch(host):
+        return None
+    frame = (f'<iframe src="{html.escape(found.address(plays, host))}" title="{html.escape(APP_NAME)}: watch live" '
+             'allow="autoplay; encrypted-media; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin"></iframe>')
+    body = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="noindex">'
+            f"<title>Watch live · {html.escape(APP_NAME)}</title><style>{STYLE}</style></head><body>{frame}</body></html>")
+    policy = (f"default-src 'none'; style-src 'sha256-{STYLE_HASH}'; frame-src {found.origin}; "
+              "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    return body, policy

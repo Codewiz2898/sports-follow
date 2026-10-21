@@ -9,12 +9,13 @@ import { Image } from 'expo-image'
 import { router } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
-import Svg, { Circle, Path } from 'react-native-svg'
+import Svg, { Circle } from 'react-native-svg'
 import { ago, duration, feedOf, fromTheFans, postFrom, views, without, type FeedKind } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { api, type Feed, type FeedGroup, type FeedItem, type FeedVerdict, type Photo } from './api'
 import { matchHref } from './blocks'
 import { useTone, type Tone } from './catalog'
+import { PlayIcon } from './icons'
 import { FeedPost, ItemSheet } from './post'
 import { colour, font, RADIUS_CARD, t } from './theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner } from './ui'
@@ -62,10 +63,6 @@ export function useFeed(playerId: number, name: string, news: string) {
 const open = (url?: string | null) => {
   const href = safeHref(url)
   return href ? () => { Linking.openURL(href).catch(() => {}) } : undefined
-}
-
-function Play({ size, color }: { size: number; color: string }) {
-  return <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
 }
 
 /** The "…" that opens an item's sheet (.feed-more). */
@@ -116,7 +113,7 @@ export function VideoCard({ item, tone, now, onMore }: { item: FeedItem; tone: T
     <Surface style={s.video}>
       <Pressable onPress={play} disabled={!play} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={s.thumb}>
         <Thumb id={id} size="hqdefault" />
-        <View style={s.play}><Play size={22} color={colour.text} /></View>
+        <View style={s.play}><PlayIcon size={22} color={colour.text} /></View>
         {length ? <Text style={s.dur}>{length}</Text> : null}
       </Pressable>
       <View style={s.body}>
@@ -261,7 +258,7 @@ function Evergreen({ item, last, onMore }: { item: FeedItem; last: boolean; onMo
       <Pressable onPress={go} disabled={!go} accessibilityRole="link" style={[s.row, { flex: 1, gap: 12 }]}>
         <View style={s.everThumb}>
           {id ? <Thumb id={id} size="mqdefault" /> : null}
-          <Play size={18} color={colour.bg} />
+          <PlayIcon size={18} color={colour.bg} />
         </View>
         <View style={{ gap: 3, flex: 1 }}>
           <Text style={[t.title, { fontSize: 14, lineHeight: 18 }]} numberOfLines={2}>{item.title}</Text>

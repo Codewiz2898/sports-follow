@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
@@ -2360,6 +2360,22 @@ def _route_of(method: str, path: str) -> str | None:
         if isinstance(route, APIRoute) and route.path.startswith("/api/") and route.matches({"type": "http", "path": path, "method": method})[0] == Match.FULL:
             return route.path
     return None
+
+
+# ---------------------------------------------------------------- a stream's player alone (the Android app's)
+
+
+@app.get("/watch/{player}/{plays}", include_in_schema=False)
+def watch_page(player: str, plays: str, request: Request) -> Response:
+    """A match page's stream played by the app's own player, alone on a page of the site (watch.page): what the
+    Android app shows over the whole screen, as Twitch's player must sit in a page on the site it's told. It brings
+    its own Content-Security-Policy, which the Caddyfile leaves it. No such player, or what it plays of another
+    shape, is a 404; nothing else is read."""
+    made = watch.page(player, plays, request.url.hostname or "")
+    if made is None:
+        raise HTTPException(404, "Not Found")
+    body, policy = made
+    return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
 # ---------------------------------------------------------------- the built frontend (production)
