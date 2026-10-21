@@ -200,6 +200,8 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
     for keys, starts_at, status, event_id in made:
         for key in keys or []:
             unpolled.setdefault(key, set()).update([starts_at] if status == OPEN and event_id is None else [])
+    # A start the league's read and the game's own disagree on (an older league read) is read again every
+    # PREPARE_EVERY till the league's next read: a few reads a game at most, in the refresh lane.
     due = [game for game in big if game[1] not in unpolled or unpolled[game[1]] - {game[0]}]
     games = {key: (start, key, sport) for start, key, sport in [*theirs, *due]}  # a fan's game that's a big one, once
     out: list[tuple[str, str]] = []
