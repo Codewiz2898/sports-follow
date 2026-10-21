@@ -1,4 +1,4 @@
-// Dev only: made-up videos, posts and news for a player's Feed and Today's rail, to see the cards before the
+// Dev only: made-up videos, posts and news for a player's Feed and the Android app's Today rail, to see the cards before the
 // feed pipeline fills them (sports_follow/feed.py, `judged`). Loaded by components/Feed.tsx when the dev
 // server's page has ?feed-sample; a production build never includes it (import.meta.env.DEV is false there).
 // The YouTube ids name no real video: the cards fall back to their ink thumbnail.

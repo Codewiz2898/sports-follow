@@ -191,7 +191,7 @@ export function PlayerPage() {
             {tab === 'overview' && <Overview card={card} feed={feed.feed} show={(t, view) => { setTab(t); setMatches(view ?? null) }} onError={setFailure} />}
             {tab === 'matches' && <Matches card={card} view={matches} setView={setMatches} />}
             {tab === 'stats' && <div className="section"><StatsWithForm card={card} /></div>}
-            {tab === 'feed' && <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} now={now} onHide={feed.hide} />}
+            {tab === 'feed' && <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} photo={p.photo} now={now} onHide={feed.hide} />}
           </ErrorBoundary>
 
           <p className="tiny muted">

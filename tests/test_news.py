@@ -65,6 +65,52 @@ def test_a_feed_is_read_as_its_stories_headline_link_time_and_a_short_descriptio
     assert stories[1].url == "https://daily.example.com/story/124" and stories[1].published == datetime(2026, 10, 20, 4, 30, tzinfo=timezone.utc)
 
 
+PICTURES = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>Daily Wicket</title>
+<item><title>Media content, the widest image of several</title><link>https://daily.example.com/a</link>
+  <media:content url="https://img.example.com/a-small.jpg" medium="image" width="320"/>
+  <media:content url="https://img.example.com/a-clip.mp4" medium="video" width="1920"/>
+  <media:content url="https://img.example.com/a-big.jpg?w=1200&amp;q=80" type="image/jpeg" width="1200"/>
+  <media:thumbnail url="https://img.example.com/a-thumb.jpg"/></item>
+<item><title>In a media group, thumbnail only</title><link>https://daily.example.com/b</link>
+  <media:group><media:thumbnail url="//img.example.com/b.jpg" width="640"/></media:group></item>
+<item><title>An image enclosure over http</title><link>https://daily.example.com/c</link>
+  <enclosure url="http://img.example.com/c.png" type="image/png" length="1000"/></item>
+<item><title>An audio enclosure, then a lead image in the description</title><link>https://daily.example.com/d</link>
+  <enclosure url="https://img.example.com/d.mp3" type="audio/mpeg" length="1000"/>
+  <description>&lt;img src="https://stats.example.com/pixel.gif" width="1" height="1"&gt;&lt;p&gt;&lt;img alt="" src='https://img.example.com/d.jpg?a=1&amp;amp;b=2'&gt;The lead.&lt;/p&gt;</description>
+  <content:encoded><![CDATA[<img src="https://img.example.com/never.jpg">]]></content:encoded></item>
+<item><title>No picture, and one that isn't an address</title><link>https://daily.example.com/e</link>
+  <media:thumbnail url="javascript:alert(1)"/><description>Words only.</description></item>
+</channel></rss>"""
+
+ATOM_PICTURE = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Board Notes</title>
+<entry><title>An Atom enclosure</title><link rel="alternate" href="https://notes.example.org/x"/>
+  <link rel="enclosure" type="image/webp" href="https://notes.example.org/x.webp"/></entry>
+</feed>"""
+
+
+def test_a_storys_picture_is_the_image_its_feed_attaches_kept_as_an_https_address():
+    pictures = [s.image for s in publisher_rss.parse(PICTURES, FEED, "Daily Wicket")]
+    assert pictures == [
+        "https://img.example.com/a-big.jpg?w=1200&q=80",  # media:content's widest image, ahead of its thumbnail; never a video
+        "https://img.example.com/b.jpg",  # a media group's thumbnail, //host asked for over https
+        "https://img.example.com/c.png",  # an image enclosure, http asked for over https
+        "https://img.example.com/d.jpg?a=1&b=2",  # the description's lead image, past a counting pixel; never content:encoded
+        None,
+    ]
+    assert [s.image for s in publisher_rss.parse(ATOM_PICTURE, "https://notes.example.org/feed", "Board Notes")] == ["https://notes.example.org/x.webp"]
+    assert publisher_rss.parse(RSS, FEED, "Daily Wicket")[0].image is None
+
+
+def test_a_storys_row_keeps_its_picture():
+    article = Article(url="https://daily.example.com/a", title="A", description="", outlet="Daily Wicket", feed=FEED, image="https://img.example.com/a.jpg")
+    found = news.Linked(article=article, player_id=1, name="Verma", where="title", sport="cricket")
+    assert news.candidate(found)["image"] == "https://img.example.com/a.jpg"
+
+
 def test_atom_and_rss_1_are_read_alike():
     (rao,) = publisher_rss.parse(ATOM, "https://notes.example.org/feed", "Board Notes")
     assert (rao.title, rao.url, rao.description) == ("Kiran Rao wins the open", "https://notes.example.org/rao-wins", "Rao beat the top seed in the final round.")

@@ -5,7 +5,7 @@
 
 import { shortName } from './format'
 import { questionPath, shareText } from './predictions'
-import type { FriendLeague, Prediction, WeekPoster } from './types'
+import type { FeedItem, FriendLeague, Prediction, WeekPoster } from './types'
 
 /** A page to share: its path on the site, the title it's shared with, and what its button says. */
 export interface Shared { path: string; title: string; label: string }
@@ -27,6 +27,11 @@ export function sharePlayer(id: number, name: string, app: string): Shared {
 /** A team's page, shared as "<name> on <app>". */
 export function shareTeam(id: number, name: string, app: string): Shared {
   return { path: `/team/${id}`, title: `${name} on ${app}`, label: `Share ${name}` }
+}
+
+/** An item of a player's Feed: their Feed tab, shared with the item's title. */
+export function shareFeedItem(playerId: number, item: Pick<FeedItem, 'title'>): Shared {
+  return { path: `/player/${playerId}?tab=feed`, title: item.title, label: 'Share' }
 }
 
 /** A This week poster: its game (/player/<id>?g=<event id>), whose link previews this moment; the player's page when it has no game. */

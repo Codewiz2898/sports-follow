@@ -323,14 +323,34 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its own), a page holds one video from each channel and two around each moment, and older ones still
   being watched are "the ones everyone's seen". With nothing scored, or if the rows can't be read, a feed is
   the card's news, so the Feed tab (which replaced News) is never emptier than News was, and "From the fans"
-  on Overview and "From your players" on Today (`GET /api/me/feed`, a followed player's top video or post,
-  never news: the Wire has that) are absent. The "…" on a card says why
+  on Overview is absent (as is the Android app's Today rail, `GET /api/me/feed`, a followed player's top video
+  or post, never news). The "…" on a card says why
   it's there and takes the fan's word (`POST /api/players/<id>/feed/<item>/feedback`: not interested, not about
   the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
-  account when they sign in, and goes with the player or the account. A video is YouTube's thumbnail behind a
-  play button; the player, from youtube-nocookie.com, loads only once it's tapped (the Caddyfile's
-  Content-Security-Policy allows those two hosts). In the dev server, `?feed-sample` on a player's page or
-  Today shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
+  account when they sign in, and goes with the player or the account. Every card has a picture where there is
+  one (`picture`): a video's is YouTube's thumbnail (`VideoSource.picture`, hqdefault, which every video has)
+  behind a play button, and the player, from youtube-nocookie.com, loads only once it's tapped; a story's is
+  the image its publisher's feed attaches (`publisher_rss.image`: media:content, media:thumbnail, an image
+  enclosure, else the description's lead image), kept as its https address and loaded from the publisher as
+  they serve it, lazily; without one the headline is drawn on the sport's colour, and a post is words only. The
+  Caddyfile's Content-Security-Policy allows images over https from anywhere (publishers' images live on their
+  own image hosts, not their feeds') and frames from youtube-nocookie.com only.
+- **The Feed tab: every followed player's at once** (`feed.page`, `web/src/pages/FeedPage.tsx`, BHA-344): one feed
+  in the bottom bar and the sidebar, at `/me/feed` (a two-word address, which the Android app's links leave in the
+  browser), from `GET /api/me/feed/items?cursor=&player=&limit=&tz=`. Each player's items as
+  their own Feed tab has them, under the day each was published where the fan is (Today, Yesterday, This week,
+  This month, Earlier), the ranking deciding within a day and the players taking turns, so no two in a row are
+  one player's while another has something to show; a story two players hold is one card, and hiding it from
+  either hides it. A page is 20; its `cursor` keeps the order as it was read (an item the fan hides meanwhile
+  keeps its place, unserved, and rows that come in later wait for the next first page), though a rescore in
+  between (views growing) can still move an item across a page's end. Each item
+  carries its player (id, name, sport, photo with its framing) for the card's head; `players` are the circles
+  across the top (a tap filters with `player=`), each with when their newest came in, which rings them in their
+  sport's colour until the fan taps them; `newest` puts a dot on the tab until the fan opens it (only items of
+  Today and Yesterday count, so an old video a sweep finds now isn't "new"; both kept on
+  the device, `web/src/feedSeen.ts`). Today's "From your players" is its top two in the same cards
+  (`components/FeedPost.tsx`) and "All N in your Feed". In the dev server, `?feed-sample` on a player's page
+  shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
   all three (`mobile/src/feed.tsx`), where a tapped video opens in the YouTube app (or the browser without it)
   rather than playing inside the page; `EXPO_PUBLIC_FEED_SAMPLE=1` on Metro shows the same made-up items.
 - **Campaign pages: a big event as a row, never code.** `stann.in/gukesh` (`sports_follow/campaigns.py`,
