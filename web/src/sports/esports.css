@@ -59,15 +59,14 @@
 .draft .ban { display: flex; flex-direction: column; color: var(--muted); font-size: 14px; }
 .draft .side.right .ban { align-items: flex-end; }
 .draft .ban .tiny { color: var(--text); font-weight: 700; }
-.draft .pick { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 12px; background: var(--text); color: var(--surface); width: 100%; }
+.draft .pick { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 12px; background: var(--bg); color: var(--text); box-shadow: inset 0 0 0 2px var(--text); width: 100%; }  /* a pick ringed in ink; a ban is struck through */
 .draft .side.right .pick { align-items: flex-end; }
 .draft .pick .dsp { font-size: 18px; overflow-wrap: anywhere; }
-.draft .pick.yours { background: var(--sport); color: var(--on-sport); }
-.best-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 18px; background: var(--text); color: var(--surface); }
-.best-card .eyebrow { color: var(--sport-on-ink); }
+.draft .pick.yours { background: var(--sport); color: var(--on-sport); box-shadow: none; }
+.best-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 18px; background: var(--surface); color: var(--text); }
 .across { display: grid; grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); gap: 6px; }
 .across > span { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 12px; background: var(--bg); text-align: center; }
-.across > span.won { background: var(--text); color: var(--surface); }
+.across > span.won { background: var(--sport); color: var(--on-sport); }  /* a map their side took, in its sport's colour */
 .across .num { font-size: 14px; }
 .who-played { display: grid; column-gap: 0; padding: 12px 16px; }
 .who-played .team { grid-column: 1 / -1; font-size: 18px; padding-bottom: 6px; }
