@@ -547,8 +547,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` (each moment search less is 101 units more) or more YouTube quota. Off
   without the key.
 - **What every search asks for** (BHA-341): the player by the name fans and titles write (`candidates.search_name`):
-  of their own name and their aliases, the shortest that still names them and no other followed player of their
-  sport, sharing a word with their own name: "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
+  of their own name and the aliases with fewer words than it, the shortest that still names them and no other
+  followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
+  football"): "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
   Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
   players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
   the same 100 units, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends

@@ -45,7 +45,12 @@ def test_a_search_never_asks_by_a_name_another_followed_player_shares():
     assert named([rohit, namesake]) == ["Rohit Gurunath Sharma", "Rohit Sharma"]  # the namesake has nothing better than his own
     # A one-word name of their own, when another player has it too, isn't theirs: their own name it is, as before.
     assert named([candidates.Followed(3, "valorant", "Ace"), candidates.Followed(4, "valorant", "Ace Ventura")]) == ["Ace", "Ace Ventura"]
-    assert named([candidates.Followed(5, "cricket", "Virat Kohli", ["Kohli", "King Kohli"])]) == ["Virat Kohli"]  # same length: their own name first
+    assert named([candidates.Followed(5, "cricket", "Virat Kohli", ["Kohli", "King Kohli"])]) == ["Virat Kohli"]  # never an alias as long as their name
+    # Namesakes' slugs (pipeline._free_slug), aliases once their hyphens go: never a search, which wants the name.
+    salahs = [candidates.Followed(6, "football", "Mohamed Salah", ["mohamed salah"]), candidates.Followed(7, "football", "Mohamed Salah", ["mohamed salah football"]),
+              candidates.Followed(8, "football", "Mohamed Salah", ["mohamed salah football q123456"])]
+    assert named(salahs) == ["Mohamed Salah"] * 3
+    assert named([candidates.Followed(9, "football", "Pedri", ["pedri football"]), candidates.Followed(10, "football", "Pedri Gonzalez")]) == ["Pedri", "Pedri Gonzalez"]
 
 
 def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811

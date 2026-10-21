@@ -141,25 +141,28 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
 
 def search_name(player: Followed, names: dict[int, set[tuple[str, ...]]]) -> str:
     """The name a search asks for a player by (sweeps.py, searches.py): the one fans and titles write, "Jasprit Bumrah"
-    for the registry's "Jasprit Jasbirsingh Bumrah". Of their own name and their aliases, the shortest that their
-    phrases among these players hold (names: phrases()) and no other player's do, sharing a word with their own name
-    ("MS Dhoni" for Mahendra Singh Dhoni; not a nickname alone, nor a name in another script). One
-    word only when it's their own name ("TenZ"): a surname or nickname is theirs among those followed, not among
-    everyone a search finds. None qualifying (two followed players share every name): their own name."""
+    for the registry's "Jasprit Jasbirsingh Bumrah". Of their own name and the aliases with fewer words than it, the
+    shortest that their phrases among these players hold (names: phrases()) and no other player's do, sharing a word
+    with their own name ("MS Dhoni" for Mahendra Singh Dhoni; not a nickname alone, nor a name in another script).
+    Never an alias as long as their name or longer: a namesake's slug ("mohamed salah football") tells them apart
+    from the rest of us, not on YouTube. A surname or nickname alone is theirs among those followed, not among
+    everyone a search finds, so one word only when it's their own name ("TenZ"). None qualifying (two followed
+    players share their name and it can't be shortened): their own name."""
     theirs = names.get(player.player_id, set())
     others = {phrase for pid, held in names.items() if pid != player.player_id for phrase in held}
-    own = set(naming.words(player.name))
-    best: tuple[tuple[int, bool, int, bool], str] | None = None
+    own_words = naming.words(player.name)
+    own = set(own_words)
+    best: tuple[tuple[int, bool, int, bool, str], str] | None = None
     for name in (player.name, *player.aliases):
         spelt = [tuple(s) for s in naming.spellings(name)]
         plain = spelt[0] if spelt else ()
         if not plain or plain not in theirs or any(s in others for s in spelt) or not own & set(plain):
             continue
-        if len(plain) == 1 and name != player.name:
+        if name != player.name and not 1 < len(plain) < len(own_words):
             continue
         # Fewest words; of those, one their own name's words make ("Virat Kohli" before "King Kohli"); then the fewest
         # letters; of one name's forms, the one written with capitals.
-        key = (len(plain), not set(plain) <= own, len("".join(plain)), name == name.lower())
+        key = (len(plain), not set(plain) <= own, len("".join(plain)), name == name.lower(), name)
         if best is None or key < best[0]:
             best = (key, name)
     return best[1] if best else player.name
