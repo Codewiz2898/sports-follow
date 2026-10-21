@@ -1,3 +1,4 @@
+import ImageIO
 import AVFoundation
 import CoreMedia
 import CoreVideo
@@ -160,5 +161,90 @@ enum Probe {
     static func fourCC(_ c: FourCharCode) -> String {
         let b = [24, 16, 8, 0].map { UInt8((c >> $0) & 0xFF) }
         return String(bytes: b, encoding: .ascii) ?? "\(c)"
+    }
+}
+
+/// `--from-frames <dir> [prefix]`: a Dota `startmovie` export (prefix_00000000.jpg… at 30 fps, prefix_.wav)
+/// through the same encoders, ring, writer and cut, so the numbers come from real game footage.
+enum FromFrames {
+    static func run(dir: URL, prefix: String, fps: Int, strip: String?) async throws {
+        let fm = FileManager.default
+        let jpgs = try fm.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix(prefix) && $0.lowercased().hasSuffix(".jpg") }.sorted()
+        guard let first = jpgs.first, let img0 = load(dir.appendingPathComponent(first)) else {
+            throw NSError(domain: "frames", code: 1, userInfo: [NSLocalizedDescriptionKey: "no frames"])
+        }
+        let fit = min(1, 1600 / Double(img0.width), 900 / Double(img0.height))
+        let w = Int((Double(img0.width) * fit / 2).rounded()) * 2, h = Int((Double(img0.height) * fit / 2).rounded()) * 2
+        let ring = ReplayRing(seconds: 30)
+        let video = try VideoEncoder(width: w, height: h, hevc: false, bitrate: 10_000_000, fps: fps,
+                                     realTime: false) { ring.appendVideo($0) }
+        let audio = try AudioEncoder { ring.appendAudio($0) }
+        let t0 = CMClockGetTime(CMClockGetHostTimeClock())
+        let started = Date()
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey: w, kCVPixelBufferHeightKey: h,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+        ]
+        var pool: CVPixelBufferPool?
+        CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool)
+        for (i, name) in jpgs.enumerated() {
+            guard let img = load(dir.appendingPathComponent(name)) else { continue }
+            var pb: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool!, &pb)
+            guard let pb else { continue }
+            CVPixelBufferLockBaseAddress(pb, [])
+            let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: w, height: h, bitsPerComponent: 8,
+                                bytesPerRow: CVPixelBufferGetBytesPerRow(pb), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            ctx?.interpolationQuality = .high
+            ctx?.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            CVPixelBufferUnlockBaseAddress(pb, [])
+            video.encode(pb, pts: t0 + CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)),
+                         duration: CMTime(value: 1, timescale: CMTimeScale(fps)))
+        }
+        // The sound: the export's WAV, resampled to 48 kHz stereo float, in 1024-frame pushes.
+        if let wav = try? fm.contentsOfDirectory(atPath: dir.path).first(where: { $0.hasPrefix(prefix) && $0.lowercased().hasSuffix(".wav") }) {
+            let file = try AVAudioFile(forReading: dir.appendingPathComponent(wav))
+            let out = AVAudioFormat(standardFormatWithSampleRate: AudioEncoder.rate, channels: 2)!
+            let conv = AVAudioConverter(from: file.processingFormat, to: out)!
+            let src = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
+            try file.read(into: src)
+            let cap = AVAudioFrameCount(Double(file.length) * AudioEncoder.rate / file.processingFormat.sampleRate) + 4096
+            let dst = AVAudioPCMBuffer(pcmFormat: out, frameCapacity: cap)!
+            var fed = false
+            _ = conv.convert(to: dst, error: nil) { _, st in
+                if fed { st.pointee = .endOfStream; return nil }
+                fed = true; st.pointee = .haveData; return src
+            }
+            let n = Int(dst.frameLength), l = dst.floatChannelData![0], r = dst.floatChannelData![dst.format.channelCount > 1 ? 1 : 0]
+            var k = 0
+            while k < n {
+                let c = min(1024, n - k)
+                audio.push(pts: t0 + CMTime(value: CMTimeValue(k), timescale: CMTimeScale(AudioEncoder.rate)),
+                           left: UnsafeBufferPointer(start: l + k, count: c), right: UnsafeBufferPointer(start: r + k, count: c))
+                k += c
+            }
+        }
+        video.finish()
+        let st = ring.stats()
+        print(String(format: "%d frames %dx%d encoded in %.2f s; ring %.1f s, %.1f MB video, %.2f MB audio",
+                     jpgs.count, w, h, Date().timeIntervalSince(started), st.seconds, st.videoMB, st.audioMB))
+        guard let snap = ring.snapshot() else { throw NSError(domain: "frames", code: 2) }
+        let url = ClipWriter.newURL(label: "dota-real")
+        let res = try await ClipWriter.write(snap, to: url)
+        print(String(format: "saved %@: %.2f s, %.1f MB, write %.0f ms", url.lastPathComponent, res.seconds,
+                     Double(res.bytes) / 1_048_576, res.writeMs))
+        try await Probe.run(url)
+        let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
+        let e = try await ClipEditor.make(from: url, to: cut, strip: strip)
+        print(String(format: "cut %@: %.2f s, %.1f MB, made in %.0f ms", cut.lastPathComponent, e.seconds,
+                     Double(e.bytes) / 1_048_576, e.ms))
+    }
+
+    private static func load(_ url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
     }
 }
