@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import type { FeedCircle, FeedEntry, FeedItem, FeedLayout, FeedPage as Page, FeedTabKey, FeedVerdict } from '../api'
 import { useNow } from '../clock'
 import { ItemSheet } from '../components/Feed'
-import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, type Follows } from '../components/FeedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, usePlaying, type Follows } from '../components/FeedLayouts'
 import { Circles } from '../components/FeedPost'
 import { ringed } from '../feed'
 import { markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
@@ -15,7 +15,9 @@ import { useMyFeed, useNearEnd } from '../myFeed'
  * The Feed tab (BHA-349): For you, the fan's players' videos, posts and news with videos of players they don't
  * follow mixed in (3 of every 5 theirs), and Following, theirs alone (GET /api/me/feed/items, sports_follow/feed.py
  * `page`). The server says how to draw it (`layout`, which the admin panel changes live): edge to edge, or full
- * screen (components/FeedLayouts.tsx). Following's circles across the top filter it to one player
+ * screen (components/FeedLayouts.tsx). Its videos play in their cards: on a tap, with sound, or by themselves, muted,
+ * the topmost more than half on screen, as the fan's setting on the Account page allows (BHA-359, autoplay.ts).
+ * Following's circles across the top filter it to one player
  * (/me/feed?tab=following&player=<id>), ringed in their sport's colour while they have something the fan hasn't
  * seen. The next page loads as the end comes near. Opening it takes away the tab's dot (feedSeen.ts).
  */
@@ -82,7 +84,7 @@ export function FeedPage() {
   const { follows, error: followError } = useFollows()
   const [open, setOpen] = useState<FeedEntry | null>(null)
   const [circles, setCircles] = useState<FeedCircle[]>([])
-  const [playing, setPlaying] = useState<string | null>(null)
+  const [edge, setEdge] = useState<HTMLDivElement | null>(null)
   useFeedSeen()
   const end = useNearEnd(more, layout === 'edge' && Boolean(page?.cursor))
 
@@ -98,6 +100,7 @@ export function FeedPage() {
   }
   const picked = circles.find((c) => c.id === player)
   const items = page?.items ?? []
+  const { playing, play } = usePlaying(layout === 'edge' ? edge : null, null, items)
   const sheet = open && (
     <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_: FeedItem, verdict: FeedVerdict) => hide(open, verdict)}>
       {layout === 'edge' && <EdgeSheetExtras entry={open} />}
@@ -166,9 +169,9 @@ export function FeedPage() {
       {empty}
 
       {items.length > 0 && (
-        <div className="edge">
+        <div ref={setEdge} className="edge">
           {items.map((e) => (
-            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing === e.item.id} onPlay={setPlaying} onMore={() => setOpen(e)} />
+            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id} muted={playing?.muted} onPlay={play} onMore={() => setOpen(e)} />
           ))}
         </div>
       )}
