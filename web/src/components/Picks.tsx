@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type MyPredictions, type Prediction } from '../api'
+import { api, type Prediction } from '../api'
 import { useNow } from '../clock'
-import { byGame, isOpen, outcomeOf, withWhom } from '../predictions'
+import { isOpen, outcomeOf, withWhom } from '../predictions'
 import { shareQuestion } from '../share'
 import { sportKey } from '../sports'
+import { callsChanged } from './Calls'
 import { CheckIcon } from './Icons'
-import { Rail } from './Rail'
 import { ShareButton } from './Share'
 
 /**
@@ -22,10 +22,10 @@ export function usePredictions(given: Prediction[] | undefined) {
 }
 
 /** The split as a bar: each answer's share, the fan's own in its sport's colour, the rest in greys. */
-function SplitBar({ q, onInk = false }: { q: Prediction; onInk?: boolean }) {
+function SplitBar({ q }: { q: Prediction }) {
   const said = q.options.map((o) => `${o.label} ${o.share ?? 0}%`).join(', ')
   return (
-    <div className={`split${onInk ? ' on-ink' : ''}`} role="img" aria-label={said}>
+    <div className="split" role="img" aria-label={said}>
       {q.options.map((o, i) => (
         <span key={o.key} className={`split-seg${o.key === q.mine ? ' mine' : i % 2 ? ' even' : ''}`} style={{ flexGrow: Math.max(o.share ?? 0, 1) }} />
       ))}
@@ -35,10 +35,10 @@ function SplitBar({ q, onInk = false }: { q: Prediction; onInk?: boolean }) {
 
 /**
  * One question: its answers to tap while it's open (the split shows once the fan has picked: the crowd doesn't
- * pick for them), then closed with their pick, then settled, right or wrong, and what it scored. `compact` is
- * Today's ink card: the answers and a line, no more.
+ * pick for them), then closed with their pick, then settled, right or wrong, and what it scored. A pick made or
+ * taken back tells the cards that show the fan's calls (Calls.tsx).
  */
-export function PickCard({ q, onChange, compact = false }: { q: Prediction; onChange: (q: Prediction) => void; compact?: boolean }) {
+export function PickCard({ q, onChange }: { q: Prediction; onChange: (q: Prediction) => void }) {
   const now = useNow()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -51,6 +51,7 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
     setError(null)
     try {
       onChange((key === q.mine ? await api.unpick(q.id) : await api.pick(q.id, key)).question)
+      callsChanged()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -58,7 +59,7 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
     }
   }
 
-  if (outcome && !compact) {
+  if (outcome) {
     return (
       <article className={`pick-card settled ${outcome.kind}`} data-sport={sportKey(q.sport)} aria-label={q.title}>
         <span className="tag">{q.title}</span>
@@ -76,15 +77,12 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
 
   const cols = Math.min(q.options.length, 3)
   return (
-    <article className={`pick-card${compact ? ' compact' : ''}`} data-sport={sportKey(q.sport)} aria-label={q.title}>
-      {!compact && (
-        <span className="row">
-          <span className="eyebrow">{open ? 'Your pick' : 'Picks closed'}</span>
-          <span className="tiny muted" style={{ fontWeight: 800 }}>{open ? 'Locks when it starts' : q.mine ? 'Settled when it ends' : ''}</span>
-        </span>
-      )}
-      {compact && <Link to={`/match/${q.match}`} className="eyebrow muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.game}</Link>}
-      <span className={`dsp ${compact ? 'pick-q-small' : 'pick-q'}`}>{q.title}</span>
+    <article className="pick-card" data-sport={sportKey(q.sport)} aria-label={q.title}>
+      <span className="row">
+        <span className="eyebrow">{open ? 'Your pick' : 'Picks closed'}</span>
+        <span className="tiny muted" style={{ fontWeight: 800 }}>{open ? 'Locks when it starts' : q.mine ? 'Settled when it ends' : ''}</span>
+      </span>
+      <span className="dsp pick-q">{q.title}</span>
       <div className="pick-options" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }} role="group" aria-label={q.title}>
         {q.options.map((o) => {
           const mine = o.key === q.mine
@@ -97,7 +95,7 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
           )
         })}
       </div>
-      {q.mine && q.options.some((o) => o.share != null) && <SplitBar q={q} onInk={compact} />}
+      {q.mine && q.options.some((o) => o.share != null) && <SplitBar q={q} />}
       {q.mine ? (
         <span className="small" style={{ fontWeight: 800 }}>
           {withWhom(q) || `You said ${q.options.find((o) => o.key === q.mine)?.label ?? ''}. The split shows once ${q.split_from} fans have picked.`}
@@ -108,7 +106,7 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
           {open ? `${q.picks ? `${q.picks.toLocaleString()} ${q.picks === 1 ? 'fan has' : 'fans have'} picked. ` : ''}See how fans split once you pick.` : `Closed. ${q.picks.toLocaleString()} picked.`}
         </span>
       )}
-      {!compact && q.mine && open && (
+      {q.mine && open && (
         <span className="row" style={{ justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
           <ShareButton {...shareQuestion(q)} className="btn small primary" text="Share the split" />
           <span className="tiny muted" style={{ fontWeight: 700 }}>Tap your pick again to take it back.</span>
@@ -120,11 +118,11 @@ export function PickCard({ q, onChange, compact = false }: { q: Prediction; onCh
 }
 
 /**
- * A match page's questions: "Call it", each open one to answer, each closed or settled one as it stands; and a
- * way to play with friends. None for a game whose sport asks nothing.
+ * A match page's questions (usePredictions, kept by the page): "Call it", each open one to answer, each closed or
+ * settled one as it stands; and a way to play with friends. None for a game whose sport asks nothing. On a wide
+ * screen the page stands it in the side column, beside the game (Side.tsx).
  */
-export function Picks({ questions }: { questions: Prediction[] | undefined }) {
-  const { shown, replace } = usePredictions(questions)
+export function Picks({ shown, replace }: ReturnType<typeof usePredictions>) {
   if (!shown.length) return null
   return (
     <section className="section" aria-label="Call it">
@@ -154,31 +152,11 @@ export function CampaignCalls({ questions }: { questions: Prediction[] | undefin
           <PickCard q={q} onChange={replace} />
         </div>
       ))}
-      <div className="next-card" style={{ gap: 12 }}>
+      <div className="card card-pad stack friends-card" style={{ gap: 12 }}>
         <span className="dsp" style={{ fontSize: 30 }}>Play with your friends</span>
         <span className="small muted" style={{ fontWeight: 700 }}>Start a league, send the link to your group, and see who calls it best. Bragging rights only: no money, no prizes.</span>
-        <Link to="/me/leagues" className="btn on-ink primary" style={{ alignSelf: 'flex-start' }}>Start a league</Link>
+        <Link to="/me/leagues" className="btn primary" style={{ alignSelf: 'flex-start' }}>Start a league</Link>
       </div>
     </section>
-  )
-}
-
-/**
- * Today's calls (GET /api/me/predictions): the fan's picks settled lately, how they went; then a question to call
- * on each of their games coming up (the first still open of each: a series' later maps are on its page). Looked
- * at again as their games change. None while there's nothing to call.
- */
-export function TodayCalls({ refreshKey }: { refreshKey: unknown }) {
-  const [mine, setMine] = useState<MyPredictions | null>(null)
-  useEffect(() => { api.myPredictions().then(setMine).catch(() => setMine(null)) }, [refreshKey])
-  if (!mine) return null
-  const replace = (q: Prediction) => setMine((m) => m && { open: m.open.map((x) => (x.id === q.id ? q : x)), settled: m.settled.map((x) => (x.id === q.id ? q : x)) })
-  const open = byGame(mine.open).map((game) => game[0])
-  if (!open.length && !mine.settled.length) return null
-  return (
-    <Rail title="Call it" note={open.length ? `${open.length} to call` : 'Your calls'}>
-      {mine.settled.map((q) => <div key={q.id} className="pick-slot"><PickCard q={q} onChange={replace} /></div>)}
-      {open.map((q) => <PickCard key={q.id} q={q} onChange={replace} compact />)}
-    </Rail>
   )
 }

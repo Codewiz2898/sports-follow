@@ -6,6 +6,7 @@ import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
 import { PlayerRow, TeamRow } from './components/Blocks'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { SideColumn, SideSlot, useWide } from './components/Side'
 import { BellIcon, ChevronIcon, FeedIcon, HomeIcon, LiveIcon, SearchIcon, UserIcon } from './components/Icons'
 import { entries, SearchResults, useSearch, useSearchActions } from './components/Search'
 import { report, watchErrors } from './errors'
@@ -198,6 +199,9 @@ function NotFound() {
 
 function App() {
   const { pathname } = useLocation()
+  // A wide screen's side column (Side.tsx), and where in it a page stands its own part.
+  const wide = useWide()
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null)
   return (
     <div className="shell">
       <ScrollToTop />
@@ -211,33 +215,36 @@ function App() {
         <AccountNotice />
         {/* A page that fails to render shows a message, and the tab bar still works; another page tries again. */}
         <ErrorBoundary resetKey={pathname}>
-          <Routes>
-            <Route path="/" element={<TodayPage />} />
-            <Route path="/welcome" element={<WelcomePage />} />
-            <Route path="/following" element={<FollowingPage />} />
-            <Route path="/me/feed" element={<FeedPage />} />
-            <Route path="/live" element={<LivePage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/player/:id" element={<PlayerPage />} />
-            <Route path="/match/:source/:game" element={<MatchPage />} />
-            {/* Two words or more, so the Android app (which opens one-word addresses) leaves them to the browser. */}
-            <Route path="/competition/:name/clips" element={<ClipsPage />} />
-            <Route path="/clip/:id" element={<ClipPage />} />
-            <Route path="/team/:id" element={<TeamPage />} />
-            <Route path="/athlete/:system/:id" element={<AthletePage />} />
-            <Route path="/notifications" element={<NotificationsPage />} />
-            <Route path="/credits" element={<CreditsPage />} />
-            <Route path="/account" element={<AccountPage />} />
-            <Route path="/privacy" element={<PrivacyPage />} />
-            <Route path="/me/leagues" element={<LeaguesPage />} />
-            <Route path="/league/:code" element={<FriendLeaguePage />} />
-            <Route path="/j/:code" element={<InvitePage />} />
-            {/* A campaign page (stann.in/gukesh): any other one-word address; the server says if it's one. */}
-            <Route path="/:slug" element={<CampaignPage notFound={<NotFound />} />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <SideSlot.Provider value={wide ? slot : null}>
+            <Routes>
+              <Route path="/" element={<TodayPage />} />
+              <Route path="/welcome" element={<WelcomePage />} />
+              <Route path="/following" element={<FollowingPage />} />
+              <Route path="/me/feed" element={<FeedPage />} />
+              <Route path="/live" element={<LivePage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/player/:id" element={<PlayerPage />} />
+              <Route path="/match/:source/:game" element={<MatchPage />} />
+              {/* Two words or more, so the Android app (which opens one-word addresses) leaves them to the browser. */}
+              <Route path="/competition/:name/clips" element={<ClipsPage />} />
+              <Route path="/clip/:id" element={<ClipPage />} />
+              <Route path="/team/:id" element={<TeamPage />} />
+              <Route path="/athlete/:system/:id" element={<AthletePage />} />
+              <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/credits" element={<CreditsPage />} />
+              <Route path="/account" element={<AccountPage />} />
+              <Route path="/privacy" element={<PrivacyPage />} />
+              <Route path="/me/leagues" element={<LeaguesPage />} />
+              <Route path="/league/:code" element={<FriendLeaguePage />} />
+              <Route path="/j/:code" element={<InvitePage />} />
+              {/* A campaign page (stann.in/gukesh): any other one-word address; the server says if it's one. */}
+              <Route path="/:slug" element={<CampaignPage notFound={<NotFound />} />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </SideSlot.Provider>
         </ErrorBoundary>
       </main>
+      {wide && <SideColumn slot={setSlot} />}
       <nav className="tabbar" aria-label="Main">
         {/* The Following and Live pages are part of Today here (Today opens them): Today stays lit there. */}
         <NavLink to="/" end className={({ isActive }) => (isActive || pathname === '/following' || pathname === '/live' ? 'active' : '')}><HomeIcon width={20} height={20} />Today</NavLink>

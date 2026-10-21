@@ -1,14 +1,14 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useActivity } from '../activity'
-import type { FollowedMatch, League } from '../api'
+import type { FollowedMatch, League, MyPredictions } from '../api'
 import { APP_NAME } from '../app'
 import { useNow } from '../clock'
 import { BoardLink, ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { FromYourPlayers } from '../components/Feed'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
-import { TodayCalls } from '../components/Picks'
+import { useCalls } from '../components/Calls'
 import { PlayersStrip } from '../components/PlayersStrip'
 import { Rail } from '../components/Rail'
 import { AlsoLive, MoreLive } from '../components/LiveNow'
@@ -56,7 +56,7 @@ function SaveNudge() {
  * the app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
  * taking turns. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
-function BigGames({ league, now }: { league: League | null; now: number }) {
+function BigGames({ league, now, calls }: { league: League | null; now: number; calls: MyPredictions | null }) {
   if (!league) return null
   const done = league.results.games
   const coming = leagueComingUp(league.coming.games, new Set(), now)
@@ -65,14 +65,14 @@ function BigGames({ league, now }: { league: League | null; now: number }) {
       <ErrorBoundary fallback={<BlockError />} resetKey={league}>
         {done.length > 0 && (
           <Rail title="Big results" note={`${resultsDay(league.results.day)} · ${done.length}`} all="Every big result" max={TAIL}>
-            {done.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />)}
+            {done.map((g) => <LeagueResultCard key={g.key} game={g} now={now} calls={calls} />)}
           </Rail>
         )}
       </ErrorBoundary>
       <ErrorBoundary fallback={<BlockError />} resetKey={league}>
         {coming.length > 0 && (
           <Rail title="Big games coming up" note={`Next ${AHEAD_DAYS} days · ${coming.length}`} all={`Every big game in the next ${AHEAD_DAYS} days`} max={TAIL}>
-            {coming.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />)}
+            {coming.map((g) => <LeagueComingCard key={g.key} game={g} now={now} calls={calls} />)}
           </Rail>
         )}
       </ErrorBoundary>
@@ -131,6 +131,8 @@ export function TodayPage() {
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
+  // The fan's calls (predictions.py), on their games' cards: "Call it" opens a game's page, where they call it.
+  const calls = useCalls(theirKey)
   const railKey = useMemo(() => [cards, teams, league], [cards, teams, league])  // a rail that failed tries again on any
   const now = useNow()
   const today = new Date(now).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
@@ -157,7 +159,7 @@ export function TodayPage() {
       <>
         {header}
         <AlsoLive mine={[]} />
-        <BigGames league={league} now={now} />
+        <BigGames league={league} now={now} calls={calls} />
         {/* Who's out and who's back among the best-known players. */}
         <ErrorBoundary fallback={<BlockError />} resetKey={week}>
           <Wire rows={week.wire} now={now} />
@@ -224,18 +226,13 @@ export function TodayPage() {
           follow list has answered, so a game of the fan's is never counted as another. */}
       {(loaded || failed) && <MoreLive mine={games.flatMap(([, group]) => group)} />}
 
-      {/* Calling their games before they start (sports_follow/predictions.py), and how their calls went. */}
-      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
-        <TodayCalls refreshKey={theirKey} />
-      </ErrorBoundary>
-
       <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
         {resultCount > 0 && (
           <Rail title={done ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
             all={done ? `Every result ${done.day ? `on ${done.day}` : 'since yesterday'}${bigDone.length ? ', and the big ones' : ''}` : 'Every big result'} max={(done?.games.length ?? 0) + TAIL}>
             {/* With nothing live, the biggest result leads the page. */}
-            {done?.games.map((g, i) => <ResultCard key={g.key} game={g} hero={i === 0 && !games.length} now={now} />)}
-            {bigDone.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />)}
+            {done?.games.map((g, i) => <ResultCard key={g.key} game={g} hero={i === 0 && !games.length} now={now} calls={calls} />)}
+            {bigDone.map((g) => <LeagueResultCard key={g.key} game={g} now={now} calls={calls} />)}
           </Rail>
         )}
       </ErrorBoundary>
@@ -251,8 +248,8 @@ export function TodayPage() {
         {comingCount > 0 && (
           <Rail title={coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
             all={`Every ${coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${coming.length && bigComing.length ? ', and the big ones' : ''}`} max={coming.length + TAIL}>
-            {coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} />)}
-            {bigComing.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />)}
+            {coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} calls={calls} />)}
+            {bigComing.map((g) => <LeagueComingCard key={g.key} game={g} now={now} calls={calls} />)}
           </Rail>
         )}
       </ErrorBoundary>

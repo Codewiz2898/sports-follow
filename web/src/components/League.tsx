@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type League, type LeagueGame } from '../api'
+import { api, type League, type LeagueGame, type MyPredictions } from '../api'
 import { dayLabel, shortWhen } from '../format'
 import { wordSize } from '../lines'
+import { callNote } from '../predictions'
+import { sharedLook, useShared } from '../shared'
 import { leagueAbout, leagueComing } from '../today'
 import { Backdrop, sportKey } from '../sports'
+import { CallTag } from './Calls'
 
 const SOON = 5_000  // when the server says a read is under way, the next look
 const EVERY = 15 * 60_000  // otherwise, while the page is in view: results come in through the day
@@ -12,43 +15,21 @@ const EVERY = 15 * 60_000  // otherwise, while the page is in view: results come
 /**
  * The big results and big games coming up in the competitions the sources cover, whoever follows them (GET
  * /api/league, league.py): the same for every fan. Looked at once, again in a moment while the server says
- * a source is being read, and every EVERY while the page is in view. Null until the first answer.
+ * a source is being read, and every EVERY while the page is in view, one look for every part of the page
+ * showing it (shared.ts). Null until the first answer.
  *
  * `theirs` says which events the fan's players are in (theirEvents, as a key), once their games have
  * loaded: when it changes (a player just followed, from Today), it looks again past any kept copy, so a
  * league game that's now theirs, whose event was only just made, shows once, as theirs.
  */
+const LEAGUE = sharedLook((fresh) => api.league(fresh), EVERY, SOON, 'stale')
+
 export function useLeague(theirs: string | null = null): League | null {
-  const [league, setLeague] = useState<League | null>(null)
-  const again = useRef<((tries: number, fresh?: boolean) => void) | null>(null)
-  useEffect(() => {
-    let current = true
-    let timer: number | undefined
-    let latest = 0  // the newest look: an older one's answer starts no second loop
-    let at = 0
-    const look = (tries: number, fresh = false) => {
-      window.clearTimeout(timer)
-      if (document.hidden) return  // nobody's looking; showing the tab again looks, if it's been a while
-      const mine = ++latest
-      at = Date.now()
-      api.league(fresh)
-        .then((r) => {
-          if (!current || mine !== latest) return
-          setLeague(r)
-          timer = window.setTimeout(() => look(r.refreshing ? tries + 1 : 0), r.refreshing && tries < 3 ? SOON : EVERY)
-        })
-        .catch(() => { if (current && mine === latest) timer = window.setTimeout(() => look(tries), EVERY) })
-    }
-    const shown = () => { if (!document.hidden && Date.now() - at > EVERY) look(0) }
-    document.addEventListener('visibilitychange', shown)
-    again.current = look
-    look(0)
-    return () => { current = false; again.current = null; window.clearTimeout(timer); document.removeEventListener('visibilitychange', shown) }
-  }, [])
+  const league = useShared(LEAGUE).value
   const known = useRef<string | null>(null)
   useEffect(() => {
     if (theirs == null) return
-    if (known.current != null && known.current !== theirs) again.current?.(0, true)
+    if (known.current != null && known.current !== theirs) LEAGUE.again(true)
     known.current = theirs
   }, [theirs])
   return league
@@ -67,7 +48,7 @@ function LeagueCard({ game, className, label, children }: { game: LeagueGame; cl
  * pass for theirs. Its competition, when, its sport's big word for it (the score, the margin, a lobby's
  * winner), who played, and what made it big. It opens the game's match page: what happened in it.
  */
-export function LeagueResultCard({ game, now }: { game: LeagueGame; now: number }) {
+export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame; now: number; calls?: MyPredictions | null }) {
   const key = sportKey(game.sport)
   const word = game.word || game.title
   return (
@@ -78,6 +59,7 @@ export function LeagueResultCard({ game, now }: { game: LeagueGame; now: number 
       <span className="stack" style={{ gap: 2 }}>
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
         <span className="line soft">{leagueAbout(game)}</span>
+        <CallTag note={callNote(calls, game.match, now)} />
       </span>
     </LeagueCard>
   )
@@ -85,7 +67,7 @@ export function LeagueResultCard({ game, now }: { game: LeagueGame; now: number 
 
 /** A big game to come on Today, outlined: the countdown within a day, else the day, big; then the game. It
  * opens the game's match page: its line-ups as they come, and both sides' players to follow. */
-export function LeagueComingCard({ game, now }: { game: LeagueGame; now: number }) {
+export function LeagueComingCard({ game, now, calls = null }: { game: LeagueGame; now: number; calls?: MyPredictions | null }) {
   const key = sportKey(game.sport)
   const { big, when } = leagueComing(game, now)
   return (
@@ -96,6 +78,7 @@ export function LeagueComingCard({ game, now }: { game: LeagueGame; now: number 
       <span className="stack" style={{ gap: 2 }}>
         <span className="line strong">{game.title}</span>
         <span className="line soft">{leagueAbout(game, when)}</span>
+        <CallTag note={callNote(calls, game.match, now)} />
       </span>
     </LeagueCard>
   )

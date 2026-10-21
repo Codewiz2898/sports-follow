@@ -1,12 +1,14 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
-import type { Card, FollowedTeam, LiveStatus, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
+import type { Card, FollowedTeam, LiveStatus, MyPredictions, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
 import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { outlets } from '../feed'
+import { callNote } from '../predictions'
+import { CallTag } from './Calls'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -94,7 +96,7 @@ export type { GameResult }
  * The hero, the first card on a day with nothing live, is bigger and has the first player's numbers. It opens
  * the game's match page, what happened in it, where a source has the game; else the first player's page.
  */
-export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boolean; now: number }) {
+export function ResultCard({ game, hero, now, calls = null }: { game: GameResult; hero?: boolean; now: number; calls?: MyPredictions | null }) {
   const key = sportKey(game.players[0].sport)
   const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, sportDrawn(game.players[0].sport))
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
@@ -121,6 +123,7 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
         )}
         {!hero && match !== word && <span className="line">{match}</span>}
         {lines.map((l) => <span key={l} className="line strong">{l}</span>)}
+        <CallTag note={callNote(calls, page, now)} />
       </span>
       {hero && (
         <span className="hero-foot">
@@ -138,7 +141,7 @@ export function ResultCard({ game, hero, now }: { game: GameResult; hero?: boole
  * it, or saying they follow the game itself. It opens the game's match page (the line-ups as they come, both
  * sides' players), else the first player's page.
  */
-export function ComingCard({ event, players, seed, sport, teams = [] }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[] }) {
+export function ComingCard({ event, players, seed, sport, teams = [], calls = null }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[]; calls?: MyPredictions | null }) {
   const now = useNow()
   const key = sportKey(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
@@ -150,6 +153,7 @@ export function ComingCard({ event, players, seed, sport, teams = [] }: { event:
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
         <span className="player-chip">{[...teams, ...players.map((c) => shortName(c.player.name))].join(' · ') || 'Following this game'}</span>
+        <CallTag note={callNote(calls, event.match, now)} />
       </span>
     </Link>
   )

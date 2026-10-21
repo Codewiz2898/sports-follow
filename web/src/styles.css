@@ -80,9 +80,38 @@ p { margin: 0; }
     padding: 28px 20px; background: var(--raised);
   }
   :root { --page-x: 40px; }
-  .main { max-width: 1040px; padding: 32px var(--page-x) 56px; margin: 0; }
+  .main { max-width: none; padding: 32px var(--page-x) 56px; margin: 0; }  /* the page runs to the window's edge, or the side column's */
   .tabbar { display: none; }
 }
+
+/* A wide screen: a column on the right, beside every page (Side.tsx, from the same width): the page's own part at its
+   top (a match page's Call it), then the scores on now and the games starting soon. It stays as the page scrolls. */
+@media (min-width: 1400px) {
+  .shell { grid-template-columns: 300px minmax(0, 1fr) 372px; }
+  .side-col {
+    display: flex; flex-direction: column; gap: 24px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    padding: 32px 28px 40px 12px; scrollbar-width: thin;  /* 12px: a rail that runs under it stops short of its cards */
+  }
+}
+.side-slot { display: flex; flex-direction: column; gap: 16px; }
+.side-slot:empty { display: none; }
+.side-head-title { font-size: 26px; }
+.side-more { display: inline-flex; align-items: center; gap: 2px; }
+.side-more:hover { color: var(--text); }
+.side-list { list-style: none; margin: 0; padding: 2px 14px; border-radius: var(--radius-card); background: var(--surface); }
+.side-list > li + li { border-top: 1px solid var(--line); }
+.side-row { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 9px 0; }
+a.side-row:hover .side-title-line { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.side-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--sport); flex-shrink: 0; }
+.side-what { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.side-title-line, .side-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-title-line { font-weight: 800; font-size: 14px; line-height: 1.3; }
+.side-line { font-size: 12px; font-weight: 700; color: var(--muted); }
+.side-row .call-tag { flex-shrink: 0; }
+/* Call it in the column: the cards a size down, beside the game. */
+.side-col .pick-card { padding: 14px 16px; }
+.side-col .pick-q { font-size: 26px; }
+.side-col .pick-option { min-height: 52px; }
 
 /* The logo: the fan badge (the app icon's mark) and the name in Fredoka, in lower case like the badge's "s". */
 .brand { align-self: flex-start; display: flex; align-items: center; gap: 10px; font-family: var(--logo); font-weight: 600; font-size: 30px; line-height: 1; letter-spacing: -0.01em; text-transform: lowercase; }
@@ -751,7 +780,6 @@ div.result-main { cursor: default; }
    split is a bar: theirs in the colour, the rest in greys. Today's are ink cards, as games to come are. */
 .pick-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: var(--radius-card); background: var(--surface); }
 .pick-q { font-size: 34px; }
-.pick-q-small { font-size: 22px; }
 .pick-options { display: grid; gap: 8px; }
 .pick-option { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 64px; padding: 8px 6px; border: 0; border-radius: 16px; background: var(--bg); box-shadow: inset 0 0 0 2px var(--line); color: var(--text); text-align: center; cursor: pointer; }
 .pick-option:hover:not(:disabled) { box-shadow: inset 0 0 0 2px var(--text); }
@@ -763,14 +791,12 @@ div.result-main { cursor: default; }
 .split-seg { flex-basis: 0; border-radius: 999px; background: #8e8f93; }
 .split-seg.even { background: #c9c9c2; }
 .split-seg.mine { background: var(--sport); }
-.split.on-ink .split-seg { background: #55575c; }
-.split.on-ink .split-seg.mine { background: var(--sport-on-ink); }
-.pick-card.compact { width: 264px; padding: 14px 16px; background: var(--text); color: var(--bg); --focus: var(--bg); }
-.pick-card.compact .muted { color: #a9abb0; }
-.pick-card.compact .pick-option { min-height: 44px; background: transparent; color: var(--bg); box-shadow: inset 0 0 0 2px #8e8f93; }
-.pick-card.compact .pick-option[aria-pressed='true'] { background: var(--sport); color: var(--on-sport); box-shadow: none; }
-.pick-card.compact .pick-option:disabled:not([aria-pressed='true']) { color: #a9abb0; }
-.pick-card.compact .pick-label { font-size: 15px; }
+/* A game card's word on the fan's calls (Calls.tsx): "Call it" in the sport's colour; their pick, outlined in the
+   card's ink; a right call filled, in the block's own ink on a result's sport colour. */
+.call-tag { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; max-width: 100%; height: 24px; padding: 0 10px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 11px; font-weight: 800; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-tag.said { background: transparent; color: inherit; box-shadow: inset 0 0 0 2px currentColor; }
+.result-card .call-tag.right { background: var(--on-sport); color: var(--sport); }
+.friends-card { background: transparent; box-shadow: inset 0 0 0 2px var(--text); }
 .pick-card.settled .tag { align-self: flex-start; }
 .pick-card.settled.right { background: var(--sport); color: var(--on-sport); --focus: var(--on-sport); }
 .pick-head { font-size: 30px; }

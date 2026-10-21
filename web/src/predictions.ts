@@ -1,8 +1,8 @@
 // Calling games (sports_follow/predictions.py): what a question's card says, in the app's words. Pure, so the
-// match page, Today, a league's page and the campaign page say the same.
+// match page, Today's cards, a league's page and the campaign page say the same.
 
 import { APP_NAME } from './app'
-import type { Prediction } from './types'
+import type { MyPredictions, Prediction } from './types'
 
 /** Whether a question still takes picks: open, and its start not come (the server refuses one after that anyway). */
 export function isOpen(q: Prediction, now: number): boolean {
@@ -64,9 +64,25 @@ export function shareText(q: Prediction): string {
   return `${q.title} ${q.game}. Call it on ${APP_NAME}:`
 }
 
-/** A game's questions, as one group per game for Today: in the server's order, their game's first. */
-export function byGame(questions: Prediction[]): Prediction[][] {
-  const games = new Map<string, Prediction[]>()
-  for (const q of questions) games.set(q.match, [...(games.get(q.match) ?? []), q])
-  return [...games.values()]
+/** What a game's card says of the fan's calls on it: how they went, once one's settled; else that there's one to make;
+ * else their pick. */
+export type CallNote = { kind: 'call'; left: number } | { kind: 'said'; label: string } | { kind: 'right'; points: number } | { kind: 'wrong'; label: string }
+
+/**
+ * A game's note from the fan's calls (GET /api/me/predictions), by its address (`match`, after /match/): the
+ * points of every right call once its questions settle ("You called it · +38"), or what they said when none was
+ * right; before it starts, the questions still open that they haven't called, else their pick. None for a game
+ * they've nothing to call on, or whose calls were voided.
+ */
+export function callNote(calls: MyPredictions | null, match: string | null | undefined, now: number): CallNote | null {
+  if (!calls || !match) return null
+  const settled = calls.settled.filter((q) => q.match === match && q.status === 'settled' && q.mine)
+  const right = settled.filter((q) => q.mine === q.answer)
+  if (right.length) return { kind: 'right', points: right.reduce((n, q) => n + (q.points ?? 0), 0) }
+  if (settled.length) return { kind: 'wrong', label: labelOf(settled[0], settled[0].mine) }
+  const open = calls.open.filter((q) => q.match === match && isOpen(q, now))
+  const left = open.filter((q) => !q.mine).length
+  if (left) return { kind: 'call', left }
+  const picked = open.find((q) => q.mine)
+  return picked ? { kind: 'said', label: labelOf(picked, picked.mine) } : null
 }
