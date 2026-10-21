@@ -150,6 +150,22 @@ export function sourceLine(item: FeedItem, now: number, withLength = false): str
   return [item.source, length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
 }
 
+/** The channel a video's from or the outlet a story's from, as the card's header names it (BHA-358): a post's
+ * source is a person, named in its own line, so none. */
+export function channelOf(item: FeedItem): string | null {
+  return item.kind !== 'post' && item.source ? item.source : null
+}
+
+/** sourceLine without the channel, for a card whose header names it: "81K views · 2d", or with the video's length
+ * first ("4:12 · 81K views · 2d"). */
+export function statsLine(item: FeedItem, now: number, withLength = false): string {
+  const length = withLength ? duration(item.video?.duration) : ''
+  return [length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
+}
+
+/** Whether a video is taller than it's wide (a Short): framed and played upright. */
+export const upright = (item: FeedItem): boolean => item.kind === 'video' && item.video?.upright === true
+
 /** What a card's link at the bottom says: a story "Read at <outlet>", a post "Open on <platform>", a video "Watch at <channel>". */
 export function openLabel(item: FeedItem): string {
   if (item.kind === 'post') return `Open on ${item.post?.platform ?? 'the post'}`

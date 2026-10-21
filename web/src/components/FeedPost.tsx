@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import type { FeedCircle, FeedItem, FeedWho, Photo } from '../api'
-import { duration, fromLine, openLabel, views } from '../feed'
+import { duration, fromLine, openLabel, upright, views } from '../feed'
 import { initials, safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
@@ -60,7 +60,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
   let caption = null
   if (item.kind === 'video' && id) {
     media = (
-      <div className="post-media video">
+      <div className={upright(item) ? 'post-media video upright' : 'post-media video'}>
         {playing ? (
           <iframe src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1`} title={item.title}
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />

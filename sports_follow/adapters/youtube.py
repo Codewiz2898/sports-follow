@@ -6,7 +6,9 @@ answers 404 or 500 for a while, for no reason it gives. When it doesn't answer a
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
 (how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
 videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
-maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored. A big moment of a followed player is searched for (search.list:
+maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored, and its
+shape (player, asked with maxWidth: the embedded player's size), which tells an upright video (a Short) from a wide
+one. A big moment of a followed player is searched for (search.list:
 searches.py), from any channel, twice: the curator keeps those searches to a cap in any 24 hours
 (SPORTS_FOLLOW_FEED_MOMENT_SEARCHES). A followed player with nothing to watch this week is searched for once a day,
 each one's six months' most watched once a week, and their most watched ever once a month (sweeps.py), under caps of
@@ -29,6 +31,7 @@ again, and drops those gone).
 
 from __future__ import annotations
 
+import html
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -69,7 +72,10 @@ VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
 _NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015", "media": "http://search.yahoo.com/mrss/"}
 # What videos.list is asked of each video: 1 unit a request whichever parts it names.
-PARTS = "snippet,contentDetails,statistics,status,paidProductPlacementDetails"
+PARTS = "snippet,contentDetails,statistics,status,paidProductPlacementDetails,player"
+# Asked with the parts: the player part then gives the embedded player's size at the video's own shape (embedWidth,
+# embedHeight), this wide for a wide video and as tall as its shape needs for an upright one.
+PLAYER_WIDTH = "1280"
 _DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?")
 
 PROVIDER = Provider(
@@ -209,7 +215,8 @@ def parse_playlist(data: dict[str, Any]) -> list[Upload]:
 
 
 def parse_search(data: dict[str, Any]) -> list[Upload]:
-    """search.list's items as uploads, in the order it ranked them; its descriptions are cut short."""
+    """search.list's items as uploads, in the order it ranked them; its descriptions are cut short. Unlike every
+    other part's, its titles come HTML-escaped ("Mbappe &amp; Bijan"): they're read as written."""
     out = []
     for item in data.get("items") or []:
         video_id = str((item.get("id") or {}).get("videoId") or "")
@@ -220,9 +227,9 @@ def parse_search(data: dict[str, Any]) -> list[Upload]:
         out.append(Upload(
             video_id=video_id,
             channel_id=str(snippet.get("channelId") or ""),
-            channel=str(snippet.get("channelTitle") or ""),
-            title=str(snippet.get("title") or ""),
-            description=str(snippet.get("description") or ""),
+            channel=html.unescape(str(snippet.get("channelTitle") or "")),
+            title=html.unescape(str(snippet.get("title") or "")),
+            description=html.unescape(str(snippet.get("description") or "")),
             url=f"https://www.youtube.com/watch?v={video_id}",
             published=_time(snippet.get("publishedAt")),
             thumbnail=next((thumbs[k].get("url") for k in ("high", "medium", "default") if isinstance(thumbs.get(k), dict)), None),
@@ -248,6 +255,12 @@ def _count(value: Any) -> int | None:
         return None
 
 
+def _size(player: dict[str, Any]) -> dict[str, int] | None:
+    """The embedded player's size at the video's shape, as the player part gives it when asked with maxWidth."""
+    width, height = _count(player.get("embedWidth")), _count(player.get("embedHeight"))
+    return {"width": width, "height": height} if width and height and width > 0 and height > 0 else None
+
+
 def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
     """videos.list's items as what the feed reads of each, by id."""
     out = {}
@@ -255,7 +268,8 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
         video_id = str(item.get("id") or "")
         if not VIDEO_ID.fullmatch(video_id):
             continue
-        details, stats, status, snippet, placement = (item.get(k) or {} for k in ("contentDetails", "statistics", "status", "snippet", "paidProductPlacementDetails"))
+        details, stats, status, snippet, placement, player = (
+            item.get(k) or {} for k in ("contentDetails", "statistics", "status", "snippet", "paidProductPlacementDetails", "player"))
         region = details.get("regionRestriction") or {}
         allowed = region.get("allowed")
         out[video_id] = VideoFacts(
@@ -275,7 +289,7 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
                 "status": status,
                 "snippet": {k: snippet[k] for k in ("liveBroadcastContent", "categoryId", "defaultAudioLanguage", "tags") if k in snippet}
                 | {"thumbnails": sorted(k for k, v in (snippet.get("thumbnails") or {}).items() if isinstance(v, dict))},  # the sizes it has (picture)
-            },
+            } | ({"player": size} if (size := _size(player)) else {}),  # its shape (upright), not the player's own HTML
         )
     return out
 
@@ -309,6 +323,13 @@ class YouTube(VideoSource):
         name = "maxresdefault" if "maxres" in sizes else "sddefault" if "standard" in sizes else "hqdefault"
         return f"https://i.ytimg.com/vi/{video_id}/{name}.jpg"
 
+    def upright(self, details: dict[str, Any] | None = None) -> bool:
+        """Taller than it's wide (a Short), by the player's size videos.list gave; a video last read before that was
+        asked is wide until it's read again."""
+        size = (details or {}).get("player") or {}
+        width, height = _count(size.get("width")), _count(size.get("height"))
+        return bool(width and height and height > width)
+
     @classmethod
     def available(cls) -> bool:
         return bool(key())
@@ -333,7 +354,7 @@ class YouTube(VideoSource):
         out: dict[str, VideoFacts] = {}
         for i in range(0, len(ids), self.batch):
             part = ids[i:i + self.batch]
-            out |= parse_videos(_get("videos", {"part": PARTS, "id": ",".join(part), "maxResults": str(self.batch)}, max_age))
+            out |= parse_videos(_get("videos", {"part": PARTS, "id": ",".join(part), "maxResults": str(self.batch), "maxWidth": PLAYER_WIDTH}, max_age))
         return out
 
     def search(self, query: str, after: datetime | None, country: str) -> list[Upload]:

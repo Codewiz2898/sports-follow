@@ -58,6 +58,9 @@ SPORTS_YAARI = "UCjFw-0Vdfy2KW78NClGECXw"  # a small channel the list left out
     ("Wow?! What a finish", "ICC", (), "Wow? What a finish"),  # a question stays one
     # A kept phrase only whole: "Test" is cricket's, "New" alone isn't a name.
     ("MI VS CSK: ROHIT SHARMA ON THE NEW BALL IN THE TEST", "Star Sports", ("Rohit Sharma",), "MI vs CSK: Rohit Sharma on the new ball in the Test"),
+    # A search's title stored as it came, HTML-escaped (before BHA-358): read as written.
+    ("Kylian Mbappe &amp; Bijan Robinson SWAP sports!", "NFL", (), "Kylian Mbappe & Bijan Robinson SWAP sports!"),
+    ("Gukesh&#39;s win &quot;for India&quot;", "FIDE", (), "Gukesh's win \"for India\""),
 ])  # fmt: skip
 def test_a_title_is_tidied_as_its_served(title, channel, keep, shown):
     assert titles.tidy(title, channel, CRICKET.title_words, keep) == shown

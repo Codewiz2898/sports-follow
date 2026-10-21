@@ -481,7 +481,11 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 sizes = (facts[row.external_id].raw.get("snippet") or {}).get("thumbnails")
                 if sizes is not None and (details.get("snippet") or {}).get("thumbnails") != sizes:  # the picture's sizes (VideoSource.picture)
                     snippet = {**(details.get("snippet") or {}), "thumbnails": sizes}
-                    row.candidate = {**(row.candidate or {}), "details": {**details, "snippet": snippet}}
+                    details = {**details, "snippet": snippet}
+                    row.candidate = {**(row.candidate or {}), "details": details}
+                shape = facts[row.external_id].raw.get("player")
+                if shape is not None and details.get("player") != shape:  # its shape (VideoSource.upright), for a video kept before it was asked
+                    row.candidate = {**(row.candidate or {}), "details": {**details, "player": shape}}
                 paid = facts[row.external_id].paid
                 if (row.candidate or {}).get("paid") is not paid:
                     row.candidate = {**(row.candidate or {}), "paid": paid}
