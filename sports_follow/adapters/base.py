@@ -496,7 +496,8 @@ class VideoSource:
         return self.provider.budgets
 
     def search_budgets(self) -> tuple[Budget, ...]:
-        """What a search() spends (search_cost of each): all its budgets, unless the source counts searches apart."""
+        """What a search() spends (search_cost of each): all its budgets, unless the source counts searches apart. The
+        gates (searches.room, sweeps._room) take a search's reads of what it found to spend the other budgets."""
         return self.budgets()
 
     def uploads(self, channel_id: str) -> list[Upload]:

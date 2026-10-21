@@ -153,11 +153,11 @@ def reset_in(now: datetime | None = None) -> float:
     return (midnight - pacific).total_seconds()
 
 
-def _fetch(path: str, params: dict[str, str], spends: budget.Budget = BUDGET) -> dict[str, Any]:
-    """A Data API request, counted as 1 of the quota it spends (BUDGET, or SEARCH_BUDGET for search.list)."""
+def _fetch(path: str, params: dict[str, str], spends: budget.Budget = BUDGET, cost: int = 1) -> dict[str, Any]:
+    """A Data API request, counted as cost of the quota it spends (BUDGET, or SEARCH_BUDGET for search.list)."""
     if not key():
         raise AdapterError("no YouTube key (~/.config/sports-follow/youtube-key)")
-    budget.take(spends)
+    budget.take(spends, cost=cost)
     try:
         # The key in a header, not the query string: it stays out of every URL a log line or a span may show.
         res = _client.get(f"{API}/{path}", params=params, headers={"x-goog-api-key": key() or ""})
@@ -334,4 +334,4 @@ class YouTube(VideoSource):
         }  # fmt: skip
         if after is not None:
             params["publishedAfter"] = after.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return parse_search(_fetch("search", params, spends=SEARCH_BUDGET))
+        return parse_search(_fetch("search", params, spends=SEARCH_BUDGET, cost=SEARCH_COST))

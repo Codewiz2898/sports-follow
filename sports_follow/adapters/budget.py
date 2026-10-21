@@ -263,7 +263,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     slow down, what it says is left is down to the margin (or, for a background lane, the reserve), a
     window's allowance less the same is spent, or so is the fans' share of a scarce source. A refused
     request isn't counted. cost: what the request spends of each window, where a source prices its calls apart
-    (a search worth a hundred reads)."""
+    (a search worth a hundred reads, where a source counts them in one allowance)."""
     budget = effective(budget)
     lane_name = lane_name or lane()
     now = time.time()

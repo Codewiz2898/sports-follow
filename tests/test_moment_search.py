@@ -149,12 +149,23 @@ def test_a_costly_request_is_refused_whole_and_not_counted():
     assert budget.room(tight) == (0, 1000)
 
 
-def test_moment_searches_run_until_the_days_searches_are_spent_whatever_is_left_of_the_units(fake):
-    budget.take(youtube.BUDGET, cost=youtube.PER_DAY - youtube.MARGIN)  # the 10,000 units spent: searches don't spend them
+def test_moment_searches_run_until_the_days_searches_are_spent(fake):
+    budget.take(youtube.BUDGET, cost=youtube.PER_DAY - youtube.MARGIN - 1)  # 1 unit left: room to read what a search finds
     assert searches.room(SOURCE)
     budget.take(youtube.SEARCH_BUDGET, cost=94)  # 1 of the 95 spendable left
     assert searches.room(SOURCE)
     budget.take(youtube.SEARCH_BUDGET)
+    assert not searches.room(SOURCE)
+
+
+def test_no_search_runs_while_what_it_finds_cant_be_read(fake):
+    """A search spends none of the 10,000 units, but reading what it finds does: with those spent, or YouTube saying
+    slow down, a search would be spent for nothing."""
+    budget.observe(youtube.BUDGET, "", 0, 3600)
+    assert budget.room(youtube.SEARCH_BUDGET)[0] > 0 and not searches.room(SOURCE)
+    budget.observe(youtube.BUDGET, "", 5000, 3600)
+    assert searches.room(SOURCE)
+    budget.pause(youtube.BUDGET)
     assert not searches.room(SOURCE)
 
 

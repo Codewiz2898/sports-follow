@@ -96,8 +96,8 @@ def test_spend_is_counted_by_lane():
 PACIFIC = "America/Los_Angeles"
 
 
-def _at(*when: int) -> float:
-    return datetime(*when, tzinfo=timezone.utc).timestamp()  # pyright: ignore[reportArgumentType]
+def _at(year: int, month: int, day: int, hour: int, minute: int) -> float:
+    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc).timestamp()
 
 
 def test_a_zoned_day_starts_at_the_zones_midnight_not_utcs():

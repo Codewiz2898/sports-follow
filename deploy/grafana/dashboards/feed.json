@@ -1390,7 +1390,7 @@
     },
     {
       "type": "stat",
-      "title": "Units spent",
+      "title": "Search quota spent",
       "description": "What the searches spent of their own quota: YouTube's 100 searches a day, 1 a search (none of the 10,000 units).",
       "datasource": {
         "type": "prometheus",
@@ -1454,8 +1454,8 @@
     },
     {
       "type": "stat",
-      "title": "Units per served video",
-      "description": "Units spent on searches over the range, for each video they found that was served.",
+      "title": "Search quota per served video",
+      "description": "What searches spent of their quota over the range, for each video they found that was served. 1 a search since BHA-342 (22 Oct 2026); 100 before.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prom}"

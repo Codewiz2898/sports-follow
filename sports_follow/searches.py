@@ -105,12 +105,13 @@ def queue(now: datetime | None = None) -> dict[str, int]:
 
 def room(source: VideoSource, keep: int = 0) -> bool:
     """Whether what a search spends (VideoSource.search_budgets) has room for one now, with keep left over (a sweep's:
-    what moment searches may still spend, sweeps._room)."""
+    what moment searches may still spend, sweeps._room), and the source's other budgets room to read what it finds
+    (budget.spare): a search whose finds can't be read is spent for nothing, and its run counted."""
     for b in source.search_budgets():
         left = budget.room(b)
         if left is not None and left[0] - (source.search_cost or 0) < keep:
             return False
-    return True
+    return all(budget.spare(b, lane_name="feed") for b in source.budgets() if b not in source.search_budgets())
 
 
 def spent(since: datetime) -> int:
