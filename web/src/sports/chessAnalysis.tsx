@@ -9,23 +9,11 @@ import type { LiveStatus } from '../api'
 import { BackIcon, ChevronIcon, CloseIcon } from '../components/Icons'
 import { EvalBar } from './chess'
 import { ENGINE_LICENCE, ENGINE_SOURCE, startEngine, type Engine } from './chessEngine'
-import { PIECES, position, standardCastling, type ChessEval, type ChessState } from './facts/chess'
-import { checked, ended, fenAt, lineFrom, lineOfGame, lookFromWhite, numbered, PIECE_NAMES, playable, played, samePosition, sanLine, stepped, targets, type ChessLine } from './facts/chessLine'
-
-/** Where an analysis starts: the game's position when the fan opened it (`base`, with the move that led there),
- * or a finished game's moves (SAN, from its start) at a ply of theirs. `asked` changes with each new start, the
- * board open or not; `focus` puts the keyboard on the board (opened by its button, not from the moves). */
-export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean }
+import { PIECES, position, type ChessEval, type ChessState } from './facts/chess'
+import { checked, ended, fenAt, lineWhere, lookFromWhite, movedOn, numbered, openingLine, PIECE_NAMES, played, samePosition, sanLine, squareWords, stepped, targets, type Opening } from './facts/chessLine'
 
 const PROMOTIONS = ['q', 'r', 'b', 'n']
 const KEYS = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -8, ArrowDown: 8 }  // along the board as it's drawn
-
-/** The line an analysis starts with, or null for one that can't be played here: moves that don't replay (the
- * Moves list offers only those that do), or a position that isn't one, or not by the standard rules. */
-function begin(opening: Opening): ChessLine | null {
-  if (opening.moves) return lineOfGame(opening.moves, opening.ply ?? 0)
-  return playable(opening.base) && standardCastling(opening.base) ? lineFrom(opening.base) : null
-}
 
 /** The analysis board: the fan's line (ChessLine) on the board, played by tap then tap, or a drag, the legal
  * squares of the picked piece marked; a promotion asks what the pawn becomes. Back and forward step
@@ -33,7 +21,7 @@ function begin(opening: Opening): ChessLine | null {
  * moves on, their line stays and a line says so. `flip`: the board's turn, the fan's Switch sides. `still`: the
  * game's own board with something under it, for a position that can't be played. */
 export default function ChessAnalysis({ state, live, flip, opening, leave, still }: { state: ChessState; live: LiveStatus; flip: boolean; opening: Opening; leave: () => void; still: (under: ReactNode) => ReactNode }) {
-  const [line, setLine] = useState(() => begin(opening))
+  const [line, setLine] = useState(() => openingLine(opening))
   const [asked, setAsked] = useState(opening.asked)
   const [picked, setPicked] = useState<string | null>(null)
   const [promoting, setPromoting] = useState<{ from: string; to: string } | null>(null)
@@ -49,7 +37,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
   // A new start (another of the game's moves tapped) while the board is open: its line, the engine kept.
   if (asked !== opening.asked) {
     setAsked(opening.asked)
-    setLine(begin(opening))
+    setLine(openingLine(opening))
     setPicked(null)
     setPromoting(null)
   }
@@ -186,12 +174,9 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
     board.current?.querySelector<HTMLElement>(`[data-sq="${name}"]`)?.focus()
   }
 
-  const colour = (piece: string) => (piece === piece.toUpperCase() ? 'white' : 'black')
-  const words = (name: string, piece: string | null) => [name, piece && `${colour(piece)} ${PIECE_NAMES[piece.toLowerCase()]}`, aims.has(name) && 'move here'].filter(Boolean).join(', ')
   const side = turn === 'w' ? 'White' : 'Black'
-  const before = line.at > 1 ? line.plies[line.at - 2].fen : line.start
-  const where = last ? `After ${numbered([last.san], before)}` : samePosition(fen, opening.base) ? "The game's position" : 'The starting position'
-  const movedOn = !samePosition(state.fen, opening.base)
+  const where = lineWhere(line, opening.base)
+  const onward = movedOn(state, opening.base)
   const engineWords = over ?? (engine.failed ? "The engine couldn't start in this browser; the moves still play."
     : best ? `Best: ${best}${look?.ev.depth ? ` · depth ${look.ev.depth}` : ''}`
       : !engine.ready ? `Loading the engine…${engine.loaded > 0 && engine.loaded < 1 ? ` ${Math.round(engine.loaded * 100)}%` : ''}` : 'The engine is looking…')
@@ -207,7 +192,7 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
             data-sq={sq.name}
             tabIndex={sq.name === stop ? 0 : -1}
             className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}${picked === sq.name ? ' picked' : ''}${aims.has(sq.name) ? (sq.piece ? ' aim take' : ' aim') : ''}${check === sq.name ? ' check' : ''}${mine(sq.piece) ? ' mine' : ''}`}
-            aria-label={words(sq.name, sq.piece)}
+            aria-label={squareWords(sq.name, sq.piece, aims.has(sq.name))}
             aria-pressed={picked === sq.name}
             onClick={() => tap(sq.name, sq.piece)}
             onPointerDown={(e) => drag(e, sq.name, sq.piece)}
@@ -235,10 +220,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
           <button type="button" className="btn icon chess-step" aria-label="Forward a move" title="Forward a move" aria-disabled={line.at === line.plies.length} onClick={() => line.at < line.plies.length && step(1)}>
             <ChevronIcon width={18} height={18} />
           </button>
-          <button type="button" className={`btn small${movedOn ? ' primary' : ''}`} onClick={leave}>{state.result ? 'Back to the game' : 'Back to live'}</button>
+          <button type="button" className={`btn small${onward ? ' primary' : ''}`} onClick={leave}>{state.result ? 'Back to the game' : 'Back to live'}</button>
         </span>
         <span className="small" role="status">{where} · {side} to move</span>
-        {movedOn && <span className="small chess-moved" role="status">{state.result ? `The game is over: ${state.result.replace('-', '–')}` : `The game has moved on${state.move ? ` · move ${state.move}` : ''}`}</span>}
+        {onward && <span className="small chess-moved" role="status">{onward}</span>}
         <span className="tiny">{engineWords}</span>
         <span className="tiny muted">
           Engine: Stockfish 18 (<a href={ENGINE_LICENCE} target="_blank" rel="noreferrer" className="link">GPL-3.0</a>) · <a href={ENGINE_SOURCE} target="_blank" rel="noreferrer" className="link">source</a>

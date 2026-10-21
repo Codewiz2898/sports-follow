@@ -18,6 +18,13 @@ TITLES = {
 }
 TITLE_ORDER = ["GM", "IM", "WGM", "FM", "WIM", "CM", "WFM", "WCM"]  # highest first
 
+# The engine of a match page's Play from here, on the fan's own device (web/src/sports/engine/, its README): the
+# commit of Stockfish.js that published its build, the board's "source" and "GPL-3.0" links, as
+# web/src/sports/facts/chessEngineCore.ts has them (tests/test_credits.py holds the two to one commit).
+ENGINE_BUILT_FROM = "93c994592dcf3b4b21052ab925e9b534df9c0918"
+ENGINE_SOURCE = f"https://github.com/nmrugg/stockfish.js/tree/{ENGINE_BUILT_FROM}"
+ENGINE_LICENCE = f"https://github.com/nmrugg/stockfish.js/blob/{ENGINE_BUILT_FROM}/Copying.txt"
+
 # An engine evaluation (engine.py) falls in a band, from White's side: 2 winning, 1 better, 0 level,
 # -1 worse, -2 losing. +3.0 and +1.4 are 75% and 63% winning chances in Lichess's model; a forced
 # mate is winning. Leaving a band takes MARGIN more, so a score sitting on a line doesn't flap.
@@ -153,6 +160,15 @@ class Chess(Sport):
         "key": ("The game turning and the result", "The game starting, turning (a side winning, a turnaround) and the result"),
         "more": ("every edge", "the game edging one way or back to level"),
     }
+
+    def credits_also(self) -> list[dict[str, Any]]:
+        return [{
+            "name": "Stockfish.js",
+            "url": ENGINE_SOURCE,
+            "what": "The chess engine of a game's Play from here, on the fan's own phone or browser: Stockfish 18, its lite single-threaded WebAssembly build by Nathan Rugg and Chess.com. The link is its source, the commit that built it.",
+            "licence": "GPL-3.0",
+            "licence_url": ENGINE_LICENCE,
+        }]
 
     def title_of(self, label: str) -> str | None:
         return TITLES.get(label)

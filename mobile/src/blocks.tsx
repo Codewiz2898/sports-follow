@@ -222,10 +222,11 @@ export function PlainScore({ live, pal }: { live: LiveStatus; pal: Palette }) {
 
 /** A live game's score as its sport's board draws it (sports/), or the plain score where none draws this
  * state. `teams`: the followed player's, marked on a board that lists many (a battle royale lobby); `lines`: each
- * of the fan's players' numbers, on a card of several of theirs or a match page (BoardProps). */
-export function GameBoard({ live, compact, teams, lines, pal }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][]; pal: Palette }) {
+ * of the fan's players' numbers, on a card of several of theirs or a match page; `explore`: the match page's,
+ * which the fan may explore where its sport has a way to (BoardProps). */
+export function GameBoard({ live, compact, teams, lines, explore, pal }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][]; explore?: boolean; pal: Palette }) {
   const Board = boardFor(live)
-  return Board && live.state ? <Board state={live.state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} live={live} pal={pal} /> : <PlainScore live={live} pal={pal} />
+  return Board && live.state ? <Board state={live.state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} explore={explore} live={live} pal={pal} /> : <PlainScore live={live} pal={pal} />
 }
 
 /**
