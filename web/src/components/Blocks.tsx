@@ -136,9 +136,9 @@ export function ResultCard({ game, hero, now, calls = null }: { game: GameResult
 }
 
 /**
- * One of the fan's games still to come, on Today: an ink card with, big in the sport's colour, the countdown
- * once it's less than a day away (else the day), then the game and a chip naming the fan's teams and players in
- * it, or saying they follow the game itself. It opens the game's match page (the line-ups as they come, both
+ * One of the fan's games still to come, on Today: a block of its sport's colour, as their results are (a big game
+ * none of theirs are in is outlined), with the countdown big once it's less than a day away (else the day), then
+ * the game and a chip naming the fan's teams and players in it, or saying they follow the game itself. It opens the game's match page (the line-ups as they come, both
  * sides' players), else the first player's page.
  */
 export function ComingCard({ event, players, seed, sport, teams = [], calls = null }: { event: UpcomingEvent; players: Card[]; seed: string; sport?: string; teams?: string[]; calls?: MyPredictions | null }) {
@@ -146,9 +146,9 @@ export function ComingCard({ event, players, seed, sport, teams = [], calls = nu
   const key = sportKey(sport ?? players[0]?.player.sport)
   const { big, eyebrow } = comingCard(event, now)
   return (
-    <Link to={event.match ? `/match/${event.match}` : players[0] ? `/player/${players[0].player_id}` : '/'} className="next-card coming" data-sport={key}>
+    <Link to={event.match ? `/match/${event.match}` : players[0] ? `/player/${players[0].player_id}` : '/'} className="coming-card" data-sport={key}>
       <Backdrop sport={key} seed={seed} />
-      <span className="eyebrow muted">{eyebrow}</span>
+      <span className="eyebrow">{eyebrow}</span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
@@ -159,21 +159,21 @@ export function ComingCard({ event, players, seed, sport, teams = [], calls = nu
   )
 }
 
-/** A player's next game, on their page: an ink card, the countdown in their sport's colour. `children` sit
- * at its foot beside when and where it is (the page's refresh button). */
+/** A player's next game, on their page: a white card under their band, tagged in their sport's colour, the countdown
+ * big. `children` sit at its foot beside when and where it is (the page's refresh button). */
 export function NextCard({ event, sport, children }: { event: UpcomingEvent; sport?: string | null; children?: ReactNode }) {
   const left = countdown(event.start_utc, useNow())
   return (
     <section className="next-card" data-sport={sportKey(sport)} aria-label="Next game">
       <span className="row">
-        <span className="eyebrow" style={{ color: 'var(--sport-on-ink)' }}>Next game</span>
+        <span className="sport-tag">Next game</span>
         {event.competition && <span className="tiny muted" style={{ fontWeight: 700, textAlign: 'right' }}>{event.competition}</span>}
       </span>
       <span className="row" style={{ alignItems: 'flex-end' }}>
         <span className="title" style={{ fontSize: 20 }}>{event.title}</span>
         {left && <span className="dsp count">{left}</span>}
       </span>
-      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.16)', flexWrap: 'wrap' }}>
+      <span className="row small" style={{ paddingTop: 12, borderTop: '1px solid var(--line)', flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 700 }}>{[event.start_utc ? dateTime(event.start_utc) : 'Date to be confirmed', event.venue].filter(Boolean).join(' · ')}</span>
         {children}
       </span>
