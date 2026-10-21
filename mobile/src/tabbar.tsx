@@ -26,8 +26,10 @@ type Nav = { type?: string; index?: number; routes: readonly { name: string; sta
 
 /** Whether a stack on the way to the screen in front has `screen` under it. */
 function under(state: Nav | undefined, screen: string): boolean {
-  for (let at = state; at; at = at.routes[at.index ?? at.routes.length - 1]?.state) {
-    if (at.type === 'stack' && at.routes.slice(0, at.index).some((r) => r.name === screen)) return true
+  for (let at = state; at; ) {
+    const front = at.index ?? at.routes.length - 1
+    if (at.type === 'stack' && at.routes.slice(0, front).some((r) => r.name === screen)) return true
+    at = at.routes[front]?.state
   }
   return false
 }
