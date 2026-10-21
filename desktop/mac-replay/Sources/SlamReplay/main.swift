@@ -77,6 +77,27 @@ if let m = value("--strip") {
     }
 }
 
+if let i = args.firstIndex(of: "--ocr"), i + 2 < args.count {
+    // --ocr <clip> <seconds>: the clocks the save would read off that frame, and all the text it saw
+    runAsync {
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: args[i + 1])))
+        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceAfter = .zero
+        let (image, _) = try await gen.image(at: CMTime(seconds: Double(args[i + 2]) ?? 0, preferredTimescale: 600))
+        var pb: CVPixelBuffer?
+        let attrs = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
+        CVPixelBufferCreate(nil, image.width, image.height, kCVPixelFormatType_32BGRA, attrs, &pb)
+        CVPixelBufferLockBaseAddress(pb!, [])
+        let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb!), width: image.width, height: image.height, bitsPerComponent: 8,
+                            bytesPerRow: CVPixelBufferGetBytesPerRow(pb!), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        ctx?.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        CVPixelBufferUnlockBaseAddress(pb!, [])
+        print("clocks:", FPSProbe.clocks(in: pb!))
+        print("text:", FPSProbe.texts(in: pb!))
+    }
+}
+
 var opts = Options()
 if let t = value("--target") { opts.target = t; opts.label = value("--label") ?? t.split(separator: ".").last.map(String.init) ?? "clip" }
 if let l = value("--label") { opts.label = l }

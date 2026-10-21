@@ -1,6 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 import Vision
+import CoreImage
 
 /// Reads the game's own frame-rate counter (Dota's "Display network information", or the Metal HUD)
 /// by taking a one-off screenshot of the top strip of its window every few seconds and reading the
@@ -86,16 +87,40 @@ final class FPSProbe {
 extension FPSProbe {
     /// Game clocks ("26:00") in the top fifth of a frame: Dota's clock when spectating in the client,
     /// or a stream's overlay. To compare with the API's clock at the same moment.
-    static func clocks(in pb: CVPixelBuffer) -> [String] {
+    static let ci = CIContext()
+
+    /// Text in the middle of the top bar, where Dota keeps its clock: that strip cut out and scaled 3×
+    /// first, as the clock is only ~14 px high in a 900-high frame and Vision misses it at that size.
+    static func texts(in pb: CVPixelBuffer) -> [String] {
+        let img = CIImage(cvPixelBuffer: pb)
+        let e = img.extent
+        let crop = CGRect(x: e.minX + e.width * 0.4, y: e.maxY - e.height * 0.06, width: e.width * 0.2, height: e.height * 0.06)
+        let big = img.cropped(to: crop).transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+            .transformed(by: CGAffineTransform(scaleX: 3, y: 3))
+        guard let cg = ci.createCGImage(big, from: big.extent) else { return [] }
         let req = VNRecognizeTextRequest()
         req.recognitionLevel = .accurate
         req.usesLanguageCorrection = false
-        req.regionOfInterest = CGRect(x: 0, y: 0.8, width: 1, height: 0.2)  // Vision's y goes up
-        try? VNImageRequestHandler(cvPixelBuffer: pb).perform([req])
-        let texts = (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        try? VNImageRequestHandler(cgImage: cg).perform([req])
+        return (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    static func clocks(in pb: CVPixelBuffer) -> [String] {
+        let texts = texts(in: pb)
         let r = try! NSRegularExpression(pattern: #"\b\d{1,2}:\d{2}\b"#)
         return texts.flatMap { t in
             r.matches(in: t, range: NSRange(t.startIndex..., in: t)).compactMap { Range($0.range, in: t).map { String(t[$0]) } }
         }
+    }
+
+    /// Dota's own top bar read off the screen: "10–5 · 15:22" (kills either side of the clock), the
+    /// strip's words when Slam's API has no live map for the game.
+    static func screenLine(in pb: CVPixelBuffer) -> (text: String, clock: String)? {
+        let t = texts(in: pb)
+        guard let ci = t.firstIndex(where: { $0.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil }) else { return nil }
+        let clock = t[ci]
+        func num(_ i: Int) -> Int? { t.indices.contains(i) ? Int(t[i].trimmingCharacters(in: .whitespaces)) : nil }
+        if let a = num(ci - 1), let b = num(ci + 1) { return ("\(a)–\(b) · \(clock)", clock) }
+        return (clock, clock)
     }
 }

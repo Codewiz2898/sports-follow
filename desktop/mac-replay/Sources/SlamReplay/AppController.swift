@@ -27,6 +27,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     private var vertical = true
     private var verticalItem: NSMenuItem?
     private var montageTask: Task<Void, Never>?
+    private var pickedName: String?
     private var matchItem: NSMenuItem?
 
     init(opts: Options, probeOnly: Bool) {
@@ -96,7 +97,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
-        Log.json("picker", ["picked": Recorder.describe(filter.contentRect), "preflight": CGPreflightScreenCaptureAccess()])
+        let apps = filter.includedApplications.map(\.applicationName)
+            + filter.includedWindows.compactMap { $0.owningApplication?.applicationName }
+        let what = Array(Set(apps)).sorted().joined(separator: ", ")
+        pickedName = what.isEmpty ? "the picked window" : what
+        Log.json("picker", ["picked": Recorder.describe(filter.contentRect), "app": what,
+                            "windows": filter.includedWindows.compactMap(\.title),
+                            "preflight": CGPreflightScreenCaptureAccess()])
         let r = Recorder(opts: opts)
         r.onStateChange = { [weak self] s in DispatchQueue.main.async { self?.setState(s) } }
         Task {
@@ -136,12 +143,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
         let url = ClipWriter.newURL(label: opts.label)
         let previous = saveChain
         let edit = self.edit, feed = self.feed
-        let frame = edit ? recorder.latestFrame : nil
+        let frame = recorder.latestFrame
         saves += 1
         flash("Saving…")
         // The strip's numbers and the clock on screen, both as of the tap, while the clip is written.
         let line = Task.detached { await feed.line() }
-        let screen = Task.detached { frame.map(FPSProbe.clocks(in:)) ?? [] }
+        let screen = Task.detached { frame.flatMap(FPSProbe.screenLine(in:)) }
         saveChain = Task.detached {
             await previous?.value  // saves queue; each keeps the 30 s before its own tap
             do {
@@ -156,10 +163,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                     NSSound(named: "Tink")?.play()
                     self.flash(edit ? "Saved ✓ · cutting…" : "Saved ✓")
                 }
-                let strip = await line.value
-                let clocks = await screen.value
-                let side: [String: Any] = ["strip": strip?.text ?? "", "apiClock": strip?.clock ?? "", "screenClocks": clocks,
-                                           "apiMs": round1(strip?.ms ?? 0), "match": feed.path ?? "",
+                let api = await line.value
+                let onScreen = await screen.value
+                // Slam's numbers when the API has the map; else what Dota's own top bar said.
+                let stripText = api?.text ?? onScreen?.text ?? ""
+                let side: [String: Any] = ["strip": stripText, "apiLine": api?.text ?? "", "apiClock": api?.clock ?? "",
+                                           "screenLine": onScreen?.text ?? "", "screenClock": onScreen?.clock ?? "",
+                                           "apiMs": round1(api?.ms ?? 0), "match": feed.path ?? "",
                                            "savedAt": ISO8601DateFormatter().string(from: tap)]
                 Log.json("strip", side)
                 // Beside the clip, for the montage's titles.
@@ -168,7 +178,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 }
                 guard edit else { return }
                 let cut = url.deletingPathExtension().appendingPathExtension("replay.mp4")
-                let e = try await ClipEditor.make(from: r.url, to: cut, strip: strip?.text)
+                let e = try await ClipEditor.make(from: r.url, to: cut, strip: stripText.isEmpty ? nil : stripText)
                 Log.json("cut", ["file": cut.lastPathComponent, "seconds": round2(e.seconds),
                                  "MB": round2(Double(e.bytes) / 1_048_576), "ms": round1(e.ms),
                                  "sinceTapMs": round2(Date().timeIntervalSince(tap) * 1000)])
@@ -209,7 +219,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 f["audioBuffers"] = m.buffers
             }
             statusLine.title = String(format: "Recording %@ · %.0f s in memory · %.0f MB · %.0f fps",
-                                      opts.label, r.seconds, r.videoMB + r.audioMB, Double(c.encoded) / dt)
+                                      pickedName ?? opts.label, r.seconds, r.videoMB + r.audioMB, Double(c.encoded) / dt)
         }
         Log.json("stats", f)
     }

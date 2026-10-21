@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "SlamReplay",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS("15.2")],
     targets: [
         .executableTarget(
             name: "SlamReplay",

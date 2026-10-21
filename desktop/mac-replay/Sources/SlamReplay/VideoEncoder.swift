@@ -12,6 +12,7 @@ final class VideoEncoder {
     private let lock = NSLock()
     private var _encoded = 0
     private var _dropped = 0
+    private var lastKey: CMTime?  // our own 2 s keyframe clock: the encoder's limits slip when frames come slowly
 
     var encoded: Int { lock.withLock { _encoded } }
     var dropped: Int { lock.withLock { _dropped } }
@@ -59,9 +60,14 @@ final class VideoEncoder {
 
     func encode(_ pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime = .invalid) {
         guard let session else { return }
+        var props: CFDictionary?
+        if lastKey == nil || (pts - lastKey!).seconds >= 2 {
+            lastKey = pts
+            props = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+        }
         let st = VTCompressionSessionEncodeFrame(
             session, imageBuffer: pixelBuffer, presentationTimeStamp: pts, duration: duration,
-            frameProperties: nil, infoFlagsOut: nil
+            frameProperties: props, infoFlagsOut: nil
         ) { [weak self] status, flags, sample in
             guard let self else { return }
             if status != noErr || flags.contains(.frameDropped) || sample == nil {
