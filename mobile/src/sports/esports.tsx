@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native'
 import Svg, { ClipPath, Defs, Line, Polygon, Polyline, Rect } from 'react-native-svg'
 import {
   acrossMaps, banNote, boardSide, dotaLine, draftRounds, esports as facts, everyMapBans, followedIn, isLobby, isYours, LANES, laneWords, leader, leadLine, leadOf,
@@ -135,6 +135,9 @@ function Totals({ teams, rows }: { teams: PageTeam[]; rows: { label: string; val
 
 const GRAPH = 128 // the lead graph's height, as the web's
 const PAD = 8 // its line's room at either end
+// A minute's mark: the web's prime (′) isn't in Manrope, and Android measures a line with a fallback glyph in it
+// short, cutting off its end ("52′ · Yandex" for "52′ · Yandex +17.5k"); an apostrophe, as football's minutes.
+const MINUTE = "'"
 
 /** Where a minute's tick sits under the graph: the first from the left edge, the others centred on their time,
  * kept inside the graph. */
@@ -156,16 +159,16 @@ function LeadGraph({ title, what, readings, marks = [], teams, tone }: { title: 
     if (width > 2 * PAD) setAt(nearest(readings, ((e.nativeEvent.locationX - PAD) / (width - 2 * PAD)) * line.end))
   }
   const step = (by: number) => setAt((i) => Math.max(0, Math.min(last, (i ?? last) + by)))
-  const [time, value] = readings[at ?? last]
-  const reading = `${Math.round(time / 60)}′ · ${leader(value, teams)}`
+  const [time, value] = readings[Math.min(at ?? last, last)] // a reading stepped to on a longer line: its last
+  const reading = `${Math.round(time / 60)}${MINUTE} · ${leader(value, teams)}`
   const ticks = Array.from({ length: Math.floor(line.end / 600) + 1 }, (_, i) => i * 600)
   const area = `${line.points} ${line.x(readings[last][0]).toFixed(1)},${line.mid} ${line.x(readings[0][0]).toFixed(1)},${line.mid}`
   const id = title.replace(/\W+/g, '-')
   return (
     <Card pad style={{ gap: 10 }}>
       <View style={s.row}>
-        <Eyebrow style={{ flexShrink: 1 }}>{title}</Eyebrow>
-        <Text style={[t.small, { fontFamily: font[800] }]} accessibilityLiveRegion="polite">{reading}</Text>
+        <Eyebrow style={{ flex: 1 }}>{title}</Eyebrow>
+        <Text style={[t.small, { fontFamily: font[800], flexShrink: 0 }]} accessibilityLiveRegion="polite">{reading}</Text>
       </View>
       <View accessible accessibilityRole="adjustable" accessibilityLabel={`${a.short}'s ${what} lead, ${title.toLowerCase()}: ${leadSummary(readings, teams)}.`}
         accessibilityValue={{ text: reading }} accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
@@ -198,7 +201,7 @@ function LeadGraph({ title, what, readings, marks = [], teams, tone }: { title: 
         </View>
         <Text style={[s.axis, { marginTop: 4 }]}>{b.short} ahead</Text>
         <View style={{ height: 16 }}>
-          {width > 0 ? ticks.map((sec) => <Text key={sec} style={[s.axis, s.tick, tickAt(line.x(sec), width, sec === 0)]}>{sec / 60}′</Text>) : null}
+          {width > 0 ? ticks.map((sec) => <Text key={sec} style={[s.axis, s.tick, tickAt(line.x(sec), width, sec === 0)]}>{sec / 60}{MINUTE}</Text>) : null}
         </View>
       </View>
       {marks.length > 0 ? (
@@ -256,7 +259,7 @@ function LiveMap({ live, board, teams, yours, tone }: { live: LiveDetail; board?
           ) : null}
         </Card>
       </MatchSection>
-      {readings.length > 1 ? <LeadGraph title={`Map ${live.n}, gold so far`} what={live.lead?.what ?? 'lead'} readings={readings} teams={teams} tone={tone} /> : null}
+      {readings.length > 1 ? <LeadGraph key={live.n} title={`Map ${live.n}, gold so far`} what={live.lead?.what ?? 'lead'} readings={readings} teams={teams} tone={tone} /> : null}
       {heroes.length > 0 ? (
         <MatchSection title={`Heroes on map ${live.n}`}>
           <Card style={s.heroes}>
@@ -325,7 +328,7 @@ function MapView({ maps, map, teams, yours, tone }: { maps: MapDetail[]; map: Ma
         {(map.totals ?? []).length > 0 ? <Totals teams={teams} rows={map.totals ?? []} /> : null}
       </Card>
       {(map.lead?.by_minute ?? []).length > 1 ? (
-        <LeadGraph title={`Map ${map.n}, ${map.lead?.what ?? 'lead'} by minute`} what={map.lead?.what ?? 'lead'} readings={leadOf(map, a.id)} marks={map.marks} teams={teams} tone={tone} />
+        <LeadGraph key={map.n} title={`Map ${map.n}, ${map.lead?.what ?? 'lead'} by minute`} what={map.lead?.what ?? 'lead'} readings={leadOf(map, a.id)} marks={map.marks} teams={teams} tone={tone} />
       ) : null}
       {events.length > 0 ? (
         <MatchSection title={`How map ${map.n} went`}>
@@ -459,12 +462,16 @@ function SeriesDetail({ maps, teams, yours, live, tone }: { maps: MapDetail[]; t
         </View>
       ) : null}
       {maps.length > 1 ? (
-        <View style={s.tabs} accessibilityRole="tablist" accessibilityLabel="Maps">
-          {maps.map((m) => (
-            <Pressable key={m.n} accessibilityRole="tab" accessibilityState={{ selected: m.n === map.n }} onPress={() => setPicked(m.n)} style={[s.tab, m.n === map.n && s.tabOn]}>
-              <Text style={[s.tabText, m.n === map.n && { color: colour.text }]}>Map {m.n}</Text>
-            </Pressable>
-          ))}
+        <View accessibilityRole="tablist" accessibilityLabel="Maps">
+          <View style={s.tabsLine} />
+          {/* Sideways, as the web's .tabs, when five maps don't fit at a large text size. */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 18 }}>
+            {maps.map((m) => (
+              <Pressable key={m.n} accessibilityRole="tab" accessibilityState={{ selected: m.n === map.n }} onPress={() => setPicked(m.n)} style={[s.tab, m.n === map.n && s.tabOn]}>
+                <Text style={[s.tabText, m.n === map.n && { color: colour.text }]}>Map {m.n}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
         </View>
       ) : null}
       <MapView maps={maps} map={map} teams={teams} yours={yours} tone={tone} />
@@ -630,8 +637,8 @@ const s = StyleSheet.create({
   ban: { fontFamily: font[500], fontSize: 14, lineHeight: 19, color: colour.muted, textDecorationLine: 'line-through' },
   pick: { alignSelf: 'stretch', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 12 },
   best: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 18, backgroundColor: colour.text },
-  tabs: { flexDirection: 'row', gap: 18, borderBottomWidth: 2, borderBottomColor: colour.line },
-  tab: { height: 44, justifyContent: 'center', borderBottomWidth: 3, borderBottomColor: 'transparent', marginBottom: -2 },
+  tabsLine: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 2, backgroundColor: colour.line }, // under the picked tab's own
+  tab: { height: 44, justifyContent: 'center', borderBottomWidth: 3, borderBottomColor: 'transparent' },
   tabOn: { borderBottomColor: colour.text },
   tabText: { fontFamily: font[800], fontSize: 13, letterSpacing: 1, textTransform: 'uppercase', color: colour.muted },
   acrossTile: { alignItems: 'center', gap: 2, paddingVertical: 8, paddingHorizontal: 4, borderRadius: 12 },

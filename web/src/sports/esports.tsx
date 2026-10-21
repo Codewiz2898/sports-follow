@@ -126,7 +126,7 @@ function LeadGraph({ id, title, what, readings, marks = [], teams }: { id: strin
   }
   const summary = leadSummary(readings, teams)
   const ticks = Array.from({ length: Math.floor(line.end / 600) + 1 }, (_, i) => i * 600)
-  const [t, v] = readings[at ?? last]
+  const [t, v] = readings[Math.min(at ?? last, last)] // a reading stepped to on a longer line: its last
   const area = `${line.points} ${line.x(readings[last][0]).toFixed(1)},${line.mid} ${line.x(readings[0][0]).toFixed(1)},${line.mid}`
   return (
     <div className="card card-pad stack lead-graph" style={{ gap: 10 }}>
