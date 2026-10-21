@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, literal, or_, select, update
+from sqlalchemy import delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -339,17 +339,20 @@ def for_admin(db: Session, status: str | None = None, limit: int = 50) -> list[d
     """Clips for the admin panel, newest first, whatever their status (or "reported": the live ones fans
     reported, the most first), with their reports."""
     bucket = clipstore.STORE
-    q = select(Clip, ClipKey.name).outerjoin(ClipKey, ClipKey.id == Clip.key_id)
+    # Reports counted from their rows, not the clip's counter: a sign-in merging two of one person's, or an
+    # account deleted, takes theirs away.
+    count = select(func.count()).where(ClipReport.clip_id == Clip.id).correlate(Clip).scalar_subquery()
+    q = select(Clip, ClipKey.name, count).outerjoin(ClipKey, ClipKey.id == Clip.key_id)
     order = [Clip.created_at.desc()]
     if status == "reported":  # live clips fans reported, the most reported first
-        q = q.where(Clip.status == "live", Clip.reports > 0)
-        order = [Clip.reports.desc(), *order]
+        q = q.where(Clip.status == "live", count > 0)
+        order = [count.desc(), *order]
     elif status:
         q = q.where(Clip.status == status)
     out = []
-    for clip, by in db.execute(q.order_by(*order).limit(limit)):
+    for clip, by, reports in db.execute(q.order_by(*order).limit(limit)):
         item = public(clip, bucket) if bucket is not None else {"id": clip.slug, "line": line(clip.moment or {})}
-        out.append({**item, "status": clip.status, "reports": clip.reports, "source": clip.source,
+        out.append({**item, "status": clip.status, "reports": reports, "source": clip.source,
                     "by": by, "created": clip.created_at.isoformat()})
     return out
 
