@@ -55,13 +55,14 @@ jobs:
             web/package-lock.json
             mobile/package-lock.json
 
-      # The API and worker: migrations, then the tests.
-      - name: Install Stockfish
-        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends stockfish
+      # The API and worker: migrations, then the tests. Stockfish after pip, so a failed apt-get skips only
+      # what needs it, not lint and types.
       # The app's own packages too: the type check reads their types.
       - name: Install dependencies
         id: python
         run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install Stockfish
+        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends stockfish
       - name: Migrations have one head
         run: |
           heads=$(alembic heads)
@@ -96,13 +97,14 @@ jobs:
         run: npm run build
 
       # The Android app's types, on a pull request. Also checks the web files the app shares
-      # (web/src/types.ts, format.ts, follow.ts, sports/naming.ts).
+      # (web/src/types.ts, format.ts, follow.ts, sports/naming.ts). Its packages install on main too: the npm
+      # cache main saves (keyed on both lockfiles) is the one pull requests start from, so it needs them.
       - name: Android app dependencies
         id: mobile
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() }}
         working-directory: mobile
         run: npm ci --no-audit --no-fund
       - name: Android app type-check
-        if: ${{ !cancelled() && steps.mobile.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.mobile.outcome == 'success' }}
         working-directory: mobile
         run: npm run typecheck
