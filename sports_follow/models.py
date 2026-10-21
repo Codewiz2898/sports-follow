@@ -801,3 +801,63 @@ class LeagueMember(Base):
     fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(40))
     joined_at: Mapped[datetime] = _now()
+
+
+class Clip(Base):
+    """A short video published to Slam (clips.py): a moment of a game, cut on Slam's Mac app and put straight
+    into the clips bucket (clipstore.py), then shown in its game's, its competition's and its players' feeds.
+    Only holders of a publishing key (ClipKey) put clips up, for now: admins."""
+
+    __tablename__ = "clip"
+    __table_args__ = (Index("ix_clip_players", "players", postgresql_using="gin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(16), unique=True)  # its public id, in URLs and file names
+    key_id: Mapped[int | None] = mapped_column(ForeignKey("clip_key.id", ondelete="SET NULL"), index=True)  # who put it up
+    # The game it's of, by its match page's address ("pandascore_esports/1753729"), and what that page said of
+    # it when the clip went up; none for a fan's own game, which no source lists.
+    match: Mapped[str | None] = mapped_column(String(100), index=True)
+    sport: Mapped[str | None] = mapped_column(String(60))
+    competition: Mapped[str | None] = mapped_column(String(200), index=True)
+    game_title: Mapped[str] = mapped_column(String(300), default="")
+    players: Mapped[list] = mapped_column(JSONB, default=list)  # player ids it shows
+    moment: Mapped[dict] = mapped_column(JSONB, default=dict)  # what the app read at the tap: teams, kills, clock, game
+    caption: Mapped[str] = mapped_column(String(280), default="")
+    # What it was recorded from: "game_client" (the game's own window), "browser" (a stream: a broadcaster's
+    # production) or "file". What may be published from each is clips.RIGHTS's.
+    source: Mapped[str] = mapped_column(String(20))
+    seconds: Mapped[float] = mapped_column(Float)
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    bytes: Mapped[int] = mapped_column(Integer, default=0)
+    # uploading → live, or failed (the files never came, or were too big); hidden (by an admin, or by reports)
+    # and removed (files deleted) after.
+    status: Mapped[str] = mapped_column(String(12), default="uploading", index=True)
+    reports: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = _now()
+    live_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class ClipKey(Base):
+    """A publishing key (clips.py): what Slam's Mac app sends to put clips up, made with
+    `python -m sports_follow.clips key "<name>"`. Only its hash is kept; revoking it stops it at once."""
+
+    __tablename__ = "clip_key"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))  # whose: "Bharath's Mac"
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = _now()
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ClipReport(Base):
+    """A fan saying a clip shouldn't be up (clips.report): one each, counted on the clip."""
+
+    __tablename__ = "clip_report"
+
+    clip_id: Mapped[int] = mapped_column(ForeignKey("clip.id", ondelete="CASCADE"), primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = _now()
