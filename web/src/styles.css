@@ -524,13 +524,13 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 /* A player too wide for a phone's column, over the whole screen: sideways while the phone is held upright, so it's
    never narrower than its platform allows (Twitch: 400×300), whichever way the phone is turned. */
 .watch-whole { position: fixed; inset: 0; z-index: 50; background: #000; color: #fff; }
-.watch-whole-frame { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.watch-whole-frame { position: absolute; inset: 0; display: flex; }
 @media (orientation: portrait) {
   .watch-whole-frame { inset: auto; top: 50%; left: 50%; width: 100vh; height: 100vw; width: 100dvh; height: 100dvw; transform: translate(-50%, -50%) rotate(90deg); }
 }
-.watch-whole-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 48px; padding: 0 8px 0 16px; flex-shrink: 0; }
-.watch-whole-bar .btn.icon { width: 36px; height: 36px; background: #fff; color: #0d0d0d; }
-.watch-whole iframe { flex: 1; width: 100%; min-height: 0; border: 0; }
+.watch-whole-side { flex-shrink: 0; width: 52px; padding: 8px; }  /* beside the player, which keeps the screen's whole height */
+.watch-whole-side .btn.icon { width: 36px; height: 36px; background: #fff; color: #0d0d0d; }
+.watch-whole iframe { flex: 1; height: 100%; min-width: 0; border: 0; }
 /* A football timeline: the home side's on the left, the away side's on the right. */
 .timeline > li { display: flex; align-items: baseline; gap: 10px; }
 .timeline > li .num { font-size: 17px; min-width: 44px; }

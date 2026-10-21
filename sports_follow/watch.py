@@ -27,11 +27,14 @@ YOUTUBE_VIDEO = re.compile(r"[A-Za-z0-9_-]{11}")
 Play = Callable[[str, list[str], dict[str, list[str]]], str | None]  # (host, path, query) -> what the player plays
 
 
-def _channel(name: re.Pattern[str], pages: set[str]) -> Play:
-    """A platform whose player plays a channel by its name, from the channel's page ("twitch.tv/riotgames"): not one
-    of the platform's own pages (pages), nor any page deeper than a channel's ("twitch.tv/riotgames/videos")."""
+def _channel(site: str, name: re.Pattern[str], pages: set[str]) -> Play:
+    """A platform whose player plays a channel by its name, from the channel's page on its own site ("twitch.tv/
+    riotgames", with "www." or "m." or neither): not another of its sites' ("clips.twitch.tv/…"), one of the site's
+    own pages (pages), nor any page deeper than a channel's ("twitch.tv/riotgames/videos")."""
+    own = {f"{sub}{site}" for sub in ("", "www.", "m.")}
+
     def play(host: str, path: list[str], query: dict[str, list[str]]) -> str | None:
-        return path[0] if len(path) == 1 and name.fullmatch(path[0]) and path[0].lower() not in pages else None
+        return path[0] if host in own and len(path) == 1 and name.fullmatch(path[0]) and path[0].lower() not in pages else None
     return play
 
 
@@ -59,11 +62,13 @@ class Platform:
 
 
 PLATFORMS = (
-    Platform("Twitch", ("twitch.tv",), "twitch", _channel(re.compile(r"[A-Za-z0-9_]{1,25}"), {
-        "directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet", "drops"})),
+    Platform("Twitch", ("twitch.tv",), "twitch", _channel("twitch.tv", re.compile(r"[A-Za-z0-9_]{1,25}"), {
+        "directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet",
+        "drops", "login", "signup", "friends", "messages", "store", "prime", "bits"})),
     Platform("YouTube", ("youtube.com", "youtu.be"), "youtube", _youtube),
-    Platform("Kick", ("kick.com",), "kick", _channel(re.compile(r"[A-Za-z0-9_-]{1,40}"), {
-        "browse", "categories", "category", "following", "search", "video", "clips", "dashboard", "settings", "terms-of-service", "privacy-policy"})),
+    Platform("Kick", ("kick.com",), "kick", _channel("kick.com", re.compile(r"[A-Za-z0-9_-]{1,40}"), {
+        "browse", "categories", "category", "following", "search", "video", "clips", "dashboard", "settings", "about", "help",
+        "community-guidelines", "terms-of-service", "privacy-policy", "dmca-policy", "careers", "contact", "brand", "login", "signup"})),
     Platform("Bilibili", ("bilibili.com",)),
     Platform("SOOP", ("sooplive.co.kr", "afreecatv.com")),
     Platform("Huya", ("huya.com",)),

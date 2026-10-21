@@ -38,6 +38,8 @@ def test_only_a_channels_own_page_or_a_videos_plays_in_the_page():
     assert embed("https://www.youtube.com/watch?v=short") is None
     assert embed("https://www.youtube.com/OGNEsports1") is None  # an old channel address, as long as a video id
     assert embed("https://kick.com/browse") is None and embed("https://kick.com/fiesta_cs/videos") is None
+    assert embed("https://kick.com/about") is None and embed("https://www.kick.com/united21_en") == {"player": "kick", "id": "united21_en"}
+    assert embed("https://clips.twitch.tv/AwkwardHelplessSalamander") is None  # a clip on Twitch's other site, not a channel
     assert embed("https://evil-twitch.tv/riotgames") is None  # twitch.tv's, not a lookalike's
     assert watch.offer([raw("https://evil-twitch.tv/riotgames")])[0]["platform"] == "evil-twitch.tv"
 

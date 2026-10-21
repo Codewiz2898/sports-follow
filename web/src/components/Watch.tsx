@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import type { MatchStream } from '../api'
 import { safeHref } from '../format'
 import { streamNote } from '../match'
@@ -55,16 +56,36 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
   streams: MatchStream[]; title: string; sport: string; playing: string | null; onPlay: (url: string | null) => void
 }) {
   const [ref, width] = useWidth()
+  const location = useLocation()
+  const navigate = useNavigate()
   // Playing over the whole screen: chosen at the tap, where the column is too narrow for the player, and kept till
   // it's closed, so turning the phone sideways doesn't put it back in the page.
   const [whole, setWhole] = useState(false)
-  const [first, ...more] = streams
+  const poster = useRef<HTMLButtonElement>(null)  // where focus goes back to once that's closed
+  // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile.
+  const first = streams.find((s) => s.url === playing) ?? streams[0]
+  const on = !!first && playing === first.url
+  const covering = on && whole
+  const close = () => { setWhole(false); onPlay(null); poster.current?.focus() }
+  // Over the whole screen it's a step in the browser's history of its own, so Back (a phone's gesture) closes it,
+  // and × goes back. Closed once its step has been seen and is gone.
+  const stepped = !!(location.state as { watching?: boolean } | null)?.watching
+  const seen = useRef(false)
+  useEffect(() => {
+    if (!covering) seen.current = false
+    else if (stepped) seen.current = true
+    else if (seen.current) close()
+  })
   if (!first) return null
+  const more = streams.filter((s) => s !== first)
   const embed = first.embed
   const src = embed ? playerUrl(embed) : null
-  const on = playing === first.url
   const narrow = !!embed && width < (MIN_WIDTH[embed.player] ?? 0)  // too narrow for its player here
-  const start = () => { setWhole(narrow); onPlay(first.url) }
+  const start = () => {
+    setWhole(narrow)
+    onPlay(first.url)
+    if (narrow) navigate(location, { state: { ...(location.state as object | null), watching: true } })
+  }
   const note = streamNote(first)
   const named = `${title} on ${first.platform}`
   return (
@@ -74,7 +95,7 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
         <>
           <div className={`watch-player${embed.player in MIN_WIDTH && !narrow ? ' tall' : ''}`}>
             {on && !whole ? frame(src, named) : (
-              <button type="button" className="watch-start" onClick={start} aria-label={`Play on ${first.platform}${note ? `, ${note}` : ''}`}>
+              <button ref={poster} type="button" className="watch-start" onClick={start} aria-label={`Play on ${first.platform}${note ? `, ${note}` : ''}`}>
                 <span className="watch-play">{play}</span>
                 <span className="stack" style={{ gap: 4 }}>
                   <span className="dsp watch-big">Watch on {first.platform}</span>
@@ -84,7 +105,7 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
             )}
           </div>
           <a className="link small" href={safeHref(first.url)} target="_blank" rel="noopener noreferrer" style={{ alignSelf: 'flex-start' }}>Open on {first.platform}</a>
-          {on && whole && <WholeScreen src={src} title={named} label={[first.platform, note].filter(Boolean).join(' · ')} onClose={() => { setWhole(false); onPlay(null) }} />}
+          {covering && <WholeScreen src={src} title={named} onClose={() => { if (seen.current) navigate(-1); else close() }} />}
         </>
       ) : (
         <WatchLink stream={first} big />
@@ -99,8 +120,9 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
 }
 
 /** A player over the whole screen, sideways while the phone is held upright (styles.css's .watch-whole), so it's
- * as wide as its platform needs on any phone; × or Escape closes it. */
-function WholeScreen({ src, title, label, onClose }: { src: string; title: string; label: string; onClose: () => void }) {
+ * as wide as its platform needs on any phone, and as tall as the screen: × is in a strip beside it, not over it.
+ * × or Escape closes it (Escape while the page has the keys, not the player). */
+function WholeScreen({ src, title, onClose }: { src: string; title: string; onClose: () => void }) {
   const close = useRef(onClose)
   useEffect(() => { close.current = onClose })
   useEffect(() => {
@@ -113,11 +135,10 @@ function WholeScreen({ src, title, label, onClose }: { src: string; title: strin
   return createPortal(
     <div className="watch-whole" role="dialog" aria-modal="true" aria-label={title}>
       <div className="watch-whole-frame">
-        <div className="watch-whole-bar">
-          <span className="tag">{label}</span>
-          <button type="button" className="btn icon" aria-label="Close the player" onClick={onClose}><CloseIcon width={20} height={20} /></button>
-        </div>
         {frame(src, title)}
+        <div className="watch-whole-side">
+          <button type="button" className="btn icon" aria-label="Close the player" onClick={onClose} autoFocus><CloseIcon width={20} height={20} /></button>
+        </div>
       </div>
     </div>,
     document.body,
