@@ -13,6 +13,7 @@ from sports_follow.adapters import VIDEOS
 from sports_follow.feed import Candidate
 from sports_follow.models import FeedCandidate, Follow, Moment, Player, PlayerCard
 
+from .test_admin import admin_cookie, password, sign_in  # noqa: F401  (password is a fixture)
 from .test_api import api  # noqa: F401  (a fixture)
 from .test_feed import db, needs_db  # noqa: F401  (db is a fixture)
 from .test_my_feed import NOW, follow, item
@@ -31,15 +32,18 @@ SPORTS_YAARI = "UCjFw-0Vdfy2KW78NClGECXw"  # a small channel the list left out
      'Press conference: "Bhuvi has won the IPL twice!" Shreyas Iyer ready'),
     ("VIRAT KOHLI'S 100 VS AUS 🔥🔥 #viratkohli #cricket #shorts", "Cricket Fan", ("Virat Kohli",), "Virat Kohli's 100 vs AUS"),
     ("KOHLI'S FIRST TEST HUNDRED IN ENGLAND, EDGBASTON 2018 | England & Wales Cricket Board", "England & Wales Cricket Board", ("Virat Kohli",),
-     "Kohli's first test hundred in England, Edgbaston 2018"),
+     "Kohli's first Test hundred in England, Edgbaston 2018"),
     ("SMRITI MANDHANA SMASHES 117 IN THE 1ST ODI vs AUSTRALIA - Highlights", "ICC", ("Smriti Mandhana",),
      "Smriti Mandhana smashes 117 in the 1st ODI vs Australia - highlights"),
     ("WHAT I LEARNED FROM MAGNUS CARLSEN - GothamChess", "GothamChess", ("Magnus Carlsen",), "What I learned from Magnus Carlsen"),
     # Partly in capitals: those are names, left as they are.
-    ("IND vs AUS 2nd ODI Highlights | India vs Australia | Star Sports", "Star Sports", (), "IND vs AUS 2nd ODI Highlights | India vs Australia"),
+    ("IND vs AUS 2nd ODI Highlights | India vs Australia | Star Sports", "Star Sports", (), "IND vs AUS 2nd ODI Highlights · India vs Australia"),
+    # Each part between the bars is read alone, and the bars become the app's dots.
+    ("FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League", "Man City", ("Phil Foden", "City", "Man City"),
+     "Foden hat-trick for City! · Man City 5-1 AEK Athens · Champions League"),
     ("Kohli hits a brilliant century, Windies v India 2nd ODI 2019", "Windies Cricket", (), "Kohli hits a brilliant century, Windies v India 2nd ODI 2019"),
-    # A hashtag in the middle keeps its word; a bar with someone else's name after it stays.
-    ("Watch #Gukesh beat Ding | FIDE World Championship", "ChessBase India", (), "Watch Gukesh beat Ding | FIDE World Championship"),
+    # A hashtag in the middle keeps its word; a part with someone else's name stays.
+    ("Watch #Gukesh beat Ding | FIDE World Championship", "ChessBase India", (), "Watch Gukesh beat Ding · FIDE World Championship"),
     ("Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts", "FIDE", (), "Gukesh beats Magnus!"),
     ("  Haaland   and Anderson on City's 3-0 win  ", "Sky Sports Premier League", (), "Haaland and Anderson on City's 3-0 win"),
     ("🔥🔥🔥", "Someone", (), "🔥🔥🔥"),  # nothing left: as it came
@@ -106,15 +110,18 @@ def test_the_layout_is_the_servers_setting_until_the_admin_panel_changes_it(monk
     assert controls.parse({controls.FEED_LAYOUT: "grid"}).feed_layout is None  # a row written by hand, of the wrong shape
 
 
-def test_the_admin_route_sets_the_layout_live_and_the_config_says_it(monkeypatch, api):  # noqa: F811
+def test_the_admin_route_sets_the_layout_live_and_the_config_says_it(monkeypatch, api, password):  # noqa: F811
     monkeypatch.setattr(feed, "FEED_LAYOUT", "edge")
+    cookie = admin_cookie(sign_in(api))
     assert api.call("GET", "/api/config").json()["feed_layout"] == "edge"
-    assert server.admin_feed_layout({"layout": "full"})["layout"]["layout"] == "full"
+    assert api.call("PUT", "/api/admin/feed/layout", body={"layout": "full"}).status_code == 401  # the panel's alone
+    answer = api.call("PUT", "/api/admin/feed/layout", body={"layout": "full"}, headers=cookie)  # not taken for a row's id
+    assert answer.status_code == 200 and answer.json()["layout"]["layout"] == "full"
     assert api.call("GET", "/api/config").json()["feed_layout"] == "full"
-    with pytest.raises(server.HTTPException) as refused:
-        server.admin_feed_layout({"layout": 3})
-    assert refused.value.status_code == 400
-    assert server.admin_feed_layout({"layout": None})["layout"] == {"layout": "edge", "default": config.FEED_LAYOUT, "set": None, "choices": ["edge", "full"]}
+    assert api.call("PUT", "/api/admin/feed/layout", body={"layout": 3}, headers=cookie).status_code == 400
+    assert api.call("PUT", "/api/admin/feed/layout", body={"layout": "grid"}, headers=cookie).status_code == 400
+    back = api.call("PUT", "/api/admin/feed/layout", body={"layout": None}, headers=cookie).json()["layout"]
+    assert back == {"layout": "edge", "default": config.FEED_LAYOUT, "set": None, "choices": ["edge", "full"]}
 
 
 # ---------------------------------------------------------------- the picture

@@ -379,7 +379,7 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "IPL", "WPL", "ICC", "BCCI", "ECB", "ODI", "ODIs", "T20I", "T20Is", "T20", "T20s", "WTC", "CWC",
         "DRS", "LBW", "RCB", "CSK", "KKR", "SRH", "PBKS", "LSG", "MI", "DC", "GT", "RR", "IND", "AUS", "ENG", "PAK",
         "NZ", "SA", "SL", "WI", "AFG", "India", "Australia", "England", "Pakistan", "New Zealand",
-        "South Africa", "Sri Lanka", "West Indies", "Bangladesh", "Afghanistan", "Ashes", "Ranji Trophy",
+        "South Africa", "Sri Lanka", "West Indies", "Bangladesh", "Afghanistan", "Test", "Tests", "Kiwis", "Proteas", "Ashes", "Ranji Trophy",
         "Lord's", "Edgbaston", "Wankhede", "Eden Gardens", "Chinnaswamy", "MCG", "SCG")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {

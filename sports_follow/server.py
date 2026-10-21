@@ -1664,6 +1664,18 @@ def admin_feed(show: Annotated[str, Query(max_length=20)] = "all", offset: Annot
         raise HTTPException(400, str(exc)) from None
 
 
+@app.put("/api/admin/feed/layout", dependencies=AdminOnly)
+def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
+    """How the apps draw the fan's Feed ({"layout": "edge" | "full" | null}; null: the server's setting), live in
+    every process within a few seconds: no deploy. Before /api/admin/feed/{row_id}, which would take "layout" for a row."""
+    try:
+        admin.set_feed_layout(body.get("layout"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed layout %s", body.get("layout") or "back to the server's")
+    return {"layout": admin.layout_view()}
+
+
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
@@ -1687,18 +1699,6 @@ def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depe
         raise HTTPException(400, str(exc)) from None
     admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
     return {"channels": admin.channels_view(db)}
-
-
-@app.put("/api/admin/feed/layout", dependencies=AdminOnly)
-def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
-    """How the apps draw the fan's Feed ({"layout": "edge" | "full" | null}; null: the server's setting), live in
-    every process within a few seconds: no deploy."""
-    try:
-        admin.set_feed_layout(body.get("layout"))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    admin_log.info("admin panel: feed layout %s", body.get("layout") or "back to the server's")
-    return {"layout": admin.layout_view()}
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)

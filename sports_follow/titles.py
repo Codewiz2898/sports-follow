@@ -4,11 +4,12 @@ reaches every row at once. The words stay; what comes off is what shouts:
 - emoji, and the flags, arrows and stars channels put round their words;
 - the hashtags at the end ("… #cricket #shorts"), and the # of one in the middle ("#ViratKohli" is a word);
 - the channel's own name after a bar or a dash at the end ("… | Sports Yaari"), and a bar with nothing after it;
+  the bars left between its parts become the app's own dots ("Man City 5-1 AEK · Champions League");
 - runs of punctuation ("..!", "!!!"), a space before a stop, and runs of spaces;
-- a title in capitals ("PRESS CONFERENCE: SHREYAS IYER READY") is put in sentence case: its first word and each
+- a part in capitals ("PRESS CONFERENCE: SHREYAS IYER READY") is put in sentence case: its first word and each
   sentence's capitalised, every other word lower case but the ones a fan would write in capitals or with one, the
   names the caller keeps (the players', their sport's competitions and sides: Sport.title_words) as they're written,
-  and "I". A title partly in capitals ("IND vs AUS 2nd ODI") is left as it is: those are names.
+  and "I". A part only partly in capitals ("IND vs AUS 2nd ODI") is left as it is: those are names.
 
 `tidy` never returns nothing: a title with nothing left after all that is the title as it came.
 """
@@ -38,6 +39,7 @@ _EMOJI = re.compile(
 _TRAILING_TAGS = re.compile(r"(?:[\s|,.\-–—]*#[^\W_][\w]*)+[\s|,.\-–—]*$")
 _TAG_MARK = re.compile(r"#(?=[^\W\d_])")  # a hashtag in the middle: its word stays
 _SEPARATOR = re.compile(r"\s+(?:[|｜]|[-–—](?=\s))\s*")
+_BAR = re.compile(r"\s*[|｜]\s*")
 _PUNCT_RUN = re.compile(r"[.!?]*([!?])[.!?]*|\.{4,}")
 _SPACE_BEFORE = re.compile(r"\s+([,.!?:;])")
 _SPACES = re.compile(r"\s+")
@@ -59,9 +61,10 @@ def tidy(title: str, channel: str | None = None, keep: Iterable[str] = ()) -> st
     text = _PUNCT_RUN.sub(lambda m: m.group(1) or "...", text)
     text = _SPACE_BEFORE.sub(r"\1", _SPACES.sub(" ", text))
     text = _ENDS.sub("", text).strip()
-    if shouted(text):
-        text = sentence_case(text, keep)
-    return text or raw
+    # Each part between the bars that are left is read alone: "FODEN HAT-TRICK! | Man City 5-1 AEK" shouts in its
+    # first part only. The bars become the dots the app's own lines use.
+    parts = [sentence_case(p, keep) if shouted(p) else p for p in _BAR.split(text)]
+    return " · ".join(p for p in parts if p) or raw
 
 
 def shouted(text: str) -> bool:

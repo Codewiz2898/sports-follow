@@ -508,7 +508,7 @@ uploads are restreams; extended highlights from a league or broadcaster are offi
     title_words = (  # kept as written in a title put in sentence case (titles.py)
         "UEFA", "FIFA", "UCL", "UEL", "EPL", "VAR", "MLS", "PSG", "FC", "AFC", "CF", "LaLiga",
         "Premier League", "Champions League", "Europa League", "Ballon d'Or", "World Cup", "Real Madrid",
-        "Barcelona", "Barça", "Man City", "Manchester City", "Manchester United", "Man United", "Man Utd",
+        "Barcelona", "Barça", "City", "Man City", "Manchester City", "Manchester United", "Man United", "Man Utd",
         "Liverpool", "Arsenal", "Chelsea", "Tottenham", "Spurs", "Bayern", "Juventus", "Milan", "Atlético",
         "Dortmund", "Newcastle", "Aston Villa", "Saudi Pro League", "Al Nassr", "Inter Miami", "Bundesliga",
         "Serie A", "Ligue 1", "Copa América", "Euro", "England", "France", "Spain", "Portugal", "Brazil",
