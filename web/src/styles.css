@@ -911,6 +911,7 @@ div.result-main { cursor: default; }
 .reel-blur { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(28px) brightness(0.45); transform: scale(1.1); pointer-events: none; }
 .reel-frame { position: absolute; left: 0; right: 0; top: 42%; transform: translateY(-58%); aspect-ratio: 16 / 9; width: 100%; padding: 0; border: 0; background: #000; color: #fff; display: block; cursor: pointer; overflow: hidden; }
 .reel-frame img, .reel-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+.reel-play { position: absolute; inset: 0; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
 /* An upright video (a Short): 9:16 under the tabs, so nothing sits over YouTube's player while it plays. Its foot
    stops above who and what (their three lines of title at most: 310px above the reel's foot), and it's never wider
    than leaves 70px clear each side, so the buttons down the right (12px in, 46px wide) never meet it. */

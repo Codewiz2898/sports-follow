@@ -10,7 +10,7 @@ import { useSyncExternalStore } from 'react'
 
 export type Autoplay = 'always' | 'wifi' | 'off'
 export const AUTOPLAY: [Autoplay, string][] = [['always', 'Always'], ['wifi', 'On Wi-Fi'], ['off', 'Off']]
-const KEY = 'stann.autoplay'
+const KEY = 'sf-autoplay'
 
 function stored(): Autoplay {
   try {
