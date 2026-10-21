@@ -68,13 +68,20 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
   const covering = on && whole
   const close = () => { setWhole(false); onPlay(null); poster.current?.focus() }
   // Over the whole screen it's a step in the browser's history of its own, so Back (a phone's gesture) closes it,
-  // and × goes back. Closed once its step has been seen and is gone.
+  // and × goes back. Closed once its step has been seen and is gone; gone some other way (its stream no longer
+  // listed), its step is taken back too, so Back doesn't need pressing twice.
   const stepped = !!(location.state as { watching?: boolean } | null)?.watching
   const seen = useRef(false)
+  const was = useRef(false)
   useEffect(() => {
-    if (!covering) seen.current = false
-    else if (stepped) seen.current = true
-    else if (seen.current) close()
+    if (covering) {
+      if (stepped) seen.current = true
+      else if (seen.current) close()
+    } else {
+      if (was.current && stepped) { setWhole(false); onPlay(null); navigate(-1) }
+      seen.current = false
+    }
+    was.current = covering
   })
   if (!first) return null
   const more = streams.filter((s) => s !== first)
