@@ -902,15 +902,16 @@ div.result-main { cursor: default; }
 .reels { position: fixed; inset: 0; z-index: 5; background: var(--text); color: #fff; --focus: #fff; }
 .reels-snap { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; }
 .reels-snap::-webkit-scrollbar { display: none; }
-.reel { position: relative; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--text); }
+.reel { position: relative; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--text); container-type: size; }
 .reel-blur { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(28px) brightness(0.45); transform: scale(1.1); pointer-events: none; }
 .reel-frame { position: absolute; left: 0; right: 0; top: 42%; transform: translateY(-58%); aspect-ratio: 16 / 9; width: 100%; padding: 0; border: 0; background: #000; color: #fff; display: block; cursor: pointer; overflow: hidden; }
 .reel-frame img, .reel-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
-/* An upright video (a Short): 9:16 from under the tabs down to above who and what (and the buttons beside), so
-   nothing sits over YouTube's player while it plays. */
+/* An upright video (a Short): 9:16 under the tabs, so nothing sits over YouTube's player while it plays. Its foot
+   stops above who and what (their three lines of title at most: 310px above the reel's foot), and it's never wider
+   than leaves 70px clear each side, so the buttons down the right (12px in, 46px wide) never meet it. */
 .reel-frame.upright {
-  top: calc(64px + env(safe-area-inset-top, 0px)); left: 50%; right: auto; transform: translateX(-50%);
-  height: calc(100% - 404px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); width: auto; max-width: calc(100% - 32px); aspect-ratio: 9 / 16;
+  top: calc(64px + env(safe-area-inset-top, 0px)); left: 50%; right: auto; transform: translateX(-50%); width: auto; aspect-ratio: 9 / 16;
+  height: min(calc(100cqh - 374px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)), calc((100cqw - 140px) * 16 / 9));
 }
 .reel-bigplay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 64px; height: 64px; border-radius: 50%; background: rgba(243, 243, 239, 0.92); color: var(--text); display: flex; align-items: center; justify-content: center; }
 .reel-words { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; padding: 18px; background: var(--sport); color: var(--on-sport); }
@@ -943,7 +944,7 @@ div.result-main { cursor: default; }
   .reels { position: relative; inset: auto; height: calc(100vh - 64px); width: 100%; max-width: 460px; border-radius: 26px; overflow: hidden; }
   .reel-info { bottom: 32px; }
   .reel-side { bottom: 40px; }
-  .reel-frame.upright { height: calc(100% - 324px); }  /* who and what sit 80px lower here */
+  .reel-frame.upright { height: min(calc(100cqh - 294px), calc((100cqw - 140px) * 16 / 9)); }  /* who and what sit 80px lower here */
   .reels-error { position: static; }
 }
 

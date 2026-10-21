@@ -150,10 +150,12 @@ export function sourceLine(item: FeedItem, now: number, withLength = false): str
   return [item.source, length, views(item.video?.views), ago(item.published_at, now, true)].filter(Boolean).join(' · ')
 }
 
-/** The channel a video's from or the outlet a story's from, as the card's header names it (BHA-358): a post's
- * source is a person, named in its own line, so none. */
+/** The channel a video's from or the outlet a story with a picture is from, as the card's header names it
+ * (BHA-358). None for a post (its source is a person, named in its own line) or a story without a picture (its
+ * outlet heads the headline drawn in the picture's place). */
 export function channelOf(item: FeedItem): string | null {
-  return item.kind !== 'post' && item.source ? item.source : null
+  const named = item.kind === 'video' || (item.kind === 'news' && Boolean(item.picture))
+  return named && item.source ? item.source : null
 }
 
 /** sourceLine without the channel, for a card whose header names it: "81K views · 2d", or with the video's length
