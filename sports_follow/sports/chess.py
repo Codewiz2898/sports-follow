@@ -265,18 +265,29 @@ class Chess(Sport):
         return found
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
-        """The board says the game; once it's over, the moves that led there, a move number's pair to a line
-        ("1. d4 Nf6", "1... e5" where Black moved first), its opening and how it ended, where its source's read
-        of the finished game brought them (state["moves"]: [n, White's, Black's] each). Of a mini-match, the last
-        game's, the one on the board (game: its number)."""
+        """The board says the game; beside it, the moves that led there, a move number's pair to a line ("1. d4
+        Nf6", "1... e5" where Black moved first). Once it's over, from its source's read of the finished game
+        (state["moves"]: [n, White's, Black's] each), with its opening and how it ended; of a mini-match, the
+        last game's, the one on the board (game: its number). While it's on, the moves so far as its source's
+        reads keep them (state["page_detail"], under whichever board is newest, but only the same game's: a
+        mini-match's next one is another), with its opening, and those added since as the board gives its last
+        move ("d5e3": more), which the app writes as moves; a game kept from its first move has those alone."""
+        told = {} if state.get("moves") else state.get("page_detail") or {}
+        if told.get("game_id") != state.get("game_id"):
+            told = {}
         pairs = []
-        for row in state.get("moves") or []:
+        for row in state.get("moves") or told.get("moves") or []:
             if isinstance(row, list) and len(row) == 3 and (row[1] or row[2]):
                 n, white, black = row
                 pairs.append(f"{n}. {white} {black or ''}".rstrip() if white else f"{n}... {black}")
-        if not pairs:
+        more = [m for m in told.get("more") or [] if isinstance(m, str)]
+        if not pairs and not more:
             return {}
-        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": (state.get("match") or {}).get("games")}
+        match = state.get("match") or {}
+        if told:
+            game = match["games"] + (0 if state.get("result") else 1) if isinstance(match.get("games"), int) else None  # the one being played
+            return {"moves": pairs, "more": more, "opening": told.get("opening"), "ending": None, "game": game}
+        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": match.get("games")}
 
     def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
         """White and Black by name, each with their points: of a mini-match so far (state["match"]: its score is

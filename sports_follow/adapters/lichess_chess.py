@@ -42,6 +42,7 @@ DAYS_AHEAD = 21
 MAX_TOURS = 6  # the most recent tournaments a player is followed through
 PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a few times a month
 STALE_PAGE = 7 * 24 * 3600  # what the last copy read listed, kept in Redis while Lichess refuses a new one
+LIVE_MOVES_KEEP = 6 * 3600  # a live board's moves so far, kept in Redis this long after the last move added
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _lock = threading.Lock()  # one request at a time from each process, as Lichess asks
@@ -287,6 +288,47 @@ def parse_pgn_game(pgn: str) -> dict[str, Any]:
     ending = tags.get("Termination") or ""
     return {"moves": [[k, *pair] for k, pair in sorted(moves.items())], "opening": tags.get("Opening") or None,
             "ending": None if ending.lower() in _ENDINGS else ending}
+
+
+def fen_ply(fen: str | None) -> int | None:
+    """How many moves (plies: White's and Black's each one) a game has had at a position, by its FEN's move
+    number and side to move ("… b - - 4 25": White's 25 and Black's 24, 49); None for a FEN that doesn't say."""
+    fields = (fen or "").split()
+    if len(fields) < 6 or fields[1] not in ("w", "b") or not fields[5].isdigit():
+        return None
+    return (int(fields[5]) - 1) * 2 + (fields[1] == "b")
+
+
+def moves_ply(moves: list[list[Any]]) -> int:
+    """How many plies a game had after its moves (parse_pgn_game's rows): by the last one's number and side, so a
+    game set up from a position counts from there as its FEN does; 0 with none."""
+    if not moves:
+        return 0
+    n, _, black = moves[-1]
+    return (int(n) - 1) * 2 + (2 if black else 1)
+
+
+def moves_to(kept: dict[str, Any] | None, fen: str | None, last_move: str | None) -> dict[str, Any] | None:
+    """A live board's moves kept so far ({"moves": parse_pgn_game's rows, "more": moves added since, as the
+    board gives its last one, "d5e3"; "at": the board's last move when they last reached it) brought to its
+    position: as they are when they reach it, with its last move added when they're one short, or as they are
+    when they're ahead of it (a look at an older copy of the round than the one they were kept up by). None when
+    they can't be: none kept, a move or more missed in between, or the board's last move not the one they
+    reached it with (a relay correcting a move): its PGN is read again."""
+    ply = fen_ply(fen)
+    if kept is None or ply is None:
+        return None
+    have = moves_ply(kept.get("moves") or []) + len(kept.get("more") or [])
+    if have > ply:
+        return kept
+    if have == ply:
+        at = kept.get("at")
+        if at is not None and last_move and at != last_move:
+            return None
+        return kept if at == last_move or not last_move else {**kept, "at": last_move}
+    if have + 1 == ply and last_move:
+        return {**kept, "more": [*(kept.get("more") or []), last_move], "at": last_move}
+    return None
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
@@ -792,13 +834,54 @@ class LichessChess(Adapter):
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
-        return parse_board(data, locator["fide"])
+        snap = parse_board(data, locator["fide"])
+        if snap.status == "live":
+            self._moves_so_far(locator["round"], snap.state, read=False)  # one move on: added to its page's list
+        return snap
+
+    @staticmethod
+    def _moves_so_far(round_id: str, state: dict[str, Any], read: bool) -> dict[str, Any] | None:
+        """A live board's moves so far (moves_to's), kept in Redis for the worker and the API alike, under its
+        game: each poll of the board, and each read of its match page, that finds it a move on adds that move,
+        at no request, so a game whose page someone opened is read once and kept up by every look after.
+        With `read` (the match page's own read, at most once a minute a game while it's open), its PGN is read
+        where they can't be brought to the board (none kept yet, or moves missed between looks: a fast
+        exchange, time trouble). None where there are none (a poll before anyone opened the page, or a PGN
+        Lichess wouldn't give: the page shows the board alone till the next read)."""
+        game_id, fen = state.get("game_id"), state.get("fen")
+        if not game_id or fen_ply(fen) is None:
+            return None
+        key = f"lichess:moves:{game_id}"
+        try:
+            r: Any = bus.sync_redis()
+            raw = r.get(key)
+            kept = json.loads(raw) if raw else None
+        except Exception:  # Redis down: a read still brings them, nothing is kept
+            r, kept = None, None
+        now = moves_to(kept, fen, state.get("last_move"))
+        if now is None and read:
+            try:
+                # Without clocks, comments and side lines: a smaller answer, and not the finished game's copy
+                # (match(), kept a day), which a live read's must never stand in for.
+                pgn = parse_pgn_game(get_json(f"{API}study/{round_id}/{game_id}.pgn?clocks=false&comments=false&variations=false", ttl=10, text=True))
+            except AdapterError as exc:  # refused or unreachable (RateLimited too): the board alone this time
+                log.info("lichess: no live moves for %s/%s: %s", round_id, game_id, exc)
+                return kept
+            read_ = {"moves": pgn["moves"], "more": [], "opening": pgn["opening"], "at": None}
+            now = moves_to(read_, fen, state.get("last_move")) or read_
+        if now is not None and now != kept and r is not None:
+            try:
+                r.set(key, json.dumps(now), ex=LIVE_MOVES_KEEP)
+            except Exception:
+                pass  # Redis down: the next look reads them again
+        return now if now is not None else kept
 
     def match(self, source_id: str) -> LiveGame | None:
         """One board by a fixture of it ("<round id>-<FIDE id>", one player's game or mini-match in a round),
         whoever follows it, for its match page: its position, clocks and match score, and both players. One
-        round request, the one Live now and a followed player's live poll make; and once the game on the board
-        is over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A board
+        round request, the one Live now and a followed player's live poll make; while the game is on, its moves
+        so far (_moves_so_far: its PGN once, then kept up a move at a time by every look at the board); and once
+        it's over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A board
         whose moves couldn't be read, or whose round is still on (a mini-match's next game may follow a decided
         one), is partial: match.py reads it again later, and keeps it a week once the round is over (or, if
         Lichess never says so, once it has waited long enough: match.PARTIAL)."""
@@ -806,6 +889,13 @@ class LichessChess(Adapter):
         data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
         game = parse_game(data, fide, self.system)
         state = game.snapshot.state if game else {}
+        if game and game.snapshot.status == "live":
+            # The moves so far, as the page's detail: it shows under whichever board is newest (match.py), a
+            # followed player's poll's too.
+            # Of this game: a mini-match's next game is another, and a newer board of it mustn't take these.
+            moves = self._moves_so_far(round_id, state, read=True)
+            if moves and (moves.get("moves") or moves.get("more")):
+                state["page_detail"] = {"game_id": state.get("game_id"), "moves": moves.get("moves") or [], "more": moves.get("more") or [], "opening": moves.get("opening")}
         if game and game.snapshot.status == "final":
             game.partial = not (data.get("round") or {}).get("finished")
             try:

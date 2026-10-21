@@ -124,6 +124,7 @@ html:has(.chess-study[open]) { overflow: hidden; }
    with its top edge, the bottom one with its bottom, the move between them, and Play from here under it. */
 .chess-frame { container: chess / inline-size; }
 .chess.big { --big: min(560px, max(320px, 100vh - 280px)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'mid' 'top' 'board' 'bottom' 'under'; gap: 10px; }
+.chess.big.has-moves { grid-template-areas: 'mid' 'top' 'board' 'bottom' 'moves' 'under'; }
 @supports (height: 1svh) { .chess.big { --big: min(560px, max(320px, 100svh - 280px)); } }
 .chess.big .chess-play { grid-area: board; width: min(100%, var(--big)); }
 .chess.big .chess-top { grid-area: top; }
@@ -131,6 +132,12 @@ html:has(.chess-study[open]) { overflow: hidden; }
 .chess.big .chess-bottom { grid-area: bottom; }
 .chess.big .chess-under { grid-area: under; margin-top: 4px; }
 .chess.big .chess-clock { font-size: 26px; }
+/* The game's moves (MovesPanel): on a phone a few lines under the board, scrolled to the newest; on a wide band
+   between the top player and the move line, as tall as the board leaves them (contain: size, so a long game
+   scrolls in its room rather than stretching the board's rows). The board's move in the band's colours. */
+.chess-moves-panel { grid-area: moves; display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
+.chess.big .chess-line { max-height: 7.8em; }
+.chess.big .chess-line .chess-move[aria-current='true'] { background: var(--on-sport); color: var(--sport); }
 .chess .nowrap { white-space: nowrap; }
 @container chess (min-width: 600px) {
   .chess.big { grid-template-columns: min(var(--big), 100% - 312px) minmax(240px, 360px); grid-template-rows: auto 1fr auto auto; grid-template-areas: 'board top' 'board mid' 'board bottom' 'under .'; gap: 0 32px; }
@@ -139,6 +146,10 @@ html:has(.chess-study[open]) { overflow: hidden; }
   .chess.big .chess-mid { align-self: center; }
   .chess.big .chess-bottom { align-self: end; }
   .chess.big .chess-under { margin-top: 12px; }
+  .chess.big.has-moves { grid-template-rows: auto minmax(0, 1fr) auto auto auto; grid-template-areas: 'board top' 'board moves' 'board mid' 'board bottom' 'under .'; }
+  .chess.big.has-moves .chess-mid { align-self: end; margin-bottom: 12px; }
+  .chess-moves-panel { contain: size; margin: 16px 0 14px; }
+  .chess.big .chess-line { flex: 1; max-height: none; align-content: flex-start; }
 }
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
@@ -152,8 +163,6 @@ html:has(.chess-study[open]) { overflow: hidden; }
 .live-other .chessboard .sq { font-size: 11px; }
 .live-other .chess .tiny, .live-other .chess-turn, .live-other .chess-eval { display: none; }
 .live-other .chess-clock { font-size: 18px; padding: 2px 6px; }
-/* A finished game's moves on its match page, in pairs, as many columns as fit; each opens the analysis board
-   after it, where they replay. */
-.chess-moves { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+/* A move in a list (the match page's, the analysis board's): a button that looks like the move. */
 .chess-move { margin: -3px -2px; padding: 3px 5px; border: 0; border-radius: 6px; background: none; cursor: pointer; }
 .chess-move:hover { background: var(--raised); }

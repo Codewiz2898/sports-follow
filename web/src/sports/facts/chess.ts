@@ -21,9 +21,10 @@ export type ChessColour = 'white' | 'black'
 // White's side: in centipawns, or the moves to a forced mate (plus, White mates; minus, Black does), how deep it
 // looked, and the position it looked at; with the band the swing alerts go by (band, raw, told) and when.
 export interface ChessEval { cp?: number | null; mate?: number | null; depth?: number | null; fen?: string; at?: number; move?: number | null; band?: number; raw?: number; told?: number }
-// A finished game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"), its opening, how it
-// ended where that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
-export interface ChessPage { moves?: string[]; opening?: string | null; ending?: string | null; game?: number | null }
+// A game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"); while it's on, those its
+// source added since the last read of them, as the board gave each ("d5e3": more); its opening, how it ended where
+// that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
+export interface ChessPage { moves?: string[]; more?: string[] | null; opening?: string | null; ending?: string | null; game?: number | null }
 
 /** The line over a finished game's moves: its opening, and how it ended ("Resigned"). */
 export function movesAbout(page: ChessPage): string {

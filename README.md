@@ -188,7 +188,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's Matches tab ("The match"). Its board large in a block of its sport's colour, and over a finished
   game's board who won, big, in its sport's words (`Sport.verdict`); a game to come has its countdown
   instead. Then what its sport shows under it (a football timeline, a cricket scorecard, an esports series by
-  map or a lobby's standings, a finished chess game's moves), the fan's players in it with their lines and
+  map or a lobby's standings; a chess game's moves sit beside its board instead), the fan's players in it with their lines and
   results, the moments found for the players followed in it, and both sides' players to follow with a tap.
   A game's address is its source and the id a fixture of it has there, as its event's key holds them, so
   it's the same whether or not anyone follows a player in it, and once it's over; the server gives every
@@ -524,14 +524,25 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   mini-match stays live after it) isn't evaluated any more. The live state carries the latest evaluation (`eval`), and the board draws it
   as a bar beside the board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
   `web/src/sports/facts/chess.ts`).
-- **Play from here, on the fan's device.** A chess game's match page makes its board an analysis board
-  where it is: the fan plays either side's legal moves from the game's position (or from any move of a
-  finished game's list that replays), steps along their line, and Back to live returns to the game. A
+- **A chess game's match page.** Its board is as big as the band and the screen let it be (up to 560px), the
+  players level with its edges (beside it on a wide screen, above and under it on a phone), and its moves beside
+  it: a finished game's from its PGN; a live game's so far, its PGN read once by the page's first read (without
+  clocks, so never the finished game's copy) and kept in Redis per game (`lichess:moves:<game>`), each poll or
+  read of the board that finds it one move on adding that move as Lichess gives it (`d5e3`, the page's `more`)
+  at no request, and a read reading the PGN again only after moves were missed between looks
+  (`LichessChess._moves_so_far`); the browser writes them in SAN with chess.js, and adds the board's own last
+  move where the list is one short of it.
+- **Play from here, on the fan's device.** A chess game's match page opens an analysis board over the page (a
+  modal dialog, the board up to 720px): the fan plays either side's legal moves from the game's position (or
+  from any move in its list that replays), steps along their line, plays any of the engine's best three lines to
+  a move, with its best move as an arrow, flips, starts over, turns the engine off, and Back to live (or Escape)
+  returns to the game. A
   Freestyle (Chess960) position that can still castle isn't offered: chess.js would castle it the standard way.
   Its bar comes from Stockfish 18 (the lite single-threaded WebAssembly build, GPL-3.0, vendored in
   `web/src/sports/engine/` with its source commit, licence and checksums) in a Web Worker of the page, each
   position to depth 18 from a cleared hash on one thread, so every device ends on the same result (a slow phone
-  later; the lite network's, which can differ from the server's full engine). The build names its files by
+  later; the lite network's, which can differ from the server's full engine; the web looks for three lines and
+  the Android app for one until its board shows them, BHA-403, which can move the best line's score a little). The build names its files by
   their content under `/assets/`, a fan's browser fetches them only when they open the board, and the service
   worker keeps them then, as it does every built asset. Moves come from chess.js in a chunk of its own
   (`web/src/sports/facts/chessLine.ts`, `chessAnalysis.tsx`). Nothing the fan plays reaches the server, so it
@@ -558,8 +569,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),
   `match` for a game's match page (one game by a fixture's id, whoever follows it, live, to come or over,
-  with its line-ups and every player's line, in a request or two: a finished chess board's moves are a
-  second; a finished game's read that lacks what the source will have later, or may still change, sets
+  with its line-ups and every player's line, in a request or two: a chess board's moves are a second, once
+  while it's on and kept up after, and once it's over; a finished game's read that lacks what the source will have later, or may still change, sets
   `LiveGame.partial`, so it's read again rather than kept a week; where the source lists the game's
   broadcasts, `LiveGame.streams` has them, as its fixture's `streams` do, for the page's Watch live; ids of
   another shape than its `fixture_pattern` are refused; `sports_follow/match.py`; a league game whose source

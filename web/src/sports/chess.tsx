@@ -5,8 +5,7 @@ import { usePwa } from '../pwa'
 import './chess.css'
 import type { Opening } from './facts/chessLine'
 import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, gameMoves, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
-import { MatchSection } from './section'
-import type { BoardProps, MatchProps, SportView } from './view'
+import type { BoardProps, SportView } from './view'
 
 // The analysis board (Play from here), with chess.js and the engine's worker: loaded when a fan opens one.
 const ChessAnalysis = lazy(() => import('./chessAnalysis'))
@@ -52,18 +51,96 @@ function phrases(text?: string | null) {
   return text?.split(' · ').map((part, i) => <span key={i}>{i > 0 && ' · '}<span className="nowrap">{part}</span></span>)
 }
 
-// A finished game's move tapped in its Moves list (ChessMatch), for the match page's board to play from: the
-// board that offers Play from here listens.
-type Ask = { moves: string[]; ply: number }
-const listening = new Set<(ask: Ask) => void>()
+/** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
+ * board gave each, "d5e3"), replayed as chess from the start, each in SAN, with the board's own last move where
+ * they're one short of it: a page's look lags the board a little. Replaying takes chess.js, which comes in the
+ * analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where they don't replay
+ * (a Freestyle game's, or one set up from a position): then the pairs show as words. A finished game's must end
+ * where its board does; a live game's may lag it. */
+function useReplay(page: ChessPage | undefined, state: ChessState): string[] | null {
+  const [sans, setSans] = useState<string[] | null>(null)
+  const { fen, last_move: last, result } = state
+  // By their words: the page's next look, with the same moves, doesn't replay them again.
+  const pairs = page?.moves?.join('\n') ?? ''
+  const more = page?.more?.join(' ') ?? ''
+  useEffect(() => {
+    // From the start: by the pairs, or with none yet (a game kept from its first move), by the added ones alone.
+    const from = pairs ? gameMoves(pairs.split('\n')) : []
+    const added = more ? more.split(' ') : []
+    if (!from || (!from.length && !added.length) || !fen || !standardCastling(fen)) {
+      setSans(null)
+      return
+    }
+    let current = true
+    // The last list stays while the next replays (no flicker each look), and goes where it doesn't.
+    const words = () => { if (current) setSans(null) }
+    import('./facts/chessLine')
+      .then(({ fenAt, lineOfGame, playedOn, samePosition }) => {
+        const start = lineOfGame(from, from.length)
+        let game = start && playedOn(start, added)
+        if (!game || game.plies.length < from.length + added.length) return words()  // one of them doesn't play
+        if (!samePosition(fenAt(game), fen) && last) {
+          const on = playedOn(game, [last])
+          if (samePosition(fenAt(on), fen)) game = on
+        }
+        if (result && !samePosition(fenAt(game), fen)) return words()
+        if (current) setSans(game.plies.map((p) => p.san))
+      })
+      .catch(words)
+    return () => { current = false }
+  }, [pairs, more, fen, last, result])
+  return sans
+}
+
+/** The game's moves beside its match page's board, in the board's colours: each, once they replay, opening the
+ * analysis board after it (`open`), and the last (where the board is) marked; while they don't (or chess.js is
+ * on its way), the pairs as words, and those added since as the board gave them (a Freestyle game's: "d6d7"). Its opening and how it ended, or of a mini-match the game's number, over them. Kept scrolled to the
+ * newest as moves come, unless the fan has scrolled back. */
+function MovesPanel({ page, sans, open }: { page: ChessPage; sans: string[] | null; open: (moves: string[], ply: number) => void }) {
+  const list = useRef<HTMLOListElement>(null)
+  const pinned = useRef(true)  // at the newest: false once the fan scrolls back, true again at the end
+  const count = sans?.length ?? (page.moves?.length ?? 0) + (page.more?.length ?? 0)
+  useEffect(() => {
+    if (pinned.current && list.current) list.current.scrollTop = list.current.scrollHeight
+  }, [count, sans])
+  // And when its room changes (a phone turned: the list beside the board, or under it).
+  useEffect(() => {
+    const ol = list.current
+    if (!ol || typeof ResizeObserver === 'undefined') return
+    const watch = new ResizeObserver(() => { if (pinned.current) ol.scrollTop = ol.scrollHeight })
+    watch.observe(ol)
+    return () => watch.disconnect()
+  }, [])
+  const about = [page.game ? `Game ${page.game}` : null, movesAbout(page)].filter(Boolean).join(' · ')
+  return (
+    <div className="chess-moves-panel">
+      <span className="row" style={{ justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+        <span className="eyebrow">Moves</span>
+        {about && <span className="tiny muted">{about}</span>}
+      </span>
+      <ol ref={list} className="chess-line" aria-label="Moves" onScroll={(e) => { const ol = e.currentTarget; pinned.current = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24 }}>
+        {sans ? sans.map((san, i) => {
+          const said = `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'} ${san}`
+          return (
+            <li key={i}>
+              {i % 2 === 0 && <span className="muted">{i / 2 + 1}.</span>}
+              <button type="button" className="chess-move" aria-current={i + 1 === sans.length} aria-label={`Play on from ${said}`} title={`Play on from ${said}`} onClick={() => open(sans, i + 1)}>{san}</button>
+            </li>
+          )
+        }) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
+      </ol>
+    </div>
+  )
+}
 
 /** The board from the position's FEN, with the last move marked and, while the game's on, the engine's evaluation
  * beside it when there is one: from the followed player's side (from White's with no one side of the fan's,
  * followedSide), until the fan turns it, which holds while the page is open. With `explore` (the match page's),
  * the board is big, its players level with its edges (beside it on a wide screen, above and under it on a
- * phone: chess.css), and Play from here opens the analysis board over the page (chessAnalysis.tsx), as does a
- * finished game's move tapped in the Moves list; closing it is back to the game. */
-function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<ChessState>) {
+ * phone: chess.css), the game's moves beside it (its `page`'s: MovesPanel), and Play from here opens the
+ * analysis board over the page (chessAnalysis.tsx), as does a move tapped in the list; closing it is back to
+ * the game. */
+function ChessBoard({ state, clock, compact, live, lines, explore, page }: BoardProps<ChessState>) {
   const [side, setSide] = useState<ChessColour | null>(null)
   const [opening, setOpening] = useState<Opening | null>(null)
   const play = useRef<HTMLButtonElement>(null)
@@ -71,24 +148,21 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
   // Play from here: the match page's board, of a position that plays by the standard rules (not a Freestyle
   // game's before its castling).
   const playable = Boolean(explore && state.fen && standardCastling(state.fen))
-  useEffect(() => {
-    if (!playable || !state.fen) return
-    const base = state.fen
-    const asked = (ask: Ask) => {
-      // The move tapped (Safari doesn't focus a clicked button: then body, and Play from here takes the focus back).
-      const at = document.activeElement
-      back.current = at instanceof HTMLElement && at !== document.body ? at : null
-      setOpening((o) => ({ base, last: state.last_move, moves: ask.moves, ply: ask.ply, asked: (o?.asked ?? 0) + 1 }))
-    }
-    listening.add(asked)
-    return () => { listening.delete(asked) }
-  }, [playable, state.fen, state.last_move])
+  const moves = explore ? (page as ChessPage | undefined) : undefined
+  const sans = useReplay(moves, state)
+  // A move tapped in the list: the analysis board after it.
+  const openAt = (line: string[], ply: number) => {
+    // The keyboard goes back to it after (Safari doesn't focus a clicked button: then Play from here takes it).
+    const at = document.activeElement
+    back.current = at instanceof HTMLElement && at !== document.body ? at : null
+    setOpening((o) => ({ base: state.fen ?? '', last: state.last_move, moves: line, ply, asked: (o?.asked ?? 0) + 1 }))
+  }
   if (!state.white || !state.black) return null
   const { ranks, flip, moved } = position(state, live, (side ?? followedSide(live, lines)) === 'black')
   // The live evaluation while the game's on: once it's over, the last one isn't what the result says (a draw
   // agreed at +3.0).
   const ev = state.result ? null : state.eval
-  // Closed: the keyboard back where it was, the move tapped in the Moves list or Play from here.
+  // Closed: the keyboard back where it was, the move tapped in the list or Play from here.
   const leave = () => {
     setOpening(null)
     window.requestAnimationFrame(() => (back.current?.isConnected ? back.current : play.current)?.focus())
@@ -139,11 +213,12 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
     const depth = ev?.depth ? <span className="tiny muted">Engine · depth {ev.depth}</span> : null
     return (
       <div className="chess-frame">
-        <div className="chess big">
+        <div className={`chess big${moves?.moves?.length || moves?.more?.length ? ' has-moves' : ''}`}>
           <span className="stack chess-mid">{middle}{note}</span>
           {player(top, topColour, 'chess-top')}
           {board}
           {player(bottom, bottomColour, 'chess-bottom')}
+          {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={playable ? sans : null} open={openAt} /> : null}
           {(playable || depth) && (
             <div className="chess-under row">
               {playable && <button ref={play} type="button" className="btn small" onClick={() => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, asked: 1, focus: true }) }}>Play from here</button>}
@@ -175,55 +250,5 @@ function ChessBoard({ state, clock, compact, live, lines, explore }: BoardProps<
   )
 }
 
-/** A finished game's match page under its board: the moves that led there, in pairs, with its opening and how
- * it ended; of a mini-match, the last game's (the one on the board). Each move opens the board's analysis at the
- * position after it where they replay as chess from the start to the position on the board: a Freestyle game's,
- * or one set up from a position, don't. Knowing that takes chess.js, which comes for it in the analysis board's
- * own chunk of the rules (facts/chessLine.ts); until it has, and where they don't, the moves are words. */
-function ChessMatch({ page, live }: MatchProps<ChessPage>) {
-  const [replays, setReplays] = useState<string[] | null>(null)
-  const fen = (live?.state as ChessState | undefined)?.fen
-  const moves = page.moves?.join(' ') ?? ''
-  useEffect(() => {
-    setReplays(null)
-    const sans = page.moves ? gameMoves(page.moves) : null
-    if (!sans || !fen || !standardCastling(fen)) return
-    let current = true
-    import('./facts/chessLine')
-      .then(({ fenAt, lineOfGame, samePosition }) => {
-        const game = lineOfGame(sans, sans.length)
-        if (current && game && samePosition(fenAt(game), fen)) setReplays(sans)
-      })
-      .catch(() => {})  // the moves stay words
-    return () => { current = false }
-    // By the moves' words: the page's next look, with the same moves, doesn't replay them again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moves, fen])
-  if (!page.moves?.length) return null
-  const about = movesAbout(page)
-  const move = (ply: number) => {
-    const san = replays?.[ply - 1]
-    if (!replays || !san) return null
-    const said = `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'} ${san}`
-    return (
-      <button type="button" className="chess-move" aria-label={`Play on from ${said}`} title={`Play on from ${said}`} onClick={() => listening.forEach((asked) => asked({ moves: replays, ply }))}>
-        {san}
-      </button>
-    )
-  }
-  return (
-    <MatchSection title="Moves" note={page.game ? `Game ${page.game}` : null}>
-      <div className="card card-pad stack" style={{ gap: 10 }}>
-        {about && <span className="small muted">{about}</span>}
-        {replays && <span className="tiny muted">Tap a move to play on from there.</span>}
-        <ol className="chess-moves">
-          {page.moves.map((m, i) => (
-            <li key={m} className="small">{replays ? <>{i + 1}. {move(2 * i + 1)} {move(2 * i + 2)}</> : m}</li>
-          ))}
-        </ol>
-      </div>
-    </MatchSection>
-  )
-}
-
-export const chess: SportView = { ...facts, Board: ChessBoard as SportView['Board'], Match: ChessMatch as SportView['Match'] }
+// The moves, a chess game's only section, are beside its board (MovesPanel): it has no Match of its own.
+export const chess: SportView = { ...facts, Board: ChessBoard as SportView['Board'] }
