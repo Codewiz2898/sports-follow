@@ -64,26 +64,29 @@ function useReplay(page: ChessPage | undefined, state: ChessState): string[] | n
   const pairs = page?.moves?.join('\n') ?? ''
   const more = page?.more?.join(' ') ?? ''
   useEffect(() => {
-    const from = pairs ? gameMoves(pairs.split('\n')) : null
+    // From the start: by the pairs, or with none yet (a game kept from its first move), by the added ones alone.
+    const from = pairs ? gameMoves(pairs.split('\n')) : []
     const added = more ? more.split(' ') : []
-    if (!from || !fen || !standardCastling(fen)) {
+    if (!from || (!from.length && !added.length) || !fen || !standardCastling(fen)) {
       setSans(null)
       return
     }
     let current = true
+    // The last list stays while the next replays (no flicker each look), and goes where it doesn't.
+    const words = () => { if (current) setSans(null) }
     import('./facts/chessLine')
       .then(({ fenAt, lineOfGame, playedOn, samePosition }) => {
         const start = lineOfGame(from, from.length)
         let game = start && playedOn(start, added)
-        if (!game || game.plies.length < from.length + added.length) return  // one of them doesn't play: words
+        if (!game || game.plies.length < from.length + added.length) return words()  // one of them doesn't play
         if (!samePosition(fenAt(game), fen) && last) {
           const on = playedOn(game, [last])
           if (samePosition(fenAt(on), fen)) game = on
         }
-        if (result && !samePosition(fenAt(game), fen)) return
+        if (result && !samePosition(fenAt(game), fen)) return words()
         if (current) setSans(game.plies.map((p) => p.san))
       })
-      .catch(() => {})  // the moves stay words
+      .catch(words)
     return () => { current = false }
   }, [pairs, more, fen, last, result])
   return sans
@@ -210,12 +213,12 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
     const depth = ev?.depth ? <span className="tiny muted">Engine · depth {ev.depth}</span> : null
     return (
       <div className="chess-frame">
-        <div className={`chess big${moves?.moves?.length ? ' has-moves' : ''}`}>
+        <div className={`chess big${moves?.moves?.length || moves?.more?.length ? ' has-moves' : ''}`}>
           <span className="stack chess-mid">{middle}{note}</span>
           {player(top, topColour, 'chess-top')}
           {board}
           {player(bottom, bottomColour, 'chess-bottom')}
-          {moves?.moves?.length ? <MovesPanel page={moves} sans={playable ? sans : null} open={openAt} /> : null}
+          {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={playable ? sans : null} open={openAt} /> : null}
           {(playable || depth) && (
             <div className="chess-under row">
               {playable && <button ref={play} type="button" className="btn small" onClick={() => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, asked: 1, focus: true }) }}>Play from here</button>}

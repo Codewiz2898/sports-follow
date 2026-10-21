@@ -310,17 +310,24 @@ def moves_ply(moves: list[list[Any]]) -> int:
 
 def moves_to(kept: dict[str, Any] | None, fen: str | None, last_move: str | None) -> dict[str, Any] | None:
     """A live board's moves kept so far ({"moves": parse_pgn_game's rows, "more": moves added since, as the
-    board gives its last one, "d5e3"}) brought to its position: as they are when they reach it, with its last
-    move added when they're one short; None when they can't be (none kept, a move or more missed in between, or
-    ahead of it): its PGN is read again."""
+    board gives its last one, "d5e3"; "at": the board's last move when they last reached it) brought to its
+    position: as they are when they reach it, with its last move added when they're one short, or as they are
+    when they're ahead of it (a look at an older copy of the round than the one they were kept up by). None when
+    they can't be: none kept, a move or more missed in between, or the board's last move not the one they
+    reached it with (a relay correcting a move): its PGN is read again."""
     ply = fen_ply(fen)
     if kept is None or ply is None:
         return None
     have = moves_ply(kept.get("moves") or []) + len(kept.get("more") or [])
-    if have == ply:
+    if have > ply:
         return kept
+    if have == ply:
+        at = kept.get("at")
+        if at is not None and last_move and at != last_move:
+            return None
+        return kept if at == last_move or not last_move else {**kept, "at": last_move}
     if have + 1 == ply and last_move:
-        return {**kept, "more": [*(kept.get("more") or []), last_move]}
+        return {**kept, "more": [*(kept.get("more") or []), last_move], "at": last_move}
     return None
 
 
@@ -860,7 +867,7 @@ class LichessChess(Adapter):
             except AdapterError as exc:  # refused or unreachable (RateLimited too): the board alone this time
                 log.info("lichess: no live moves for %s/%s: %s", round_id, game_id, exc)
                 return kept
-            read_ = {"moves": pgn["moves"], "more": [], "opening": pgn["opening"]}
+            read_ = {"moves": pgn["moves"], "more": [], "opening": pgn["opening"], "at": None}
             now = moves_to(read_, fen, state.get("last_move")) or read_
         if now is not None and now != kept and r is not None:
             try:
@@ -885,9 +892,10 @@ class LichessChess(Adapter):
         if game and game.snapshot.status == "live":
             # The moves so far, as the page's detail: it shows under whichever board is newest (match.py), a
             # followed player's poll's too.
+            # Of this game: a mini-match's next game is another, and a newer board of it mustn't take these.
             moves = self._moves_so_far(round_id, state, read=True)
-            if moves and moves.get("moves"):
-                state["page_detail"] = {"moves": moves["moves"], "more": moves.get("more") or [], "opening": moves.get("opening")}
+            if moves and (moves.get("moves") or moves.get("more")):
+                state["page_detail"] = {"game_id": state.get("game_id"), "moves": moves.get("moves") or [], "more": moves.get("more") or [], "opening": moves.get("opening")}
         if game and game.snapshot.status == "final":
             game.partial = not (data.get("round") or {}).get("finished")
             try:

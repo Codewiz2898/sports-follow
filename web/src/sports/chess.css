@@ -123,7 +123,8 @@ html:has(.chess-study[open]) { overflow: hidden; }
    above and under the board as in a chess app; on a band wide enough, the players beside it, the top one level
    with its top edge, the bottom one with its bottom, the move between them, and Play from here under it. */
 .chess-frame { container: chess / inline-size; }
-.chess.big { --big: min(560px, max(320px, 100vh - 280px)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'mid' 'top' 'board' 'bottom' 'moves' 'under'; gap: 10px; }
+.chess.big { --big: min(560px, max(320px, 100vh - 280px)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'mid' 'top' 'board' 'bottom' 'under'; gap: 10px; }
+.chess.big.has-moves { grid-template-areas: 'mid' 'top' 'board' 'bottom' 'moves' 'under'; }
 @supports (height: 1svh) { .chess.big { --big: min(560px, max(320px, 100svh - 280px)); } }
 .chess.big .chess-play { grid-area: board; width: min(100%, var(--big)); }
 .chess.big .chess-top { grid-area: top; }

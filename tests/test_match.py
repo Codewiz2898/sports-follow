@@ -95,9 +95,11 @@ def test_a_sport_without_sections_lists_the_key_events_and_a_chess_board_says_it
 
 def test_a_live_chess_game_lists_its_moves_so_far_and_those_added_since():
     # Its read's moves (the PGN's) under whichever board is newest, and the moves added since as the board gave them.
-    told = {"moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": ["g1f3", 7], "opening": "Indian"}
-    state = {"kind": "chess", "fen": "x", "match": {"games": 2, "score": "1½–½"}, "page_detail": told}
+    told = {"game_id": "g3", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": ["g1f3", 7], "opening": "Indian"}
+    state = {"kind": "chess", "game_id": "g3", "fen": "x", "match": {"games": 2, "score": "1½–½"}, "page_detail": told}
     assert sports.get("chess").match_page(state, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6"], "more": ["g1f3"], "opening": "Indian", "ending": None, "game": 3}
+    # A newer board of the mini-match's next game doesn't take the last game's moves.
+    assert sports.get("chess").match_page({**state, "game_id": "g4"}, [], {}, {}) == {}
     # Once it's over, the finished game's own moves stand, not a live read's.
     over = {"kind": "chess", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", "d5"]], "opening": "QGD", "ending": "resigned", "page_detail": told}
     assert sports.get("chess").match_page(over, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6", "3. Nf3 d5"], "opening": "QGD", "ending": "resigned", "game": None}

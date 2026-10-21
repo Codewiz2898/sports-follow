@@ -209,12 +209,18 @@ export function numbered(sans: string[], fen: string): string {
   return numberedMoves(sans, fen).map((m) => (m.number ? `${m.number} ${m.san}` : m.san)).join(' ')
 }
 
-/** A line with an engine's moves (UCI) played on from where the board is, as far as they're legal, the board
- * after the last: the fan's line from there gives way to them, as a move of theirs would. */
+// Castling as some boards send it, the king onto its rook's square (Chess960's way, never a legal king move in
+// standard chess), and as UCI writes it, the king two squares over.
+const CASTLES: Record<string, string> = { e1h1: 'e1g1', e1a1: 'e1c1', e8h8: 'e8g8', e8a8: 'e8c8' }
+
+/** A line with moves in UCI (an engine's, or a live board's as its source gives them) played on from where the
+ * board is, as far as they're legal, the board after the last: the fan's line from there gives way to them, as
+ * a move of theirs would. */
 export function playedOn(line: ChessLine, uci: string[]): ChessLine {
   let next = line
   for (const u of uci) {
-    const after = played(next, u.slice(0, 2), u.slice(2, 4), u[4])
+    const as = (m: string) => played(next, m.slice(0, 2), m.slice(2, 4), m[4])
+    const after = as(u) ?? (CASTLES[u] ? as(CASTLES[u]) : null)
     if (!after) break
     next = after
   }
