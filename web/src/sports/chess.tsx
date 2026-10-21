@@ -68,7 +68,7 @@ function ChessBoard({ state, clock, compact, live, lines }: BoardProps<ChessStat
         <span className="row">
           <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{chessMiddle(state, clock)}</span>
           {ranks.length === 8 && (
-            <button type="button" className="btn icon chess-turn" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
+            <button type="button" className="btn icon chess-turn over-link" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
               <SwapIcon width={18} height={18} />
             </button>
           )}

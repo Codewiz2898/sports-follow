@@ -179,8 +179,9 @@ def test_chess_swings_from_the_players_side():
 def test_a_swing_says_the_engine_score_as_the_board_does():
     # Halves of a tenth round away from zero either way, as the app's evaluation bar rounds them (facts/chess.ts).
     score = lambda cp, side=1: chess._score({"cp": cp, "mate": None}, side)  # noqa: E731
-    assert [score(125), score(-125), score(135), score(-135), score(-4), score(0)] == ["+1.3", "-1.3", "+1.4", "-1.4", "+0.0", "+0.0"]
-    assert (score(360, side=-1), score(-1049), score(5)) == ("-3.6", "-10.5", "+0.1")
+    assert [score(125), score(-125), score(135), score(-135), score(-4), score(0)] == ["+1.3", "-1.3", "+1.4", "-1.4", "0.0", "0.0"]
+    # Past ten pawns, whole ones, as the bar shows them.
+    assert (score(360, side=-1), score(-994), score(-1049), score(1250), score(5)) == ("-3.6", "-9.9", "-11", "+13", "+0.1")
     assert (chess._score({"mate": -3}, -1), chess._score({"mate": -3}, 1)) == ("mate in 3", "facing mate in 3")
 
 
