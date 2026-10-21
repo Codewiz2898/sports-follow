@@ -487,6 +487,8 @@ restreams; a player's own stream highlights aren't."""
     # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
     # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
+    # A team's name as official channels' titles write it ("Falcons vs Vitality", "Liquid", "G2"): BHA-382.
+    team_affixes = ("Team", "Esports", "Gaming", "Clan", "Club")
     video_channels = (
         "UCENNtCRTPTdH_IGXs42LuHQ",  # Esports World Cup
         "UCvqRdlKsE5Q8mf8YXbdIJLw",  # LoL Esports
@@ -500,6 +502,11 @@ restreams; a player's own stream highlights aren't."""
         "UCugG6-k5QGbq_iDEPAnG4NQ",  # KRAFTON INDIA ESPORTS: BGMI
         "UCmeeY9kzNswUpbYyJntb3Aw",  # PUBG MOBILE Esports
         "UCuLq0ME8tqK6pzCm9rpkwjQ",  # Red Bull Gaming
+        # Teams in several games (BHA-382): their videos are titled by team and match, which candidates.py reads.
+        "UCoxY6eycLUwdWbvi2gLi9Qw",  # Falcons Esports
+        "UCgjhed4ZWlmC25hS4Sgs7gw",  # Team Vitality
+        "UCxo56gzJQ_fhb6svPqTSewg",  # FNATIC
+        "UCs9Bi1j5s25Yinhmd-NJvJw",  # G2 Esports
     )
     title_words = (  # kept as written in a title put in sentence case (titles.py)
         "VALORANT", "Valorant", "VCT", "LoL", "League of Legends", "CS2", "CS:GO", "Counter-Strike",
@@ -536,8 +543,11 @@ class Game(Esports):
     group = Esports.key
     kinds = ()  # its scoreboards are esports' (SPORT's kinds)
 
-    def __init__(self, key: str, label: str, colour: dict[str, str], names: tuple[str, ...] = (), pattern: str = "", teams: bool = True) -> None:
+    def __init__(self, key: str, label: str, colour: dict[str, str], names: tuple[str, ...] = (), pattern: str = "", teams: bool = True,
+                 channels: tuple[str, ...] = ()) -> None:
         self.key, self.label, self.colour, self.names = key, label, colour, names
+        # Every game's channels, and its own: its leagues', organisers' and teams' (BHA-382).
+        self.video_channels = (*Esports.video_channels, *channels)
         # Fans can follow its teams (teams.py): a team title's. A battle royale's teams are a lobby's, a dozen or more
         # a game, whose results are standings, not one side's against another's.
         self.follow_teams = teams
@@ -563,10 +573,38 @@ def _dark(block: str, ink: str) -> dict[str, str]:
 # Every game a source covers, in the order the app lists them, after the other sports. Each colour reads
 # with its text at 4.5:1 or better and stands apart from every other sport's (tests/test_sports.py).
 GAMES: tuple[Game, ...] = (
-    Game("valorant", "Valorant", _light("#ff6b6b", "#1f0005")),
-    Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b"),
-    Game("lol", "League of Legends", _light("#19c3e6", "#00161c"), ("LoL",), r"league of legends|\blol\b"),
-    Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3"), ("Dota", "Dota2"), r"\bdota ?2?\b"),
+    Game("valorant", "Valorant", _light("#ff6b6b", "#1f0005"), channels=(
+        "UCifCesg-EUkjKyQedaB3hRg",  # VALORANT Champions Tour Americas
+        "UCp6n8d8Y8r3MwKNw_MMaouQ",  # VALORANT Champions Tour EMEA
+        "UCA8fUfoBLWyUpAZTbXB0uoA",  # VALORANT Champions Tour Pacific
+        "UCc1VJX_5Z2RdGi58XU4IfbA",  # VALORANT Champions Tour CN
+        "UCNcWiCgpHVctNxLr3FD04PA",  # Sentinels
+        "UCwlKnVP2b9m2riIqBFrAUfw",  # Paper Rex
+        "UCE5oMiJ540R4BwnlEKf93SQ",  # Team Liquid VALORANT
+        "UCY2Mt2Aa95FP3-F6_9aQm5w",  # FNATIC Valorant
+    )),
+    Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b", channels=(
+        "UCx1kGL8Qox1jEiHRMsnn9Ag",  # StarLadder CS2
+        "UCajcK9vEBDLmcLSSYf4WXVA",  # FACEIT
+        "UC5V-Uv0eUg0Fby0v13luULw",  # NAVI CS2
+        "UCJGMbg3US0xwGXzLFwYOE-g",  # Team Vitality Counter Strike
+        "UCLSWNf28X3mVTxTT3_nLCcw",  # Team Liquid CS2
+        "UCLtSNxtLXu61XvIa0TpwP2w",  # FaZe Esports
+        "UCCo2nH5KDA1OE4m2VZAEbLg",  # Team Spirit CS
+    )),
+    Game("lol", "League of Legends", _light("#19c3e6", "#00161c"), ("LoL",), r"league of legends|\blol\b", channels=(
+        "UCKVlixycWmapnGQ_wht4cHQ",  # LCK Global
+        "UCWWZjhmokTbezUQr1kbbEYQ",  # LEC
+        "UCSF_aFGIIIoWY30GVV19TKA",  # LCS
+        "UCJprx3bX49vNl6Bcw01Cwfg",  # T1
+        "UCDmmbxGg8g-EBkC_ku6vybg",  # Gen.G Esports
+        "UCMEMMaL6Xpvoqvw3TxI5jmg",  # Team Liquid League of Legends
+    )),
+    Game("dota2", "Dota 2", _dark("#a3213a", "#ff8fa3"), ("Dota", "Dota2"), r"\bdota ?2?\b", channels=(
+        "UCAvIC2XmBLLXFPdveirTrmw",  # BLAST SLAM Dota 2
+        "UC7VWLs_Ivccq22rM2_xo0Rg",  # PGL DOTA2
+        "UCSyKkR1BFlJ1915TqXHkclQ",  # Team Spirit
+    )),
     Game("bgmi", "BGMI", _dark("#166534", "#4ade80"), ("Battlegrounds Mobile India",), r"\bbgmi\b|battlegrounds mobile india", teams=False),
     Game("freefire", "Free Fire", _light("#e879f9", "#1f0024"), ("Free Fire MAX", "Garena Free Fire"), r"free ?fire", teams=False),
     Game("pubgmobile", "PUBG Mobile", _light("#60a5fa", "#001a33"), ("PUBGM",), r"pubg ?mobile|\bpubgm\b", teams=False),
@@ -574,7 +612,9 @@ GAMES: tuple[Game, ...] = (
     Game("mlbb", "Mobile Legends", _dark("#0f766e", "#2dd4bf"), ("Mobile Legends: Bang Bang", "MLBB"), r"mobile legends|\bmlbb\b"),
     Game("hok", "Honor of Kings", _dark("#8b5a2b", "#e0a96d"), ("King of Glory", "Honour of Kings"), r"hono(?:u)?r of kings|king of glory"),
     Game("r6siege", "Rainbow Six Siege", _dark("#6b2d5c", "#e79ad3"), ("Rainbow Six", "R6 Siege"), r"rainbow six|\br6\b"),
-    Game("overwatch", "Overwatch", _light("#ffb37a", "#1f0d00"), ("Overwatch 2",), r"overwatch"),
+    Game("overwatch", "Overwatch", _light("#ffb37a", "#1f0d00"), ("Overwatch 2",), r"overwatch", channels=(
+        "UCiAInBL9kUzz1XRxk66v-gw",  # Overwatch Esports: OWCS
+    )),
     Game("apex", "Apex Legends", _dark("#7c2d12", "#fb9a6c"), ("Apex",), r"apex legends|\bapex\b", teams=False),
     Game("rocketleague", "Rocket League", _light("#5eead4", "#00201b")),
     Game("cod", "Call of Duty", _dark("#6b5d4f", "#d2c4b4"), ("CoD",), r"call of duty(?!:? ?mobile)|\bcod\b"),

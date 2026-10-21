@@ -25,11 +25,14 @@ pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABA
 
 
 class Redis:
-    """The few Redis calls the fetch makes (what it refused, remembered a while), in memory."""
+    """The few Redis calls the fetch makes (what it refused, remembered a while; the pool), in memory."""
 
     def __init__(self):
         self.data: dict[str, str] = {}
         self.ttl: dict[str, int | None] = {}
+
+    def get(self, key):
+        return self.data.get(key)
 
     def mget(self, keys):
         return [self.data.get(k) for k in keys]
@@ -296,3 +299,32 @@ def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_f
     with db_module.session() as s:
         marks = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at)).all())
     assert marks == {kohli: NOW, bumrah: NOW}
+
+
+def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_their_teams(world):
+    """BHA-382: the pool's players (feedpool.ids: nobody follows them) are looked for beside followed ones, and a video
+    naming a team and none of its players is kept for them as the team's."""
+    import json
+
+    from sports_follow import feedpool
+
+    kohli = player("Virat Kohli")
+    with db_module.session() as s:
+        s.get(Player, kohli).teams = ["India", "Royal Challengers Bengaluru"]  # pyright: ignore[reportOptionalMemberAccess]
+    mandhana = player("Smriti Mandhana", followed=False)
+    player("Rohit Sharma", followed=False)  # neither followed nor in the pool: never looked for
+    world.redis.data[feedpool.POOL_KEY] = json.dumps({"players": {"cricket": [mandhana]}})
+    world.feeds[CHANNEL] = feed(
+        ("indaus00001", "India vs Australia, 2nd ODI | Highlights", ""),
+        ("mandhana001", "Smriti Mandhana's 117 at Brisbane", ""),
+        ("rohit000001", "Rohit Sharma's pull", ""),
+        ("indwomen001", "India Women vs Australia Women | Highlights", ""),
+    )
+    world.videos.update({v["id"]: v for v in (video("indaus00001"), video("mandhana001"), video("rohit000001"), video("indwomen001"))})
+    done = candidates.poll(NOW)
+    assert rows() == [(kohli, "indaus00001"), (mandhana, "mandhana001")] and done["kept"] == 2
+    with db_module.session() as s:
+        team = s.scalar(select(FeedCandidate).where(FeedCandidate.external_id == "indaus00001"))
+        mine = s.scalar(select(FeedCandidate).where(FeedCandidate.external_id == "mandhana001"))
+        assert team is not None and (team.candidate["about"], team.candidate["team"], team.candidate["named"]) == ("team", "India", "india")
+        assert mine is not None and "about" not in mine.candidate and mine.candidate["named"] == "smriti mandhana"

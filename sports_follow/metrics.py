@@ -155,10 +155,10 @@ def feed(result: str, by: int = 1) -> None:
 # ---------------------------------------------------------------- the feed's funnel, judge and coverage (BHA-326)
 
 # Where a video came from: a trusted channel's uploads (candidates.poll), a moment's search (searches.run), a search
-# for a player with nothing to watch this week (gap), for their six months' most watched (wide), or for their most
-# watched ever (famous; all three sweeps.py). A
+# for a player with nothing to watch this week (gap), for their six months' most watched (wide), for their most
+# watched ever (famous), or for a pool player's last two months (pool; all four sweeps.py). A
 # publisher's story (news.py) is judged, passed and served as "news" too.
-STREAMS = ("channels", "search", "gap", "wide", "famous")
+STREAMS = ("channels", "search", "gap", "wide", "famous", "pool")
 # Each step of the funnel, as sports_follow.feed.<step>: uploads read, those naming a followed player (one for each
 # player named), kept (a row stored), judged, passed by the judge, and served (a row's score set, newly).
 FEED_STEPS = {

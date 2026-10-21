@@ -65,7 +65,7 @@ def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811
 
 def test_without_a_key_nothing_is_swept(monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
-    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
+    assert sweeps.run(NOW) == {"gap searched": 0, "wide searched": 0, "famous searched": 0, "pool searched": 0, "found": 0, "kept": 0, "refused": 0}  # no database read either
 
 
 def test_a_sweeps_rows_are_counted_as_its_own_stream():

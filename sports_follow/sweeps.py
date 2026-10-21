@@ -18,12 +18,16 @@ second run in the day only does what a missed first one didn't):
   seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
   more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
   first), the most followed of those. When the cap binds it gets round everyone before anyone's swept again.
+- The pool sweep (BHA-382): each pool player nobody follows (feedpool.py: their sport's best known, whose videos
+  fill For you), for videos of the last POOL_DAYS (For you's window for them, feed.OTHERS_WINDOW), most watched
+  first. Each at most once in POOL_EVERY, up to FEED_POOL_SEARCHES in any 24 hours, after the followed players'
+  three, the longest unswept first (never, first), the best known of those.
 
 What each finds goes the way a moment search's does: kept where it names the player and passes the hard filters
 (candidates.keep), unless it's stored for them already (counted as already_stored: units spent for nothing), then
 judged and ranked with the rest (curator.rank_new). Each search a source answered is a row (FeedSweep) with what it
 found and kept, and each candidate it kept names it, which says what it served (report). In the feed's funnel each
-is a stream of its own, "gap", "wide" and "famous". They run in that order, as far as there's room.
+is a stream of its own, "gap", "wide", "famous" and "pool". They run in that order, as far as there's room.
 
 Moment searches come first: sweeps stop while what's left of a source's searches (VideoSource.search_budgets) is what
 the moment searches' cap may still spend in the day (_room), so however full the sweeps' caps, the day's moment
@@ -43,21 +47,23 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import candidates, db, feedstats, metrics, searches, shutdown, sports
+from . import candidates, db, feedpool, feedstats, metrics, searches, shutdown, sports
 from .adapters import AdapterError, VideoSource, budget
-from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MOMENT_SEARCHES, FEED_WIDE_SEARCHES
+from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MOMENT_SEARCHES, FEED_POOL_SEARCHES, FEED_WIDE_SEARCHES
 from .models import FeedCandidate, FeedSweep, Follow, Player
 from .sports.base import words
 
 log = logging.getLogger("sports_follow.sweeps")
 
-GAP, WIDE, FAMOUS = "gap", "wide", "famous"  # their streams (metrics.STREAMS)
+GAP, WIDE, FAMOUS, POOL = "gap", "wide", "famous", "pool"  # their streams (metrics.STREAMS)
 GAP_DAYS = timedelta(days=14)  # a gap search looks for videos published this recently
 GAP_EVERY = timedelta(hours=20)  # a player's gap search runs once a day: the sweep is daily, and may run a little early
 GAP_BACKOFF = timedelta(days=3)  # after a gap search that kept nothing, the player's next waits this long
 WIDE_DAYS = timedelta(days=183)  # the wide sweep looks for videos published this recently: six months
 WIDE_EVERY = timedelta(days=7) - timedelta(hours=4)  # a player's wide search runs once a week: a run a little early still counts
 FAMOUS_EVERY = timedelta(days=30)  # a player's most watched videos are searched for again no sooner than this
+POOL_DAYS = timedelta(days=60)  # the pool sweep looks for videos published this recently: For you's window for others
+POOL_EVERY = timedelta(days=14) - timedelta(hours=4)  # a pool player is searched for once a fortnight at most
 # The caps' windows, rolling, an hour short: a daily run that starts a moment earlier than yesterday's doesn't count
 # yesterday's against today's cap.
 DAY, WEEK = timedelta(hours=23), timedelta(days=7) - timedelta(hours=1)
@@ -66,28 +72,31 @@ _EVER = datetime.min.replace(tzinfo=timezone.utc)  # never swept: first among th
 
 
 def run(now: datetime | None = None) -> dict[str, int]:
-    """The day's gap searches, then the wide sweep's, then the famous sweep's, within their caps, keeping what they
-    find. Returns what it did."""
+    """The day's gap searches, then the wide sweep's, then the famous sweep's, then the pool sweep's, within their
+    caps, keeping what they find. Returns what it did."""
     now = now or datetime.now(timezone.utc)
-    counts = {"gap searched": 0, "wide searched": 0, "famous searched": 0, "found": 0, "kept": 0, "refused": 0}
+    counts = {"gap searched": 0, "wide searched": 0, "famous searched": 0, "pool searched": 0, "found": 0, "kept": 0, "refused": 0}
     sources = searches.searching()
-    if not sources or FEED_GAP_SEARCHES + FEED_WIDE_SEARCHES + FEED_FAMOUS_SEARCHES <= 0:
+    if not sources or FEED_GAP_SEARCHES + FEED_WIDE_SEARCHES + FEED_FAMOUS_SEARCHES + FEED_POOL_SEARCHES <= 0:
         return counts
     with db.session() as session:
         session.execute(delete(FeedSweep).where(FeedSweep.ran_at < now - KEEP_FOR))
-        players = [p for p in candidates.followed(session) if sports.get(p.sport) and sports.on(p.sport)]
-        if not players:
+        everyone = [p for p in candidates.followed(session, feedpool.ids()) if sports.get(p.sport) and sports.on(p.sport)]
+        if not everyone:
             return counts
+        players = [p for p in everyone if not p.pooled]
         followers: dict[int, int] = {pid: n for pid, n in session.execute(select(Follow.player_id, func.count()).group_by(Follow.player_id))}
         gaps = gap_due(session, players, followers, now)
         wide = wide_due(session, players, followers, now, {p.player_id for p in gaps})
         famous = famous_due(session, players, followers, now)
+        pooled = pool_due(session, [p for p in everyone if p.pooled], now)
     names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
-    for p in players:
+    for p in everyone:
         if p.sport not in names:
-            names[p.sport] = candidates.phrases([q for q in players if q.sport == p.sport])
-    if _sweep(GAP, gaps, now - GAP_DAYS, now, sources, names, counts) and _sweep(WIDE, wide, now - WIDE_DAYS, now, sources, names, counts):
-        _sweep(FAMOUS, famous, None, now, sources, names, counts)
+            names[p.sport] = candidates.names_for([q for q in everyone if q.sport == p.sport])
+    if (_sweep(GAP, gaps, now - GAP_DAYS, now, sources, names, counts) and _sweep(WIDE, wide, now - WIDE_DAYS, now, sources, names, counts)
+            and _sweep(FAMOUS, famous, None, now, sources, names, counts)):  # fmt: skip
+        _sweep(POOL, pooled, now - POOL_DAYS, now, sources, names, counts)
     metrics.feed("kept", counts["kept"])
     metrics.feed("refused", counts["refused"])
     return counts
@@ -164,6 +173,18 @@ def famous_due(session: Session, players: list[candidates.Followed], followers: 
     last = _last(session, FAMOUS)
     due = [p for p in players if p.player_id not in last or last[p.player_id] <= now - FAMOUS_EVERY]
     return _rotated(due, followers, last)[:left]
+
+
+def pool_due(session: Session, pool: list[candidates.Followed], now: datetime) -> list[candidates.Followed]:
+    """The pool players (nobody follows them) the pool sweep is for now, in order: those not searched for in the last
+    POOL_EVERY, as many as FEED_POOL_SEARCHES leaves in the last DAY; the longest unswept first (never, first), then
+    in the pool's order (its best known first)."""
+    left = FEED_POOL_SEARCHES - _since(session, POOL, now - DAY)
+    if left <= 0 or not pool:
+        return []
+    last = _last(session, POOL)
+    due = [p for p in pool if p.player_id not in last or last[p.player_id] <= now - POOL_EVERY]
+    return sorted(due, key=lambda p: last.get(p.player_id, _EVER))[:left]
 
 
 def query(player: candidates.Followed, names: dict[int, set[tuple[str, ...]]]) -> str:

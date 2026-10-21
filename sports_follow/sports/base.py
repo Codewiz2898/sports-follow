@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+from .. import naming
+
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
     from ..models import Athlete
@@ -690,6 +692,30 @@ class Sport:
     # feed; a sport that's off has none read. Every address is a real feed that answers with headlines, links, dates
     # and a short description (README.md, "Adding or removing"), never a search engine's feed of other sites.
     news_feeds: dict[str, str] = {}
+    # Words a team's name goes without in its videos' titles, at its start or end (team_names): "FC" in "Liverpool
+    # FC", "Team" in "Team Falcons". A video naming a player's team, and not them, is kept for them as their team's
+    # (candidates.py, BHA-382).
+    team_affixes: tuple[str, ...] = ()
+    # Words that, right after a team's name, make it another side ("India Women", "Liverpool U21"): such a mention
+    # isn't the player's team. A sport adds its own (cricket's "Legends").
+    other_sides: tuple[str, ...] = ("women", "womens", "w", "u17", "u18", "u19", "u20", "u21", "u23", "academy", "b", "ii")
+
+    def team_names(self, name: str) -> list[str]:
+        """A team's names as its videos' titles write them, each as plain words (naming.words) joined by spaces: its
+        own, and without the words its sport's titles leave off (team_affixes): "liverpool" for "Liverpool FC",
+        "falcons" for "Team Falcons". A name the affixes would leave empty stays as it is."""
+        own = naming.words(name)
+        affixes = [naming.words(a) for a in self.team_affixes]
+        bare = list(own)
+        cut = True
+        while cut:
+            cut = False
+            for a in (a for a in affixes if a and len(a) < len(bare)):
+                if bare[:len(a)] == a:
+                    bare, cut = bare[len(a):], True
+                elif bare[-len(a):] == a:
+                    bare, cut = bare[:-len(a)], True
+        return list(dict.fromkeys(" ".join(w) for w in (own, bare) if w))
 
     def video_words(self) -> str:
         """Words that, after a player's name, find videos about them on a video source's search when there's no moment

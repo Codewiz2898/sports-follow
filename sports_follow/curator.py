@@ -1,6 +1,7 @@
 """The curator: the feed's own process beside the worker, which fetches what's shared about followed players
 (candidates.py: trusted channels; searches.py: searches for big moments; sweeps.py: searches for players with nothing
-to watch, and for each one's most watched; news.py: publishers' feeds), then has the
+to watch, and for each one's most watched; news.py: publishers' feeds), and for each sport's best known besides
+(feedpool.py: the pool, for For you), then has the
 judge read it and ranks it (rank.py). It's an arq worker of its own on a queue of
 its own, so its jobs never take the worker's slots and a slow source or model never holds up a live poll; its
 source requests are in the feed lane, a background lane (adapters/budget.py). The feed's endpoint only reads
@@ -17,6 +18,8 @@ Read the publishers' feeds once, judge and rank what's new, and say what it did 
               .venv/bin/python -m sports_follow.curator news
 List the last week's sweeps, with what each found, kept and serves (and with --run, run the day's first):
               .venv/bin/python -m sports_follow.curator sweeps [--run]
+List the pool of top players (and with --run, work it out again first, making players of up to the day's adds):
+              .venv/bin/python -m sports_follow.curator pool [--run]
 """
 
 from __future__ import annotations
@@ -35,11 +38,11 @@ from . import logs, tracing
 logs.setup()
 tracing.setup("sports-follow-curator")
 
-from arq import cron  # noqa: E402
+from arq import cron, func  # noqa: E402
 from arq.connections import RedisSettings  # noqa: E402
 from arq.worker import run_worker  # noqa: E402
 
-from . import bus, candidates, db, feedstats, metrics, news, rank, searches, sweeps  # noqa: E402
+from . import bus, candidates, db, feedpool, feedstats, metrics, news, rank, searches, sweeps  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
 from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
 
@@ -166,20 +169,35 @@ async def sweep(ctx) -> None:
         log.info("feed sweep: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra={k.replace(" ", "_"): v for k, v in done.items()})
 
 
+async def refresh_pool(ctx) -> None:
+    """Daily, before the sweep: the pool of top players worked out again, and up to the day's adds of them made
+    players, found in their sport's live source (feedpool.py)."""
+    if await _missed(ctx, "feed_pool"):
+        return
+    done = await in_lane("feed", _locked("feed-pool", feedpool.refresh))
+    if done:
+        log.info("feed pool: %s", ", ".join(f"{v} {k}" for k, v in done.items()), extra={f"pool_{k}": v for k, v in done.items()})
+
+
 async def startup(ctx) -> None:
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 2, thread_name_prefix="curator"))
     db.size_pool(MAX_JOBS + 7)  # the pool's least is five
     metrics.feed_seed()
+    redis = ctx.get("redis")
+    if redis is not None and not await redis.exists(feedpool.POOL_KEY):
+        # A deploy restarts the curator: only one that finds no pool kept works it out now, not each restart.
+        await redis.enqueue_job("refresh_pool", _job_id="refresh_pool:startup", _queue_name=QUEUE)
 
 
 class CuratorSettings:
-    functions: list[Any] = []
+    functions: list[Any] = [func(_logged(refresh_pool), timeout=POLL_LOCK)]  # also queued by a curator starting without a pool
     cron_jobs = [
         cron(_logged(poll_channels), minute={5, 35}, second=20, run_at_startup=True, timeout=POLL_LOCK),
         cron(_logged(poll_news), minute={0, 20, 40}, second=40, run_at_startup=True, timeout=POLL_LOCK),
         cron(_logged(check_videos), hour=3, minute=50, second=0, timeout=3600),
         cron(_logged(prune_news), weekday=0, hour=4, minute=20, second=0, timeout=3600),
+        cron(_logged(refresh_pool), hour=7, minute=40, second=0, timeout=POLL_LOCK),
         # YouTube's day starts at midnight Pacific: 07:00 or 08:00 UTC.
         cron(_logged(sweep), hour={8, 20}, minute=15, second=0, timeout=POLL_LOCK),
     ]
@@ -201,11 +219,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("news", help="read the publishers' feeds once, judge and rank what's new, and say what it did for each sport")
     swept = sub.add_parser("sweeps", help="list the last week's sweeps (gap searches, the wide and famous sweeps): what each found, kept and serves")
     swept.add_argument("--run", action="store_true", help="run the day's sweeps first, within their caps, then judge and rank what's new")
+    pooled = sub.add_parser("pool", help="list the pool of top players whose videos are fetched for For you, by sport, best known first")
+    pooled.add_argument("--run", action="store_true", help="work the pool out again first, making players of up to the day's adds (asks the live sources)")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "news":
         return _news_once()
     if args.command == "sweeps":
         return _sweeps(args.run)
+    if args.command == "pool":
+        return _pool(args.run)
     if args.command != "rescore":
         run_worker(CuratorSettings)  # type: ignore[arg-type]  # arq types its settings as a dict; it reads a class's attributes too
         return 0
@@ -263,6 +285,22 @@ def _sweeps(run: bool) -> int:
     print(f"{'ran (UTC)':<17}{'stream':<8}{'found':>6}{'kept':>6}{'served':>8}  query")
     for r in rows:
         print(f"{r['ran_at']:%Y-%m-%d %H:%M}  {r['stream']:<8}{r['found']:>6}{r['kept']:>6}{r['served']:>8}  {r['query']}")
+    return 0
+
+
+def _pool(run: bool) -> int:
+    """The pool as kept, by sport; with run, worked out again by hand first, in the feed lane."""
+    from .adapters import budget
+
+    if run:
+        with budget.in_lane("feed"):
+            done = _locked("feed-pool", feedpool.refresh)()  # not beside the cron's: both would make the same players
+        print("a pool refresh is running elsewhere; try again when it's done" if done is None else ", ".join(f"{v} {k}" for k, v in done.items()))
+    with db.session() as session:
+        rows = feedpool.report(session)
+    print(f"{'sport':<12}{'place':>6}  {'player':>7}  name")
+    for r in rows:
+        print(f"{r['key']:<12}{r['place']:>6}  {r['player_id']:>7}  {r['name']} ({r['sport']})")
     return 0
 
 

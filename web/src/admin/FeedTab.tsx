@@ -176,7 +176,7 @@ function Verdict({ row }: { row: FeedCandidateRow }) {
       <div className="row" style={{ justifyContent: 'flex-start', flexWrap: 'wrap', gap: 6 }}>
         <span className={`pill ${row.served ? 'ink' : 'soft'}`}>{row.served ? `Served · ${row.score?.toFixed(2)}` : 'Held back'}</span>
         {row.unplayable_at && <span className="pill danger">Won't play in the app · {relative(row.unplayable_at)}</span>}
-        <span className={`pill ${v.about_player === 'no' ? 'danger' : 'soft'}`}>{v.about_player === 'subject' ? 'About them' : v.about_player === 'mention' ? 'Mentions them' : 'Not about them'}</span>
+        <span className={`pill ${v.about_player === 'no' ? 'danger' : 'soft'}`}>{v.about_player === 'subject' ? 'About them' : v.about_player === 'team' ? 'About their team' : v.about_player === 'mention' ? 'Mentions them' : 'Not about them'}</span>
         <span className="pill soft">{v.kind.replace(/_/g, ' ')}</span>
         <span className="pill soft">by {v.by.replace(/_/g, ' ')}</span>
         <span className="pill soft">interest {v.interest.toFixed(2)}</span>

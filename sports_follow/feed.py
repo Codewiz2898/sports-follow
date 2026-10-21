@@ -20,7 +20,10 @@ Yesterday, This week, This month, Earlier, in the fan's own days), the ranking d
 players taking turns, so no two items in a row are about one player while another has one to show. It pages
 with a cursor that keeps the order it was read in, so a page loaded later carries on where the last one ended.
 That's its Following tab; For you (BHA-349) mixes in videos of players the fan doesn't follow, MIX of them in
-every few items (others): the most followed on the app and those with a big moment today, the fan's sports first.
+every few items (others): the most followed on the app, those with a big moment today and the pool's (feedpool.py:
+each sport's best known, fetched for For you), the fan's sports first. Their last OTHERS_WINDOW (two months) is one
+list, ranked by the faded score whatever the day (BHA-382), so a strong official video of three weeks ago comes
+before a weak one of today's.
 Each entry says whether the fan follows its player, and the page which of the two layouts the apps draw (layout:
 a setting, FEED_LAYOUT, that the admin panel changes live).
 
@@ -51,7 +54,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import controls, rank, sports, titles
+from . import controls, feedpool, rank, sports, titles
 from .adapters import VIDEOS, feed_source
 from .config import FEED_LAYOUT
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerCard
@@ -92,7 +95,10 @@ TABS = (FOLLOWING, FOR_YOU)
 # For you: of every MIX[0] + MIX[1] items, MIX[0] from players the fan follows and MIX[1] from players they don't, while
 # both have some left; then whichever has. A fan who follows nobody gets For you all from the others.
 MIX = (3, 2)
-OTHERS = 30  # players the fan doesn't follow whose videos For you mixes in, at most
+OTHERS = 50  # players the fan doesn't follow whose videos For you mixes in, at most
+# For you's others' videos this recent are one list, best first by their score faded for age (fade), whatever their day;
+# older ones come after, newest day first. The fan's own players' stay in their days.
+OTHERS_WINDOW = timedelta(days=60)
 BIG_MOMENT = 85  # a key moment this big (moments.PRIORITY: a goal, a hundred, an upset) in the last BIG_FOR puts its player among them
 BIG_FOR = timedelta(hours=24)
 LAYOUTS = controls.FEED_LAYOUTS  # how the apps draw the fan's Feed: "edge", posts edge to edge, or "full", a video a screen (layout)
@@ -409,7 +415,8 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     either hides it. Read from rows only, never a model or a source.
 
     tab: FOLLOWING is that; FOR_YOU mixes in the videos of players the fan doesn't follow (others), MIX of them in
-    every few items, in the same order of days and turns among themselves; with a player picked it's FOLLOWING's.
+    every few items: those of the last OTHERS_WINDOW best first whatever their day, in turns, then older ones by day;
+    with a player picked it's FOLLOWING's.
 
     cursor: where the last page ended (Page.cursor), which carries on after its last item in the order as it was at
     the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
@@ -456,7 +463,8 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
     """The players For you mixes in for a fan who follows these, OTHERS at most, each with its tier, in order: of the
     players the Feed serves a video of, in a sport that runs, those the fan doesn't follow; the fan's sports first
     (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
-    BIG_MOMENT or more, not taken back), then the most followed on the app. The tier is the first two of those
+    BIG_MOMENT or more, not taken back), then the most followed on the app, then by the pool's order (feedpool.ids:
+    its players nobody follows, the best known first). The tier is the first two of those
     (0: the fan's sport with a big moment, up to 3: neither): For you serves a tier's videos before the next's."""
     served = select(FeedCandidate.player_id).where(FeedCandidate.served(), FeedCandidate.source.in_(list(VIDEOS))).distinct().subquery()
     rows = db.execute(select(Player.id, Player.sport, func.count(Follow.id)).join(served, served.c.player_id == Player.id)
@@ -466,8 +474,10 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
     taken_back = select(Moment.corrects).where(Moment.corrects.is_not(None))
     big = set(db.scalars(select(Moment.player_id).where(Moment.level == "key", Moment.priority >= BIG_MOMENT, Moment.created_at >= now - BIG_FOR,
                                                         Moment.created_at <= now, Moment.kind.not_in(rank.NOT_A_HEAD), Moment.id.not_in(taken_back))))  # fmt: skip
-    pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -n, pid) for pid, sport, n in rows if pid not in mine and sports.on(sport)]
-    return {pid: tier for tier, _, pid in sorted(pool)[:OTHERS]}
+    place = {pid: i for i, pid in enumerate(feedpool.ids())}
+    pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -n, place.get(pid, len(place)), pid)
+            for pid, sport, n in rows if pid not in mine and sports.on(sport)]  # fmt: skip
+    return {pid: tier for tier, _, _, pid in sorted(pool)[:OTHERS]}
 
 
 def _mix(mine: list[Any], theirs: list[Any]) -> list[Any]:
@@ -529,9 +539,15 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
             (mine if pid in followed else theirs)[_day(c, now, tz)].append((pid, c))
     seen: set[str] = set()
     if strangers:
-        # Others a tier at a time (others: the fan's sports first, then a big moment today), each by day and in turns.
-        tiered = [_in_turns({d: [(pid, c) for pid, c in theirs[d] if strangers[pid] == tier] for d in DAYS}, None, seen) for tier in sorted(set(strangers.values()))]
-        ordered = _mix(_in_turns(mine, player, seen), [x for t in tiered for x in t])
+        # Others a tier at a time (others: the fan's sports first, then a big moment today); within a tier, the last
+        # OTHERS_WINDOW's best first whatever the day, in turns, then the older ones by day.
+        tiered: list[tuple[str, int, Candidate]] = []
+        for tier in sorted(set(strangers.values())):
+            these = {d: [(pid, c) for pid, c in theirs[d] if strangers[pid] == tier] for d in DAYS}
+            recent = [(d, pid, c) for d in DAYS for pid, c in these[d] if _within(c, now, OTHERS_WINDOW)]
+            older = {d: [(pid, c) for pid, c in these[d] if not _within(c, now, OTHERS_WINDOW)] for d in DAYS}
+            tiered += _best_in_turns(recent, seen) + _in_turns(older, None, seen)
+        ordered = _mix(_in_turns(mine, player, seen), tiered)
     else:
         ordered = _in_turns(mine, player, seen)
     entries: list[tuple[Entry, int | None, bool]] = []
@@ -569,6 +585,24 @@ def _in_turns(days: dict[str, list[tuple[int, Candidate]]], player: int | None, 
             last = pid
             out.append((day, pid, c))
     return out
+
+
+def _best_in_turns(items: list[tuple[str, int, Candidate]], seen: set[str]) -> list[tuple[str, int, Candidate]]:
+    """Items of any day as one list, the best first (their faded score, then the newest), the players taking turns
+    down it (_turns); each keeps its day. An item already in seen only with the first, and noted there."""
+    ranked: list[tuple[str, int, Candidate]] = []
+    for day, pid, c in sorted(items, key=lambda x: _newest(x[2])):
+        if c.item.id not in seen:
+            seen.add(c.item.id)
+            ranked.append((day, pid, c))
+    day_of = {c.item.id: day for day, _, c in ranked}
+    return [(day_of[c.item.id], pid, c) for pid, c in _turns([(pid, c) for _, pid, c in ranked], None)]
+
+
+def _within(c: Candidate, now: datetime, window: timedelta) -> bool:
+    """Whether an item was published in the last window (a pinned one always is; an undated one never)."""
+    at = _when(c.item.published_at)
+    return c.pinned or (at is not None and now - at <= window)
 
 
 def _turns(ranked: list[tuple[int, Candidate]], last: int | None) -> list[tuple[int, Candidate]]:

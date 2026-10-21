@@ -442,3 +442,46 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
 def all_rows() -> list[FeedCandidate]:
     with db_module.session() as s:
         return list(s.scalars(select(FeedCandidate)))
+
+
+def test_a_teams_video_kept_for_several_of_its_players_is_judged_once_and_its_verdict_is_theirs_as_the_teams(made, monkeypatch):
+    """BHA-382: one share about a team, kept for each of its players (candidates.py), is one model call; a verdict
+    that it's about the first of them is their team's for the rest; and one kept later takes the stored verdict."""
+    with db_module.session() as s:
+        ids = []
+        for name in ("Asha Verma", "Mira Das", "Tara Singh"):
+            p = Player(slug=name.lower().replace(" ", "-"), name=name, sport="cricket", teams=["Riverside XI"])
+            s.add(p)
+            s.flush()
+            ids.append(p.id)
+    first, second, third = ids
+    for pid in (first, second):
+        row = stored(pid, "riverside01", "Riverside XI v Hilltop, the final", EDITS, 5)
+        with db_module.session() as s:
+            s.execute(update(FeedCandidate).where(FeedCandidate.id == row).values(candidate=FeedCandidate.candidate.op("||")(
+                literal_column("""'{"about": "team", "team": "Riverside XI"}'::jsonb"""))))
+    asked: list[curate.Candidate] = []
+
+    def judge_many(cands):
+        cands = list(cands)
+        asked.extend(cands)
+        return [curate.Verdict.model_validate(said(about_player="subject")) for _ in cands]
+
+    monkeypatch.setattr(curate, "judge_many", judge_many)
+    assert rank.judge(NOW) == {"judged": 2, "unjudged": 0}
+    assert len(asked) == 1 and asked[0].team == "Riverside XI"
+    verdicts = {r.player_id: r.verdict["about_player"] for r in rows_of("riverside01")}
+    assert verdicts == {first: "subject", second: "team"}  # the judge's word on the first; the team's for the second
+    # A teammate found with it later takes the stored verdict, without asking again.
+    row = stored(third, "riverside01", "Riverside XI v Hilltop, the final", EDITS, 5)
+    with db_module.session() as s:
+        s.execute(update(FeedCandidate).where(FeedCandidate.id == row).values(candidate=FeedCandidate.candidate.op("||")(
+            literal_column("""'{"about": "team", "team": "Riverside XI"}'::jsonb"""))))
+    assert rank.judge(NOW) == {"judged": 1, "unjudged": 0} and len(asked) == 1
+    assert {r.player_id: r.verdict["about_player"] for r in rows_of("riverside01")}[third] == "team"
+    assert rank.rescore(NOW)["served"] == 3
+
+
+def rows_of(vid: str) -> list[FeedCandidate]:
+    with db_module.session() as s:
+        return list(s.scalars(select(FeedCandidate).where(FeedCandidate.external_id == vid)))

@@ -1,11 +1,15 @@
-"""The feed's fetch (L0, BHA-298): videos about followed players, from the channels each sport trusts, kept as
-candidates for the later stages to judge and rank (feed_candidates). Run by the curator (curator.py), never by
-a request: the feed reads what's here and never waits on it.
+"""The feed's fetch (L0, BHA-298): videos about followed players and the pool's (feedpool.py: each sport's best known,
+for For you), from the channels each sport trusts, kept as candidates for the later stages to judge and rank
+(feed_candidates). Run by the curator (curator.py), never by a request: the feed reads what's here and never waits
+on it.
 
 Every half hour (poll), for each running video source (adapters.videos): the latest uploads of each channel a
 running sport lists (Sport.video_channels), and of those, each one whose title or the opening of its description
-names a followed player of that sport (named) is a candidate for that player: not a name in the link lists further
-down (related videos, podcasts, a channel's other series), which are about someone else. What the source says of the new ones (one request
+names a followed or pool player of that sport (named) is a candidate for that player: not a name in the link lists further
+down (related videos, podcasts, a channel's other series), which are about someone else. One that names none of
+them but names a team they play for (sides: "Falcons vs Vitality", "Liverpool v City", as Sport.team_names writes
+a team) is a candidate for that team's followed players and up to TEAM_POOL of its pool players, marked as their
+team's (candidate "about": "team"), which the judge reads as a share about the team (curate.py, BHA-382). What the source says of the new ones (one request
 for every 50) then decides, with the hard filters alone, which are kept (refused): a video that may be embedded,
 is public, plays in FEED_COUNTRY, isn't a live stream and runs 1 to 20 minutes. Whether it's any good is the
 judge's to say, later. A video refused is remembered for a week, so it isn't asked about again while it's still
@@ -28,11 +32,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, db, feedstats, metrics, naming, shutdown, sports
+from . import bus, db, feedpool, feedstats, metrics, naming, shutdown, sports
 from .adapters import NEWS, AdapterError, Upload, VideoFacts, VideoSource, budget, videos
 from .config import FEED_COUNTRY
 from .models import Athlete, FeedCandidate, Follow, Player, PlayerAlias, PlayerIdentity
@@ -40,6 +44,7 @@ from .models import Athlete, FeedCandidate, Follow, Player, PlayerAlias, PlayerI
 log = logging.getLogger("sports_follow.candidates")
 
 MIN_SECONDS, MAX_SECONDS = 60, 20 * 60  # how long a kept video runs
+TEAM_POOL = 3  # pool players a video naming their team (and not them) is kept for, of each team it names: the best known
 SECOND_READ_AFTER = timedelta(days=1)  # a kept video's views and likes are read again this long after
 # While a kept video is this young, its numbers are read again this often (fresh_reads): how fast it's watched in
 # its first two days is most of what ranks it (rank.py), and a first read minutes after it's out says little.
@@ -61,27 +66,35 @@ _POSSESSIVE = re.compile(r"['’`]s\b", re.I)  # "Kohli's": the name, not "kohli
 @dataclass
 class Followed:
     """A followed player as the feed looks for them: their sport (its key), every name they go by, and the sides
-    they turn out for (their teams, their country), which tell a namesake apart in a story (news.py)."""
+    they turn out for (their teams, their country), which tell a namesake apart in a story (news.py); their teams
+    alone (squads), whose videos are kept for them as their team's (sides); and whether nobody follows them, a pool
+    player (feedpool.py)."""
 
     player_id: int
     sport: str
     name: str
     aliases: list[str] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)
+    squads: list[str] = field(default_factory=list)
+    pooled: bool = False
 
 
-def followed(session: Session) -> list[Followed]:
-    """Every player at least one fan follows, with their sport and the names they go by: their own, what fans
-    typed to find them, and the registry's other names for them."""
-    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid, Player.teams, Player.nationality)
-                           .where(exists().where(Follow.player_id == Player.id))).all()  # fmt: skip
-    out = {pid: Followed(pid, sports.family(sport), name, teams=_sides(teams, country)) for pid, name, sport, _, teams, country in rows}
+def followed(session: Session, also: Iterable[int] = ()) -> list[Followed]:
+    """Every player at least one fan follows, then these (the pool's: feedpool.ids) that nobody does, in their order
+    and marked pooled, with their sport and the names they go by: their own, what fans typed to find them, and the
+    registry's other names for them."""
+    extra = list(dict.fromkeys(also))
+    fans = exists().where(Follow.player_id == Player.id)
+    rows = session.execute(select(Player.id, Player.name, Player.sport, Player.wikidata_qid, Player.teams, Player.nationality, fans)
+                           .where(or_(fans, Player.id.in_(extra)) if extra else fans)).all()  # fmt: skip
+    out = {pid: Followed(pid, sports.family(sport), name, teams=_sides(teams, country), squads=_sides(teams, None), pooled=not has_fans)
+           for pid, name, sport, _, teams, country, has_fans in rows}  # fmt: skip
     if not out:
         return []
     for pid, alias in session.execute(select(PlayerAlias.player_id, PlayerAlias.alias).where(PlayerAlias.player_id.in_(out))):
         out[pid].aliases.append(alias.replace("-", " "))
     qids: dict[str, set[int]] = {}
-    for pid, _, _, qid, _, _ in rows:
+    for pid, _, _, qid, *_ in rows:
         if qid:
             qids.setdefault(qid, set()).add(pid)
     for pid, qid in session.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(out), PlayerIdentity.system == "wikidata")):
@@ -91,7 +104,7 @@ def followed(session: Session) -> list[Followed]:
             for pid in qids[qid]:
                 if out[pid].sport in ("", sports.family(sport)) or not sports.get(out[pid].sport):
                     out[pid].aliases += [name, *(a for a in aliases or [] if isinstance(a, str))]
-    return list(out.values())
+    return [p for p in out.values() if not p.pooled] + [out[pid] for pid in extra if pid in out and out[pid].pooled]
 
 
 def _sides(teams: Any, country: str | None) -> list[str]:
@@ -136,6 +149,20 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
             if len(spelling) >= 2 and theirs(spelling[-1], p.player_id):
                 found.add((spelling[-1],))
         out[p.player_id] = found
+    return out
+
+
+def names_for(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
+    """phrases() for followed and pool players together, with the followed players' worked out among themselves
+    alone, as they were before the pool (BHA-382): a pool player sharing a surname never takes it from a followed one.
+    A pool player's are theirs among everyone, less any a followed player holds."""
+    mine = [p for p in players if not p.pooled]
+    out = phrases(mine)
+    if len(mine) < len(players):
+        held = {phrase for theirs in out.values() for phrase in theirs}
+        for pid, theirs in phrases(players).items():
+            if pid not in out:
+                out[pid] = {phrase for phrase in theirs if phrase not in held}
     return out
 
 
@@ -201,6 +228,87 @@ def named(upload: Upload, names: Iterable[tuple[str, ...]], read: Texts | None =
     return None
 
 
+@dataclass
+class Side:
+    """A team some of these players turn out for, as a video names it: its name as their rows have it, its sport, its
+    names as the word runs a video's text must hold (longest first), and the players a video naming it is kept for:
+    its followed players, then up to TEAM_POOL of its pool players, the pool's best known first."""
+
+    name: str
+    sport: str
+    phrases: list[tuple[str, ...]]
+    players: list[int]
+
+
+def sides(players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Side]:
+    """The teams of these players' (Followed.squads), with the names their sport's titles write them by
+    (Sport.team_names): a name two of a sport's teams share names neither, nor does one that's a player's name
+    (names: phrases()), nor one word of under three letters but with a digit in it ("T1", "G2"). Two sports' teams
+    may share a name (Falcons in CS2 and in Valorant): which game a video is about tells them apart (teams_named)."""
+    by: dict[tuple[str, str], Side] = {}
+    pooled: dict[tuple[str, str], int] = {}
+    for p in players:
+        for team in p.squads:
+            key = (p.sport, naming.team_key(team))
+            if key not in by:
+                spelled = {tuple(n.split()) for n in sports.of(p.sport).team_names(team)}
+                by[key] = Side(team, p.sport, _longest_first(spelled), [])
+            if p.pooled and pooled.get(key, 0) >= TEAM_POOL or p.player_id in by[key].players:
+                continue
+            pooled[key] = pooled.get(key, 0) + p.pooled
+            by[key].players.append(p.player_id)
+    owners: dict[tuple[str, tuple[str, ...]], set[tuple[str, str]]] = {}
+    for key, side in by.items():
+        for phrase in side.phrases:
+            owners.setdefault((side.sport, phrase), set()).add(key)
+    theirs = {phrase for held in names.values() for phrase in held}
+
+    def fits(phrase: tuple[str, ...]) -> bool:
+        first = phrase[0]
+        return len(phrase) > 1 or len(first) >= 3 or (len(first) == 2 and any(c.isdigit() for c in first))
+
+    for key, side in by.items():
+        side.phrases = [ph for ph in side.phrases if owners[(side.sport, ph)] == {key} and ph not in theirs and fits(ph)]
+    return [side for side in by.values() if side.phrases and side.players]
+
+
+def _games(upload: Upload, among: set[str]) -> set[str]:
+    """Which of these sports a video's title or description's opening names (Sport.pattern: "VALORANT", "CS2")."""
+    text = f"{upload.title}\n{naming.lead(upload.description)}".lower()
+    return {key for key in among if (pattern := sports.of(key).pattern) and re.search(pattern, text)}
+
+
+def teams_named(teams: list[Side], upload: Upload, read: Texts) -> dict[int, tuple[str, str]]:
+    """The teams (by their place in teams) a video's title, else its description's opening, names, each with the name
+    it's named by and where. Not a name the next word makes another side of ("India Women": Sport.other_sides), nor
+    one inside another of these teams' longer names ("Milan" in "Inter Milan"). When these teams are of more than one
+    sport (a channel every esports game lists), only those of the sport the video names (_games): with none named, none."""
+    of_sports = {side.sport for side in teams}
+    if len(of_sports) > 1:
+        told = _games(upload, of_sports)
+        teams_in = [i for i, side in enumerate(teams) if side.sport in told]
+    else:
+        teams_in = list(range(len(teams)))
+    out: dict[int, tuple[str, str]] = {}
+    for where, words, present in read:
+        spans: list[tuple[int, int, int, tuple[str, ...]]] = []  # (start, end, team, name)
+        for i in teams_in:
+            other = set(sports.of(teams[i].sport).other_sides)
+            for phrase in teams[i].phrases:
+                if phrase[0] not in present:
+                    continue
+                n = len(phrase)
+                spans += [(k, k + n, i, phrase) for k in range(len(words) - n + 1)
+                          if tuple(words[k:k + n]) == phrase and (k + n == len(words) or words[k + n] not in other)]
+        for start, end, i, phrase in spans:
+            inside = any(j != i and s <= start and end <= e and (e - s) > (end - start) for s, e, j, _ in spans)
+            if not inside and i not in out:
+                out[i] = (" ".join(phrase), where)
+        if out:
+            break
+    return out
+
+
 # ---------------------------------------------------------------- channels, and the hard filters
 
 
@@ -263,8 +371,9 @@ def read_again(kept: dict[str, Any], facts: VideoFacts, at: datetime) -> dict[st
     return {**kept, "views": facts.views, "likes": facts.likes, "reads": reads}
 
 
-def candidate(upload: Upload, name: str, where: str, sport: str, facts: VideoFacts | None) -> dict[str, Any]:
-    """What a candidate row keeps of what was fetched."""
+def candidate(upload: Upload, name: str, where: str, sport: str, facts: VideoFacts | None, team: str = "") -> dict[str, Any]:
+    """What a candidate row keeps of what was fetched; with team, that it was found as the player's team's: the team
+    it names (rank.about_team)."""
     return {
         "title": upload.title,
         "description": upload.description,
@@ -277,6 +386,7 @@ def candidate(upload: Upload, name: str, where: str, sport: str, facts: VideoFac
         "sport": sport,
         "details": {k: v for k, v in (facts.raw if facts else {}).items() if k != "statistics"},
         "paid": facts.paid if facts else False,
+        **({"about": "team", "team": team} if team else {}),
     }
 
 
@@ -314,7 +424,7 @@ def _remember_refused(source: VideoSource, why: dict[str, str]) -> None:
 
 @dataclass
 class Found:
-    """One upload that names one followed player."""
+    """One upload that names one followed (or pool) player, or their team (team: the team's name)."""
 
     player_id: int
     sport: str
@@ -323,18 +433,29 @@ class Found:
     where: str
     moment_id: int | None = None  # the moment it was searched for (searches.py); the ranking works it out for the rest
     sweep: int | None = None  # the sweep that found it (sweeps.py: a FeedSweep's id)
+    team: str = ""  # found as the player's team's: the team it names, and not them
 
 
-def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]]) -> list[Found]:
-    """Each upload, once for each of these players it names. Each upload's text is read into words once."""
+def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[tuple[str, ...]]], teams: Iterable[Side] = ()) -> list[Found]:
+    """Each upload, once for each of these players it names; then, of those it doesn't, once for each player of a
+    team it names (teams: sides()), as that team's. Each upload's text is read into words once."""
     ordered = {p.player_id: _longest_first(names.get(p.player_id, ())) for p in players}
+    sport_of = {p.player_id: p.sport for p in players}
+    teams = list(teams)
     out = []
     for upload in uploads:
         read = texts(upload)
+        hit_ids: set[int] = set()
         for p in players:
             hit = named(upload, ordered[p.player_id], read)
             if hit:
                 out.append(Found(p.player_id, p.sport, upload, *hit))
+                hit_ids.add(p.player_id)
+        for i, (name, where) in teams_named(teams, upload, read).items() if teams else ():
+            for pid in teams[i].players:
+                if pid not in hit_ids:
+                    hit_ids.add(pid)
+                    out.append(Found(pid, sport_of[pid], upload, name, where, team=teams[i].name))
     return out
 
 
@@ -384,10 +505,10 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
             if vid in stored:
                 same = stored[vid]
                 values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"],
-                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None), "details": same["candidate"].get("details") or {},
+                          "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None, f.team), "details": same["candidate"].get("details") or {},
                                         "paid": same["candidate"].get("paid") is True}}
             else:
-                values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid]), "features": features(facts[vid], now)}
+                values = {"url": f.upload.url, "candidate": candidate(f.upload, f.name, f.where, f.sport, facts[vid], f.team), "features": features(facts[vid], now)}
             if f.moment_id is not None:
                 values["candidate"]["searched_for"] = f.moment_id  # the ranking keeps it while it stands (rank.rescore)
             if f.sweep is not None:
@@ -407,12 +528,13 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
 
 
 def poll(now: datetime | None = None) -> dict[str, int]:
-    """Read every running video source's channels once, and keep what's new; then read again what was kept a
-    day ago (second_reads). Returns what it did."""
+    """Read every running video source's channels once, and keep what's new for followed and pool players
+    (feedpool.ids), by their names and their teams'; then read again what was kept a day ago (second_reads).
+    Returns what it did."""
     now = now or datetime.now(timezone.utc)
     totals = {"channels": 0, "unread": 0, "found": 0, "kept": 0, "refused": 0, "off_list": 0, "dropped": 0, "read_again": 0}
     with db.session() as session:
-        players = followed(session)
+        players = followed(session, feedpool.ids())
     for source in videos():
         listed = channels(source)
         if not listed:
@@ -431,12 +553,13 @@ def poll(now: datetime | None = None) -> dict[str, int]:
                 log.info("feed: %s channel %s not read: %s", source.system, channel, exc)
         totals["channels"] += len(uploads)
         found: list[Found] = []
-        by_sports: dict[frozenset[str], tuple[list[Followed], dict[int, set[tuple[str, ...]]]]] = {}
+        by_sports: dict[frozenset[str], tuple[list[Followed], dict[int, set[tuple[str, ...]]], list[Side]]] = {}
         for channel, theirs in uploads.items():
             keys = frozenset(listed[channel])
             if keys not in by_sports:
                 group = [p for p in players if p.sport in keys]
-                by_sports[keys] = (group, phrases(group))
+                names = names_for(group)
+                by_sports[keys] = (group, names, sides(group, names))
             matched = match(theirs, *by_sports[keys])
             feedstats.read_channel(channel, keys, theirs, matched, now)
             found += matched

@@ -107,7 +107,7 @@ def top_pool(sport: str) -> list[dict[str, Any]]:
     return json.loads(raw) if raw else []
 
 
-def _known() -> Any:
+def known() -> Any:
     """How well known an athlete is: Wikipedia editions, doubled for the home country's."""
     if not STARTERS_HOME_COUNTRY:
         return Athlete.sitelinks
@@ -133,7 +133,7 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
         with session() as db:
             # Only athletes some Wikipedia knows: a sport's roster-imported pros (esports) all have none, and
             # among ties the order would be the import's, and the checks would spend a scarce allowance.
-            rows = db.scalars(select(Athlete).where(Athlete.sport == sport.key, Athlete.current, Athlete.sitelinks > 0).order_by(_known().desc(), Athlete.id).limit(TOP_CANDIDATES)).all()
+            rows = db.scalars(select(Athlete).where(Athlete.sport == sport.key, Athlete.current, Athlete.sitelinks > 0).order_by(known().desc(), Athlete.id).limit(TOP_CANDIDATES)).all()
             people = [registry.Person.of(a) for a in rows]
         entries: list[dict[str, Any]] = []
         waited = False

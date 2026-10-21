@@ -8,7 +8,8 @@ A candidate row keeps three things apart, so any of them can be worked out again
     verdict    what the judge said (curate.py): who it's about, what it is, how interesting, what's wrong
     score      this module's number, from the two and the channel's trust; NULL for a row never served
 
-Only a share about the player is served. A verdict that says it only mentions them, that it isn't about them,
+Only a share about the player is served, or one found for them as their team's that the judge says is about that
+team (candidates.py, BHA-382: "team", worth TEAM of one about them). A verdict that says it only mentions them, that it isn't about them,
 that it's paid for, or that names any risk is kept (for the admin panel, for channel trust and for the judge's
 tuning) but never served: its score stays NULL. So is a video from a channel its player's sport doesn't list
 (candidates.on_list: official channels and a few top creators, BHA-349), a row stored before the list was cut. An
@@ -76,6 +77,7 @@ LIKES_UNKNOWN = 0.5  # its part while there are too few views to tell (or likes 
 LIKES_FROM = 100  # views before the like ratio means anything
 OUTLETS_TOP = 5  # outlets running one story that count as the most a story can be covered
 MENTION = 0.6  # a share that only mentions the player, served only when an admin approves it, is worth this much of one about them
+TEAM = 0.8  # a share about the player's team (found as their team's: candidates.py) is worth this much of one about them
 LISTED, UNLISTED = 1.0, 0.5  # a channel's trust: a running sport lists it, or none does now
 PIN = 10.0  # added to a pinned row's score: ahead of everything the numbers rank
 # Signed-in fans' feedback on a channel's items lowers its default trust: each report counts this much, each "not
@@ -163,7 +165,7 @@ def popular_part(features: dict[str, Any], published: datetime | None) -> float:
 
 def stream(source: str, kept: dict[str, Any] | None) -> str:
     """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, a
-    sweep's (gap, wide, famous: sweeps.py), or a channel."""
+    sweep's (gap, wide, famous, pool: sweeps.py), or a channel."""
     if is_story(source):
         return "news"
     kept = kept or {}
@@ -173,8 +175,15 @@ def stream(source: str, kept: dict[str, Any] | None) -> str:
 
 
 def passes(verdict: dict[str, Any] | None) -> bool:
-    """Whether the judge lets a share be served: about the player (a passing mention never is), not paid for, no risk."""
-    return bool(verdict) and verdict.get("about_player") == "subject" and not verdict.get("sponsored") and not verdict.get("risks")
+    """Whether the judge lets a share be served: about the player, or about their team when it was found as their team's
+    (the judge says "team" of no other: curate.py), and a passing mention never; not paid for, no risk."""
+    return bool(verdict) and verdict.get("about_player") in ("subject", "team") and not verdict.get("sponsored") and not verdict.get("risks")
+
+
+def about_team(kept: dict[str, Any] | None) -> str:
+    """The team a row was found for its player as (candidates.py), or "" for one found by their own name."""
+    kept = kept or {}
+    return str(kept.get("team") or "") if kept.get("about") == "team" else ""
 
 
 def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, published: datetime | None) -> float:
@@ -187,6 +196,8 @@ def score(verdict: dict[str, Any], features: dict[str, Any], trust: float, publi
     raw = INTEREST * interest + POPULAR * popular_part(features, published) + LIKES * like_part(features)
     if verdict.get("about_player") == "mention":
         raw *= MENTION
+    elif verdict.get("about_player") == "team":
+        raw *= TEAM
     return round(max(0.0, trust) * raw, 4)
 
 
@@ -330,7 +341,7 @@ def as_candidate(source: str, url: str, kept: dict[str, Any], features: dict[str
         title=str(kept.get("title") or ""), text=str(kept.get("description") or ""), published_at=kept.get("published") or None,
         engagement=curate.Engagement(views=whole(features.get("views")), likes=whole(features.get("likes"))),
         platform_flags=curate.PlatformFlags(paid_partnership=kept.get("paid") is True, embeddable=status.get("embeddable") is not False),
-        duration_seconds=whole(features.get("seconds")), player=player,
+        duration_seconds=whole(features.get("seconds")), player=player, team=about_team(kept),
     )  # fmt: skip
 
 
@@ -358,33 +369,88 @@ def players(session: Session, ids: Iterable[int]) -> dict[int, curate.PlayerCont
 def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again: bool = False, within: float | None = JUDGE_FOR) -> dict[str, int]:
     """Send unjudged rows (every row, with again) to the judge, newest first, and keep its verdicts, a chunk at a
     time. A row the judge couldn't answer for now stays as it was, for the next run; so do the rows left when
-    the run has taken `within` seconds or the curator is stopping."""
+    the run has taken `within` seconds or the curator is stopping.
+
+    A video found for several players as their team's (about_team) is one share about the team: the judge reads it
+    once, for the first of them, and its verdict is theirs too; one judged so before (not again) is theirs as it is."""
     now = now or datetime.now(timezone.utc)
     started = time.monotonic()
     with db.session() as session:
-        query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
+        query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate,
+                       FeedCandidate.features)  # fmt: skip
         if not again:
             query = query.where(FeedCandidate.verdict.is_(None))
         rows = session.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id).limit(limit)).all()
         who = players(session, (r.player_id for r in rows))
-    rows = [r for r in rows if r.player_id in who]
-    judged = 0
-    for i in range(0, len(rows), JUDGE_CHUNK):
+        rows = [r for r in rows if r.player_id in who]
+        before = {} if again else _team_verdicts(session, rows)
+    leaders: list[Any] = []
+    shared: dict[tuple[str, str, str], list[Any]] = {}  # a team's video: the rows that take its first row's verdict
+    known: list[dict[str, Any]] = []
+    for r in rows:
+        key = _team_share(r)
+        if key is not None and key in before:
+            known.append({"id": r.id, "verdict": _for_teammate(before[key], about_team(r.candidate)), "judged_at": now})
+            for step in ("judged", "passed") if passes(known[-1]["verdict"]) else ("judged",):
+                metrics.feed_step(step, stream(r.source, r.candidate), [who[r.player_id].sport])
+        elif key is not None and key in shared:
+            shared[key].append(r)
+        else:
+            if key is not None:
+                shared[key] = []
+            leaders.append(r)
+    if known:
+        with db.session() as session:
+            session.execute(update(FeedCandidate), known)
+    judged = len(known)
+    for i in range(0, len(leaders), JUDGE_CHUNK):
         if shutdown.stopping.is_set() or (within is not None and time.monotonic() - started > within):
-            log.info("feed: the judge stopped with %d candidate(s) left for the next run", len(rows) - i)
+            log.info("feed: the judge stopped with %d candidate(s) left for the next run", len(leaders) - i)
             break
-        part = rows[i:i + JUDGE_CHUNK]
+        part = leaders[i:i + JUDGE_CHUNK]
         verdicts = curate.judge_many(as_candidate(r.source, r.url, r.candidate or {}, r.features or {}, who[r.player_id]) for r in part)
-        done = [{"id": r.id, "verdict": v.model_dump(mode="json"), "judged_at": now} for r, v in zip(part, verdicts) if v is not None]
+        done = []
+        for r, v in zip(part, verdicts):
+            if v is None:
+                continue
+            said = v.model_dump(mode="json")
+            for each in [r, *shared.get(_team_share(r) or ("", "", ""), [])]:
+                done.append({"id": each.id, "verdict": said if each is r else _for_teammate(said, about_team(r.candidate)), "judged_at": now})
+                for step in ("judged", "passed") if passes(done[-1]["verdict"]) else ("judged",):
+                    metrics.feed_step(step, stream(each.source, each.candidate), [who[each.player_id].sport])
         if done:
             with db.session() as session:
                 session.execute(update(FeedCandidate), done)
-        for r, v in zip(part, verdicts):
-            if v is not None:
-                for step in ("judged", "passed") if passes(v.model_dump()) else ("judged",):
-                    metrics.feed_step(step, stream(r.source, r.candidate), [who[r.player_id].sport])
         judged += len(done)
     return {"judged": judged, "unjudged": len(rows) - judged}
+
+
+def _team_share(r: Any) -> tuple[str, str, str] | None:
+    """A row found as its player's team's, as one share: its source, video and team; None for one found by name."""
+    team = about_team(r.candidate)
+    return (r.source, r.external_id, naming.team_key(team)) if team else None
+
+
+def _for_teammate(verdict: dict[str, Any], team: str) -> dict[str, Any]:
+    """A team share's verdict for another of the team's players: one the judge found was about the first player after
+    all is their team's for the rest, with a line that names no player."""
+    if verdict.get("about_player") != "subject":
+        return verdict
+    return {**verdict, "about_player": "team", "reason": f"A video about {team}." if team else verdict.get("reason")}
+
+
+def _team_verdicts(session: Session, rows: Sequence[Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """The verdicts already given on these rows' team shares (_team_share), for another player of the team."""
+    keys = {k for r in rows if (k := _team_share(r)) is not None}
+    if not keys:
+        return {}
+    out: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for found in session.execute(select(FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.candidate, FeedCandidate.verdict)
+                                 .where(FeedCandidate.verdict.is_not(None), FeedCandidate.external_id.in_(sorted({k[1] for k in keys})))):  # fmt: skip
+        key = _team_share(found)
+        if key in keys and found.verdict:
+            out.setdefault(key, found.verdict)
+    return out
 
 
 # ---------------------------------------------------------------- the score
