@@ -1124,11 +1124,13 @@ tap then tap or drag a piece with a finger (a swipe from anywhere but the side t
 and its line, rules and words are the web's (`web/src/sports/facts/chessLine.ts`, with chess.js in
 `mobile/package.json`). Its engine is the site's own Stockfish files, `web/src/sports/engine/`, which the app
 carries rather than downloads: the app's module `mobile/modules/chess-engine` copies them into its assets at each
-build and runs them in a Web Worker of a page in a hidden WebView of its own, served at
-`https://appassets.androidplatform.net` by WebViewAssetLoader, with no file access, no network (its
-Content-Security-Policy, and the WebView refuses any other address) and no navigation. The conversation with it is
-the web's (`web/src/sports/facts/chessEngineCore.ts`), each position to depth 18 from a cleared hash. The WebView
-opens with the board and goes with it, and the search stops while the app is in the background. A new engine
+build (a file missing there stops the build) and runs them in a Web Worker of a page in a hidden WebView of its
+own, which WebViewAssetLoader serves that folder alone at `https://appassets.androidplatform.net/engine/`, with no
+file access, no network (its Content-Security-Policy, and the WebView refuses any other address) and no
+navigation. The conversation with it is the web's (`web/src/sports/facts/chessEngineCore.ts`), each position to
+depth 18 from a cleared hash. The WebView opens with the board and goes with it, and while another page is over
+the board. Behind another app the engine stays and only its search stops, so coming back doesn't compile it again;
+if Android ended its page meanwhile (short of memory), a fresh one starts when the fan comes back. A new engine
 needs a new app build, not only new JavaScript. Removing chess removes the module and those files as well.
 
 **stann.in links open the app** when it's installed (Android App Links), at the same page: a player

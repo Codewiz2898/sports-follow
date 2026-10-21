@@ -33,11 +33,31 @@ def test_the_engine_on_the_fans_device_is_credited_while_chess_is_on():
     assert "Stockfish.js" not in _names(credits.credits({}, stockfish=False, on=(football.SPORT,))["also"])
 
 
+ROOT = Path(__file__).resolve().parent.parent
+ENGINE = ROOT / "web" / "src" / "sports" / "engine"
+
+
 def test_the_engines_source_is_the_one_the_boards_link():
     # The boards' "source" link (web/src/sports/facts/chessEngineCore.ts) and the Credits page name one commit.
-    core = (Path(__file__).resolve().parent.parent / "web" / "src" / "sports" / "facts" / "chessEngineCore.ts").read_text()
+    core = (ROOT / "web" / "src" / "sports" / "facts" / "chessEngineCore.ts").read_text()
     built = re.search(r"const BUILT_FROM = '([0-9a-f]{40})'", core)
     assert built and built[1] == chess.ENGINE_BUILT_FROM
+
+
+def test_every_engine_file_named_is_there():
+    # Each place that names the engine's files by name: the web's two ?url imports, the Android module's copy (whose
+    # build fails on a missing one, but CI doesn't build the app), and the Android page's worker. A renamed or
+    # missing file would ship a board whose engine never starts.
+    web = re.findall(r"from '\./engine/([^'?]+)\?url'", (ROOT / "web" / "src" / "sports" / "chessEngine.ts").read_text())
+    android = ROOT / "mobile" / "modules" / "chess-engine" / "android"
+    gradle = re.search(r"def engineFiles = \[([^\]]*)\]", (android / "build.gradle").read_text())
+    copied = re.findall(r'"([^"]+)"', gradle[1]) if gradle else []
+    page = re.findall(r"new Worker\('([^'#]+)#' \+ encodeURIComponent\('([^']+)'\)\)", (android / "src" / "main" / "assets" / "engine" / "page.js").read_text())
+    ran = [name for pair in page for name in pair]
+    assert len(web) == 2 and len(copied) == 3 and len(ran) == 2
+    assert set(ran) <= set(copied)  # what the page runs is what the build copies
+    missing = [name for name in (*web, *copied, *ran) if not (ENGINE / name).is_file()]
+    assert not missing, f"named but not in web/src/sports/engine: {missing}"
 
 
 def test_a_development_build_also_names_espn():

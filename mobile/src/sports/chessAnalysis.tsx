@@ -16,7 +16,7 @@ import { font, t } from '../theme'
 import { Btn } from '../ui'
 import { useInFront } from '../watch'
 import type { Palette } from './board'
-import { BAR, EvalBar, Piece, SQUARE } from './chess'
+import { BAR, EvalBar, Piece, SQUARE } from './chessParts'
 import { ENGINE_LICENCE, ENGINE_SOURCE, EngineView, startEngine, type Engine } from './chessEngine'
 
 const PROMOTIONS = ['q', 'r', 'b', 'n']
@@ -76,12 +76,14 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
   const [picked, setPicked] = useState<string | null>(null)
   const [promoting, setPromoting] = useState<{ from: string; to: string } | null>(null)
   const [ghost, setGhost] = useState<{ piece: string; x: number; y: number } | null>(null) // a piece being dragged
-  const [engine, setEngine] = useState<{ ready: boolean; failed: boolean }>({ ready: false, failed: false })
+  const [engine, setEngine] = useState<{ ready: boolean; failed: boolean; gone: boolean }>({ ready: false, failed: false, gone: false })
+  const [round, setRound] = useState(0) // each engine the board has started: another after one Android ended
   const [worker, setWorker] = useState<Engine | null>(null)
   const [look, setLook] = useState<{ fen: string; ev: ChessEval; pv: string[] } | null>(null)
   const [width, setWidth] = useState(0) // the board's, once laid out
   const front = useInFront()
   const focused = useIsFocused()
+  const away = useRef(false) // the app has been behind another since this engine started
 
   // A new start (another of the game's moves tapped) while the board is open: its line, the engine kept.
   if (asked !== opening.asked) {
@@ -100,17 +102,26 @@ export default function ChessAnalysis({ state, live, flip, opening, leave, still
   const plays = line != null && focused
   useEffect(() => {
     if (!plays) return
-    setEngine({ ready: false, failed: false })
+    away.current = false
+    setEngine({ ready: false, failed: false, gone: false })
     const started = startEngine({
       ready: () => setEngine((e) => ({ ...e, ready: true })),
-      failed: () => setEngine((e) => ({ ...e, failed: true })),
+      failed: (gone) => setEngine((e) => ({ ...e, failed: true, gone })),
     })
     setWorker(started)
     return () => {
       started.quit()
       setWorker(null)
     }
-  }, [plays])
+  }, [plays, round])
+  // Behind another app the board keeps its engine, only stopping its search (below), so coming back doesn't compile
+  // the 7 MB engine again. If Android ended its page once the app had been behind another (the phone short of
+  // memory), a fresh one starts with the fan back on the board; one that goes while they've been on it all along
+  // says so, and stays gone until they open the board again.
+  useEffect(() => {
+    if (!front) away.current = true
+    else if (away.current && engine.gone) setRound((r) => r + 1)
+  }, [front, engine.gone])
   // Each position the board comes to, looked at afresh (the last search stops); an ended one needs no look, and
   // nor does a board behind another app: it stops there, and looks again on the fan's return.
   useEffect(() => {

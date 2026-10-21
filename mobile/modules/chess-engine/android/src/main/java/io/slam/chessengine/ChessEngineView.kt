@@ -19,8 +19,10 @@ import expo.modules.kotlin.views.ExpoView
 import java.io.ByteArrayInputStream
 
 // The app's own address for what it serves its page, from its assets: WebViewAssetLoader's, which no site has.
+// Only the engine's folder is served there (assets/engine: its page and files), none of the app's other assets.
 private const val HOST = "appassets.androidplatform.net"
-private const val PAGE = "https://$HOST/assets/engine/index.html"
+private const val FOLDER = "engine"
+private const val PAGE = "https://$HOST/$FOLDER/index.html"
 // Every response the page gets carries this policy, the worker's script too (a worker takes its policy from its
 // own script's response): its own files and WebAssembly, and nothing else, so no network.
 private val POLICY = mapOf(
@@ -28,11 +30,12 @@ private val POLICY = mapOf(
 )
 
 /** The engine's page in a WebView of its own, drawn too small to see while a board is open (the app's
- *  src/sports/chessEngine.tsx): its files come from the app's assets at https://appassets.androidplatform.net
+ *  src/sports/chessEngine.tsx): its files come from the app's assets/engine at https://appassets.androidplatform.net/engine/
  *  (WebViewAssetLoader, which also types the .wasm application/wasm, as streaming compile needs), never from
  *  file: URLs, so the WebView needs no file access at all. A request for anything else is refused here, whatever
  *  the page asks, and so is every navigation; it keeps nothing (no storage, no cache). Its words come out as
- *  "onWord" events, and `tell` gives it a line, over the WebView's message channel, open to this address alone. */
+ *  "onWord" events, and `tell` gives it a line, over the WebView's message channel, open to this address alone;
+ *  "!gone" is its own, when Android has ended the page's process (the board can start another). */
 @SuppressLint("ViewConstructor", "SetJavaScriptEnabled")
 class ChessEngineView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   override val shouldUseAndroidLayout = true
@@ -42,7 +45,10 @@ class ChessEngineView(context: Context, appContext: AppContext) : ExpoView(conte
 
   init {
     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-    val assets = WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context)).build()
+    val files = WebViewAssetLoader.AssetsPathHandler(context)
+    val assets = WebViewAssetLoader.Builder()
+      .addPathHandler("/$FOLDER/") { path -> if (path.split('/').any { it == ".." || it == "." }) null else files.handle("$FOLDER/$path") }
+      .build()
     val web = WebView(context)
     web.settings.apply {
       javaScriptEnabled = true
@@ -64,9 +70,10 @@ class ChessEngineView(context: Context, appContext: AppContext) : ExpoView(conte
 
       override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
 
-      // Its process ended (the phone short of memory): the board hears so, and the app goes on.
+      // Its process ended (the phone short of memory, often while the app was behind another): the board hears so,
+      // and the app goes on.
       override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        say("!failed its page went")
+        say("!gone")
         end()
         return true
       }

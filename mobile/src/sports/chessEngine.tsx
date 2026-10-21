@@ -14,21 +14,24 @@ import EnginePage, { type EnginePageHandle } from '../../modules/chess-engine'
 export { ENGINE_LICENCE, ENGINE_SOURCE, type Engine } from '../../../web/src/sports/facts/chessEngineCore'
 
 // The page's own words (modules/chess-engine's page.js), which no engine line starts with: it's listening, and
-// it couldn't start the engine (or the WebView couldn't keep it).
+// it couldn't start the engine; and its WebView's, Android has ended the page's process.
 const UP = '!up'
 const FAILED = '!failed'
+const GONE = '!gone'
 
-/** What an engine's EngineView connects: the conversation, and how to tell the page a line. */
-interface Wires { talk: Talk; tell: ((line: string) => void) | null }
+/** What an engine's EngineView connects: the conversation, how to tell the page a line, and whether its page went. */
+interface Wires { talk: Talk; tell: ((line: string) => void) | null; gone: boolean }
 const WIRES = new WeakMap<Engine, Wires>()
 
 /** An engine for a board, its page in an EngineView the board draws. `ready`: it answers; `failed`: it couldn't
- * start, it stopped answering, or its page went (the phone short of memory): the board says so and lets its
+ * start, it stopped answering, or its page went (`gone`: Android ended its process, the phone short of memory,
+ * often while the app was behind another, where another engine can start): the board says so and lets its
  * EngineView go, and its moves still play. */
-export function startEngine(on: { ready: () => void; failed: () => void }): Engine {
+export function startEngine(on: { ready: () => void; failed: (gone: boolean) => void }): Engine {
   const wires: Wires = {
-    talk: talkToEngine({ tell: (line) => wires.tell?.(line), end: () => { wires.tell = null } }, on),
+    talk: talkToEngine({ tell: (line) => wires.tell?.(line), end: () => { wires.tell = null } }, { ready: on.ready, failed: () => on.failed(wires.gone) }),
     tell: null,
+    gone: false,
   }
   WIRES.set(wires.talk.engine, wires)
   // A build without the page can't start it.
@@ -49,7 +52,10 @@ export function EngineView({ engine }: { engine: Engine }) {
   if (!wires || !EnginePage) return null
   const heard = (word: string) => {
     if (word === UP) wires.talk.start()
-    else if (word.startsWith(FAILED)) wires.talk.failed()
+    else if (word === GONE) {
+      wires.gone = true
+      wires.talk.failed()
+    } else if (word.startsWith(FAILED)) wires.talk.failed()
     else wires.talk.heard(word)
   }
   return <EnginePage ref={page} style={s.unseen} onWord={(e) => heard(e.nativeEvent.word)} />

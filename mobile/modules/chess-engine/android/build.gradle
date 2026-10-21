@@ -19,9 +19,20 @@ android {
   sourceSets.main.assets.srcDirs += "$buildDir/generated/chess-engine/assets"
 }
 
-def repo = file("../../../..")
+// The engine's files, by name (its page, src/main/assets/engine/page.js, names the two it runs). A name with no
+// file stops the build, rather than an app that ships without its engine: a Copy that matches nothing is skipped,
+// not failed. tests/test_credits.py holds these names, the page's and the web's to files in the folder.
+def engineDir = file("../../../../web/src/sports/engine")
+def engineFiles = ["stockfish-18-lite-single.js", "stockfish-18-lite-single.wasm", "Copying.txt"]
+def engineThere = tasks.register("chessEngineThere") {
+  doLast {
+    def missing = engineFiles.findAll { !new File(engineDir, it).isFile() }
+    if (missing) throw new GradleException("The chess engine's ${missing.join(', ')} isn't in $engineDir: see its README.md")
+  }
+}
 tasks.register("chessEngineFiles", Copy) {
-  from("$repo/web/src/sports/engine") { include "stockfish-18-lite-single.js", "stockfish-18-lite-single.wasm", "Copying.txt" }
+  dependsOn(engineThere)
+  from(engineDir) { include engineFiles }
   into("$buildDir/generated/chess-engine/assets/engine")
 }
 preBuild.dependsOn("chessEngineFiles")

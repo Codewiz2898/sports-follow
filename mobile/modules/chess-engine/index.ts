@@ -12,7 +12,8 @@ export interface EnginePageHandle {
 }
 
 export interface EnginePageProps {
-  /** Each word of the page: one of the engine's lines, or the page's own ("!up", "!failed …"). */
+  /** Each word of the page: one of the engine's lines, or the page's own ("!up", "!failed …"), or "!gone" when
+   * Android has ended the page's process. */
   onWord: (event: { nativeEvent: { word: string } }) => void
   style?: StyleProp<ViewStyle>
   ref?: Ref<EnginePageHandle>

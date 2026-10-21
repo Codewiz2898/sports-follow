@@ -33,10 +33,11 @@ hash (`<script>#<wasm>`). WebAssembly needs `'wasm-unsafe-eval'` in the page's C
 (deploy/caddy/Caddyfile).
 
 The Android app carries these files rather than downloading them: its module's build copies the `.js`, the
-`.wasm` and `Copying.txt` from here into its assets at each build (mobile/modules/chess-engine/android/build.gradle),
-and its WebView serves them to the engine's page at https://appassets.androidplatform.net/assets/engine/
-(WebViewAssetLoader, which types the `.wasm` application/wasm), with no file access and no network. A new
-engine reaches phones with a new build of the app, not with its JavaScript alone.
+`.wasm` and `Copying.txt` from here into its assets at each build (mobile/modules/chess-engine/android/build.gradle;
+a name there with no file here stops the build), and its WebView serves that folder alone to the engine's page at
+https://appassets.androidplatform.net/engine/ (WebViewAssetLoader, which types the `.wasm` application/wasm), with
+no file access and no network. A new engine reaches phones with a new build of the app, not with its JavaScript
+alone. tests/test_credits.py holds every name the web, the module and its page give a file to one here.
 
 Replacing the engine: new files here and their checksums above; in chessEngine.ts the two `?url` imports (they
 name the files); in the Android module, the names in build.gradle's copy and in its page
