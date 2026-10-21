@@ -599,3 +599,32 @@ export interface LeagueInvite { code: string; name: string; members: number; by:
 
 /** The predictions numbers on the admin panel's Users tab. */
 export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
+
+/**
+ * A short video published from the Mac app (the server's clips.py, GET /api/clips): a moment of a game, cut
+ * with its replay and end card. `match` is its match page's address ("<source>/<game id>"), none for a fan's
+ * own game; `line` is the moment in a line ("TY 21–18 GL · 26:00 · Game 2"); `published` is when it went live.
+ */
+export interface Clip {
+  id: string
+  video: string
+  poster: string
+  seconds: number
+  width: number
+  height: number
+  caption: string
+  line: string
+  match: string | null
+  sport: string | null
+  competition: string | null
+  game_title: string
+  players: number[]
+  published: string | null
+}
+
+/** Which clips: a game's (its feed), a competition's (the tournament feed), a player's, or everyone's. */
+export interface ClipsOf {
+  match?: string
+  competition?: string
+  player?: number
+}
