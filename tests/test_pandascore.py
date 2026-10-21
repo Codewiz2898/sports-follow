@@ -373,11 +373,26 @@ def test_live_now_keeps_the_big_tournaments_series_biggest_tier_first(monkeypatc
     monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: asked.append(path) or running)
     games = ps.PandascoreEsports().live_now()
     assert asked == ["/matches/running"]  # still the one request
-    # S, then the two A's in PandaScore's order, then B; C, D, unranked and untiered series aren't the big games.
+    # S, then the two A's in PandaScore's order, then B; the C gives way to the bigger ones on in its game, and
+    # D, unranked and untiered series never show.
     assert [(g.source_id, g.tier) for g in games] == [("5", 3), ("2", 2), ("6", 2), ("4", 1)]
     assert games[0].competition == "Worlds Stage 2 2026"
-    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: [on(1, "DreamLeague Closed Qualifier", "c"), on(3, "ESEA Advanced", "d")])
-    assert ps.PandascoreEsports().live_now() == []  # a quiet day: esports shows nothing
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: [on(3, "ESEA Advanced", "d"), on(7, "Streamers League", "unranked")])
+    assert ps.PandascoreEsports().live_now() == []  # a quiet day: nothing D or unranked stands in
+
+
+def test_live_now_lets_a_games_tier_c_series_stand_in_while_none_bigger_is_on_in_it(monkeypatch):
+    def on(match_id: int, slug: str, tier: str) -> dict:
+        return {**LIVE, "id": match_id, "videogame": {"id": match_id, "slug": slug}, "tournament": {"id": match_id, "name": "Group stage", "tier": tier}}
+
+    # Dota 2 has only an EPL Masters (C) and a second division (D) on; CS2 has a top league (A) and a qualifier (C).
+    running = [on(1, "dota-2", "c"), on(2, "dota-2", "d"), on(3, "cs-go", "c"), on(4, "cs-go", "a"), on(5, "dota-2", "c")]
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: running)
+    games = ps.PandascoreEsports().live_now()
+    # CS2's A, then Dota's two C's below every rated series; CS2's C isn't wanted beside its A, nor Dota's D at all.
+    assert [(g.source_id, g.sport, g.tier) for g in games] == [("4", "cs2", 2), ("1", "dota2", 0), ("5", "dota2", 0)]
+    running[0]["tournament"]["tier"] = "b"  # a bigger Dota series comes on: the C's give way
+    assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("4", 2), ("1", 1)]
 
 
 def test_the_schedule_is_the_big_tournaments_series_between_two_days_each_with_its_tier(monkeypatch):
