@@ -117,9 +117,10 @@ function useInFront() {
  * allows (Twitch: 400×300): × is in a strip beside it, not over it, as on the web (.watch-whole). × or Back closes it.
  * Only its own page loads here: a link out of the player (its "Watch on Twitch") opens in the platform's app or the
  * browser. While the app is behind another, the player goes, and comes back (live again) when it's in front. A page
- * that doesn't load, or that the server refuses, says so, with the way to the platform.
+ * that doesn't load, or that the server refuses, says so, with the way to the platform. The Feed's videos play in it
+ * too (feedLayouts.tsx).
  */
-function WholeScreen({ page, platform, onOut, onClose }: { page: string; platform: string; onOut?: () => void; onClose: () => void }) {
+export function WholeScreen({ page, platform, onOut, onClose }: { page: string; platform: string; onOut?: () => void; onClose: () => void }) {
   useSideways()
   const front = useInFront()
   const insets = useSafeAreaInsets()

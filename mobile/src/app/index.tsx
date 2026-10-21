@@ -28,7 +28,7 @@ import { PlayersStrip } from '../today/strip'
 import { ThisWeek, useWeek, Wire } from '../today/week'
 import { Btn, Eyebrow, Notice } from '../ui'
 import { Page } from '../page'
-import { FromYourPlayers } from '../post'
+import { FromYourPlayers } from '../feedLayouts'
 import { useWelcomed } from '../welcome'
 import { LoadFailed } from '../today/load'
 

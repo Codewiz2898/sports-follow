@@ -18,6 +18,7 @@ export const colour = {
   inkMuted: '#A9ABB0', // muted text on ink (the board, the Wire, the next game)
   inkLine: 'rgba(255,255,255,0.16)',
   inkRaised: '#26272A',
+  follow: '#1F5BEF', // Follow on a Feed card (--follow): the boards' one blue, never a sport's identity
 }
 
 // The names the expo-font plugin gives the files in app.config.ts, by weight.
