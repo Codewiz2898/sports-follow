@@ -40,10 +40,15 @@ function pages(): ExpoConfigAndroidIntentFiltersData[] {
   })
 }
 
+// SPIKE (recorder, BHA-314): a separate test app beside the real one on the phone. Its own package, name and
+// scheme, no stann.in links and no Firebase (google-services.json names io.stann.app). Never merged.
+const SPIKE = { package: 'io.stann.replayspike', name: 'Slam replay test', scheme: 'slamreplay' }
+void [name, pages, FIREBASE, SITE]
+
 export default (): ExpoConfig => ({
-  name,
+  name: SPIKE.name,
   slug: 'stann',
-  scheme: 'stann',
+  scheme: SPIKE.scheme,
   version: '0.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'light',
@@ -51,16 +56,10 @@ export default (): ExpoConfig => ({
   icon: `${ICONS}/icon-512.png`,
   android: {
     // Play never lets a package id change after the first upload (decided 16 Oct 2026, BHA-210).
-    package: 'io.stann.app',
+    package: SPIKE.package,
     adaptiveIcon: { foregroundImage: `${ICONS}/adaptive-432.png`, monochromeImage: `${ICONS}/adaptive-monochrome-432.png`, backgroundColor: PAPER },
     predictiveBackGestureEnabled: false,
-    intentFilters: [{
-      action: 'VIEW',
-      autoVerify: true,
-      category: ['BROWSABLE', 'DEFAULT'],
-      data: [{ scheme: 'https', host: SITE }, ...pages()],
-    }],
-    ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
+    intentFilters: [],
   },
   ios: { bundleIdentifier: 'io.stann.app' },
   plugins: [
@@ -86,5 +85,5 @@ export default (): ExpoConfig => ({
     }],
   ],
   experiments: { typedRoutes: true },
-  extra: { firebase: FIREBASE }, // whether this build can have an FCM token (src/push.ts)
+  extra: { firebase: false }, // whether this build can have an FCM token (src/push.ts)
 })

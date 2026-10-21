@@ -7,7 +7,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { Image } from 'expo-image'
-import { router } from 'expo-router'
+import { Redirect, router } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { AHEAD_DAYS, comingUp, FEW, followedLive, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type TeamGame } from '../../../web/src/today'
@@ -128,7 +128,12 @@ function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
   ) : null))
 }
 
-export default function TodayScreen() {
+// SPIKE (recorder, BHA-314): the test app opens on the recorder.
+export default function Index() {
+  return <Redirect href="/recorder" />
+}
+
+export function TodayScreen() {
   const following = useFollowing()
   const { cards, loaded, failed, matches, matchesLoaded, teams } = following
   const { items: alerts, seen } = useActivity()

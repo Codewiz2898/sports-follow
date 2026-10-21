@@ -1,0 +1,33 @@
+// SPIKE (BHA-314 recorder spike): instant replay of the screen, never merged. The recorder lives in
+// src/main/java/io/stann/recorder; an Expo module of this app's own, linked like stann-notifications.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'io.stann'
+version = '0.0.1'
+
+android {
+  namespace "io.stann.recorder"
+  defaultConfig {
+    versionCode 1
+    versionName "0.0.1"
+  }
+  sourceSets.main.res.srcDirs += "$buildDir/generated/slam-fonts/res"
+}
+
+def appRoot = file("../../..")
+tasks.register("slamFonts", Copy) {
+  from("$appRoot/assets/fonts/AntonSlanted.ttf") { rename { "slam_anton_slanted.ttf" } }
+  from("$appRoot/node_modules/@expo-google-fonts/manrope/800ExtraBold/Manrope_800ExtraBold.ttf") { rename { "slam_manrope.ttf" } }
+  into("$buildDir/generated/slam-fonts/res/font")
+}
+preBuild.dependsOn("slamFonts")
+
+dependencies {
+  // The end card: the clip and a still, joined and re-encoded (Transformer).
+  implementation 'androidx.media3:media3-transformer:1.11.1'
+  implementation 'androidx.media3:media3-effect:1.11.1'
+  implementation 'androidx.media3:media3-common:1.11.1'
+}
