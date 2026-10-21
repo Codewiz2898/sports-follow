@@ -173,7 +173,7 @@ export function FeedPage() {
   }
 
   return (
-    <>
+    <div className="feed-page">
       <header className="page-head">
         <h1 className="dsp page-title">Feed</h1>
       </header>
@@ -201,6 +201,6 @@ export function FeedPage() {
       {done}
       {short != null && items.some((e) => e.item.id === short && isShort(e.item)) && <ShortsViewer entries={items} start={short} now={now} follows={follows} onMore={setOpen} onNear={more} onClose={closeShort} />}
       {sheet}
-    </>
+    </div>
   )
 }

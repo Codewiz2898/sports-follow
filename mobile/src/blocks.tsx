@@ -97,9 +97,10 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
   const lead = game.players[0]
   return (
     <Pressable onPress={openMatch(page, lead.team != null ? `/team/${lead.team}` : `/player/${c.r.player_id}`)} style={[b.result, hero && b.resultHero, { backgroundColor: tone.sport }, fill && { width: undefined }]}>
-      <Backdrop sport={tone.key} seed={game.key} colour={tone.on} />
+      {/* A result's line art, fainter than other cards': it sits behind the most words (.result-card .backdrop). */}
+      <Backdrop sport={tone.key} seed={game.key} colour={tone.on} opacity={0.1} />
       <View style={b.row}>
-        {hero ? <Pill label={c.when} bg={tone.on} color={tone.sport} /> : <Eyebrow color={tone.onSoft} lines={1} style={{ flexShrink: 1 }}>{[c.when, c.r.competition].filter(Boolean).join(' · ')}</Eyebrow>}
+        {hero ? <Pill label={c.when} bg={tone.on} color={tone.sport} /> : <Eyebrow color={tone.onSoft} lines={1} style={{ flexShrink: 1 }}>{c.when}</Eyebrow>}
         {badge}
       </View>
       <Dsp size={wordSize(c.word, hero)} color={tone.on}>{breakable(c.word)}</Dsp>
@@ -118,8 +119,10 @@ export function ResultCard({ game, hero, now, fill }: { game: GameResult; hero?:
             </View>
           </View>
         ) : null}
-        {!hero && c.match !== c.word ? line(c.match) : null}
+        {/* Under the name, a few words only: their own line, then the game (the badge says how it went). */}
         {c.lines.map((l) => line(l, true))}
+        {/* With no badge (a result it can't read as a win, draw or loss), the game says how it went instead. */}
+        {!hero && (c.wl ? c.r.title : c.match) !== c.word ? <Text style={[b.resultLine, { color: tone.onSoft }]} numberOfLines={c.wl ? 1 : 2}>{c.wl ? c.r.title : c.match}</Text> : null}
       </View>
       {hero ? (
         <View style={[b.heroFoot, { borderTopColor: alpha(tone.on, 0.18) }]}>
@@ -532,8 +535,8 @@ export const b = StyleSheet.create({
   stat: { flexGrow: 1, flexBasis: 104, gap: 6, padding: 14, borderRadius: 16, backgroundColor: colour.surface, minWidth: 0 },
   lineStats: { flexDirection: 'row', gap: 8 },
   lineStat: { flex: 1, gap: 4, padding: 12, borderRadius: 14 },
-  result: { overflow: 'hidden', justifyContent: 'space-between', gap: 10, width: 236, minHeight: 268, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE },
-  resultHero: { width: 322, minHeight: 356, padding: 18, borderRadius: 26 },
+  result: { overflow: 'hidden', justifyContent: 'space-between', gap: 10, width: 236, minHeight: 268, flexGrow: 1, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_TILE },
+  resultHero: { width: 322, minHeight: 356, paddingVertical: 18, paddingHorizontal: 18, borderRadius: 26 },  // b.result's paddingVertical/Horizontal beat a plain padding
   resultLine: { fontSize: 13, lineHeight: 17, fontFamily: font[700] },
   heroFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingTop: 10, borderTopWidth: 2 },
   coming: { overflow: 'hidden', justifyContent: 'space-between', gap: 8, width: 204, minHeight: 176, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE },  // its sport's colour (ComingCard)

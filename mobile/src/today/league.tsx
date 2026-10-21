@@ -74,15 +74,12 @@ export function LeagueResultCard({ game, now, fill }: { game: LeagueGame; now: n
   const word = game.word || game.title
   return (
     <LeagueCard game={game} label={`${game.competition}: ${game.line || game.title}, ${word}`} style={[s.card, s.result, fill && { width: undefined }]}>
-      <Backdrop sport={tone.key} seed={game.key} colour={tone.sport} opacity={0.2} />
-      <View style={s.head}>
-        <Pill small label={game.competition} bg={tone.sport} color={tone.on} style={{ flexShrink: 1 }} />
-        <Eyebrow>{dayLabel(game.start_utc, new Date(now))}</Eyebrow>
-      </View>
+      <Backdrop sport={tone.key} seed={game.key} colour={tone.sport} opacity={0.12} />
+      <Pill small label={game.competition} bg={tone.sport} color={tone.on} style={{ alignSelf: 'flex-start', maxWidth: '100%' }} />
       <Text style={dsp(wordSize(word))}>{breakable(word)}</Text>
       <View style={{ gap: 2 }}>
         {word !== game.title ? <Text style={[s.line, { fontFamily: font[800] }]} numberOfLines={2}>{game.line || game.title}</Text> : null}
-        <Text style={[s.line, { color: colour.muted }]} numberOfLines={2}>{leagueAbout(game)}</Text>
+        <Text style={[s.line, { color: colour.muted }]} numberOfLines={1}>{leagueAbout(game, dayLabel(game.start_utc, new Date(now)))}</Text>
       </View>
     </LeagueCard>
   )
@@ -108,8 +105,7 @@ export function LeagueComingCard({ game, now, fill }: { game: LeagueGame; now: n
 
 const s = StyleSheet.create({
   card: { overflow: 'hidden', justifyContent: 'space-between', gap: 10, flexGrow: 1, paddingVertical: 14, paddingHorizontal: 16, borderRadius: RADIUS_TILE, backgroundColor: colour.surface, borderWidth: 2, borderColor: colour.text },
-  result: { width: 236, minHeight: 268 },
+  result: { width: 236, minHeight: 268, paddingVertical: 16, paddingHorizontal: 18 },
   coming: { width: 204, minHeight: 176, gap: 8 },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   line: { fontFamily: font[700], fontSize: 13, lineHeight: 17, color: colour.text },
 })
