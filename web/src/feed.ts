@@ -166,9 +166,9 @@ export function statsLine(item: FeedItem, now: number, withLength = false): stri
 }
 
 /** YouTube's no-cookie player for a Feed video, playing at once: the web's in the picture's place, the app's inline in
- * a WebView on the site's address. `muted` for one that starts by itself (autoplay; YouTube's own button turns the sound
- * on), as browsers and YouTube's rules allow only that. `origin`: the page's own, for one YouTube's IFrame Player API
- * listens to (its errors: refusedHere). (BHA-354: the server will say how to play each video.) */
+ * a WebView on the site's address. `muted` for one that starts by itself without the fan's sound on (autoplay; a
+ * browser lets only a muted one start before the page is tapped). `origin`: the page's own, for one YouTube's IFrame
+ * Player API drives (its errors: refusedHere; its sound turned on and off where it plays, BHA-381). (BHA-354: the server will say how to play each video.) */
 export function youtubeEmbed(id: string, muted = false, origin?: string): string {
   const api = origin ? `&enablejsapi=1&origin=${encodeURIComponent(origin)}` : ''
   return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${muted ? '&mute=1' : ''}${api}`

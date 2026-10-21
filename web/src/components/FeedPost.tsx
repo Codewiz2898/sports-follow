@@ -6,6 +6,7 @@ import { initials, safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
 import { FeedPlayer } from './FeedPlayer'
+import { setSound } from '../sound'
 import { ShareButton } from './Share'
 
 /**
@@ -67,7 +68,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
         ) : (
           <>
             {picture && <Picture src={picture} onGone={() => setNoPicture(true)} />}
-            <button type="button" className="post-play" aria-label={`Play: ${item.title}`} onClick={() => setPlaying(true)}>{playIcon}</button>
+            <button type="button" className="post-play" aria-label={`Play: ${item.title}`} onClick={() => { setPlaying(true); setSound(true) }}>{playIcon}</button>
             {length && <span className="post-chip">{length}</span>}
           </>
         )}

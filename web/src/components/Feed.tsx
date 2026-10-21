@@ -9,6 +9,7 @@ import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
 import { EdgePost, EdgeSheetExtras } from './FeedLayouts'
 import { FeedPlayer } from './FeedPlayer'
+import { setSound } from '../sound'
 import { FeedPost } from './FeedPost'
 
 /**
@@ -86,7 +87,7 @@ export function VideoCard({ item, playerId, now, onMore }: { item: FeedItem; pla
         ) : (
           <>
             <Thumb id={id} size="hqdefault" />
-            <button type="button" className="feed-play" aria-label={`Play: ${item.title}`} onClick={() => setPlaying(true)}>{play(22)}</button>
+            <button type="button" className="feed-play" aria-label={`Play: ${item.title}`} onClick={() => { setPlaying(true); setSound(true) }}>{play(22)}</button>
             {length && <span className="feed-dur">{length}</span>}
           </>
         )}

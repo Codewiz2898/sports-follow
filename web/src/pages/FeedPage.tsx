@@ -171,7 +171,7 @@ export function FeedPage() {
       {items.length > 0 && (
         <div ref={setEdge} className="edge">
           {items.map((e) => (
-            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id} muted={playing?.muted} onPlay={play} onMore={() => setOpen(e)} />
+            <EdgePost key={e.item.id} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id} onPlay={play} onMore={() => setOpen(e)} />
           ))}
         </div>
       )}

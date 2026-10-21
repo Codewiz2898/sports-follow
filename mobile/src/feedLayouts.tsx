@@ -3,9 +3,10 @@
 // (the S2Edge board), full-width posts down the page; and full screen (the S5Reels board), one item a screen, paging
 // from one to the next. A video is YouTube's biggest thumbnail until it plays, in the picture's place, as the web's
 // does: YouTube's player in a WebView on the site's address (InlineVideo), the tab bar where it was. It starts when
-// tapped, with its sound, or by itself (BHA-359), muted, once more than half of it is on screen, as the fan's
-// autoplay setting allows (autoplay.ts); one at a time, and it stops once it's off the screen, the Feed's left or the
-// app's behind another. An upright video (a Short) is framed and plays upright (BHA-358), clear of whatever is beside
+// tapped, with its sound, or by itself (BHA-359), once more than half of it is on screen, as the fan's autoplay
+// setting allows (autoplay.ts): muted until the fan turns the sound on, then with it until they turn it off (BHA-381,
+// sound.ts; the sound button beside a playing video). One at a time, and it stops once it's off the screen, the Feed's
+// left or the app's behind another. An upright video (a Short) is framed and plays upright (BHA-358), clear of whatever is beside
 // it, as YouTube's rules want nothing over its player. Each card names its channel under whose it is. Items of
 // players the fan doesn't follow (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here". Also Today's "From your players" (the web's components/Feed.tsx),
 // in the edge layout's cards.
@@ -25,9 +26,10 @@ import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type Feed
 import { useTone } from './catalog'
 import { useAutoplay } from './autoplay'
 import { useFollowing } from './following'
-import { CheckIcon, PlayIcon, PlusIcon, ShareIcon } from './icons'
+import { CheckIcon, MutedIcon, PlayIcon, PlusIcon, ShareIcon, SoundIcon } from './icons'
 import { useMyFeed } from './myFeed'
 import { Face, ItemSheet, Picture } from './post'
+import { setSound, useSound } from './sound'
 import { share, ShareButton } from './share'
 import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
@@ -100,13 +102,14 @@ export function useFollows(): { follows: Follows; error: string | null } {
   return { follows, error }
 }
 
-/** The one Feed video playing: which item, whether it started by itself (muted), and whether the fan has touched it
- * since (`kept`: perhaps turned its sound on with YouTube's button, which nothing outside the player can see). */
-export interface Playing { id: string; muted: boolean; kept?: boolean }
+/** The one Feed video playing: which item, whether it started by itself (`auto`), and whether the fan has touched its
+ * player since (`kept`). Whether it has its sound is the fan's, for every video (sound.ts). */
+export interface Playing { id: string; auto?: boolean; kept?: boolean }
 
-/** Which of a list's videos plays (one at a time). `play` starts one with its sound (a tap). While `on` (the screen in
- * front, the app too) and `auto` (a list that autoplays, and the fan's setting allows it now), the topmost video more
- * than half on screen starts by itself, muted, unless one the fan started or touched (`keep`) is still playing; a
+/** Which of a list's videos plays (one at a time). `play` starts one with its sound (a tap), which turns the sound on
+ * for the ones after it. While `on` (the screen in front, the app too) and `auto` (a list that autoplays, and the
+ * fan's setting allows it now), the topmost video more than half on screen starts by itself, with the sound as the fan
+ * last left it, unless one the fan started or touched (`keep`) is still playing; a
  * video goes once none of it is on screen. `pairs` is what the list watches its items with (FlatList's
  * viewabilityConfigCallbackPairs), and `playing` what it draws again on (extraData); a list that isn't watched
  * (Today's cards, `auto` false) keeps what plays till the screen goes. */
@@ -123,15 +126,15 @@ export function usePlaying(on: boolean, auto = true): { playing: Playing | null;
     const now = was && (!watched.current || seen.current.has(was.id)) ? was : null
     // The 60% watch waits 250ms to say, the 1% one doesn't: one just gone off screen isn't started again meanwhile.
     const next = top.current && seen.current.has(top.current) ? top.current : null
-    if (starts.current && next && (!now || (now.muted && !now.kept)) && now?.id !== next) return { id: next, muted: true }
+    if (starts.current && next && (!now || (now.auto && !now.kept)) && now?.id !== next) return { id: next, auto: true }
     return now
   }), [])
   useEffect(() => { if (on) settle(); else setPlaying(null) }, [on, allowed, settle])
   const play = useCallback((item: FeedItem) => {
-    if (item.video?.youtube_id) setPlaying({ id: item.id, muted: false })
+    if (item.video?.youtube_id) { setPlaying({ id: item.id }); setSound(true) }
     else open(item.url)?.()
   }, [])
-  const keep = useCallback(() => setPlaying((was) => (was && was.muted && !was.kept ? { ...was, kept: true } : was)), [])
+  const keep = useCallback(() => setPlaying((was) => (was && was.auto && !was.kept ? { ...was, kept: true } : was)), [])
   const pairs = useRef<ViewabilityConfigCallbackPairs>([
     { viewabilityConfig: { itemVisiblePercentThreshold: 60, minimumViewTime: 250 }, onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<FeedEntry>[] }) => {
       top.current = viewableItems.find((v) => v.isViewable && v.item?.item.kind === 'video' && v.item.item.video?.youtube_id)?.item?.item.id ?? null
@@ -146,31 +149,65 @@ export function usePlaying(on: boolean, auto = true): { playing: Playing | null;
 }
 
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-// YouTube's IFrame Player API over the page's player: its errors come to the app (onMessage), as {"error": code}.
-const LISTEN = '<script>function onYouTubeIframeAPIReady(){new YT.Player("v",{events:{onError:function(e){'
-  + 'window.ReactNativeWebView.postMessage(JSON.stringify({error:e.data}))}}})}</script>'
-  + '<script src="https://www.youtube.com/iframe_api"></script>'
+// The player page's own script, YouTube's IFrame Player API over its player: its errors come to the app (onMessage)
+// as {"error": code}; window.sound(muted) turns its sound off or on where it plays (the app's sound button, BHA-381);
+// and what YouTube's own sound button did is told to the app as {"sound": on} once it has played (asked of the
+// player: it starts by itself before the API is on it, so there's no event for that). A change the page itself just
+// asked for takes YouTube a moment to report, so it isn't told back.
+const PLAYER_SCRIPT = `
+var want = START, ready = false, played = false, quiet = 0, p
+function say(what) { window.ReactNativeWebView.postMessage(JSON.stringify(what)) }
+function apply() {
+  if (!ready) return
+  quiet = Date.now() + 1500
+  if (want) p.mute(); else { p.unMute(); if (p.getVolume() === 0) p.setVolume(100) }
+}
+window.sound = function (muted) { want = muted; apply() }
+window.onYouTubeIframeAPIReady = function () {
+  p = new YT.Player('v', { events: {
+    onError: function (e) { say({ error: e.data }) },
+    onReady: function () {
+      ready = true; apply()
+      setInterval(function () {
+        played = played || p.getPlayerState() === YT.PlayerState.PLAYING
+        if (!played || Date.now() < quiet) return
+        var muted = p.isMuted()
+        if (muted !== want) { want = muted; say({ sound: !muted }) }
+      }, 400)
+    },
+  } })
+}`
 const told = new Set<string>() // the videos this app has told the server won't play here, once each
 
 /** YouTube's no-cookie player playing a Feed video where its picture was: a WebView of a page with the player alone,
- * on the site's address (YouTube's embeds want a site around them, as the web's are), muted when it started by
- * itself. YouTube's own buttons do the rest: the sound, pausing, its full screen (upright, as the phone is held). A
- * link out of it opens in the YouTube app or the browser. One that won't load says so, with the way to the video; one
- * YouTube won't play here (its owner keeps it off other sites: refusedHere) says that, and the server is told, once,
- * so no fan's Feed serves it again (BHA-380). */
-function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playerId: number; muted: boolean; onTouch?: () => void }) {
+ * on the site's address (YouTube's embeds want a site around them, as the web's are), with its sound as the fan's
+ * left it (sound.ts): turned on and off where it plays, through YouTube's IFrame Player API, and YouTube's own sound
+ * button turns it on or off for the videos after it too. YouTube's own buttons do the rest: pausing, its full screen
+ * (upright, as the phone is held). Drawn once a video (`key` it by the video). A link out of it opens in the YouTube
+ * app or the browser. One that won't load says so, with the way to the video; one YouTube won't play here (its owner
+ * keeps it off other sites: refusedHere) says that, and the server is told, once, so no fan's Feed serves it again
+ * (BHA-380). */
+function InlineVideo({ item, playerId, onTouch }: { item: FeedItem; playerId: number; onTouch?: () => void }) {
   const [failed, setFailed] = useState<'load' | 'refused' | null>(null)
   const site = `${API_URL}/`
   const id = item.video?.youtube_id ?? ''
+  const muted = !useSound()
+  const [startMuted] = useState(muted) // the page starts as the sound is; a change after goes through the player
+  const web = useRef<WebView>(null)
   const html = useMemo(() => '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
     + '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body>'
-    + `<iframe id="v" src="${escape(youtubeEmbed(id, muted, API_URL))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
-    + LISTEN + '</body></html>', [id, muted, item.title])
+    + `<iframe id="v" src="${escape(youtubeEmbed(id, startMuted, API_URL))}" title="${escape(item.title)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`
+    + `<script>${PLAYER_SCRIPT.replace('START', String(startMuted))}</script><script src="https://www.youtube.com/iframe_api"></script>`
+    + '</body></html>', [id, startMuted, item.title])
+  const tell = useCallback(() => web.current?.injectJavaScript(`window.sound && window.sound(${muted}); true;`), [muted])
+  useEffect(() => { tell() }, [tell])
   const leave = (url: string) => { open(url)?.() }
   const down = useRef<number | null>(null) // where a touch began: one that ends where it began is a tap, not a scroll
   const heard = (data: string) => {
-    let code: unknown
-    try { code = (JSON.parse(data) as { error?: unknown }).error } catch { return }
+    let said: { error?: unknown; sound?: unknown }
+    try { said = JSON.parse(data) as typeof said } catch { return }
+    if (typeof said.sound === 'boolean') { setSound(said.sound); return }
+    const code = said.error
     if (!refusedHere(code)) return // another of the player's errors: YouTube's own message says it, as on the web
     setFailed('refused')
     if (told.has(item.id)) return
@@ -191,7 +228,9 @@ function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playe
     <View style={StyleSheet.absoluteFill} onTouchStart={(ev) => { down.current = ev.nativeEvent.pageY }}
       onTouchEnd={(ev) => { if (down.current != null && Math.abs(ev.nativeEvent.pageY - down.current) < 12) onTouch?.(); down.current = null }}>
     <WebView
+      ref={web}
       source={{ html, baseUrl: site }}
+      onLoadEnd={tell} // a change made while the page was loading
       style={v.web}
       containerStyle={v.web}
       originWhitelist={['*']}
@@ -201,7 +240,7 @@ function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playe
         return false
       }}
       onOpenWindow={(e) => leave(e.nativeEvent.targetUrl)}
-      mediaPlaybackRequiresUserAction={false} // it plays at once: a tap asked for it, or it's muted
+      mediaPlaybackRequiresUserAction={false} // it plays at once, with its sound when the fan has that on
       allowsInlineMediaPlayback
       allowsFullscreenVideo
       setBuiltInZoomControls={false}
@@ -213,6 +252,20 @@ function InlineVideo({ item, playerId, muted, onTouch }: { item: FeedItem; playe
       onRenderProcessGone={() => setFailed('load')} // its process was ended (memory): said, rather than blank
     />
     </View>
+  )
+}
+
+/** The sound of every Feed video, near the one playing but never over it (YouTube's rules want nothing over its
+ * player): a speaker, crossed out while muted; a tap turns it on or off for this video and the ones after it. Under
+ * the player's right-hand corner on paper; `onInk`, the full screen's, in a ring at the top right, by the tabs. */
+function SoundButton({ onInk }: { onInk?: boolean }) {
+  const on = useSound()
+  const Icon = on ? SoundIcon : MutedIcon
+  return (
+    <Pressable onPress={() => setSound(!on)} accessibilityRole="button" accessibilityLabel={on ? 'Mute the videos' : 'Turn the videos’ sound on'}
+      style={({ pressed }) => [onInk ? r.sound : e.sound, pressed && { opacity: 0.6 }]}>
+      <Icon size={20} color={onInk ? '#FFFFFF' : colour.text} />
+    </Pressable>
   )
 }
 
@@ -260,7 +313,7 @@ export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, 
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
     // An upright one (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly.
-    const still = playing ? <InlineVideo item={item} playerId={who.id} muted={playing.muted} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
+    const still = playing ? <InlineVideo key={id} item={item} playerId={who.id} onTouch={onKeep} /> : picture ? <Picture src={picture} onGone={gone} /> : null
     media = playing ? (
       <View style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
         {upright(item) ? <View style={e.tall}>{still}</View> : still}
@@ -320,9 +373,12 @@ export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, 
         </Pressable>
       </View>
       {media}
-      <View style={e.cap}>
-        {titled ? <Text style={e.title} numberOfLines={3}>{item.title}</Text> : null}
-        {from ? <Text style={e.src}>{from}</Text> : null}
+      <View style={e.foot}>
+        <View style={e.cap}>
+          {titled ? <Text style={e.title} numberOfLines={3}>{item.title}</Text> : null}
+          {from ? <Text style={e.src}>{from}</Text> : null}
+        </View>
+        {playing ? <SoundButton /> : null}
       </View>
     </View>
   )
@@ -388,6 +444,7 @@ export function Reels({ entries, now, tab, read, onTab, follows, videos, onMore,
       <View style={[r.tabs, { top: insets.top + 18 }]} pointerEvents="box-none">
         <FeedTabs tab={tab} onTab={onTab} onInk />
       </View>
+      {videos.playing ? <View style={[r.soundAt, { top: insets.top + 11 }]}><SoundButton onInk /></View> : null}
     </View>
   )
 }
@@ -421,7 +478,7 @@ function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: 
 
   let frame: ReactNode
   if (item.kind === 'video' && id && playing) {
-    frame = <View style={[r.frame, place]}><InlineVideo item={item} playerId={who.id} muted={playing.muted} onTouch={onKeep} /></View>
+    frame = <View style={[r.frame, place]}><InlineVideo key={id} item={item} playerId={who.id} onTouch={onKeep} /></View>
   } else if (item.kind === 'video' && id) {
     frame = (
       <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, place]}>
@@ -561,7 +618,9 @@ const e = StyleSheet.create({
   },
   block: { aspectRatio: 16 / 9, justifyContent: 'space-between', gap: 16, padding: 18 },
   quote: { paddingTop: 6, paddingHorizontal: 16, paddingBottom: 4, fontFamily: font[600], fontStyle: 'italic', fontSize: 18, lineHeight: 25, color: '#2A2B2E' },
-  cap: { gap: 3, paddingTop: 10, paddingHorizontal: 14, paddingBottom: 14 },
+  foot: { flexDirection: 'row', alignItems: 'flex-start' },
+  cap: { flex: 1, gap: 3, paddingTop: 10, paddingHorizontal: 14, paddingBottom: 14 },
+  sound: { width: 44, height: 44, marginTop: 2, marginRight: 4, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },  // under the player's right-hand corner
   title: { fontFamily: font[700], fontSize: 15, lineHeight: 20, color: colour.text },
   src: { fontFamily: font[700], fontSize: 12, lineHeight: 16, color: colour.muted },
   extras: { flexDirection: 'row', alignItems: 'center', gap: 18 },
@@ -577,6 +636,10 @@ const r = StyleSheet.create({
   bigplay: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(243,243,239,0.92)', alignItems: 'center', justifyContent: 'center' },
   words: { alignItems: 'stretch', justifyContent: 'space-between', gap: 12, padding: 18 },
   tabs: { position: 'absolute', left: 0, right: 0 },
+  // The sound button, 44 across, level with the tabs (whose row is shorter, so it's beside it rather than in it: all of
+  // it takes taps), at the side buttons' right edge, clear of the highest a player goes (insets.top + 56).
+  soundAt: { position: 'absolute', right: 13 },
+  sound: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
   info: { position: 'absolute', left: 16, right: 84, gap: 10 },
   who: { flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', maxWidth: '100%' },
   faceRing: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }, // .reel-who .face's 2px white ring

@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CS
 import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
 import { useAutoplay } from '../autoplay'
-import { channelOf, duration, statsLine, upright, youtubeEmbed } from '../feed'
+import { channelOf, duration, statsLine, upright } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
+import { setSound, useSound } from '../sound'
 import { sportKey } from '../sports'
+import { FeedPlayer } from './FeedPlayer'
 import { Face } from './FeedPost'
+import { MutedIcon, SoundIcon } from './Icons'
 import { ShareButton } from './Share'
 
 /**
@@ -14,9 +17,10 @@ import { ShareButton } from './Share'
  * admin panel changes live): edge to edge (the S2Edge board), full-width posts down the page; and full screen (the
  * S5Reels board), one video a screen, snapping from one to the next. In both a video is YouTube's biggest thumbnail
  * until it plays, and only then does YouTube's no-cookie player load, in its place: an upright one (a Short) in an
- * upright frame. It starts when tapped, with its sound, or by itself (BHA-359, usePlaying), muted, once more than half
- * of it is on screen, as the fan's autoplay setting allows (autoplay.ts); one at a time, and it stops once it's off
- * the screen. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
+ * upright frame (FeedPlayer). It starts when tapped, with its sound, or by itself (BHA-359, usePlaying), once more than
+ * half of it is on screen, as the fan's autoplay setting allows (autoplay.ts): muted until the fan turns the sound on,
+ * then with it until they turn it off (BHA-381, sound.ts; the sound button beside a playing video). One at a time,
+ * and it stops once it's off the screen. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
  * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
  */
 
@@ -50,18 +54,22 @@ function Still({ src, className, onGone }: { src: string; className?: string; on
   return <img ref={check} className={className} src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={onGone} onLoad={(e) => check(e.currentTarget)} />
 }
 
-/** YouTube's no-cookie player, playing, in the picture's place; muted when it started by itself (YouTube's own
- * button turns the sound on). */
-function Player({ id, title, muted }: { id: string; title: string; muted?: boolean }) {
+/** The sound of every Feed video, near the one playing but never over it (YouTube's rules want nothing over its
+ * player), the Android app's SoundButton: a speaker, crossed out while muted (or its sound held back till a tap on
+ * the page, which this is); a tap turns it on or off for this video and the ones after it. */
+function SoundButton({ className }: { className: string }) {
+  const sound = useSound()
+  const on = sound.on && !sound.held
   return (
-    <iframe src={youtubeEmbed(id, muted)} title={title}
-      allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
+    <button type="button" className={className} data-sound aria-label={on ? 'Mute the videos' : 'Turn the videos’ sound on'} onClick={() => setSound(!on)}>
+      {on ? <SoundIcon width={20} height={20} /> : <MutedIcon width={20} height={20} />}
+    </button>
   )
 }
 
-/** The one Feed video playing: which item, whether it started by itself (muted), and whether the fan has touched it
- * since (`kept`: perhaps turned its sound on with YouTube's button, which nothing outside the player can see). */
-export interface Playing { id: string; muted: boolean; kept?: boolean }
+/** The one Feed video playing: which item, whether it started by itself (`auto`), and whether the fan has touched its
+ * player since (`kept`). Whether it has its sound is the fan's, for every video (sound.ts). */
+export interface Playing { id: string; auto?: boolean; kept?: boolean }
 
 function listenFront(heard: () => void) {
   document.addEventListener('visibilitychange', heard)
@@ -74,11 +82,12 @@ function useInFront(): boolean {
 }
 
 /** Which of a list's videos plays (one at a time), the Android app's usePlaying. `play` starts one with its sound (a
- * tap on its picture). Its videos are the frames under `box` with data-video (the item's id: the picture, or the
+ * tap on its picture), which turns the sound on for the ones after it. Its videos are the frames under `box` with data-video (the item's id: the picture, or the
  * player in its place), in view of `root` (the screen when null, else what scrolls them), for `entries`. While the tab
  * is in front and the fan's setting allows it now (autoplay.ts), the topmost video more than half of whose frame is on
- * screen (YouTube's rule) starts by itself, muted, once the list has been still for 250ms, unless one the fan started
- * or touched is still playing. A video goes once none of its frame is on screen, and a muted one nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
+ * screen (YouTube's rule) starts by itself, with the sound as the fan last left it, once the list has been still for
+ * 250ms, unless one the fan started or touched is still playing. A video goes once none of its frame is on screen,
+ * and one that started by itself and nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
  * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. */
 export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[]): { playing: Playing | null; play: (id: string) => void } {
   const [playing, setPlaying] = useState<Playing | null>(null)
@@ -90,13 +99,13 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
   const settle = useCallback((start: boolean) => setPlaying((was) => {
     const frames = [...shown.current]
     const on = (id: string) => frames.some(([el, ratio]) => ratio > 0 && el.dataset.video === id)
-    const now = was && on(was.id) && (starts.current || !was.muted || was.kept) ? was : null
+    const now = was && on(was.id) && (starts.current || !was.auto || was.kept) ? was : null
     if (!start || !starts.current) return now
     const next = frames.find(([, ratio]) => ratio > 0.5)?.[0].dataset.video ?? null
-    if (next && (!now || (now.muted && !now.kept)) && now?.id !== next) return { id: next, muted: true }
+    if (next && (!now || (now.auto && !now.kept)) && now?.id !== next) return { id: next, auto: true }
     return now
   }), [])
-  const play = useCallback((id: string) => setPlaying({ id, muted: false }), [])
+  const play = useCallback((id: string) => { setPlaying({ id }); setSound(true) }, [])
 
   const ids = entries.map((e) => e.item.id).join(' ')
   useEffect(() => {
@@ -125,22 +134,23 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
   }, [box, root, ids, settle])
   useEffect(() => { settle(true) }, [allowed, front, settle])
 
-  // A click into the muted player (YouTube's sound button, say) moves the focus into its frame: the page's blurs.
-  const muted = playing?.muted && !playing.kept ? playing.id : null
+  // A click into the player that started by itself (YouTube's sound button, say) moves the focus into its frame: the
+  // page's blurs.
+  const auto = playing?.auto && !playing.kept ? playing.id : null
   useEffect(() => {
-    if (!muted) return
+    if (!auto) return
     let wait = 0
     const touched = () => {
       wait = window.setTimeout(() => {
         const el = document.activeElement
-        if (el instanceof HTMLIFrameElement && el.closest<HTMLElement>('[data-video]')?.dataset.video === muted) {
-          setPlaying((was) => (was?.id === muted ? { ...was, kept: true } : was))
+        if (el instanceof HTMLIFrameElement && el.closest<HTMLElement>('[data-video]')?.dataset.video === auto) {
+          setPlaying((was) => (was?.id === auto ? { ...was, kept: true } : was))
         }
       })
     }
     window.addEventListener('blur', touched)
     return () => { window.removeEventListener('blur', touched); window.clearTimeout(wait) }
-  }, [muted])
+  }, [auto])
   return { playing, play }
 }
 
@@ -149,9 +159,9 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
 /** One post edge to edge: who it's about (photo ringed in their sport's colour, name and under it the channel,
  * Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video upright
  * in the middle of a 4:5 one), the title, and "views · when". `playing`: its video plays in the picture's place,
- * `muted` when it started by itself. */
-export function EdgePost({ entry, now, follows, playing, muted, onPlay, onMore }: {
-  entry: FeedEntry; now: number; follows?: Follows; playing: boolean; muted?: boolean; onPlay: (id: string) => void; onMore: () => void
+ * with the sound button under its right-hand corner. */
+export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
+  entry: FeedEntry; now: number; follows?: Follows; playing: boolean; onPlay: (id: string) => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const [noPicture, setNoPicture] = useState(false)
@@ -166,8 +176,8 @@ export function EdgePost({ entry, now, follows, playing, muted, onPlay, onMore }
   if (item.kind === 'video' && id) {
     media = (
       <div className={upright(item) ? 'epost-pic upright' : 'epost-pic'} data-video={item.id}>
-        {playing ? <Player id={id} title={item.title} muted={muted} /> : (
-          <button type="button" className="epost-play" aria-label={`Play: ${item.title}`} onClick={() => onPlay(item.id)}>
+        {playing ? <FeedPlayer key={id} item={item} playerId={who.id} /> : (
+          <button type="button" className="epost-play" aria-label={`Play: ${item.title}`} onClick={() => { onPlay(item.id); setSound(true) }}>
             {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
             {length && <span className="epost-dur">{length}</span>}
           </button>
@@ -204,9 +214,12 @@ export function EdgePost({ entry, now, follows, playing, muted, onPlay, onMore }
         <button type="button" className="epost-more" aria-label="More about this item" onClick={onMore}>{dots}</button>
       </div>
       {media}
-      <div className="epost-cap">
-        {(item.kind === 'video' || (item.kind === 'news' && picture)) && <span className="epost-title clamp3">{item.title}</span>}
-        <span className="epost-src">{[item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : statsLine(item, now), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
+      <div className="epost-foot">
+        <div className="epost-cap">
+          {(item.kind === 'video' || (item.kind === 'news' && picture)) && <span className="epost-title clamp3">{item.title}</span>}
+          <span className="epost-src">{[item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : statsLine(item, now), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
+        </div>
+        {playing && <SoundButton className="epost-sound" />}
       </div>
     </article>
   )
@@ -215,8 +228,9 @@ export function EdgePost({ entry, now, follows, playing, muted, onPlay, onMore }
 // ---------------------------------------------------------------- full screen
 
 /** The full-screen Feed: one item a screen, snapping; For you and Following at the top. The next page loads as the
- * last few come up (onNear). The video on screen plays by itself, muted, as the fan's setting allows (usePlaying), and
- * what plays stops once it's scrolled away. */
+ * last few come up (onNear). The video on screen plays by itself as the fan's setting allows (usePlaying), muted till
+ * they turn the sound on (the sound button at the top right, by the tabs), and what plays stops once it's scrolled
+ * away. */
 export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, footer }: {
   entries: FeedEntry[]; now: number; tab: FeedTabKey; onTab: (tab: FeedTabKey) => void; follows: Follows
   onMore: (entry: FeedEntry) => void; onNear: () => void; footer?: ReactNode
@@ -251,6 +265,7 @@ export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, foote
   return (
     <div className="reels" data-tab={tab}>
       <FeedTabs tab={tab} onTab={onTab} className="reels-tabs" />
+      {playing && <SoundButton className="reels-sound" />}
       <div ref={setBox} className="reels-snap">
         {entries.map((e, n) => (
           <Reel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id ? playing : null}
@@ -283,7 +298,7 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
     // One frame, the picture or the player in it, so what's watched for how much is on screen stays the same.
     frame = (
       <div className={box} data-video={item.id}>
-        {playing ? <Player id={id} title={item.title} muted={playing.muted} /> : (
+        {playing ? <FeedPlayer key={id} item={item} playerId={who.id} /> : (
           <button type="button" className="reel-play" aria-label={`Play: ${item.title}`} onClick={onPlay}>
             {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
             <span className="reel-bigplay" aria-hidden="true">{playIcon}</span>

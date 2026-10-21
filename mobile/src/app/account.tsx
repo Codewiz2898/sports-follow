@@ -26,7 +26,8 @@ export default function AccountScreen() {
   )
 }
 
-/** Whether the Feed's videos play by themselves as they come on screen, muted: Always (the default), On Wi-Fi, Off. */
+/** Whether the Feed's videos play by themselves as they come on screen, muted until the fan turns the sound on
+ * (sound.ts): Always (the default), On Wi-Fi, Off. */
 function Videos() {
   const autoplay = useAutoplaySetting()
   return (
@@ -34,7 +35,7 @@ function Videos() {
       <Card pad style={{ gap: 12 }}>
         <View style={{ gap: 4 }}>
           <Text style={t.title}>Play videos as you scroll</Text>
-          <Text style={[t.small, t.muted]}>In your Feed, the video on screen starts by itself, muted. A tap on it turns the sound on.</Text>
+          <Text style={[t.small, t.muted]}>In your Feed, the video on screen starts by itself, muted until you turn the sound on. Then the next ones play with it, until you mute.</Text>
         </View>
         <View style={s.choices} accessibilityRole="radiogroup" accessibilityLabel="Play videos as you scroll">
           {AUTOPLAY.map(([key, label]) => (
