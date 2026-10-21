@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Clip, type ClipsOf } from '../api'
+import { api, ApiError, type Clip, type ClipsOf } from '../api'
 import { APP_NAME } from '../app'
 import { useNow } from '../clock'
 import { relative } from '../format'
 import { shareClip } from '../share'
+import { sportKey } from '../sports'
 import { SectionHead } from './Blocks'
 import { ShareButton } from './Share'
 
@@ -26,6 +27,9 @@ export function useClips(of: ClipsOf): Clip[] | null {
   return clips
 }
 
+/** A page of clips, as the server sends them (clips.PAGE): a shorter one is the last. */
+export const CLIPS_PAGE = 30
+
 /** The competition's clips page: its tournament feed. */
 export const competitionClips = (competition: string) => `/clips?competition=${encodeURIComponent(competition)}`
 
@@ -35,11 +39,13 @@ export const competitionClips = (competition: string) => `/clips?competition=${e
  */
 export function ClipCard({ clip, showGame = true }: { clip: Clip; showGame?: boolean }) {
   const now = useNow()
-  const [report, setReport] = useState<'no' | 'sending' | 'done'>('no')
+  const [report, setReport] = useState<'no' | 'sending' | 'done' | 'gone' | 'failed'>('no')
   const sendReport = () => {
     if (!window.confirm('Report this clip? It goes to the people who look after the app, who take down what shouldn’t be up.')) return
     setReport('sending')
-    api.reportClip(clip.id, 'fan report').then(() => setReport('done')).catch(() => setReport('no'))
+    api.reportClip(clip.id, 'fan report')
+      .then(() => setReport('done'))
+      .catch((e) => setReport(e instanceof ApiError && e.status === 404 ? 'gone' : 'failed'))
   }
   const where = [
     showGame && clip.match ? <Link key="game" to={`/match/${clip.match}`}>{clip.game_title || 'The game'}</Link> : null,
@@ -47,9 +53,10 @@ export function ClipCard({ clip, showGame = true }: { clip: Clip; showGame?: boo
     clip.published ? <span key="when">{relative(clip.published, now)}</span> : null,
   ].filter(Boolean)
   return (
-    <article className="card clip" data-sport={clip.sport ?? undefined} aria-label={clip.caption || clip.line || 'A clip'}>
+    <article className="card clip" data-sport={clip.sport ? sportKey(clip.sport) : undefined} aria-label={clip.caption || clip.line || 'A clip'}>
       <video
         className="clip-video"
+        aria-label={`Clip: ${clip.caption || clip.line || clip.game_title || 'a moment'}`}
         controls
         playsInline
         preload="none"
@@ -67,10 +74,12 @@ export function ClipCard({ clip, showGame = true }: { clip: Clip; showGame?: boo
         )}
         <div className="clip-actions">
           <ShareButton {...shareClip(clip, APP_NAME)} className="btn" text="Share" />
-          <button type="button" className="btn" disabled={report !== 'no'} onClick={sendReport}>
-            {report === 'done' ? 'Reported' : report === 'sending' ? 'Reporting…' : 'Report'}
+          <button type="button" className="btn" disabled={report === 'sending' || report === 'done' || report === 'gone'} onClick={sendReport}>
+            {report === 'done' ? 'Reported' : report === 'sending' ? 'Reporting…' : report === 'failed' ? 'Report again' : 'Report'}
           </button>
         </div>
+        {report === 'failed' && <p className="tiny muted" role="status">Couldn’t send the report: try again.</p>}
+        {report === 'gone' && <p className="tiny muted" role="status">This clip is already down.</p>}
       </div>
     </article>
   )

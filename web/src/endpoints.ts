@@ -37,7 +37,8 @@ export function endpoints(request: Request) {
       if (of.competition) q.set('competition', of.competition)
       if (of.player != null) q.set('player', String(of.player))
       if (before) q.set('before', before)
-      return request<{ clips: Clip[] }>(`/api/clips${q.size ? `?${q}` : ''}`)
+      const query = q.toString()  // not q.size: Safari before 17 and Hermes don't have it
+      return request<{ clips: Clip[] }>(`/api/clips${query ? `?${query}` : ''}`)
     },
     clip: (id: string) => request<Clip>(`/api/clips/${encodeURIComponent(id)}`),
     // A fan saying a clip shouldn't be up: once each; it flags the clip for the admin panel.
