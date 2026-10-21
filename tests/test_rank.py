@@ -120,6 +120,7 @@ def test_older_videos_still_being_watched_are_evergreen():
     growing = numbers(read(24 * 39, 2_000), read(24 * 8, 900_000), read(1, 960_000))
     assert rank.evergreen(growing, old, NOW)
     assert not rank.evergreen(growing, NOW - timedelta(days=3), NOW)  # still this week's
+    assert not rank.evergreen(growing, NOW - timedelta(days=15), NOW)  # still this month's (feed.py)
     assert not rank.evergreen(numbers(read(24 * 8, 900_000), read(1, 900_100)), old, NOW)  # hardly watched now
     assert not rank.evergreen(numbers(read(1, 960_000)), old, NOW)  # one read: can't tell
     assert not rank.evergreen(numbers(read(24 * 8, 1_000), read(1, 9_000)), old, NOW)  # growing, but few have seen it

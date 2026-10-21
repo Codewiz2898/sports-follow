@@ -71,7 +71,7 @@ def test_news_is_this_week_this_month_and_earlier_newest_first():
 
 def test_this_month_is_eight_to_thirty_days_old_and_a_pin_stays_in_this_week():
     eight = Candidate(video("https://youtu.be/8", "Eight days on", days_ago=8))
-    thirty = Candidate(video("https://youtu.be/30", "A month on", days_ago=29.9))
+    thirty = Candidate(video("https://youtu.be/30", "A month on", days_ago=30))
     older = Candidate(video("https://youtu.be/31", "Over a month on", days_ago=31))
     pinned = Candidate(video("https://youtu.be/p", "Pinned, from spring", days_ago=200), pinned=True)
     seven = Candidate(video("https://youtu.be/7", "Six days on", days_ago=6.9))

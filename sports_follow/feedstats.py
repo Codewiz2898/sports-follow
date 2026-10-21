@@ -3,7 +3,7 @@ whether we get enough candidates, and where they're lost.
 
 - The funnel, counted once for each player and video (keep_counted): a trusted channel's latest uploads are read
   again every poll, so only what's new to a player counts as matched, and is then kept or refused for a reason
-  (REFUSALS). A search (a moment's, a gap's, the famous sweep's) is a fresh read each time: what it finds that's
+  (REFUSALS). A search (a moment's, or a sweep's: gap, month, famous) is a fresh read each time: what it finds that's
   stored already, or was refused lately, counts too, as already_stored or refused_before, which is what the search
   spent for nothing.
 - Each trusted channel's yield (read_channel, channel_yield): its uploads of the last YIELD_DAYS, and those naming

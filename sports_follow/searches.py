@@ -98,12 +98,12 @@ def queue(now: datetime | None = None) -> dict[str, int]:
     return counts
 
 
-def room(source: VideoSource, share: float = KEEP_SHARE) -> bool:
-    """Whether a search leaves the source more than this share of each budget's tightest window (a sweep's is more:
-    sweeps.KEEP_SHARE)."""
+def room(source: VideoSource, keep: int = 0) -> bool:
+    """Whether a search leaves the source more than KEEP_SHARE of each budget's tightest window, and keep units on
+    top (a sweep's: what moment searches may still spend, sweeps._room)."""
     for b in source.budgets():
         left = budget.room(b)
-        if left is not None and left[0] - (source.search_cost or 0) < share * left[1]:
+        if left is not None and left[0] - (source.search_cost or 0) < KEEP_SHARE * left[1] + keep:
             return False
     return True
 

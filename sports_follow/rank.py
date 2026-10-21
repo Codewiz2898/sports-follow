@@ -79,7 +79,9 @@ FEEDBACK_FLOOR = 0.5
 MOMENT_WINDOW = timedelta(hours=48)  # a share published this long after a moment of the player's is about it
 # Moments a share isn't grouped under: before the game (a line-up), its start, and taking one back.
 NOT_A_HEAD = ("lineup", "start", "correction")
-EVERGREEN_AFTER = timedelta(days=10)  # older than this, a share is evergreen while it's still watched this fast
+# Older than this, a share is evergreen while it's still watched this fast: a month, so younger ones stay in their
+# dated group (feed.py's This week and This month).
+EVERGREEN_AFTER = timedelta(days=30)
 EVERGREEN_PACE = 25.0  # views an hour between its two reads
 EVERGREEN_VIEWS = 20_000
 REVIEWS = ("approved", "hidden", "pinned")  # what an admin may say of a row (admin.py)
@@ -149,7 +151,7 @@ def pace_part(per_hour: float) -> float:
 
 def stream(source: str, kept: dict[str, Any] | None) -> str:
     """Where a stored row was found, as the feed's metrics count it: a publisher's feed (news), a moment's search, a
-    sweep's (gap, famous: sweeps.py), or a channel."""
+    sweep's (gap, month, famous: sweeps.py), or a channel."""
     if is_story(source):
         return "news"
     kept = kept or {}

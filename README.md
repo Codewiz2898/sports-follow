@@ -521,8 +521,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20, 2,000 units); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
   **month sweep** (BHA-340): every followed player, gaps or not, for videos of the last 30 days, most viewed first,
-  for the feed's "This month"; each player at most once a week, up to `SPORTS_FOLLOW_FEED_MONTH_SEARCHES` in any 24
-  hours (14, 1,400 units), the longest unswept first and the most followed of those. Then the
+  for the feed's "This month"; each player at most once a week, a seventh of them a day, up to
+  `SPORTS_FOLLOW_FEED_MONTH_SEARCHES` in any 24 hours (14, 1,400 units), the longest unswept first and the most
+  followed of those; a player the same run gap-searches waits for a later day. Then the
   **famous sweep**: each followed player's most watched videos ever (no date limit), for "The ones everyone's seen",
   each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` in any 7 days (35) and a seventh of that a
   day (5, 500 units), the longest unswept first and the most followed of those, so a cap that binds gets round
@@ -530,15 +531,17 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the ranking; what's stored already isn't kept again, and counts as `already_stored`). Each search is a
   `feed_sweep` row with what it found and kept, and each kept candidate names its sweep, so
   `python -m sports_follow.curator sweeps` lists the last week's with what each serves (`--run` runs the day's
-  first). In the feed's funnel they're the `gap`, `month` and `famous` streams. Moment searches come first: sweeps
-  stop while less than half the day's units is left, so together they never spend more than 4,000. At 19 followed
-  players (17 uncovered) the heaviest day is the first: 17 gap, 14 month and 5 famous searches, about 3,650 units
-  with their `videos.list` reads; after that the month sweep is about 3 a day and the famous one under 1 (each
-  player weekly and monthly), so a day is about 2,000 units while 17 still have gaps, less as they're covered or
-  wait out the 3 days. At 500 the caps bind: 39 searches, 3,939 units a day at most; the month sweep gets round each
-  player every 5 weeks rather than weekly, the famous one every 14 weeks rather than monthly. With the moment
-  searches' 4,000 that's more than the 9,000 spendable less the poll's, but sweeps get only what moment searches
-  leave: after a day of 40 moment searches less than half the window is left, and that day's sweeps don't run. Off
+  first). In the feed's funnel they're the `gap`, `month` and `famous` streams, run in that order. Moment searches
+  come first: sweeps stop while less is left than the moment searches' quarter and what their cap may still spend
+  in the day (40 searches, 4,040 units with their reads), so on a day no moment search has run yet the sweeps get
+  about 2,400 units (24 searches), less after a busy one; the three caps (20 gap, 14 month, 5 famous) are ceilings
+  under that. At 19 followed players (17 uncovered) the first day is the heaviest: 17 gap searches, the 2 covered
+  players' month searches and 5 famous, about 2,400 units; after that a day is the gap searches still due (fewer
+  as players are covered or wait out the 3 days), about 3 month searches and the famous sweep's 5 for its first 4
+  days, then under 1: about 2,000 units while 17 still have gaps, well under once most are covered. At 500 the gate
+  binds: 20 gap searches and 4 month ones on a quiet day, about 2,400 units, so the month sweep gets round each
+  player every 4 months or so and the famous sweep waits for a day with fewer gaps. More for the sweeps means a
+  lower `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` (each moment search less is 101 units more) or more YouTube quota. Off
   without the key.
 - **News comes from publishers' own feeds** (`sports_follow/news.py`, `sports_follow/adapters/publisher_rss.py`,
   BHA-325), into the same pipeline as videos. Every 20 minutes the curator reads each RSS or Atom feed a running sport

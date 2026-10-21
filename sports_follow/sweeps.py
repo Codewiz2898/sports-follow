@@ -9,9 +9,10 @@ second run in the day only does what a missed first one didn't):
   last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES in any 24 hours; one
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
 - The month sweep: every followed player, gaps or not, for videos of the last MONTH_DAYS, most watched first, for
-  the feed's "This month" (feed.py). Each player at most once in MONTH_EVERY, up to FEED_MONTH_SEARCHES in any 24
-  hours, the longest unswept first (never, first), the most followed of those: when the cap binds it gets round
-  everyone before anyone's searched again.
+  the feed's "This month" (feed.py). Each player at most once in MONTH_EVERY, a seventh of them a day (so the week's
+  searches spread over it), up to FEED_MONTH_SEARCHES in any 24 hours, the longest unswept first (never, first),
+  the most followed of those: when the cap binds it gets round everyone before anyone's searched again. A player
+  the same run gap-searches waits for a later day: the two would find much the same.
 - The famous sweep: each followed player's most watched videos ever, with no date limit, for "The ones everyone's
   seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
   more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
@@ -23,14 +24,16 @@ judged and ranked with the rest (curator.rank_new). Each search a source answere
 found and kept, and each candidate it kept names it, which says what it served (report). In the feed's funnel each
 is a stream of its own, "gap", "month" and "famous". They run in that order, as far as there's room.
 
-Moment searches come first: sweeps stop while less than KEEP_SHARE of a source's tightest window is left, twice what
-moment searches leave. With no source that can search running (no key), nothing runs.
+Moment searches come first: sweeps stop while less of a source's tightest window is left than moment searches keep
+(searches.KEEP_SHARE) and what their cap may still spend in the day (_room), so however full the sweeps' caps, the
+day's moment searches all have room. With no source that can search running (no key), nothing runs.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -41,7 +44,7 @@ from sqlalchemy.orm import Session
 
 from . import candidates, db, feedstats, metrics, searches, shutdown, sports
 from .adapters import AdapterError, VideoSource, budget
-from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MONTH_SEARCHES
+from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MOMENT_SEARCHES, FEED_MONTH_SEARCHES
 from .models import FeedCandidate, FeedSweep, Follow, Player
 from .sports.base import words
 
@@ -58,7 +61,6 @@ FAMOUS_EVERY = timedelta(days=30)  # a player's most watched videos are searched
 # yesterday's against today's cap.
 DAY, WEEK = timedelta(hours=23), timedelta(days=7) - timedelta(hours=1)
 KEEP_FOR = timedelta(days=60)  # a sweep's row goes after this: the famous sweep looks back FAMOUS_EVERY
-KEEP_SHARE = 0.5  # sweeps stop while less than this share of a source's tightest window is left
 _EVER = datetime.min.replace(tzinfo=timezone.utc)  # never swept: first among the equally followed
 
 
@@ -76,7 +78,8 @@ def run(now: datetime | None = None) -> dict[str, int]:
         if not players:
             return counts
         followers: dict[int, int] = {pid: n for pid, n in session.execute(select(Follow.player_id, func.count()).group_by(Follow.player_id))}
-        gaps, month = gap_due(session, players, followers, now), month_due(session, players, followers, now)
+        gaps = gap_due(session, players, followers, now)
+        month = month_due(session, players, followers, now, {p.player_id for p in gaps})
         famous = famous_due(session, players, followers, now)
     names: dict[str, dict[int, set[tuple[str, ...]]]] = {}  # each sport's players' names, told apart among them
     for p in players:
@@ -125,14 +128,17 @@ def _last(session: Session, stream: str) -> dict[int, datetime]:
                                                    .group_by(FeedSweep.player_id))}  # fmt: skip
 
 
-def month_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime) -> list[candidates.Followed]:
-    """The players the month sweep is for now, in order: every one not searched for in the last MONTH_EVERY, as
-    many as FEED_MONTH_SEARCHES leaves in the last DAY."""
-    left = FEED_MONTH_SEARCHES - _since(session, MONTH, now - DAY)
+def month_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime,
+              gap_searched: Iterable[int] = ()) -> list[candidates.Followed]:
+    """The players the month sweep is for now, in order: every one not searched for in the last MONTH_EVERY but
+    those this run gap-searches, as many as FEED_MONTH_SEARCHES leaves in the last DAY and no more than a seventh
+    of the players a day."""
+    today = _since(session, MONTH, now - DAY)
+    left = min(FEED_MONTH_SEARCHES, math.ceil(len(players) / 7)) - today
     if left <= 0:
         return []
-    last = _last(session, MONTH)
-    due = [p for p in players if p.player_id not in last or last[p.player_id] <= now - MONTH_EVERY]
+    last, skip = _last(session, MONTH), set(gap_searched)
+    due = [p for p in players if p.player_id not in skip and (p.player_id not in last or last[p.player_id] <= now - MONTH_EVERY)]
     return _rotated(due, followers, last)[:left]
 
 
@@ -160,7 +166,7 @@ def _sweep(stream: str, due: list[candidates.Followed], after: datetime | None, 
     for p in due:
         said, sweep, found, kept = query(p), None, 0, 0
         for source in sources:
-            if shutdown.stopping.is_set() or not searches.room(source, KEEP_SHARE):
+            if shutdown.stopping.is_set() or not _room(source, now):
                 return False
             try:
                 uploads = source.search(said, after, FEED_COUNTRY)
@@ -195,6 +201,13 @@ def _sweep(stream: str, due: list[candidates.Followed], after: datetime | None, 
             if row is not None:
                 row.found, row.kept = found, kept
     return True
+
+
+def _room(source: VideoSource, now: datetime) -> bool:
+    """Whether a sweep's search leaves the day's moment searches their room: what their gate keeps, and what their
+    cap may still spend (each search with a read of its results)."""
+    still = max(0, FEED_MOMENT_SEARCHES - searches.spent(now - searches.DAY)) * ((source.search_cost or 0) + 1)
+    return searches.room(source, keep=still)
 
 
 def _record(player_id: int, stream: str, said: str, now: datetime) -> int | None:
