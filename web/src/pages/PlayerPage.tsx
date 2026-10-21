@@ -5,6 +5,7 @@ import { APP_NAME } from '../app'
 import { useActivity } from '../activity'
 import { api, subscribe, type Card, type Feed, type StreamEvent } from '../api'
 import { useNow } from '../clock'
+import { ClipsSection } from '../components/Clips'
 import { BuildProgress, formMarks, FormStrip, highlight, LineStats, LiveScoreboard, NewsList, NextCard, PlayerBand, SectionHead, SourceNote, StatGrid, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { FeedTab, FromTheFans, useFeed } from '../components/Feed'
@@ -300,6 +301,9 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
           <SourceNote provenance={card.provenance?.season_stats} note={card.season_stats_note} />
         </section>
       )}
+
+      {/* Clips of the player, published from the Mac app. */}
+      <ClipsSection of={{ player: card.player_id }} />
 
       {newsOf(card).length > 0 && (
         <section className="section" aria-label="News">

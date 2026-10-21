@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Credits, Feed, FeedPage, FeedTabKey, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Clip, ClipsOf, Credits, Feed, FeedPage, FeedTabKey, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -29,6 +29,19 @@ export function endpoints(request: Request) {
     live: () => request<{ sports: LiveSport[]; refreshing: boolean }>('/api/live'),
     // A game's match page, by its address after /match/ ("<source>/<game id>": from a live block or Live now).
     match: (source: string, game: string) => request<Match>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}`),
+    // Clips published from the Mac app, newest first (clips.py): a game's, a competition's, a player's, or
+    // everyone's; `before` (a clip's `published`) pages back.
+    clips: (of: ClipsOf = {}, before?: string | null) => {
+      const q = new URLSearchParams()
+      if (of.match) q.set('match', of.match)
+      if (of.competition) q.set('competition', of.competition)
+      if (of.player != null) q.set('player', String(of.player))
+      if (before) q.set('before', before)
+      return request<{ clips: Clip[] }>(`/api/clips${q.size ? `?${q}` : ''}`)
+    },
+    clip: (id: string) => request<Clip>(`/api/clips/${encodeURIComponent(id)}`),
+    // A fan saying a clip shouldn't be up: once each; it flags the clip for the admin panel.
+    reportClip: (id: string, reason: string) => request<{ reported: boolean }>(`/api/clips/${encodeURIComponent(id)}/report`, json('POST', { reason })),
     // Follow a game by itself, or stop (sports_follow/matches.py): by its address after /match/, as its page has it.
     followMatch: (source: string, game: string, on: boolean) =>
       request<{ following: boolean; event_id?: number }>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}/follow`, { method: on ? 'PUT' : 'DELETE' }),

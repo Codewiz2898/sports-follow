@@ -935,3 +935,14 @@ div.result-main { cursor: default; }
 /* Today's "From your players": the two best, then the way to the rest. */
 .from-players .posts { gap: 12px; }
 .from-players .all { width: 100%; height: 52px; }
+
+/* Clips (components/Clips.tsx): a video in a card, what it shows, its game and when, Share and Report. */
+.clip-list { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+.card.clip { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.clip-video { display: block; width: 100%; background: #0d0d0d; }
+.clip-body { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px 16px; }
+.clip-body p { margin: 0; }
+/* The moment as a block of the sport's colour, its text the sport's own (4.5:1 or better, tests/test_sports.py). */
+.clip-line { align-self: flex-start; padding: 3px 10px; border-radius: 8px; font-family: var(--display); font-size: 17px; letter-spacing: 0.2px; background: var(--sport); color: var(--on-sport); }
+.clip-where a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.clip-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }

@@ -371,6 +371,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Today and Yesterday count, so an old video a sweep finds now isn't "new"; both kept on
   the device, `web/src/feedSeen.ts`). Today's "From your players" is its top two, in the edge-to-edge cards
   below, and "All N in your Feed".
+- **Clips on the web** (BHA-367, `web/src/components/Clips.tsx`, `web/src/pages/ClipsPage.tsx`): clips published
+  from the Mac app (the clips API, `GET /api/clips`) in a game's feed (a Clips section on its match page), a
+  player's (on their page), and a competition's tournament feed (`/clips?competition=…`, older ones a page at a time);
+  a shared clip opens on its own page (`/clip/<id>`). Each card plays the clip where it is (it loads when played),
+  with its moment as a block of its sport's colour, its game and competition, Share and Report (a report flags it
+  for the admin panel). A section with no clips isn't shown, nor is one the API can't answer.
 - **For you and Following, edge to edge or full screen** (BHA-349, `web/src/components/FeedLayouts.tsx`): the Feed
   tab opens on For you (`?tab=for_you`), which mixes in videos of players the fan doesn't follow, 3 of every 5 items
   the fan's own and 2 others' (`feed.others`: of the players with something served, the fan's sports first, then

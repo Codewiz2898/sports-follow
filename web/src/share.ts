@@ -5,7 +5,7 @@
 
 import { shortName } from './format'
 import { questionPath, shareText } from './predictions'
-import type { FeedItem, FriendLeague, Prediction, WeekPoster } from './types'
+import type { Clip, FeedItem, FriendLeague, Prediction, WeekPoster } from './types'
 
 /** A page to share: its path on the site, the title it's shared with, and what its button says. */
 export interface Shared { path: string; title: string; label: string }
@@ -52,4 +52,9 @@ export function shareQuestion(q: Prediction): Shared {
 /** A league's invite: its link (/j/<code>) opens the page to join it. */
 export function shareInvite(league: Pick<FriendLeague, 'code' | 'name'>, app: string): Shared {
   return { path: `/j/${league.code}`, title: `Join ${league.name} on ${app}: call the games with us`, label: `Share ${league.name}'s invite` }
+}
+
+/** A clip: its own page (/clip/<id>), shared with its caption, else its moment, else its game. */
+export function shareClip(clip: Pick<Clip, 'id' | 'caption' | 'line' | 'game_title'>, app: string): Shared {
+  return { path: `/clip/${clip.id}`, title: clip.caption || clip.line || clip.game_title || `A clip on ${app}`, label: 'Share this clip' }
 }
