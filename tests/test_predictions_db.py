@@ -625,7 +625,7 @@ def test_a_game_picked_from_its_match_page_is_read_again_till_it_starts(db, redi
     """A game no league read lists, picked from its match page by a fan who follows nobody in it (BHA-392): only a
     read of it says it's moved, so it's read every PREPARE_EVERY in the AHEAD before its start (prepare), and it's
     armed, and its question closes, by its start as its source moves it. A postponement that keeps its date is
-    taken too, so the sweep waits for its new one."""
+    taken too, so the sweep waits POSTPONED_KEEP, not STALE, past it."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
     start = now + timedelta(days=2)
     games, codes = {"1": start}, {}
@@ -661,6 +661,9 @@ def test_a_game_picked_from_its_match_page_is_read_again_till_it_starts(db, redi
     codes["1"] = "POSTPONED"  # postponed, its date kept for now: the sweep waits a month, not three days
     assert run(day) == [("pitch", "1")]
     assert (db.get_one(Event, event_id).status, db.get_one(Event, event_id).start_utc) == ("postponed", later)
+    predictions.sweep(db, later + predictions.STALE + timedelta(minutes=1))  # three days past its date: closed, not voided
+    assert db.scalar(select(Question.status).where(Question.id == q.id)) == "closed"
+    db.rollback()  # (back to before that sweep: the game's to come still)
 
     codes["1"], games["1"] = "NS", (sooner := start - timedelta(hours=1))  # on again, and sooner
     assert run(day) == [("pitch", "1")]
