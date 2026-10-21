@@ -570,6 +570,11 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 /* Live is an ink scorebug, whatever the sport; the player's own line sits on their sport colour. */
 .board { --text: #ffffff; --muted: #a9abb0; --line: rgba(255, 255, 255, 0.16); --raised: #26272a; display: flex; flex-direction: column; gap: 16px; padding: 18px; border-radius: var(--radius-card); background: #0d0d0d; color: var(--text); }
 .board.compact { gap: 12px; }
+/* A board that opens a page as a whole (BoardLink): the link under it and what's under it, the board's own
+   controls (.over-link) over the link. */
+.board-link { position: relative; }
+.board-link > .card-link { position: absolute; inset: 0; z-index: 1; border-radius: var(--radius-card); }
+.board-link .over-link { position: relative; z-index: 2; }
 .board .score { font-size: 52px; white-space: nowrap; }
 .board.compact .score { font-size: 40px; }
 .board .clock { font-size: 22px; color: #ff6b5f; }
