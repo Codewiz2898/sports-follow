@@ -22,7 +22,7 @@ import { ActivityIndicator, AppState, FlatList, Linking, Modal, Pressable, Style
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import { WebView } from 'react-native-webview'
-import { channelOf, duration, openLabel, refusedHere, shortFrame, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
+import { channelOf, duration, isShort, openLabel, refusedHere, shortFrame, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
@@ -102,6 +102,12 @@ export function useFollows(): { follows: Follows; error: string | null } {
     busy: (e) => busy.has(e.player.id),
     toggle,
   }), [ids, loaded, busy, toggle])
+  // Said for a few seconds, then gone: over the full screen it sits above the tab bar, and shouldn't stay there.
+  useEffect(() => {
+    if (!error) return
+    const gone = setTimeout(() => setError(null), 5000)
+    return () => clearTimeout(gone)
+  }, [error])
   return { follows, error }
 }
 
@@ -558,9 +564,6 @@ function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: 
 
 // ---------------------------------------------------------------- Shorts
 
-/** Whether an item is a Short: a video YouTube can play here, taller than it's wide. */
-export const isShort = (item?: FeedItem | null): boolean => Boolean(item && item.kind === 'video' && item.video?.youtube_id && upright(item))
-
 const SHORT_TOP = 58 // below the status bar: the tabs (or Back) and the sound button, level, above the Short
 const STRIP = { min: 72, room: 104 } // who and what under it: a row and a title line at least; room for two and the numbers
 
@@ -569,8 +572,8 @@ const STRIP = { min: 72, room: 104 } // who and what under it: a row and a title
  * starts), YouTube's player without its controls once it does; who, the channel, Follow, Share and More in a row
  * under it, then the title, and the numbers when there's room. `foot`: what's below that strip (the tab bar, or
  * the phone's own bar in the viewer), which nothing is drawn under. */
-function ShortReel({ entry, now, height, foot, follows, playing, onPlay, onKeep, onMore, onLeave }: {
-  entry: FeedEntry; now: number; height: number; foot: number; follows: Follows; playing: Playing | null
+function ShortReel({ entry, now, height, foot, roomy, follows, playing, onPlay, onKeep, onMore, onLeave }: {
+  entry: FeedEntry; now: number; height: number; foot: number; roomy?: boolean; follows: Follows; playing: Playing | null
   onPlay: (item: FeedItem) => void; onKeep: () => void; onMore: () => void; onLeave?: () => void // onLeave: before the player's page opens
 }) {
   const { player: who, item } = entry
@@ -581,7 +584,7 @@ function ShortReel({ entry, now, height, foot, follows, playing, onPlay, onKeep,
   const picture = !noPicture && item.picture ? safeHref(item.picture) : undefined
   const mine = follows.following(entry)
   const channel = channelOf(item)
-  const box = shortFrame(width, height, insets.top + SHORT_TOP, foot + (foot > 60 ? STRIP.min : STRIP.room))
+  const box = shortFrame(width, height, insets.top + SHORT_TOP, foot + (roomy ? STRIP.room : STRIP.min))
   const room = height - box.top - box.height - foot - 10 // the strip's, under the frame
   const lines = room >= 36 + 4 + 40 ? 2 : room >= 36 + 4 + 20 ? 1 : 0
   const numbers = room >= 36 + 4 + 40 + 4 + 16
@@ -635,8 +638,9 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
   const [height, setHeight] = useState(0)
   const [first] = useState(() => entries.filter((x) => isShort(x.item))) // as it opened, so what's under the thumb stays
   const [list, setList] = useState(first)
-  useEffect(() => { // more of the Feed's Shorts as its pages come, after those it opened with
-    setList((was) => [...was, ...entries.filter((x) => isShort(x.item) && !was.some((w) => w.item.id === x.item.id))])
+  useEffect(() => { // more of the Feed's Shorts as its pages come, after those it opened with; one hidden ("…") goes
+    setList((was) => [...was.filter((w) => entries.some((x) => x.item.id === w.item.id)),
+      ...entries.filter((x) => isShort(x.item) && !was.some((w) => w.item.id === x.item.id))])
   }, [entries])
   const at = Math.max(0, first.findIndex((x) => x.item.id === start))
   const videos = usePlaying(start != null && front && height > 0)
@@ -653,7 +657,7 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
             data={list}
             keyExtractor={(x) => x.item.id}
             renderItem={({ item: x }) => (
-              <ShortReel entry={x} now={now} height={height} foot={insets.bottom + 12} follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
+              <ShortReel entry={x} now={now} height={height} foot={insets.bottom + 12} roomy follows={follows} playing={videos.playing?.id === x.item.id ? videos.playing : null}
                 onPlay={videos.play} onKeep={videos.keep} onMore={() => onMore(x)} onLeave={onClose} />
             )}
             extraData={videos.playing}

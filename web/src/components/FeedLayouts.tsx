@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { FeedEntry, FeedItem, FeedTabKey } from '../api'
+import type { FeedEntry, FeedTabKey } from '../api'
 import { useAutoplay } from '../autoplay'
-import { channelOf, duration, statsLine, upright } from '../feed'
+import { channelOf, duration, isShort, statsLine, upright } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { setSound, useSound } from '../sound'
@@ -361,16 +361,13 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
 
 // ---------------------------------------------------------------- Shorts
 
-/** Whether an item is a Short: a video YouTube can play here, taller than it's wide. */
-export const isShort = (item?: FeedItem | null): boolean => Boolean(item && item.kind === 'video' && item.video?.youtube_id && upright(item))
-
 /** A Short as Shorts play (BHA-384, the Android app's ShortReel): on black, its 9:16 frame under the tabs as wide as
  * the screen allows once what's under it is clear (.reel.short: full width on a phone taller than that needs), its
  * picture there till it plays (so nothing moves as it starts), YouTube's player without its controls once it does;
  * who, the channel, Follow, Share and More in a row under it, then the title, and the numbers when there's room.
- * `onLeave`: before the player's page opens (the viewer closes). */
-function ShortReel({ n, entry, now, follows, playing, onPlay, onMore, onLeave }: {
-  n?: number; entry: FeedEntry; now: number; follows: Follows; playing: boolean; onPlay: () => void; onMore: () => void; onLeave?: () => void
+ * (In the viewer, the player's page opens over it: Back from there comes back to it, as Shorts' does.) */
+function ShortReel({ n, entry, now, follows, playing, onPlay, onMore }: {
+  n?: number; entry: FeedEntry; now: number; follows: Follows; playing: boolean; onPlay: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const [noPicture, setNoPicture] = useState(false)
@@ -389,7 +386,7 @@ function ShortReel({ n, entry, now, follows, playing, onPlay, onMore, onLeave }:
       </div>
       <div className="short-strip">
         <div className="short-row">
-          <Link to={`/player/${who.id}`} className="short-who" onClick={onLeave}>
+          <Link to={`/player/${who.id}`} className="short-who">
             <Face name={who.name} sport={who.sport} photo={who.photo} size={28} />
             <span className="ellipsis"><b>{who.name}</b>{channel && <span className="short-chan">{`  ·  ${channel}`}</span>}</span>
           </Link>
@@ -429,7 +426,7 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
   }, [box]) // once, as it opens
   useEffect(() => {
     document.documentElement.dataset.shorts = ''
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) onClose() } // the "…" sheet's own first
     window.addEventListener('keydown', escape)
     return () => { delete document.documentElement.dataset.shorts; window.removeEventListener('keydown', escape) }
   }, [onClose])
@@ -451,7 +448,7 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
         <div ref={setBox} className="reels-snap">
           {list.map((e, n) => (
             <ShortReel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id}
-              onPlay={() => play(e.item.id)} onMore={() => onMore(e)} onLeave={onClose} />
+              onPlay={() => play(e.item.id)} onMore={() => onMore(e)} />
           ))}
         </div>
       </div>

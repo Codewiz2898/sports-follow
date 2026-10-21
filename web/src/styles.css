@@ -963,7 +963,7 @@ div.result-main { cursor: default; }
 .reel-end { display: flex; align-items: center; justify-content: center; padding: 0 var(--gutter); color: var(--text); }
 .reel-end .eyebrow { color: rgba(255, 255, 255, 0.75); }
 .reel-end .btn { border-color: #fff; color: #fff; }
-.reels-error { position: fixed; left: 16px; right: 16px; top: 64px; z-index: 6; }
+.reels-error { position: fixed; left: 16px; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); z-index: 11; }  /* above the tab bar, never over a Short's player (BHA-384) */
 @media (max-height: 700px) { .reel-frame { top: 34%; } .reel-side { gap: 12px; } }  /* a short phone: the frame clear of the buttons */
 /* A Short as Shorts play (BHA-384, ShortReel): on black, its 9:16 frame under the tabs as wide as the screen allows
    once what's under it is clear (who and what: --short-strip; the tab bar: --short-foot), full width on a phone taller

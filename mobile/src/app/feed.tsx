@@ -13,10 +13,10 @@ import { StatusBar } from 'expo-status-bar'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { ringed } from '../../../web/src/feed'
+import { isShort, ringed } from '../../../web/src/feed'
 import type { FeedCircle, FeedEntry, FeedItem, FeedTabKey } from '../api'
 import { useNow } from '../clock'
-import { EdgePost, EdgeSheetExtras, FeedTabs, isShort, Reels, ShortsViewer, useFeedLayout, useFollows, usePlaying } from '../feedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, ShortsViewer, useFeedLayout, useFollows, usePlaying } from '../feedLayouts'
 import { feedHasNew, markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
 import { useFollowing } from '../following'
 import { SearchIcon } from '../icons'
@@ -136,7 +136,7 @@ export default function FeedScreen() {
             </View>
           ) : !page || page.cursor ? <Spinner color="#FFFFFF" /> : items.length === 0 ? empty : done(true)}
         />
-        {followError ? <View style={[s.reelsError, { top: insets.top + 64 }]}><ErrorBox>{followError}</ErrorBox></View> : null}
+        {followError ? <View style={[s.reelsError, { bottom: 92 + insets.bottom }]}><ErrorBox>{followError}</ErrorBox></View> : null /* above the tab bar, never over a Short's player */}
         {reels ? <StatusBar style="light" /> : null}
         {sheet}
       </>

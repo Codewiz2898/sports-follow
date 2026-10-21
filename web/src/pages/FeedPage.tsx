@@ -3,9 +3,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import type { FeedCircle, FeedEntry, FeedItem, FeedLayout, FeedPage as Page, FeedTabKey, FeedVerdict } from '../api'
 import { useNow } from '../clock'
 import { ItemSheet } from '../components/Feed'
-import { EdgePost, EdgeSheetExtras, FeedTabs, isShort, Reels, ShortsViewer, usePlaying, type Follows } from '../components/FeedLayouts'
+import { EdgePost, EdgeSheetExtras, FeedTabs, Reels, ShortsViewer, usePlaying, type Follows } from '../components/FeedLayouts'
 import { Circles } from '../components/FeedPost'
-import { ringed } from '../feed'
+import { isShort, ringed } from '../feed'
 import { markOpened, markSeen, seenAt, useFeedSeen } from '../feedSeen'
 import { useFollowing } from '../following'
 import { SearchIcon } from '../components/Icons'
@@ -69,6 +69,12 @@ function useFollows(): { follows: Follows; error: string | null } {
     busy: (e) => busy.has(e.player.id),
     toggle,
   }), [ids, loaded, busy, toggle])
+  // Said for a few seconds, then gone: over the full screen it sits above the tab bar, and shouldn't stay there.
+  useEffect(() => {
+    if (!error) return
+    const gone = window.setTimeout(() => setError(null), 5000)
+    return () => window.clearTimeout(gone)
+  }, [error])
   return { follows, error }
 }
 
@@ -193,7 +199,7 @@ export function FeedPage() {
       {page?.cursor && <div ref={end} className="row" style={{ justifyContent: 'center', minHeight: 48 }}>{loading && <span className="spinner" />}</div>}
       {error && page && <div className="error-box">{error} <button type="button" className="btn link" onClick={more}>Try again</button></div>}
       {done}
-      {short != null && items.length > 0 && <ShortsViewer entries={items} start={short} now={now} follows={follows} onMore={setOpen} onNear={more} onClose={closeShort} />}
+      {short != null && items.some((e) => e.item.id === short && isShort(e.item)) && <ShortsViewer entries={items} start={short} now={now} follows={follows} onMore={setOpen} onNear={more} onClose={closeShort} />}
       {sheet}
     </>
   )

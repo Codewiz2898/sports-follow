@@ -191,6 +191,9 @@ export function shortFrame(width: number, height: number, top: number, foot: num
  * 101 and 150, its owner keeps it off other sites (a Content ID claim's, which YouTube's Data API doesn't say). */
 export const refusedHere = (code: unknown): boolean => code === 100 || code === 101 || code === 150
 
+/** Whether an item is a Short as the Feed plays one (BHA-384): a video YouTube can play here, taller than it's wide. */
+export const isShort = (item?: FeedItem | null): boolean => Boolean(item && item.kind === 'video' && item.video?.youtube_id && upright(item))
+
 /** Whether a video is taller than it's wide (a Short): framed and played upright. */
 export const upright = (item: FeedItem): boolean => item.kind === 'video' && item.video?.upright === true
 
