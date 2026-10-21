@@ -111,7 +111,8 @@ export function leadLine(readings: Reading[], w: number, h: number, pad = 10, fl
   const y = (v: number) => mid - (v / top) * half
   const at = (t: number) => {
     const i = readings.findIndex(([rt]) => rt >= t)
-    if (i <= 0) return readings[Math.max(0, i)]?.[1] ?? 0
+    if (i === -1) return readings[readings.length - 1]?.[1] ?? 0 // past the last reading (a map's last part minute)
+    if (i === 0) return readings[0][1]
     const [[t0, v0], [t1, v1]] = [readings[i - 1], readings[i]]
     return v0 + ((v1 - v0) * (t - t0)) / Math.max(1, t1 - t0)
   }

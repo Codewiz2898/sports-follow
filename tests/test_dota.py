@@ -563,9 +563,13 @@ def test_the_gold_line_takes_each_newer_reading_once_the_horn_has_gone():
     assert dota.add_reading(line, 90, 500) is line and dota.add_reading(line, 120, 0) is line  # the clock stepped back
     assert line == [[60, 120], [120, -340]]
     long = []
-    for t in range(1, dota.READINGS + 50):
+    for t in range(1, 300):  # two and a half hours, a reading every 30 s
         long = dota.add_reading(long, t * 30, t)
-    assert len(long) == dota.READINGS and long[-1] == [(dota.READINGS + 49) * 30, dota.READINGS + 49]
+    assert long[-1] == [299 * 30, 299] and long[0][0] > 299 * 30 - dota.LINE_SPAN  # the last two hours
+    many = []
+    for t in range(1, dota.READINGS + 50):
+        many = dota.add_reading(many, t * 5, t)
+    assert len(many) == dota.READINGS and many[-1] == [(dota.READINGS + 49) * 5, dota.READINGS + 49]
 
 
 def test_the_map_being_played_has_its_line_buildings_and_ten_heroes():
@@ -605,3 +609,16 @@ def test_a_live_maps_page_part_comes_with_the_read_and_its_line_grows_with_each(
     now = snap.state["page_detail"]["live"]
     assert now["n"] == 2 and now["lead"]["readings"] == [[600, 1800], [630, 1890], [660, 1980]] and now["lead"]["team"] == str(LIQUID)
     assert now["buildings"] is None and [h["as"] for h in now["heroes"]] == ["Juggernaut", "Faceless Void"]
+
+
+def test_map_ones_live_part_shows_before_any_map_is_over(opendota_up, monkeypatch):
+    """The first map of a series: nothing finished yet, its live part is the page's all the same."""
+    from sports_follow import sports
+
+    m = _series("running", [("running", None)])
+    monkeypatch.setattr(opendota, "live", lambda: [dict(LIVE_GAME, building_state=dota.NO_BUILDINGS)])
+    snap = ps.parse_match(m)
+    ps.PandascoreEsports()._dota(m, snap, detail=True)
+    assert snap.state["page_detail"]["maps"] == [] and snap.state["page_detail"]["live"]["n"] == 1
+    page = sports.get("Dota 2").match_page(snap.state, [], {}, {})
+    assert page["detail"]["live"]["n"] == 1 and page["detail"]["maps"] == [] and [t["short"] for t in page["teams"]] == ["Spirit", "Liquid"]

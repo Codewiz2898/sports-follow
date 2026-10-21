@@ -95,14 +95,20 @@ def live_map(game: dict[str, Any], teams: list[dict[str, Any]], players: dict[in
 
 
 # Which buildings stand, as OpenDota's live list says it: one number (Valve's building_state, undocumented;
-# read from league games recorded 21 Oct 2026 against their parsed matches, which fit it at every reading).
-# Radiant's buildings are its low 16 bits, Dire's its high 16, each lane (top, mid, bot) 3 bits from the
-# bottom: 1 to 4 count its towers down (1: all standing, 4: the T3 down), and past 4 its barracks, 4 plus 1
-# for the melee and 2 for the ranged: Dire's while they're down, Radiant's while they stand. This one value
-# comes now and then, even minutes into a game, when OpenDota hasn't got the buildings.
+# read from league games recorded 21 Oct 2026 against their parsed matches). Radiant's buildings are its
+# low 16 bits, Dire's its high 16, each lane (top, mid, bot) 3 bits from the bottom: 1 to 4 count its towers
+# down (1: all standing, 4: the T3 down), and past 4 its barracks, 4 plus 1 for the melee and 2 for the
+# ranged: Dire's while they're down, Radiant's while they stand. The recordings had both of a lane's barracks
+# standing and both down on either side, and Dire's ranged alone down; one barracks down otherwise is the
+# same rule, not yet seen. This one value comes now and then, even minutes into a game, when OpenDota hasn't
+# got the buildings.
 NO_BUILDINGS = 0x01240724
 LANES = ("top", "mid", "bot")
-READINGS = 240  # a live map's gold lead readings kept: two hours of one every 30 s
+# A live map's gold line keeps its readings of the last two hours of the game, at most READINGS of them
+# (every read and poll adds one, a few a minute). The worker and the API add to it without a lock, so now
+# and then one reading is lost: a point of the line, nothing more.
+LINE_SPAN = 2 * 3600
+READINGS = 600
 
 
 def buildings(state: Any) -> dict[str, dict[str, dict[str, list[bool]]]] | None:
@@ -136,7 +142,7 @@ def add_reading(line: list[list[int]], game_time: Any, lead: Any) -> list[list[i
     t = int(game_time or 0)
     if t <= 0 or (line and t <= line[-1][0]):
         return line
-    return [*line, [t, int(lead or 0)]][-READINGS:]
+    return [r for r in line if r[0] > t - LINE_SPAN][-(READINGS - 1):] + [[t, int(lead or 0)]]
 
 
 def live_detail(game: dict[str, Any], teams: list[dict[str, Any]], players: dict[int, str], names: dict[str, str], hero_names: dict[int, str], n: int, line: list[list[int]]) -> dict[str, Any] | None:

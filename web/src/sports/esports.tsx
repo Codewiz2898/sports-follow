@@ -209,7 +209,7 @@ function LiveMap({ live, board, teams, yours }: { live: LiveDetail; board?: Dota
           {gold && <span className="dsp" style={{ fontSize: 26 }}>{gold}</span>}
           {built && (
             <div className="stack lanes" style={{ gap: 10 }}>
-              <span className="row"><span className="eyebrow">Towers and barracks</span><span className="tiny muted">Towers left {towersLeft(built[a.id])} · {towersLeft(built[b.id])}</span></span>
+              <span className="row"><span className="eyebrow">Towers and barracks</span><span className="tiny muted">Towers left: {a.short} {towersLeft(built[a.id])} · {b.short} {towersLeft(built[b.id])}</span></span>
               {LANES.map((lane) => (
                 <div key={lane} className="lane" role="img" aria-label={laneWords(lane, [{ short: a.short, lanes: built[a.id] }, { short: b.short, lanes: built[b.id] }])}>
                   <LaneSide lane={built[a.id]?.[lane]} />
@@ -451,8 +451,9 @@ function EsportsMatch({ page, live, yours }: MatchProps<EsportsPage>) {
   if (!page.maps?.length) return null
   const teams = page.teams?.length === 2 ? page.teams : null
   const detail = teams ? (page.detail?.maps ?? []) : []
-  const now = teams && live?.is_live ? page.detail?.live : null
   const board = (live?.state as unknown as EsportsState | undefined)?.dota?.live
+  // The map being played, while the board says it still is (a read can be a minute behind a map's end).
+  const now = teams && live?.is_live && board && board.n === page.detail?.live?.n ? page.detail.live : null
   const told = new Map(detail.map((m) => [m.n, m]))
   const top = Math.max(2000, ...detail.flatMap((m) => (m.lead?.by_minute ?? []).map((v) => Math.abs(v))))
   return (
