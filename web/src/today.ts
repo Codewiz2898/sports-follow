@@ -12,13 +12,19 @@ export const FEW = 3  // until a fan follows this many, Today keeps offering sta
 export const AHEAD_DAYS = 14  // how far Coming up looks
 export const TAIL = 6  // league games in a rail after the fan's own, before its "All N" card
 
-/** Group live cards by the game they're in, so two followed players in one match show as one game. Keyed by
- * the game, which also turns its line art its own way. */
+/** The game a live card or a result is of, by what the server says: the game its fixture is one of, where a game
+ * has several (a chess board is one of each player's), else its event; null where it names neither. */
+function gameOf(x: { game_key?: string | null; event_id?: number | null }): string | null {
+  return x.game_key ? `game:${x.game_key}` : x.event_id != null ? `event:${x.event_id}` : null
+}
+
+/** Group live cards by the game they're in, so two followed players in one match show as one game, and two
+ * playing each other at chess one board. Keyed by the game, which also turns its line art its own way. */
 export function liveGames(cards: Card[]): [string, Card[]][] {
   const games = new Map<string, Card[]>()
   for (const c of cards.filter((c) => c.status === 'ready' && c.live.is_live)) {
-    // A structured source names the event; the agent's text only matches when it's written the same way.
-    const key = c.live.event_id != null ? `event:${c.live.event_id}` : (c.live.event || c.live.score || String(c.player_id)).toLowerCase()
+    // A structured source names the game; the agent's text only matches when it's written the same way.
+    const key = gameOf(c.live) ?? (c.live.event || c.live.score || String(c.player_id)).toLowerCase()
     games.set(key, [...(games.get(key) ?? []), c])
   }
   return [...games.entries()]
@@ -30,12 +36,12 @@ export interface LatestMoment { text: string; missed: boolean }
 
 /** The newest moment of the fan's players in a live game (the alerts list is newest first), and whether the
  * fan missed it: it came after they last looked at their alerts, from a game they haven't muted. Only a
- * structured score names its game. */
+ * structured score names its game, under each player's event of it (a chess board is one of each player's). */
 export function latestIn(items: ActivityItem[], group: Card[], seen: number): LatestMoment | null {
-  const game = group[0].live.event_id
-  if (game == null) return null
+  const events = new Set(group.flatMap((c) => (c.live.event_id != null ? [c.live.event_id] : [])))
+  if (!events.size) return null
   const ids = new Set(group.map((c) => c.player_id))
-  const m = items.find((i) => i.event_id === game && i.player_id != null && ids.has(i.player_id))
+  const m = items.find((i) => i.event_id != null && events.has(i.event_id) && i.player_id != null && ids.has(i.player_id))
   return m ? { text: [m.title, m.body].filter(Boolean).join(' · '), missed: m.id > seen && !m.muted } : null
 }
 
@@ -113,7 +119,8 @@ export function teamsLive(teams: FollowedTeam[], cards: Card[], matches: Followe
 
 /**
  * The fan's results for the rail: every game of their players since yesterday where the fan is, else the
- * latest day that had any (`day`, its date; null since yesterday). A game two of their players were in is one card. The biggest
+ * latest day that had any (`day`, its date; null since yesterday). A game two of their players were in is one card (a
+ * chess board too, a fixture of each player's). The biggest
  * lines go first (a triple-double or a hundred, then any game with the player's numbers), then the newest.
  * Each card carries all its results (the follow list sends them), and the stream updates it as a game ends.
  */
@@ -140,7 +147,7 @@ export function results(cards: Card[], now: number, keyOf: (sport?: string | nul
   const games = new Map<string, GameResult>()
   for (const { player } of shown) {
     const r = player.result
-    const key = r.event_id != null ? `event:${r.event_id}` : `${r.title.toLowerCase()}|${parseDate(playedOn(r))!.toDateString()}`
+    const key = gameOf(r) ?? `${r.title.toLowerCase()}|${parseDate(playedOn(r))!.toDateString()}`
     const game = games.get(key)
     const who = (p: GameResult['players'][number]) => (p.team != null ? `team:${p.team}` : `player:${p.result.player_id}`)
     if (!game) games.set(key, { key, players: [player] })

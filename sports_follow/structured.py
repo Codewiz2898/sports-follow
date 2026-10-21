@@ -67,6 +67,18 @@ def match_path(key: str | None) -> str | None:
     return f"{system}/{game}" if sep and game and system in KNOWN else None
 
 
+def game_key(key: str | None, state: dict[str, Any] | None) -> str | None:
+    """The game an event's board is of, where one game is under several fixtures (a chess board is one of each
+    player's): its key, the same under each and its questions' (predictions.game_key), so Today shows the game once
+    whichever of the fan's players it's under. None where the fixture is the game: its event says it."""
+    state = state or {}
+    rules = sports.of_state(state)
+    if not rules.board(state):
+        return None
+    system, _, fixture = (key or "").partition(":")
+    return predictions.game_key(system, fixture, rules, state)
+
+
 def binding(db: Session, player_id: int) -> SourceBinding | None:
     """The player's fixtures binding, if a running adapter knows them (a licensed-only build ignores
     bindings to sources it has turned off, so those players fall back to the agent)."""
@@ -596,6 +608,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         "competition": f.competition,
         "event_id": event.id if event else None,
         "match": match_path(event.key) if event else None,  # its match page's address
+        "game_key": game_key(f"{adapter.system}:{f.source_id}", snap.state) if snap else None,  # its board says it
         "source_url": snap.source_url if snap else None,
     }
 
@@ -615,7 +628,7 @@ def merged_result(old: dict[str, Any] | None, item: dict[str, Any], scorecard: b
     old = old or {}
     new = {**item, "scorecard": True if scorecard else old.get("scorecard", False)}
     if not scorecard:
-        for key in ("player_contribution", "source_url", "result"):
+        for key in ("player_contribution", "source_url", "result", "game_key"):
             if old.get(key) and not new.get(key):
                 new[key] = old[key]
     return new
@@ -1019,6 +1032,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "is_live": True,
             "event_id": event.id,
             "match": match_path(event.key),  # its match page's address
+            "game_key": game_key(event.key, snap.state),  # the game it's one fixture of, where it has several
             "event": title,
             "competition": event.competition,
             "score": snap.score_label,
@@ -1047,6 +1061,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "competition": event.competition,
             "event_id": event.id,
             "match": match_path(event.key),
+            "game_key": game_key(event.key, snap.state),
             "source_url": snap.source_url,
         }
         card["recent_results"] = [result, *[r for r in card.get("recent_results", []) if r.get("event_id") != event.id]][:RECENT_LIMIT]

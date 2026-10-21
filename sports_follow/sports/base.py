@@ -625,8 +625,8 @@ class Sport:
 
     def board(self, state: dict[str, Any]) -> str:
         """The game as its board tells it apart, where one game is under several fixtures (a chess board is one of
-        each player's): an id they share, so its questions are one set whichever address asks. "" where the
-        fixture is the game."""
+        each player's): an id they share, so its questions are one set whichever address asks, and Today shows it
+        once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:

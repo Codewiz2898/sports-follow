@@ -63,6 +63,9 @@ export interface LiveStatus {
   // Set when the score comes from a structured source rather than the research agent.
   event_id?: number
   match?: string | null  // its match page's address after /match/: "<source>/<game id>" (sports_follow/match.py)
+  // The game it's one fixture of, where a game has several (a chess board is one of each player's): the same
+  // under each, so Today shows it once; none where the event is the game (structured.game_key).
+  game_key?: string | null
   competition?: string | null
   headline?: string | null
   state?: LiveState
@@ -100,6 +103,7 @@ export interface RecentResult {
   source_url?: string | null
   event_id?: number | null
   match?: string | null  // its match page's address after /match/, where a source has the game
+  game_key?: string | null  // the game it's one fixture of, as a live game's (LiveStatus)
   scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
 }
 
