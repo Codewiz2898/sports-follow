@@ -108,7 +108,7 @@ export function ResultCard({ game, hero, now, calls = null }: { game: GameResult
       {hero ? (
         <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
       ) : (
-        <span className="row"><span className="eyebrow">{[when, r.competition].filter(Boolean).join(' · ')}</span>{badge}</span>
+        <span className="row"><span className="eyebrow">{when}</span>{badge}</span>
       )}
       <span className="dsp word" style={{ '--word': `${wordSize(word, hero)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: hero ? 12 : 2 }}>
@@ -121,8 +121,10 @@ export function ResultCard({ game, hero, now, calls = null }: { game: GameResult
             </span>
           </span>
         )}
-        {!hero && match !== word && <span className="line">{match}</span>}
+        {/* Under the name, a few words only: their own line, then the game (the badge says how it went). */}
         {lines.map((l) => <span key={l} className="line strong">{l}</span>)}
+        {/* With no badge (a result it can't read as a win, draw or loss), the game says how it went instead. */}
+        {!hero && (wl ? r.title : match) !== word && <span className={`line soft${wl ? ' one' : ''}`}>{wl ? r.title : match}</span>}
         <CallTag note={callNote(calls, page, now)} />
       </span>
       {hero && (

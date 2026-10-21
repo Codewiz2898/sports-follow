@@ -56,11 +56,11 @@ export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame
   return (
     <LeagueCard game={game} className="league-card league-result" label={[`${game.competition}: ${game.line || game.title}, ${word}`, callWords(call)].filter(Boolean).join('. ')}>
       <Backdrop sport={key} seed={game.key} />
-      <span className="head"><span className="sport-tag">{game.competition}</span><span className="eyebrow">{dayLabel(game.start_utc, new Date(now))}</span></span>
+      <span className="sport-tag">{game.competition}</span>
       <span className="dsp word" style={{ '--word': `${wordSize(word)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: 2 }}>
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
-        <span className="line soft">{leagueAbout(game)}</span>
+        <span className="line soft one">{leagueAbout(game, dayLabel(game.start_utc, new Date(now)))}</span>
         <CallTag note={call} />
       </span>
     </LeagueCard>
