@@ -15,6 +15,13 @@ from sports_follow.adapters import VIDEOS, AdapterError, Upload, VideoFacts, bud
 from sports_follow.candidates import Followed
 
 CHANNEL = "UC" + "a" * 22
+
+
+def listing(monkeypatch, *channels: str) -> None:
+    """Every sport lists these made-up channels too, as its module would (Sport.video_channels): the feed keeps
+    videos only from a channel the player's sport lists (candidates.on_list)."""
+    for sport in (*sports.ALL, *sports.GROUPS):
+        monkeypatch.setattr(sport, "video_channels", (*sport.video_channels, *channels))
 NOW = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
 
 
@@ -46,12 +53,13 @@ def feed(*entries: tuple[str, str, str]) -> str:
 
 
 def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 300, embeddable: bool = True, privacy: str = "public",
-          region: dict | None = None, live: str = "none", paid: bool | None = None) -> dict:
-    """One item of videos.list, as YouTube sends it."""
+          region: dict | None = None, live: str = "none", paid: bool | None = None, thumbs: tuple[str, ...] = ()) -> dict:
+    """One item of videos.list, as YouTube sends it; thumbs: the thumbnail sizes it has ("maxres" only for some)."""
     details = {"duration": duration, "dimension": "2d", "definition": "hd", "caption": "false", **({"regionRestriction": region} if region else {})}
     return {
         "kind": "youtube#video", "id": vid,
-        "snippet": {"title": "t", "liveBroadcastContent": live, "categoryId": "17", "tags": ["cricket"]},
+        "snippet": {"title": "t", "liveBroadcastContent": live, "categoryId": "17", "tags": ["cricket"],
+                    **({"thumbnails": {t: {"url": f"https://i.ytimg.com/vi/{vid}/{t}.jpg", "width": 1} for t in thumbs}} if thumbs else {})},
         "contentDetails": details,
         "statistics": {"viewCount": str(views), "likeCount": str(likes), "commentCount": "12"},
         "status": {"uploadStatus": "processed", "privacyStatus": privacy, "license": "youtube", "embeddable": embeddable, "publicStatsViewable": True},
@@ -173,7 +181,9 @@ def test_a_video_is_read_as_its_facts(fake):
     f = facts["abcdefghijk"]
     assert (f.seconds, f.views, f.likes, f.embeddable, f.public, f.live, f.blocked) == (3723, 5000, 300, True, True, False, ("IN", "PK"))
     assert not f.plays_in("IN") and f.plays_in("GB") and "missing0000" not in facts
-    assert f.raw["status"]["privacyStatus"] == "public" and f.raw["snippet"] == {"liveBroadcastContent": "none", "categoryId": "17", "tags": ["cricket"]}
+    assert f.raw["status"]["privacyStatus"] == "public" and f.raw["snippet"] == {"liveBroadcastContent": "none", "categoryId": "17", "tags": ["cricket"], "thumbnails": []}
+    fake.videos["withsizes00"] = video("withsizes00", thumbs=("high", "maxres", "default", "standard", "medium"))
+    assert SOURCE.facts(["withsizes00"])["withsizes00"].raw["snippet"]["thumbnails"] == ["default", "high", "maxres", "medium", "standard"]  # the sizes, never the addresses
     assert not f.paid
 
 

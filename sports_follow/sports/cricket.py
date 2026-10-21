@@ -353,19 +353,34 @@ run-out, a last-over finish. Fantasy team picks ("Dream11 prediction", "GL team"
 innings or whole-match uploads by anyone but a board or broadcaster are restreams. Selection and squad news from \
 a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
 
-    # ---- the feed (curator.py): channels trusted for videos about its players (each feed answered, 20 Oct 2026)
+    # ---- the feed (curator.py): the only channels its players' videos come from (each feed answered, 21 Oct 2026)
+    #
+    # Official ones (leagues, federations, clubs, broadcasters, tournaments) and a few top creators: every video,
+    # whichever stream found it (a channel's poll, a moment's search, a sweep), is kept only from these (candidates.keep).
 
     video_channels = (
-        "UCujuVKmt_utAQZJghxlRMIQ",  # ESPNcricinfo: analysis, interviews
-        "UCQYRGzYaVa7aWd8TsbjdJ6Q",  # Aakash Chopra: analysis
-        "UCVXCo0W9pk2dDkEBNLhTt7A",  # Sports Tak: interviews, news (Hindi)
-        "UCjFw-0Vdfy2KW78NClGECXw",  # Sports Yaari: interviews (Hindi)
-        "UCms-xnI50pEtJC06xdw4J6A",  # Wisden Cricket: analysis, interviews
-        "UCjGC9zWjHHF6CG1j8YfJK9g",  # RevSportz: interviews, news
-        "UC5oTaFLOFlLNeAJt_dt5rBw",  # CricTracker: interviews, fan edits
-        "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au: interviews, features
-        "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC: interviews, features
+        "UCt2JXOLNxqry7B_4rRZME3Q",  # ICC
+        "UC0oyi_CF3v9fsKmBM2m6wPA",  # IPL: its feed answers, with no public uploads on 21 Oct
+        "UCz1D0n02BR3t51KuBOPmfTQ",  # England & Wales Cricket Board
+        "UCkBY0aHJP9BwjZLDYxAQrKg",  # cricket.com.au
+        "UC2MHTOXktfTK26aDKyQs3cQ",  # Windies Cricket
+        "UCuKowzPg2-A0FcmyPa3yWug",  # New Zealand Cricket
+        "UCzevPCfP7MtRqOB0ZkU5cwg",  # Cricket South Africa
+        "UCujuVKmt_utAQZJghxlRMIQ",  # ESPNcricinfo
+        "UCmqfX0S3x0I3uwLkPdpX03w",  # Star Sports
+        "UC0PTktRYpZXb6On0_zFKWIg",  # JioHotstar
+        "UC_WKb6N9iTGc77hxwXLDrbA",  # Sony Sports Network
+        "UCkd4takjjF1EGD1TKIK2QiA",  # Sky Sports Cricket
+        "UCms-xnI50pEtJC06xdw4J6A",  # Wisden Cricket
+        "UCZSNzBgFub_WWil6TOTYwAg",  # Netflix India: its cricketers' shows and interviews
+        "UCQYRGzYaVa7aWd8TsbjdJ6Q",  # Aakash Chopra: analysis (5M subscribers)
     )
+    title_words = (  # kept as written in a title put in sentence case (titles.py)
+        "IPL", "WPL", "ICC", "BCCI", "ECB", "ODI", "ODIs", "T20I", "T20Is", "T20", "T20s", "WTC", "CWC",
+        "DRS", "LBW", "RCB", "CSK", "KKR", "SRH", "PBKS", "LSG", "MI", "DC", "GT", "RR", "IND", "AUS", "ENG", "PAK",
+        "NZ", "SA", "SL", "WI", "AFG", "India", "Australia", "England", "Pakistan", "New Zealand",
+        "South Africa", "Sri Lanka", "West Indies", "Bangladesh", "Afghanistan", "Test", "Tests", "Kiwis", "Proteas", "Ashes", "Ranji Trophy",
+        "Lord's", "Edgbaston", "Wankhede", "Eden Gardens", "Chinnaswamy", "MCG", "SCG")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",

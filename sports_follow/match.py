@@ -26,7 +26,8 @@ two reads. One that finds it not there is the last for hours.
 
 What the page shows under the board is its sport's (Sport.match_page): a football timeline, a cricket
 scorecard, an esports series by map or a lobby's standings, a finished chess game's moves. Over a finished
-game's board its sport says who won (Sport.verdict).
+game's board its sport says who won (Sport.verdict). Where its source lists the game's broadcasts (an esports
+series'), the page says where to watch it (watch.py).
 """
 
 from __future__ import annotations
@@ -34,14 +35,14 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import bus, league, live, matches, registry, search, sports
+from . import bus, league, live, matches, registry, search, sports, watch
 from .adapters import ADAPTERS, KNOWN, Adapter, LiveGame, PlayerRef, source_name
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
@@ -146,6 +147,7 @@ def _dump(adapter: Adapter, game: LiveGame, sport: str, players: list[dict[str, 
         "lines": {athlete_id: {"headline": line.headline, "stats": line.stats} for athlete_id, line in snap.lines.items()},
         "players": players,
         "bench": bench,  # named for the lines they have, not offered to follow
+        "streams": [asdict(s) for s in game.streams],  # where it can be watched, as its source lists them
     }
 
 
@@ -367,6 +369,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         "teams": teams.in_game(db, fan, system, state, [e.id for e in events]),
         "event_ids": [e.id for e in events],
         "fixtures": fixtures,
+        # Where it can be watched (watch.py), from its last read: the app shows them while it's on or about to be.
+        "streams": watch.offer((game or {}).get("streams") or []),
     }, ask
 
 

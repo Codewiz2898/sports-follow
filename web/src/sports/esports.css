@@ -79,3 +79,19 @@
 .who-played .who.yours { margin: 0 -8px; padding: 8px 8px 3px; border-radius: 10px 10px 0 0; border-top-color: transparent; }
 .who-played .played.yours:nth-child(2) { margin-left: -8px; padding-left: 8px; border-radius: 0 0 0 10px; }
 .who-played .played.yours:last-child { margin-right: -8px; padding-right: 8px; border-radius: 0 0 10px 0; }
+
+/* The map being played: each lane's buildings from either base out to the river (filled: standing), and
+   the ten heroes, the fan's players tinted. */
+.lane { display: grid; grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); align-items: center; gap: 6px; }
+.lane > .eyebrow { text-align: center; }
+.lane-side { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.lane-side.right { justify-content: flex-start; }
+.lane .rax { display: flex; gap: 3px; }
+.lane .pip { width: 16px; height: 16px; border-radius: 999px; background: var(--text); flex-shrink: 0; }
+.lane .pip.box { width: 10px; border-radius: 3px; }
+.lane .pip.down { background: transparent; box-shadow: inset 0 0 0 2px var(--muted); }
+.heroes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px; padding: 14px; }
+.heroes .team { font-size: 16px; padding: 0 8px 4px; }
+.hero-row { display: flex; flex-direction: column; padding: 7px 8px; border-radius: 12px; min-width: 0; }
+.hero-row .dsp { font-size: 18px; overflow-wrap: anywhere; }
+.hero-row.yours { background: color-mix(in srgb, var(--sport) 13%, var(--surface)); }

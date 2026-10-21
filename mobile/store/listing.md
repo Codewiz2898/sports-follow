@@ -1,0 +1,85 @@
+# Store listing
+
+What to paste into Play Console, **Grow users → Store presence → Main store listing**. The name starts with
+`sports_follow/app.json`'s (below); the rest is the site's copy (`web/index.html`'s description, the pages' words),
+in its voice: short, plain sentences, no claims the app doesn't keep.
+
+## App details
+
+| Field | Value | Limit |
+|---|---|---|
+| App name | `Slam: live alerts for players` | 30 (this is 29) |
+| Short description | `Follow any athlete, any sport: live scores, results and alerts for your players.` | 80 (this is exactly 80) |
+| Full description | below | 4,000 |
+| App category | Application → **Sports** | |
+| Tags | Live scores, Sports, Football, Cricket, Chess, Esports (pick up to 5 of those Play offers) | 5 |
+| Contact email | `bharath@stann.in` | |
+| Website | `https://stann.in` | |
+| Privacy policy (App content) | `https://stann.in/privacy` | |
+| Account deletion (App content) | `https://stann.in/account` (sign in, then Delete account) | |
+
+The app is Slam (`sports_follow/app.json`: the launcher, every page, the emails), so the store name starts with it
+and says what the app is, for search to tell it apart from the other SLAMs on Play: SLAM Media's basketball
+magazine app "SLAM.", WWE SLAM, Slam Stars, Slam Fitness and the slambook apps. "Slam: live alerts for your
+players" is 34 characters, over Play's 30. Google shows the name and short description as typed.
+
+The addresses are stann.in's until the new domain is bought (BHA-348). They can change in the Console at any
+time, unlike the package: change them here and there together.
+
+**Never the word "news"** in the name, either description, the tags or a What's new note. Bharath answered No
+to the News app declaration (19 Oct 2026), and Google rejects a listing that calls itself news while declaring
+it isn't. Say alerts, moments, live scores, updates or follow instead.
+
+## Full description
+
+```
+Slam follows the athletes you care about, in any sport: football, cricket, tennis, basketball, chess and esports. Pick a player and their games come to you.
+
+Your players first
+Today opens on your players' live games, then their results and what's coming up. Follow a team and its games come too. Follow one match for its moments alone, until it ends.
+
+Alerts that know the difference
+One alert a game, replaced as its moments come: a goal, a wicket, a hundred, a game turning. Sound only for the big ones, and never in your quiet hours. Per player, you choose how much you want to hear.
+
+Live scores on your lock screen
+While a game you follow is on, its score stays on your lock screen and updates as it goes. Stop it with one tap.
+
+Their own numbers while they play
+Not just the score: your player's line in the game as it happens, and their recent form.
+
+Share a moment
+Send a player or a moment to WhatsApp with a card that shows the score.
+
+Sign in if you like
+Everything works without an account. Sign in with an email code and your players follow you to every device.
+
+No ads. No selling your data. Read the policy at stann.in/privacy.
+```
+
+That text is 1,143 characters. Play keeps line breaks; it ignores Markdown, so the headings are plain lines.
+
+Before pasting, check the sports named in the first line against what production has turned on (the admin
+panel's sports, BHA-207 for PUBG): the listing must not promise a sport that's off. Esports titles are left
+unnamed on purpose, as which ones are on changes with the sources.
+
+## What Play asks about the app (App content)
+
+Answers for the declarations under **Policy → App content**. The data safety form has its own file,
+`data-safety.md`.
+
+| Declaration | Answer | Why |
+|---|---|---|
+| Privacy policy | `https://stann.in/privacy` | Covers the app since the PR that added this folder. |
+| Ads | No, the app has no ads | None in the code. |
+| App access | All functionality is available without special access | Signing in is optional; following and alerts work anonymously. |
+| Content rating | Fill the IARC questionnaire as **Utility, Productivity, Communication or Other**: no violence, sexual content, language, controlled substances, gambling; no chat; no location sharing; no purchases. **User-generated content: No**, with one thing to know: a name a fan types into Research with AI is kept as that player's name and shown to every fan of them, which isn't fans sharing content with each other, the question's meaning. If you'd rather not argue it, turn the agent off in production (`SPORTS_FOLLOW_AGENT=0`) before the upload | Rated Everyone / 3+. |
+| Target audience | **18 and over** only | Not designed for children; picking a younger group adds the Families programme's questions. |
+| News app | **No** (answered 19 Oct 2026) | The app's purpose is scores and alerts; a player's headlines are a small part. So the listing text never says "news" (above). |
+| COVID-19 contact tracing | No | |
+| Data safety | `data-safety.md` | |
+| Government app | No | |
+| Financial features | No financial features | |
+| Health | No health features | |
+| Account deletion | Yes, in the app (Account → Delete account) and at `https://stann.in/account`; deleting the account deletes all its data (daily backups kept 14 days) | `web/src/pages/AccountPage.tsx`, `sports_follow/accounts.py`. |
+| Advertising ID | No, the app doesn't use it | No ads SDK; Firebase Messaging doesn't add the `AD_ID` permission (checked in the release bundle's merged manifest, 19 Oct 2026). |
+| AI-generated content (Policy → App content, if Play lists it) | Research with AI writes a player's page from a typed name, with the model's answer checked against the sources. Say **Yes** if the declaration is offered, and know that Play's policy then asks for a way to report objectionable content in the app: there isn't one yet, so decide between adding a Report link on researched pages and turning the agent off for the first upload | `sports_follow/agent.py`; a decision for Bharath. |

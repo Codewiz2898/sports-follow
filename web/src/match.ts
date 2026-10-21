@@ -5,7 +5,7 @@
 
 import { dateOnly, parseDate } from './format'
 import { comingCard } from './lines'
-import type { FollowedMatch, LiveStatus, Match, MatchFollowState } from './types'
+import type { FollowedMatch, LiveStatus, Match, MatchFollowState, MatchStream } from './types'
 
 // A look again: a followed player's game is polled every few seconds, any other read once a minute. A look only
 // reads what the server has, which asks the game's source at most once a minute whoever looks.
@@ -39,6 +39,25 @@ export function startsIn(match: Match, now: number): string | null {
   // A day with no time yet: its day, whatever the hour.
   if (at > now || dateOnly(match.start_utc)) return comingCard({ title: match.title ?? '', competition: '', start_utc: match.start_utc }, now).big
   return now - at < LATE ? 'Starting soon' : null
+}
+
+const WATCH_BEFORE = 30 * 6e4  // how long before its start a game's streams are offered: the build-up is on by then
+
+/** Where to watch the game (its streams, best first), while it's on or about to start: from WATCH_BEFORE before
+ * its start, and after it while it hasn't begun (a delayed start), for a few hours. None once it's over or off,
+ * or for a game whose time isn't known. */
+export function watchable(match: Match, now: number): MatchStream[] {
+  const streams = match.streams ?? []
+  if (match.status === 'live' || !streams.length) return streams
+  if (match.status !== 'scheduled' && match.status !== 'armed') return []
+  const at = parseDate(match.start_utc)?.getTime()
+  if (at == null || dateOnly(match.start_utc)) return []
+  return at - now <= WATCH_BEFORE && now - at < LATE ? streams : []
+}
+
+/** What a stream is, after its platform: its language, and whether it's the organiser's ("English · Official"). */
+export function streamNote(stream: MatchStream): string {
+  return [stream.language_name, stream.official ? 'Official' : ''].filter(Boolean).join(' · ')
 }
 
 /** A key event the source names in a game none of the fan's players' boards draw (the page's `events`). */

@@ -3,7 +3,8 @@ rename is a one-line change (README, "Renaming the app"). The API reads it there
 in for %APP_NAME% (web/vite.config.ts) and APP_NAME (web/src/app.ts); mobile/app.config.ts gives it to
 the Android app, whose code reads it from Expo's config, and mobile/babel.config.js fills in web/src/app.ts
 for the shared code the app loads (android/generate.mjs, to the old TWA). These tests fail if anything fans see writes the name out itself. Comments don't count,
-and nor does the domain ("stann.in"), which is a different setting."""
+and nor does the domain ("stann.in"), which is a different setting, or a sport's own words that have the name in
+them (tennis's Grand Slams, Dota's BLAST Slam)."""
 
 from __future__ import annotations
 
@@ -21,8 +22,8 @@ from tests.test_api import api  # noqa: F401  (the fixture)
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "sports_follow"
 WEB = ROOT / "web"
-# The name as a word of its own, not part of an address ("stann.in") or a longer word.
-NAME = re.compile(rf"(?<![\w.@-]){re.escape(APP_NAME)}(?![\w@-]|\.\w)", re.I)
+# The name as a word of its own, not part of an address ("stann.in"), a longer word or a sport's own words.
+NAME = re.compile(rf"(?<![\w.@-])(?<!grand\s)(?<!blast\s){re.escape(APP_NAME)}(?![\w@-]|\.\w)", re.I)
 # A comment in TypeScript, or a one-line string (kept, so a "//" inside a string isn't a comment).
 TS_COMMENTS = re.compile(r"""//[^\n]*|/\*.*?\*/|(["'`])(?:\\.|(?!\1)[^\\\n])*\1""", re.S)
 
@@ -100,6 +101,19 @@ def test_the_android_app_defines_what_the_web_code_it_loads_reads():
         meta += [rel] * ("import.meta" in code)
     assert not missing, "mobile/babel.config.js doesn't define what the app's shared code reads:\n" + "\n".join(missing)
     assert not meta, "Shared code the Android app loads reads import.meta, which only Vite fills in:\n" + "\n".join(meta)
+
+
+def test_the_android_apps_own_link_and_site_are_the_configs():
+    """mobile/app.config.ts says the app's own link (its scheme) and the site; the notifications module (Kotlin)
+    and src/api.ts can't read it there, so they say them again, and a rename has to change all three."""
+    config = (ROOT / "mobile" / "app.config.ts").read_text()
+    scheme = re.search(r"^  scheme: '([a-z][a-z0-9.+-]*)'", config, re.M)  # the app's, not an intent filter's
+    site = re.search(r"^const SITE = '([^']+)'", config, re.M)
+    assert scheme and site
+    kotlin = ROOT / "mobile" / "modules" / "stann-notifications" / "android" / "src" / "main" / "java" / "io" / "stann" / "notifications"
+    assert f'Uri.parse("{scheme[1]}://"' in (kotlin / "Cards.kt").read_text(), "Cards.kt opens the app by another scheme"
+    assert f'DEFAULT_API = "https://{site[1]}"' in (kotlin / "Settings.kt").read_text(), "Settings.kt's DEFAULT_API isn't the site"
+    assert f"'https://{site[1]}'" in (ROOT / "mobile" / "src" / "api.ts").read_text(), "src/api.ts's API_URL isn't the site"
 
 
 def test_the_android_app_is_named_by_generate_mjs():

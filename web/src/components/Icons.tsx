@@ -38,6 +38,9 @@ export const CloseIcon = (p: SVGProps<SVGSVGElement>) => (
 export const ShareIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><circle cx="18" cy="5" r="2.6" /><circle cx="6" cy="12" r="2.6" /><circle cx="18" cy="19" r="2.6" /><path d="m8.4 13.3 7.2 4.3M15.6 6.4l-7.2 4.3" /></svg>
 )
+export const OutIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}><path d="M7 17 17 7M8 7h9v9" /></svg>
+)
 export const FeedIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}><rect x="4" y="3" width="16" height="18" rx="3" /><path d="M4 13h16M8 17h5" /></svg>
 )

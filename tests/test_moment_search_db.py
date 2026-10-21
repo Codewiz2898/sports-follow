@@ -16,9 +16,9 @@ from sqlalchemy import create_engine, delete, select, text, update
 from sports_follow import bus, db as db_module, notify, searches
 from sports_follow.models import Event, FeedCandidate, FeedSearch, Follow, Moment, Player, PlayerAlias
 from sports_follow.sports.base import Found
-from tests.test_feed_fetch import NOW, video
+from tests.test_feed_fetch import NOW, listing, video
 from tests.test_feed_fetch_db import Redis
-from tests.test_moment_search import Searching, hit
+from tests.test_moment_search import CHANNEL as SEARCHED, Searching, hit
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -37,6 +37,7 @@ def world(monkeypatch):
     made = Searching()
     monkeypatch.setattr(youtube, "_client", httpx.Client(transport=httpx.MockTransport(made)))
     monkeypatch.setattr(youtube, "key", lambda: "test-key")
+    listing(monkeypatch, SEARCHED)
     monkeypatch.setattr(bus, "sync_redis", lambda: made.redis)
     made.redis = Redis()
     yield made
@@ -278,3 +279,14 @@ def test_without_a_key_nothing_is_queued_or_searched(world, monkeypatch):
     monkeypatch.setattr(youtube, "key", lambda: None)
     assert searches.queue(NOW)["queued"] == 0 and searches.run(FIRST)["searched"] == 0
     assert queued() == [] and world.asked == []
+
+
+def test_a_moment_search_keeps_only_whats_from_a_channel_the_players_sport_lists(world):
+    kohli = player("Virat Kohli")
+    fire(kohli, game("England vs India", venue="Lord's"), hundred())
+    searches.queue(NOW + timedelta(minutes=5))
+    world.found["Virat Kohli century Lord's"] = [hit("kohliedit01", "Virat Kohli 100 at Lord's"), hit("kohlioff001", "VIRAT KOHLI 100 🔥", channel="UC" + "z" * 22)]
+    world.videos.update({v: video(v) for v in ("kohliedit01", "kohlioff001")})
+    assert searches.run(NOW + timedelta(hours=4))["kept"] == 1
+    with db_module.session() as s:
+        assert list(s.scalars(select(FeedCandidate.external_id))) == ["kohliedit01"]

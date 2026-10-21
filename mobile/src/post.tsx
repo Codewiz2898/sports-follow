@@ -5,26 +5,24 @@
 // (feed.tsx): nothing of YouTube's loads here. A story shows the image its publisher's feed attaches, or without
 // one its headline on the sport's colour. A post is words only, opened where it was posted. Every picture has
 // its box before it loads (16:9, a headline 4:3), so nothing moves as the pictures come in. Also the players'
-// circles across the top of the Feed, and Today's "From your players".
+// circles across the top of the Feed. Feed v2's layouts are feedLayouts.tsx.
 
 import { Image } from 'expo-image'
 import { router } from 'expo-router'
-import { useEffect, useRef, useState } from 'react'
-import { AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import Svg, { Circle, Path } from 'react-native-svg'
+import Svg, { Circle } from 'react-native-svg'
 import { duration, fromLine, openLabel, views } from '../../web/src/feed'
 import { initials, safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
-import { absolute, type FeedCircle, type FeedEntry, type FeedItem, type FeedVerdict, type FeedWho, type Photo } from './api'
+import { absolute, type FeedCircle, type FeedItem, type FeedVerdict, type FeedWho, type Photo } from './api'
 import { useTone } from './catalog'
 import type { Hide } from './feed'
-import { useFollowing } from './following'
-import { useMyFeed } from './myFeed'
+import { PlayIcon } from './icons'
 import { ShareButton } from './share'
-import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
-import { Btn, ErrorBox, Eyebrow, SectionHead } from './ui'
+import { Btn, ErrorBox, Eyebrow } from './ui'
 
 const open = (url?: string | null) => {
   const href = safeHref(url)
@@ -59,13 +57,9 @@ function Dots() {
   return <Svg width={20} height={20} viewBox="0 0 24 24" fill={colour.muted}><Circle cx="5" cy="12" r="2" /><Circle cx="12" cy="12" r="2" /><Circle cx="19" cy="12" r="2" /></Svg>
 }
 
-function Play() {
-  return <Svg width={22} height={22} viewBox="0 0 24 24" fill={colour.text}><Path d="M8 5v14l11-7z" /></Svg>
-}
-
 /** A picture as its host serves it, into the box it's given; nothing once it fails, or for YouTube's grey 120×90
  * stand-in for a video it has none for. */
-function Picture({ src, onGone }: { src: string; onGone: () => void }) {
+export function Picture({ src, onGone }: { src: string; onGone: () => void }) {
   return (
     <Image source={{ uri: src }} style={StyleSheet.absoluteFill} contentFit="cover" transition={120} recyclingKey={src}
       onError={onGone} onLoad={(e) => { if (e.source.width > 0 && e.source.width <= 120) onGone() }} />
@@ -92,7 +86,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
     media = (
       <Pressable onPress={go} disabled={!go} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[s.media, { backgroundColor: colour.text }]}>
         {picture ? <Picture src={picture} onGone={gone} /> : null}
-        <View style={s.play}><Play /></View>
+        <View style={s.play}><PlayIcon size={22} color={colour.text} /></View>
         {length ? <Text style={s.chip}>{length}</Text> : null}
       </Pressable>
     )
@@ -168,9 +162,9 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
   )
 }
 
-/** The "…" sheet (.feed-sheet): why the item is here, and the three things a fan can tell the judge about it.
- * Back, or a tap above it, closes it. */
-export function ItemSheet({ item: asked, name, onClose, onHide }: { item: FeedItem | null; name: string; onClose: () => void; onHide: Hide }) {
+/** The "…" sheet (.feed-sheet): why the item is here, and the three things a fan can tell the judge about it;
+ * `children` under why (the Feed's Share and "More from …"). Back, or a tap above it, closes it. */
+export function ItemSheet({ item: asked, name, onClose, onHide, children }: { item: FeedItem | null; name: string; onClose: () => void; onHide: Hide; children?: ReactNode }) {
   const insets = useSafeAreaInsets()
   const last = useRef(asked)
   if (asked) last.current = asked
@@ -200,6 +194,7 @@ export function ItemSheet({ item: asked, name, onClose, onHide }: { item: FeedIt
         <View style={[s.sheet, { paddingBottom: 28 + insets.bottom }]} accessibilityViewIsModal>
           <Eyebrow>Why this is here</Eyebrow>
           <Text style={s.reason}>{item.reason}</Text>
+          {children}
           {error ? <ErrorBox>{error}</ErrorBox> : null}
           <View style={{ gap: 8, marginTop: 4 }}>
             {choice('Not interested', 'not_interested')}
@@ -239,35 +234,6 @@ function Player({ circle, picked, lit, onPress }: { circle: FeedCircle; picked: 
       </View>
       <Text style={[s.nm, picked && s.nmOn]} numberOfLines={1}>{short}</Text>
     </Pressable>
-  )
-}
-
-/** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed right now in its
- * cards, and the way to the rest (the Feed tab). Absent while their Feed is empty. Read once the follow list is
- * in, and again when it comes back changed, when Today is pulled (`again`) and when the app comes back to the
- * front, since Today stays open where the web's page would be loaded anew. */
-export function FromYourPlayers({ now, again = 0 }: { now: number; again?: number }) {
-  const { cards, loaded, heard } = useFollowing()
-  const [back, setBack] = useState(0)
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') setBack((n) => n + 1) })
-    return () => sub.remove()
-  }, [])
-  const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
-  const [opened, setOpened] = useState<FeedEntry | null>(null)
-  const go = useGoToPlace()
-  if (!loaded || !page?.items.length) return null
-  const all = () => go('/feed')
-  return (
-    <View style={{ gap: 10 }} accessibilityLabel="From your players">
-      <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>All {page.count}</Text>} />
-      <View style={{ gap: 12 }}>
-        {page.items.map((e) => <FeedPost key={e.item.id} who={e.player} item={e.item} moment={e.moment} now={now} onMore={() => setOpened(e)} />)}
-      </View>
-      <Btn label={`All ${page.count} in your Feed`} onPress={all} style={{ height: 52 }} />
-      <ItemSheet item={opened?.item ?? null} name={opened?.player.name ?? ''} onClose={() => setOpened(null)} onHide={(_, verdict) => (opened ? hide(opened, verdict) : Promise.resolve())} />
-    </View>
   )
 }
 

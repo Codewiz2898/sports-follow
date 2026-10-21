@@ -51,6 +51,19 @@ class PlayerRef:
 
 
 @dataclass
+class Stream:
+    """One broadcast of a game, where its source lists them (an esports series' streams): its page, in the
+    language it's called in (ISO 639-1, "en"; "" where the source doesn't say), whether the event's organiser
+    runs it, and whether it's the organiser's main one. Which platform it's on, and whether the app can play it
+    in the page, its address says (watch.py)."""
+
+    url: str
+    language: str = ""
+    official: bool = False
+    main: bool = False
+
+
+@dataclass
 class Fixture:
     """One event involving one of the player's teams, upcoming or finished."""
 
@@ -74,6 +87,8 @@ class Fixture:
     facts: dict[str, Any] = field(default_factory=dict)
     # The sport it's of, from a source of several (an esports game's: "valorant"); "" for the source's one.
     sport: str = ""
+    # Where it can be watched, where the source lists its broadcasts, in the source's order.
+    streams: list[Stream] = field(default_factory=list)
 
 
 @dataclass
@@ -133,6 +148,8 @@ class LiveGame:
     # it couldn't read, or a round with more games to come; a Dota 2 map OpenDota hasn't parsed yet. Its match
     # page reads it again later instead of keeping it as the game's last word (match.read).
     partial: bool = False
+    # Where it can be watched (Fixture.streams), as its fixture has them: its match page's Watch live (watch.py).
+    streams: list[Stream] = field(default_factory=list)
 
 
 @dataclass
@@ -486,9 +503,10 @@ class VideoSource:
         None if it can't: a video the player can't play isn't served."""
         return None
 
-    def picture(self, video_id: str) -> str | None:
+    def picture(self, video_id: str, details: dict[str, Any] | None = None) -> str | None:
         """The address of a still of one of its videos for the card to show before play is tapped (the Feed's
-        picture), one the source serves for every video; None: the card draws the title on the sport's colour."""
+        picture), the biggest the source has for it (details: what facts said of it, as the candidate keeps it:
+        VideoFacts.raw without the numbers); None: the card draws the title on the sport's colour."""
         return None
 
     @classmethod

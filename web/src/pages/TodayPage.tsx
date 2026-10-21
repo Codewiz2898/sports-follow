@@ -53,7 +53,7 @@ function SaveNudge() {
 
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions
- * stann covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
+ * the app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports
  * taking turns. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
 function BigGames({ league, now }: { league: League | null; now: number }) {

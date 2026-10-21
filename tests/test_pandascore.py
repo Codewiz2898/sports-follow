@@ -11,7 +11,7 @@ import httpx
 
 from sports_follow import credits, form, moments, registry, search, sports, structured
 from sports_follow.adapters import ADAPTERS, KNOWN, SearchResult, budget, pandascore, pandascore_esports as ps
-from sports_follow.adapters.base import PlayerRef
+from sports_follow.adapters.base import PlayerRef, Stream
 from sports_follow.models import Athlete
 
 SEN, NRG = 1234, 5678
@@ -75,6 +75,27 @@ def test_fixtures_read_both_teams_the_stage_and_the_result():
     assert scheduled.start_utc == datetime(2026, 10, 11, 19, 0, tzinfo=timezone.utc)
     # A 1v1 title's match (players, not teams) isn't a fixture for a team.
     assert ps.parse_fixtures([{**FINAL, "opponents": [{"type": "Player", "opponent": {"id": 1, "name": "Serral"}}]}]) == []
+
+
+# A series' streams_list as PandaScore lists it: each stream's page, PandaScore's player for it, its language, and
+# whether the organiser runs it and it's their main one.
+STREAMS = [
+    {"raw_url": "https://www.twitch.tv/valorant_fr", "embed_url": "https://player.twitch.tv/?channel=valorant_fr", "language": "fr", "official": False, "main": False},
+    {"raw_url": "https://www.twitch.tv/valorant_americas", "embed_url": "https://player.twitch.tv/?channel=valorant_americas", "language": "EN", "official": True, "main": True},
+    {"raw_url": "", "embed_url": None, "language": "en", "official": True, "main": False},  # no page: nothing to watch
+    "https://kick.com/valorant",  # not a stream's shape
+]
+
+
+def test_a_series_keeps_where_its_streamed_and_its_match_page_has_it(monkeypatch):
+    [series] = ps.parse_fixtures([{**LIVE, "streams_list": STREAMS}])
+    # Each stream's own page, in PandaScore's order; the order a fan wants them in is the match page's (watch.py).
+    assert series.streams == [Stream(url="https://www.twitch.tv/valorant_fr", language="fr"),
+                              Stream(url="https://www.twitch.tv/valorant_americas", language="en", official=True, main=True)]
+    assert ps.parse_fixtures([LIVE])[0].streams == [] and ps.parse_fixtures([{**LIVE, "streams_list": None}])[0].streams == []
+    monkeypatch.setattr(pandascore, "get_json", lambda path, ttl, **params: {**LIVE, "streams_list": STREAMS})
+    page = ps.PandascoreEsports().match("777")
+    assert page is not None and page.streams == series.streams
 
 
 def test_result_from_the_players_team_side():

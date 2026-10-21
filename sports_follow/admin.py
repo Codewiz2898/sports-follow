@@ -38,9 +38,9 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from . import accounts, controls, feedstats, rank, sports
+from . import accounts, controls, feed, feedstats, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
-from .config import APP_NAME, SOURCES
+from .config import APP_NAME, FEED_LAYOUT, SOURCES
 from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
 
 log = logging.getLogger("sports_follow.admin")
@@ -461,7 +461,19 @@ def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]
         **{f"review_{k}": v for k, v in counts.items()},
     }
     return {"candidates": [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], "next": offset + PAGE if len(rows) > PAGE else None,
-            "totals": totals, "channels": channels_view(db)}  # fmt: skip
+            "totals": totals, "channels": channels_view(db), "layout": layout_view()}  # fmt: skip
+
+
+def layout_view() -> dict[str, Any]:
+    """How the apps draw the fan's Feed now (feed.layout), the server's setting, and what the panel set (None: nothing)."""
+    return {"layout": feed.layout(), "default": FEED_LAYOUT, "set": controls.current().feed_layout, "choices": list(controls.FEED_LAYOUTS)}
+
+
+def set_feed_layout(layout: Any) -> None:
+    """The panel's word on the Feed's layout: one of controls.FEED_LAYOUTS, or None for the server's. ValueError otherwise."""
+    if layout is not None and not isinstance(layout, str):
+        raise ValueError("The layout is edge, full, or null for the server's.")
+    controls.set_feed_layout(layout)
 
 
 def _candidate_row(c: FeedCandidate, name: str, sport: str) -> dict[str, Any]:

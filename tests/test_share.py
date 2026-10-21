@@ -122,6 +122,13 @@ def test_the_pictures_address_changes_when_the_score_does_and_only_then():
     assert before.picture.digest() == again.picture.digest() != moved.picture.digest()
 
 
+def test_the_pictures_address_changes_with_the_apps_name(monkeypatch):
+    # The band under every picture says the name, so a preview cached under the old name is drawn again.
+    before = share.of_card(KOHLI).picture.digest()
+    monkeypatch.setattr(share, "APP_NAME", "Renamed")
+    assert share.of_card(KOHLI).picture.digest() != before
+
+
 # ---------------------------------------------------------------- the picture
 
 

@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from sports_follow import adapters, campaigns, players, registry, share, sports
 from sports_follow.adapters import AdapterError, PlayerRef, SourceTeam
 from sports_follow.adapters.pandascore_esports import parse_team
+from sports_follow.config import APP_NAME
 from sports_follow.models import Athlete, Campaign, Follow, Player, PlayerCard, PlayerIdentity
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -79,7 +80,7 @@ def test_a_campaigns_preview_says_its_event_its_next_game_and_who_to_follow():
     assert p.description.startswith("World Chess Championship. Game 1: Tue 24 Nov, 3:00 pm IST. Fourteen games for the title.")
     # Teams to come, no games yet, no event: the sport's name on the tag, and still something to say.
     p = share.of_campaign(_shown(slug="worlds", sport="esports", title="Worlds final", event=None, players=[], games=[], lines=[]))
-    assert p.picture.tag == "Esports" and p.picture.lines == () and p.description == "Live boards and alerts on stann."
+    assert p.picture.tag == "Esports" and p.picture.lines == () and p.description == f"Live boards and alerts on {APP_NAME}."
     p = share.of_campaign(_shown(players=[], teams=[{"name": "T1"}, {"name": "Gen.G"}, {"name": "BLG"}]))
     assert p.picture.lines[1] == "Follow T1, Gen.G and BLG"
     assert share.png(p.picture)[:8] == b"\x89PNG\r\n\x1a\n"
