@@ -647,8 +647,9 @@ def unplayable(db: Session, player_id: int, item: str, now: datetime | None = No
     """A fan's app said this video of the player's feed won't play inside it: its source's player refused it (its
     owner keeps it off other sites, which the source's facts didn't say). It's marked on every player's row of it,
     so no Feed serves it again, and a fetch that finds it again for someone else keeps the mark (candidates.keep).
-    True when this marked it, False when it was already. ValueError for an item id this never makes; LookupError
-    for no such video of the player's."""
+    An admin's approving or pinning it stands over that (rank.review): such a video is never marked. True when this
+    marked it, False when it was already or an admin vouched for it. ValueError for an item id this never makes;
+    LookupError for no such video of the player's."""
     if not ITEM_ID.fullmatch(item):
         raise ValueError("No such item.")
     rows = db.execute(select(FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url)
@@ -656,7 +657,10 @@ def unplayable(db: Session, player_id: int, item: str, now: datetime | None = No
     found = next(((r.source, r.external_id) for r in rows if item_id(r.url) == item), None)
     if found is None:
         raise LookupError("That video isn't in this player's feed.")
-    marked = db.execute(update(FeedCandidate).where(FeedCandidate.source == found[0], FeedCandidate.external_id == found[1], FeedCandidate.unplayable_at.is_(None))
+    video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
+    if db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))):
+        return False
+    marked = db.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_(None))
                         .values(unplayable_at=now or datetime.now(timezone.utc)).returning(FeedCandidate.id)).all()  # fmt: skip
     if marked:
         log.info("feed: %s %s won't play inside the app, a fan's app said: no longer served (%d row(s))", found[0], found[1], len(marked))

@@ -382,8 +382,8 @@ def test_a_stored_video_from_a_channel_the_sport_no_longer_lists_stops_being_ser
 
 def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_saying_it_again_changes_nothing(made):
     """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): the app's
-    player said so, so no fan is served it again, even one an admin pinned before, and the admin panel says why; an
-    admin approving or pinning it after says it plays."""
+    player said so, so no fan is served it again, and the admin panel says why. An admin approving or pinning it
+    says it plays, and stands over any app that says otherwise later."""
     pid = asha()
     with db_module.session() as s:
         p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
@@ -392,16 +392,18 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
         s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
         other = p.id
     blocked = stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
-    asha_too = stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said())
-    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    pinned = stored(pid, "pinned00001", "Verma talks through the hundred", TALKS, 4, verdict=said())
     rank.rescore()
-    admin.review_candidate(blocked, "pinned")
-    assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma's hundred, every boundary", "Verma talks through the hundred"]
+    admin.review_candidate(pinned, "pinned")
+    videos = lambda: {i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
     item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
     s = made()
     try:
         assert feed.unplayable(s, pid, item, NOW) is True
         assert feed.unplayable(s, pid, item) is False  # already: nothing changes
+        assert feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=pinned00001")) is False  # an admin vouched for it
         with pytest.raises(ValueError):
             feed.unplayable(s, pid, "not an id")
         with pytest.raises(LookupError):
@@ -409,10 +411,10 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
         s.commit()
     finally:
         s.close()
-    got = {r.id: r for r in all_rows()}
-    assert got[blocked].unplayable_at == NOW and got[asha_too].unplayable_at == NOW  # every player's row of it
+    marks = {(r.player_id, r.external_id): r.unplayable_at for r in all_rows()}
+    assert marks == {(pid, "blocked0001"): NOW, (other, "blocked0001"): NOW, (pid, "pinned00001"): None}  # every player's row of it
     rank.rescore()
-    assert [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"] == ["Verma talks through the hundred"]
+    assert videos() == {"Verma talks through the hundred"}
     s = made()
     try:
         assert feed.judged(s, [other]) == {}
@@ -422,11 +424,19 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
         assert blocked in {c["id"] for c in admin.feed_page(s, "held")["candidates"]}
     finally:
         s.close()
-    # It does play after all: an admin approving it (or pinning it) says so, for every row of it.
+    # It does play after all: an admin approving it (or pinning it) says so, for every row of it, and an app saying
+    # otherwise later doesn't take it away again.
     admin.review_candidate(blocked, "approved")
     rank.rescore()
     assert all(r.unplayable_at is None for r in all_rows())
-    assert {i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"} == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    s = made()
+    try:
+        assert feed.unplayable(s, other, item) is False
+        s.commit()
+    finally:
+        s.close()
+    assert all(r.unplayable_at is None for r in all_rows())
 
 
 def all_rows() -> list[FeedCandidate]:
