@@ -7,13 +7,14 @@ import asyncio
 import importlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from sports_follow import history, pipeline, registry, search, server, structured, tools, worker
+from sports_follow import controls, history, pipeline, registry, search, server, structured, tools, worker
 from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pubg
 
 from .test_api import api  # noqa: F401  (the fixture)
@@ -90,6 +91,43 @@ def test_spend_is_counted_by_lane():
         budget.take(SMALL, lane_name="live")
     rows = {r["lane"]: r for r in budget.usage([SMALL])}
     assert (rows["fan"]["sent_h"], rows["live"]["sent_d"], rows["live"]["refused_h"]) == (1, 1, 1) and "history" not in rows
+
+
+PACIFIC = "America/Los_Angeles"
+
+
+def _at(year: int, month: int, day: int, hour: int, minute: int) -> float:
+    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc).timestamp()
+
+
+def test_a_zoned_day_starts_at_the_zones_midnight_not_utcs():
+    day = budget.Window(86400, 100, zone=PACIFIC)
+    assert budget._start(day, _at(2026, 10, 20, 23, 59)) == budget._start(day, _at(2026, 10, 21, 0, 1))  # UTC midnight: the same Pacific day
+    assert budget._start(day, _at(2026, 10, 21, 6, 59)) + 1 == budget._start(day, _at(2026, 10, 21, 7, 1))  # midnight PDT
+    assert budget._start(day, _at(2026, 12, 21, 7, 59)) + 1 == budget._start(day, _at(2026, 12, 21, 8, 1))  # midnight PST
+    utc = budget.Window(86400, 100)
+    assert budget._start(utc, _at(2026, 10, 20, 23, 59)) + 1 == budget._start(utc, _at(2026, 10, 21, 0, 1))
+    assert budget._start(budget.Window(86400, 100, zone="Nowhere/At_All"), _at(2026, 10, 21, 0, 1)) == budget._start(utc, _at(2026, 10, 21, 0, 1))
+
+
+def test_a_zoned_days_allowance_holds_across_utcs_midnight(monkeypatch):
+    clock = [_at(2026, 10, 20, 23, 0)]  # 16:00 PDT
+    monkeypatch.setattr(budget, "time", SimpleNamespace(time=lambda: clock[0]))
+    pacific = budget.Budget("pacific", windows=(budget.Window(86400, 10, margin=1, zone=PACIFIC),))
+    budget.take(pacific, cost=5)
+    clock[0] = _at(2026, 10, 21, 1, 0)  # a new UTC day, the same Pacific one
+    budget.take(pacific, cost=4)
+    with pytest.raises(budget.RateLimited):
+        budget.take(pacific)
+    assert budget.standing(pacific)["windows"] == [{"bucket": "", "window": "day", "used": 9, "allowance": 10}]
+    clock[0] = _at(2026, 10, 21, 7, 30)  # 00:30 PDT: YouTube's new day
+    budget.take(pacific)
+
+
+def test_the_admin_panels_allowance_keeps_the_zone_its_source_declares():
+    pacific = budget.Budget("pacific", windows=(budget.Window(86400, 10, margin=1, zone=PACIFIC),))
+    controls.set_budget("pacific", {"windows": [{"seconds": 86400, "requests": 50, "margin": 2}, {"seconds": 3600, "requests": 5}]})
+    assert budget.effective(pacific).windows == (budget.Window(86400, 50, 2, PACIFIC), budget.Window(3600, 5, 0, None))
 
 
 def test_every_client_asks_the_budget_before_it_sends():

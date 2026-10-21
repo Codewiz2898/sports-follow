@@ -105,7 +105,7 @@ The usual job: a source needs its key, a key expired, or one has to be replaced.
    `deploy/backup-secrets.sh deploy@16.178.106.36 ~/Downloads/sports-follow-secrets-$(date +%Y%m%d-%H%M).age`.
 8. **Check the app uses it:**
    - A score source: the admin panel's Sources tab no longer says "No token on the server", `https://stann.in/api/credits` names it, and `c exec worker python -m sports_follow.usage` (on the server; deploy/README.md, "Operating") shows it spending.
-   - `youtube-key`: the Sources tab's Feed shows YouTube running, and its `youtube-data` budget spends.
+   - `youtube-key`: the Sources tab's Feed shows YouTube running, and its `youtube-data` budget spends (and `youtube-search`, once a search runs).
    - `fcm-service-account.json`: `https://stann.in/api/push` answers `"fcm": true`.
    - `resend-key`: a sign-in code email arrives.
    - `google-client-secret`: the Continue with Google button shows (`/api/config`, `google_sign_in: true`).
