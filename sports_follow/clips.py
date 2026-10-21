@@ -1,4 +1,4 @@
-"""Clips: short videos published to Slam from its Mac app (desktop/), shown in a game's feed (its match page),
+"""Clips: short videos published from the app's Mac recorder (desktop/), shown in a game's feed (its match page),
 its competition's (the tournament feed) and its players'.
 
 Publishing, by a publishing key's holder (admins, for now):
@@ -10,7 +10,7 @@ Publishing, by a publishing key's holder (admins, for now):
 
 What may be published depends on what it was recorded from (RIGHTS): a game's own window, or a file of one's
 own game, yes; a browser window (a stream, which is the broadcaster's production) is kept on the device while
-Slam posts clips itself. Fans report clips; enough reports hide one until an admin looks.
+the app posts clips itself. Fans report clips; enough reports hide one until an admin looks.
 
 Keys are made, listed and revoked here:
 
@@ -44,7 +44,7 @@ MAX_PLAYERS = 20
 HIDE_AT = 5  # fans' reports that hide a clip until an admin looks
 PAGE = 30
 # What may be published, by what it was recorded from (BHA-369). A stream is its broadcaster's production:
-# while Slam itself posts clips, those stay on the device.
+# while the app's own admins post clips, those stay on the device.
 RIGHTS = {"game_client": True, "file": True, "browser": False}
 VIDEO_TYPE = "video/mp4"
 POSTER_TYPE = "image/jpeg"
@@ -155,7 +155,7 @@ def create(db: Session, key: ClipKey, body: dict[str, Any], now: datetime | None
     if address is not None:
         system, _, game = str(address).partition("/")
         if system not in KNOWN or not match.ID.fullmatch(game):
-            raise Refused(400, "match must be a match page's address, like pandascore_esports/1753729.")
+            raise Refused(400, "match must be a match page's address: <source>/<game id>.")
         page, _ = match.view(db, None, system, game)
         if page is None:
             raise Refused(404, "No match page for that game.")

@@ -1508,7 +1508,7 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
 
 
 def publisher(request: Request, db: Session = Depends(get_db)) -> ClipKey:
-    """The publishing key a request carries (Authorization: Bearer slam_pk_…): Slam's Mac app, for an admin."""
+    """The publishing key a request carries (Authorization: Bearer slam_pk_…): the Mac recorder, for an admin."""
     auth = request.headers.get("authorization", "")
     token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
     key = clips.key_from(db, token) if token else None
@@ -1560,7 +1560,7 @@ def unpublish_clip(slug: str, key: ClipKey = Depends(publisher), db: Session = D
 @app.get("/api/clips")
 def clips_list(match: str | None = None, competition: str | None = None, player: int | None = None, before: str | None = None,
                db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Live clips, newest first: a game's (?match=pandascore_esports/1753729, its game feed), a competition's
+    """Live clips, newest first: a game's (?match=<its match page's address>, its game feed), a competition's
     (?competition=…, the tournament feed), a player's (?player=…), or everyone's. ?before= (a clip's
     `published`) pages back."""
     since = None

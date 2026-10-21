@@ -804,7 +804,7 @@ class LeagueMember(Base):
 
 
 class Clip(Base):
-    """A short video published to Slam (clips.py): a moment of a game, cut on Slam's Mac app and put straight
+    """A short video published to the app (clips.py): a moment of a game, cut on its Mac recorder and put straight
     into the clips bucket (clipstore.py), then shown in its game's, its competition's and its players' feeds.
     Only holders of a publishing key (ClipKey) put clips up, for now: admins."""
 
@@ -814,7 +814,7 @@ class Clip(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[str] = mapped_column(String(16), unique=True)  # its public id, in URLs and file names
     key_id: Mapped[int | None] = mapped_column(ForeignKey("clip_key.id", ondelete="SET NULL"), index=True)  # who put it up
-    # The game it's of, by its match page's address ("pandascore_esports/1753729"), and what that page said of
+    # The game it's of, by its match page's address ("<source>/<game id>"), and what that page said of
     # it when the clip went up; none for a fan's own game, which no source lists.
     match: Mapped[str | None] = mapped_column(String(100), index=True)
     sport: Mapped[str | None] = mapped_column(String(60))
@@ -839,7 +839,7 @@ class Clip(Base):
 
 
 class ClipKey(Base):
-    """A publishing key (clips.py): what Slam's Mac app sends to put clips up, made with
+    """A publishing key (clips.py): what the Mac recorder sends to put clips up, made with
     `python -m sports_follow.clips key "<name>"`. Only its hash is kept; revoking it stops it at once."""
 
     __tablename__ = "clip_key"
