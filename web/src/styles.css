@@ -827,6 +827,8 @@ div.result-main { cursor: default; }
 .post-media { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; background: var(--sport); }
 .post-media.video { background: var(--text); }
 .post-media img, .post-media iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+.post-media.upright { aspect-ratio: 4 / 5; }  /* an upright video (a Short): 9:16 in the middle, as .epost-pic.upright */
+.post-media.upright img, .post-media.upright iframe { left: 50%; right: auto; width: auto; aspect-ratio: 9 / 16; transform: translateX(-50%); }
 .post-play { position: relative; width: 58px; height: 58px; border-radius: 50%; border: 0; background: rgba(243, 243, 239, 0.95); color: var(--text); display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); cursor: pointer; }
 .post-play:hover { background: #fff; }
 .post-chip { position: absolute; right: 10px; bottom: 10px; height: 22px; padding: 0 8px; border-radius: 999px; background: rgba(13, 13, 13, 0.78); color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; line-height: 22px; }
@@ -858,7 +860,9 @@ div.result-main { cursor: default; }
 .epost-head { display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 8px 6px 8px 14px; }
 .epost-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .epost-ring { display: inline-flex; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sport); margin: 4px; }
+.epost-names { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .epost-name { font-weight: 800; font-size: 14px; }
+.epost-chan { font-size: 12px; font-weight: 700; color: var(--muted); }  /* the channel or outlet it's from (BHA-358) */
 .epost-follow { height: 36px; padding: 0 2px; border: 0; background: none; font-weight: 800; font-size: 13px; color: var(--follow); cursor: pointer; white-space: nowrap; }
 .epost-follow[aria-pressed='true'] { color: var(--muted); }
 .epost-follow:disabled { opacity: 0.6; cursor: default; }
@@ -867,6 +871,9 @@ div.result-main { cursor: default; }
 .epost-pic { position: relative; display: block; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; background: var(--text); }
 .epost-play { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; }
 .epost-pic img, .epost-pic iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+/* An upright video (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly. */
+.epost-pic.upright { aspect-ratio: 4 / 5; }
+.epost-pic.upright img, .epost-pic.upright iframe { left: 50%; right: auto; width: auto; aspect-ratio: 9 / 16; transform: translateX(-50%); }
 .epost-dur { position: absolute; right: 10px; bottom: 10px; height: 22px; padding: 0 8px; border-radius: 6px; background: rgba(13, 13, 13, 0.8); color: #fff; font-size: 11px; font-weight: 800; line-height: 22px; }
 .epost-block { display: flex; flex-direction: column; justify-content: space-between; gap: 16px; aspect-ratio: 16 / 9; padding: 18px; background: var(--sport); color: var(--on-sport); }
 .epost-block .eyebrow { color: var(--on-sport-soft); }
@@ -895,10 +902,17 @@ div.result-main { cursor: default; }
 .reels { position: fixed; inset: 0; z-index: 5; background: var(--text); color: #fff; --focus: #fff; }
 .reels-snap { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; }
 .reels-snap::-webkit-scrollbar { display: none; }
-.reel { position: relative; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--text); }
+.reel { position: relative; height: 100%; scroll-snap-align: start; scroll-snap-stop: always; overflow: hidden; background: var(--text); container-type: size; }
 .reel-blur { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(28px) brightness(0.45); transform: scale(1.1); pointer-events: none; }
 .reel-frame { position: absolute; left: 0; right: 0; top: 42%; transform: translateY(-58%); aspect-ratio: 16 / 9; width: 100%; padding: 0; border: 0; background: #000; color: #fff; display: block; cursor: pointer; overflow: hidden; }
 .reel-frame img, .reel-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border: 0; }
+/* An upright video (a Short): 9:16 under the tabs, so nothing sits over YouTube's player while it plays. Its foot
+   stops above who and what (their three lines of title at most: 310px above the reel's foot), and it's never wider
+   than leaves 70px clear each side, so the buttons down the right (12px in, 46px wide) never meet it. */
+.reel-frame.upright {
+  top: calc(64px + env(safe-area-inset-top, 0px)); left: 50%; right: auto; transform: translateX(-50%); width: auto; aspect-ratio: 9 / 16;
+  height: min(calc(100cqh - 374px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)), calc((100cqw - 140px) * 16 / 9));
+}
 .reel-bigplay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 64px; height: 64px; border-radius: 50%; background: rgba(243, 243, 239, 0.92); color: var(--text); display: flex; align-items: center; justify-content: center; }
 .reel-words { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; padding: 18px; background: var(--sport); color: var(--on-sport); }
 .reel-words .eyebrow { color: var(--on-sport-soft); }
@@ -909,6 +923,7 @@ div.result-main { cursor: default; }
 .reel-info { position: absolute; left: 16px; right: 84px; bottom: calc(112px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px; }
 .reel-who { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 15px; min-width: 0; }
 .reel-who .face { box-shadow: 0 0 0 2px #fff; }
+.reel-chan { margin-top: -4px; font-weight: 800; font-size: 14px; }  /* the channel or outlet it's from (BHA-358) */
 .reel-title { font-weight: 700; font-size: 17px; line-height: 1.35; }
 .reel-src { font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.75); }
 .reel-side { position: absolute; right: 12px; bottom: calc(120px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; align-items: center; gap: 18px; }
@@ -929,6 +944,7 @@ div.result-main { cursor: default; }
   .reels { position: relative; inset: auto; height: calc(100vh - 64px); width: 100%; max-width: 460px; border-radius: 26px; overflow: hidden; }
   .reel-info { bottom: 32px; }
   .reel-side { bottom: 40px; }
+  .reel-frame.upright { height: min(calc(100cqh - 294px), calc((100cqw - 140px) * 16 / 9)); }  /* who and what sit 80px lower here */
   .reels-error { position: static; }
 }
 

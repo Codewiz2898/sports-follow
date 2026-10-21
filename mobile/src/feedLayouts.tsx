@@ -2,8 +2,9 @@
 // /api/me/feed/items' `layout` and /api/config's `feed_layout`, which the admin panel changes live): edge to edge
 // (the S2Edge board), full-width posts down the page; and full screen (the S5Reels board), one item a screen, paging
 // from one to the next. A video is YouTube's biggest thumbnail until it's tapped, and only then does it play, in the
-// app's own player over the whole screen (watch.tsx's, as Watch live's: the site's /watch/youtube/<id>), where the
-// web's plays in the picture's place. Items of players the fan doesn't follow (For you's) offer Follow, which works
+// app's own player over the whole screen (watch.tsx's, as Watch live's: the site's /watch/youtube/<id>), upright with
+// Expand for a wide one and upright over the whole screen for an upright one (a Short: framed upright here too,
+// BHA-358), where the web's plays in the picture's place. Each card names its channel under whose it is. Items of players the fan doesn't follow (For you's) offer Follow, which works
 // where it is. "…" (More) opens "Why this is here". Also Today's "From your players" (the web's components/Feed.tsx),
 // in the edge layout's cards.
 
@@ -15,7 +16,7 @@ import { AppState, FlatList, Linking, Pressable, StyleSheet, Text, useWindowDime
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import { watchPage } from '../../web/src/endpoints'
-import { duration, sourceLine } from '../../web/src/feed'
+import { channelOf, duration, statsLine, upright } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
@@ -105,7 +106,8 @@ export function useVideo(): { play: (item: FeedItem) => void; player: ReactNode 
   }, [])
   const id = playing?.video?.youtube_id
   const player = playing && id ? (
-    <WholeScreen page={API_URL + watchPage({ player: 'youtube', id })} platform="YouTube" onOut={open(playing.url)} onClose={() => setPlaying(null)} />
+    <WholeScreen page={API_URL + watchPage({ player: 'youtube', id })} platform="YouTube" shape={upright(playing) ? 'upright' : 'wide'}
+      onOut={open(playing.url)} onClose={() => setPlaying(null)} />
   ) : null
   return { play, player }
 }
@@ -132,9 +134,10 @@ export function FeedTabs({ tab, onTab, onInk }: { tab: FeedTabKey; onTab: (tab: 
 
 // ---------------------------------------------------------------- edge to edge
 
-/** One post edge to edge (.epost): who it's about (photo ringed in their sport's colour, name, Follow when the fan
- * doesn't, "…"), the full-width 16:9 picture with the video's length, the title, and "channel · views · when".
- * `boxed`: a rounded card inside the page's margins (Today's), else the screen's full width. */
+/** One post edge to edge (.epost): who it's about (photo ringed in their sport's colour, name and under it the
+ * channel, Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video
+ * upright in the middle of a 4:5 one), the title, and "views · when". `boxed`: a rounded card inside the page's
+ * margins (Today's), else the screen's full width. */
 export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
   entry: FeedEntry; now: number; follows?: Follows; boxed?: boolean; onPlay: (item: FeedItem) => void; onMore: () => void
 }) {
@@ -148,12 +151,16 @@ export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
   const length = duration(item.video?.duration)
   const mine = follows ? follows.following(entry) : true
   const gone = () => setNoPicture(true)
+  const channel = channelOf(item)
 
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
+    // An upright one (a Short): 9:16 in the middle of a 4:5 band, its 16:9 thumbnail's pillarbox cropped off exactly.
+    const still = picture ? <Picture src={picture} onGone={gone} /> : null
     media = (
-      <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[e.pic, { backgroundColor: colour.text }]}>
-        {picture ? <Picture src={picture} onGone={gone} /> : null}
+      <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`}
+        style={[e.pic, upright(item) && e.band, { backgroundColor: colour.text }]}>
+        {upright(item) ? <View style={e.tall}>{still}</View> : still}
         {length ? <Text style={e.dur}>{length}</Text> : null}
       </Pressable>
     )
@@ -179,13 +186,17 @@ export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
   if (!media) return null
 
   const titled = item.kind === 'video' || (item.kind === 'news' && picture)
-  const from = item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : sourceLine(item, now)
+  const from = [item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : statsLine(item, now), entry.moment ? `after ${entry.moment}` : '']
+    .filter(Boolean).join(' · ')
   return (
     <View style={[e.post, boxed ? e.boxed : e.wide]}>
       <View style={e.head}>
         <Pressable onPress={() => toPlayer(who.id)} accessibilityRole="link" style={e.who}>
           <View style={[e.ring, { borderColor: tone.sport }]}><Face name={who.name} sport={who.sport} photo={who.photo} size={34} /></View>
-          <Text style={e.name} numberOfLines={1}>{who.name}</Text>
+          <View style={e.names}>
+            <Text style={e.name} numberOfLines={1}>{who.name}</Text>
+            {channel ? <Text style={e.chan} numberOfLines={1}>{channel}</Text> : null}
+          </View>
         </Pressable>
         {follows && (!entry.following || !mine) ? (
           <>
@@ -203,7 +214,7 @@ export function EdgePost({ entry, now, follows, boxed, onPlay, onMore }: {
       {media}
       <View style={e.cap}>
         {titled ? <Text style={e.title} numberOfLines={3}>{item.title}</Text> : null}
-        <Text style={e.src}>{from}{entry.moment ? ` · after ${entry.moment}` : ''}</Text>
+        {from ? <Text style={e.src}>{from}</Text> : null}
       </View>
     </View>
   )
@@ -284,14 +295,20 @@ function Reel({ entry, now, height, follows, onPlay, onMore }: {
   const go = open(item.url)
   const mine = follows.following(entry)
   const gone = () => setNoPicture(true)
+  const channel = channelOf(item)
   // The frame's middle a little above the screen's (top: 42%, translateY(-58%)); higher on a short phone, clear of the buttons.
   const short = height < 700
   const top = Math.max(insets.top + 56, height * (short ? 0.34 : 0.42) - (width * 9 / 16) * 0.58)
+  // An upright video (a Short): 9:16 from under the tabs down, as wide as that allows, who and what over its foot
+  // (it plays in the player over the whole screen, never here).
+  const tall = upright(item)
+  const tallHeight = Math.min(height - insets.top - 56 - 16, (width * 16) / 9)
+  const place = tall ? { top: insets.top + 56, left: (width - (tallHeight * 9) / 16) / 2, right: undefined, width: (tallHeight * 9) / 16, height: tallHeight, aspectRatio: undefined } : { top }
 
   let frame: ReactNode
   if (item.kind === 'video' && id) {
     frame = (
-      <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, { top }]}>
+      <Pressable onPress={() => onPlay(item)} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[r.frame, place]}>
         {picture ? <Picture src={picture} onGone={gone} /> : null}
         <View style={r.bigplay}><PlayIcon size={24} color={colour.text} /></View>
       </Pressable>
@@ -333,8 +350,9 @@ function Reel({ entry, now, height, follows, onPlay, onMore }: {
           <View style={r.faceRing}><Face name={who.name} sport={who.sport} photo={who.photo} size={40} /></View>
           <Text style={r.name} numberOfLines={1}>{who.name}</Text>
         </Pressable>
+        {channel ? <Text style={r.chan} numberOfLines={1}>{channel}</Text> : null}
         <Text style={r.title} numberOfLines={3}>{item.kind === 'post' ? `${shortName(who.name)} on ${item.post?.platform ?? ''}` : item.title}</Text>
-        <Text style={r.src}>{sourceLine(item, now, true)}{entry.moment ? ` · after ${entry.moment}` : ''}</Text>
+        <Text style={r.src}>{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</Text>
       </View>
       <View style={[r.side, { bottom: 120 + insets.bottom, gap: short ? 12 : 18 }]}>
         {!entry.following || !mine
@@ -403,12 +421,16 @@ const e = StyleSheet.create({
   who: { flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0, flexShrink: 1 },
   // A 2px ring of the sport's colour with 2px of the card between it and the photo (.epost-ring).
   ring: { width: 42, height: 42, borderRadius: 21, borderWidth: 2, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  names: { flexShrink: 1, minWidth: 0 },
   name: { fontFamily: font[800], fontSize: 14, lineHeight: 18, color: colour.text, flexShrink: 1 },
+  chan: { fontFamily: font[700], fontSize: 12, lineHeight: 15, color: colour.muted },  // the channel or outlet it's from (.epost-chan)
   sep: { fontFamily: font[700], fontSize: 14, color: colour.muted },
   follow: { height: 36, justifyContent: 'center', paddingHorizontal: 2 },
   followText: { fontFamily: font[800], fontSize: 13, color: colour.follow },
   more: { marginLeft: 'auto', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   pic: { width: '100%', aspectRatio: 16 / 9, overflow: 'hidden' },
+  band: { aspectRatio: 4 / 5, alignItems: 'center' },  // an upright video's (.epost-pic.upright)
+  tall: { height: '100%', aspectRatio: 9 / 16, overflow: 'hidden' },
   dur: {
     position: 'absolute', right: 10, bottom: 10, height: 22, paddingHorizontal: 8, borderRadius: 6, overflow: 'hidden',
     backgroundColor: 'rgba(13,13,13,0.8)', color: '#FFFFFF', fontFamily: font[800], fontSize: 11, lineHeight: 22,
@@ -435,6 +457,7 @@ const r = StyleSheet.create({
   who: { flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', maxWidth: '100%' },
   faceRing: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }, // .reel-who .face's 2px white ring
   name: { fontFamily: font[800], fontSize: 15, color: '#FFFFFF', flexShrink: 1 },
+  chan: { marginTop: -4, fontFamily: font[800], fontSize: 14, lineHeight: 18, color: '#FFFFFF' },  // .reel-chan
   title: { fontFamily: font[700], fontSize: 17, lineHeight: 23, color: '#FFFFFF' },
   src: { fontFamily: font[700], fontSize: 12, lineHeight: 16, color: 'rgba(255,255,255,0.75)' },
   side: { position: 'absolute', right: 12, alignItems: 'center' },

@@ -215,8 +215,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Twitch's player must be at least 400×300, so where the column is narrower (a phone) it opens over the
   whole screen instead, sideways while the phone is held upright. A player a fan has started stays while the
   page is open, though the game is called over before the broadcast, which runs behind, has shown the end.
-  The Android app plays the same three over the whole screen, turned sideways, once tapped (`mobile/src/watch.tsx`),
-  with "Open on Twitch" under it and the rest as links. An app isn't a site Twitch can be told, so it shows the
+  The Android app plays the same three over the whole screen once tapped (`mobile/src/watch.tsx`): a YouTube one
+  upright, the video across the middle, with Expand to turn it sideways and Collapse (or Back) to turn it upright
+  again, and Twitch's and Kick's turned sideways, as their players won't play narrower than a phone held upright is
+  (BHA-358: nothing turns on its own), with "Open on Twitch" under it and the rest as links. An app isn't a site Twitch can be told, so it shows the
   site's own page of the player alone, `/watch/<player>/<id>` (`watch.page`; a player the app doesn't have, or an
   id of another shape than its player plays, is a 404), in a WebView that keeps to that page: a link out of the
   player opens in the platform's app or the browser. That page brings its own Content-Security-Policy, stricter
@@ -378,11 +380,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `following`, so its card offers Follow, which works in place. A fan who follows nobody gets For you all from
   them. Following (`?tab=following`, the API's default) is the fan's players alone, with the circles; when they run
   out it says so and offers For you. How the apps draw it is a setting: `layout` on every page, and
-  `feed_layout` in `/api/config`, `edge` (full-width posts: photo ringed in the sport's colour, name, Follow, "…",
-  the 16:9 picture with the video's length, title, "channel · views · when") or `full` (one item a screen, snapping,
-  its picture framed on a blurred copy of itself, Follow, Share and More down the right). It's
+  `feed_layout` in `/api/config`, `edge` (full-width posts: photo ringed in the sport's colour, name and under it the
+  channel, Follow, "…", the 16:9 picture with the video's length, title, "views · when") or `full` (one item a
+  screen, snapping, its picture framed on a blurred copy of itself, who, the channel and what at its foot, Follow,
+  Share and More down the right). A video taller than it's wide (a Short: `video.upright`, from the player part
+  videos.list gives with `maxWidth`, `VideoSource.upright`) is framed 9:16, in the middle of a 4:5 band edge to edge
+  and on a player's Feed, and full screen between the tabs and what's at its foot, so nothing sits over YouTube's
+  player (BHA-358); the Android app plays it upright over the whole screen. It's
   `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
-  Titles are tidied as they're served (`sports_follow/titles.py`): emoji, hashtags and the channel's name off,
+  Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
+  escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,
   bars as dots, a shouted part in sentence case keeping names (the players', `Sport.title_words`) as written.
   A video's picture is the biggest YouTube has for it (maxres, then sd, then hq; the sizes come with each read). In the dev server, `?feed-sample` on a player's page
   shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
@@ -505,7 +512,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   serve a sport. A source of videos for the feed (`adapters/youtube.py`) is a `VideoSource` instead
   (`adapters/base.py`): it describes itself the same way, plus the shape of its channel ids
   (`channel_pattern`), lists a channel's latest `uploads` and what it says of up to 50 videos at once
-  (`facts`), and its one line is its place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
+  (`facts`), how its player plays one (`embed`), a still of it (`picture`) and whether it's upright (`upright`),
+  and its one line is its place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
   is a `NewsSource`: the shape of the feed addresses it reads (`feed_pattern`) and a feed's latest `articles`, one
   line in `adapters.NEWS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,

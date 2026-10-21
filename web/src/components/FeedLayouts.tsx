@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
-import { duration, sourceLine } from '../feed'
+import { channelOf, duration, statsLine, upright } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { sportKey } from '../sports'
@@ -12,8 +12,9 @@ import { ShareButton } from './Share'
  * The fan's Feed in the two layouts the server picks between (BHA-349, GET /api/me/feed/items' `layout`, which the
  * admin panel changes live): edge to edge (the S2Edge board), full-width posts down the page; and full screen (the
  * S5Reels board), one video a screen, snapping from one to the next. In both a video is YouTube's biggest thumbnail
- * until play is tapped, and only then does YouTube's no-cookie player load, in its place. Items of players the fan
- * doesn't follow (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
+ * until play is tapped, and only then does YouTube's no-cookie player load, in its place: an upright one (a Short) in
+ * an upright frame. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
+ * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
  */
 
 const dots = (
@@ -56,8 +57,9 @@ function Player({ id, title }: { id: string; title: string }) {
 
 // ---------------------------------------------------------------- edge to edge
 
-/** One post edge to edge: who it's about (photo ringed in their sport's colour, name, Follow when the fan doesn't,
- * "…"), the full-width 16:9 picture with the video's length, the title, and "channel · views · when". */
+/** One post edge to edge: who it's about (photo ringed in their sport's colour, name and under it the channel,
+ * Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video upright
+ * in the middle of a 4:5 one), the title, and "views · when". */
 export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
   entry: FeedEntry; now: number; follows?: Follows; playing: boolean; onPlay: (id: string | null) => void; onMore: () => void
 }) {
@@ -68,11 +70,12 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
   const href = safeHref(item.url)
   const length = duration(item.video?.duration)
   const mine = follows ? follows.following(entry) : true
+  const channel = channelOf(item)
 
   let media: ReactNode = null
   if (item.kind === 'video' && id) {
     media = (
-      <div className="epost-pic">
+      <div className={upright(item) ? 'epost-pic upright' : 'epost-pic'}>
         {playing ? <Player id={id} title={item.title} /> : (
           <button type="button" className="epost-play" aria-label={`Play: ${item.title}`} onClick={() => onPlay(item.id)}>
             {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
@@ -95,7 +98,10 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
       <div className="epost-head">
         <Link to={`/player/${who.id}`} className="epost-who">
           <span className="epost-ring"><Face name={who.name} sport={who.sport} photo={who.photo} size={34} /></span>
-          <span className="epost-name ellipsis">{who.name}</span>
+          <span className="epost-names">
+            <span className="epost-name ellipsis">{who.name}</span>
+            {channel && <span className="epost-chan ellipsis">{channel}</span>}
+          </span>
         </Link>
         {follows && (!entry.following || !mine) && (
           <>
@@ -110,7 +116,7 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
       {media}
       <div className="epost-cap">
         {(item.kind === 'video' || (item.kind === 'news' && picture)) && <span className="epost-title clamp3">{item.title}</span>}
-        <span className="epost-src">{item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : sourceLine(item, now)}{entry.moment ? ` · after ${entry.moment}` : ''}</span>
+        <span className="epost-src">{[item.kind === 'post' ? `${item.source} on ${item.post?.platform ?? ''}` : statsLine(item, now), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
       </div>
     </article>
   )
@@ -175,11 +181,15 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
   const picture = !noPicture && item.picture ? safeHref(item.picture) : null
   const href = safeHref(item.url)
   const mine = follows.following(entry)
+  const channel = channelOf(item)
+  // An upright video (a Short) in an upright frame, which stops above what's at the foot: nothing of the page may
+  // sit over YouTube's player (its Required Minimum Functionality).
+  const box = upright(item) ? 'reel-frame upright' : 'reel-frame'
 
   let frame: ReactNode
   if (item.kind === 'video' && id) {
-    frame = playing ? <div className="reel-frame"><Player id={id} title={item.title} /></div> : (
-      <button type="button" className="reel-frame" aria-label={`Play: ${item.title}`} onClick={() => onPlay(true)}>
+    frame = playing ? <div className={box}><Player id={id} title={item.title} /></div> : (
+      <button type="button" className={box} aria-label={`Play: ${item.title}`} onClick={() => onPlay(true)}>
         {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
         <span className="reel-bigplay" aria-hidden="true">{playIcon}</span>
       </button>
@@ -205,8 +215,9 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
           <Face name={who.name} sport={who.sport} photo={who.photo} size={40} />
           <span className="ellipsis">{who.name}</span>
         </Link>
+        {channel && <span className="reel-chan ellipsis">{channel}</span>}
         <span className="reel-title clamp3">{item.kind === 'post' ? `${shortName(who.name)} on ${item.post?.platform ?? ''}` : item.title}</span>
-        <span className="reel-src">{sourceLine(item, now, true)}{entry.moment ? ` · after ${entry.moment}` : ''}</span>
+        <span className="reel-src">{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
       </div>
       <div className="reel-side">
         {(!entry.following || !mine) && (

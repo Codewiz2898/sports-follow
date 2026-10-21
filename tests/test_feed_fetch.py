@@ -53,8 +53,10 @@ def feed(*entries: tuple[str, str, str]) -> str:
 
 
 def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 300, embeddable: bool = True, privacy: str = "public",
-          region: dict | None = None, live: str = "none", paid: bool | None = None, thumbs: tuple[str, ...] = ()) -> dict:
-    """One item of videos.list, as YouTube sends it; thumbs: the thumbnail sizes it has ("maxres" only for some)."""
+          region: dict | None = None, live: str = "none", paid: bool | None = None, thumbs: tuple[str, ...] = (),
+          size: tuple[int, int] | None = None) -> dict:
+    """One item of videos.list, as YouTube sends it; thumbs: the thumbnail sizes it has ("maxres" only for some);
+    size: its player's (width, height) as the player part gives it with maxWidth, else no player part."""
     details = {"duration": duration, "dimension": "2d", "definition": "hd", "caption": "false", **({"regionRestriction": region} if region else {})}
     return {
         "kind": "youtube#video", "id": vid,
@@ -64,6 +66,8 @@ def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 3
         "statistics": {"viewCount": str(views), "likeCount": str(likes), "commentCount": "12"},
         "status": {"uploadStatus": "processed", "privacyStatus": privacy, "license": "youtube", "embeddable": embeddable, "publicStatsViewable": True},
         **({"paidProductPlacementDetails": {"hasPaidProductPlacement": paid}} if paid is not None else {}),
+        **({"player": {"embedHtml": f'<iframe width="{size[0]}" height="{size[1]}" src="//www.youtube.com/embed/{vid}"></iframe>',
+                       "embedWidth": str(size[0]), "embedHeight": str(size[1])}} if size else {}),
     }
 
 
@@ -195,6 +199,28 @@ def test_a_declared_paid_promotion_is_read_in_the_same_unit(fake):
     [asked] = fake.asked
     assert "paidProductPlacementDetails" in asked.url.params["part"].split(",")
     assert budget.standing(youtube.BUDGET)["windows"][0]["used"] == 1
+
+
+def test_a_videos_shape_is_read_in_the_same_unit_and_an_upright_one_is_told_from_a_wide_one(fake):
+    fake.videos.update({"uprightvid1": video("uprightvid1", size=(1280, 2276)), "widevideo01": video("widevideo01", size=(1280, 720)),
+                        "noshape0001": video("noshape0001")})  # fmt: skip
+    with budget.in_lane("feed"):
+        got = SOURCE.facts(["uprightvid1", "widevideo01", "noshape0001"])
+    [asked] = fake.asked
+    assert "player" in asked.url.params["part"].split(",") and asked.url.params["maxWidth"] == youtube.PLAYER_WIDTH
+    assert got["uprightvid1"].raw["player"] == {"width": 1280, "height": 2276}  # its size, never the player's HTML
+    assert "player" not in got["noshape0001"].raw
+    assert [SOURCE.upright(got[v].raw) for v in ("uprightvid1", "widevideo01", "noshape0001")] == [True, False, False]
+    assert not SOURCE.upright(None) and not SOURCE.upright({"player": {"width": "wide", "height": 9}})
+    assert budget.standing(youtube.BUDGET)["windows"][0]["used"] == 1
+
+
+def test_a_searchs_titles_are_read_as_written():
+    item = {"id": {"videoId": "searched001"}, "snippet": {
+        "channelId": CHANNEL, "channelTitle": "Rock &amp; Roll", "title": "Kylian Mbappe &amp; Bijan Robinson SWAP sports! It&#39;s on",
+        "description": "&quot;Wow&quot;"}}  # fmt: skip
+    [found] = youtube.parse_search({"items": [item]})
+    assert (found.title, found.channel, found.description) == ("Kylian Mbappe & Bijan Robinson SWAP sports! It's on", "Rock & Roll", '"Wow"')
 
 
 def test_each_request_is_one_unit_of_the_days_quota_for_up_to_fifty_videos(fake):

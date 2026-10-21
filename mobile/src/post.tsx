@@ -13,7 +13,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
-import { duration, fromLine, openLabel, views } from '../../web/src/feed'
+import { duration, fromLine, openLabel, upright, views } from '../../web/src/feed'
 import { initials, safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { absolute, type FeedCircle, type FeedItem, type FeedVerdict, type FeedWho, type Photo } from './api'
@@ -84,8 +84,10 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
   let caption = null
   if (item.kind === 'video' && id) {
     media = (
-      <Pressable onPress={go} disabled={!go} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`} style={[s.media, { backgroundColor: colour.text }]}>
-        {picture ? <Picture src={picture} onGone={gone} /> : null}
+      <Pressable onPress={go} disabled={!go} accessibilityRole="button" accessibilityLabel={`Play: ${item.title}`}
+        style={[s.media, upright(item) && s.band, { backgroundColor: colour.text }]}>
+        {/* An upright one (a Short): 9:16 in the middle of a 4:5 band (.post-media.upright). */}
+        {picture ? (upright(item) ? <View style={s.tall}><Picture src={picture} onGone={gone} /></View> : <Picture src={picture} onGone={gone} />) : null}
         <View style={s.play}><PlayIcon size={22} color={colour.text} /></View>
         {length ? <Text style={s.chip}>{length}</Text> : null}
       </Pressable>
@@ -250,6 +252,8 @@ const s = StyleSheet.create({
   tagText: { fontFamily: font[800], fontSize: 10, letterSpacing: 0.9, textTransform: 'uppercase' },
   more: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   media: { width: '100%', aspectRatio: 16 / 9, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  band: { aspectRatio: 4 / 5 },
+  tall: { ...StyleSheet.absoluteFill, left: undefined, right: undefined, alignSelf: 'center', aspectRatio: 9 / 16, overflow: 'hidden' },
   play: {
     width: 58, height: 58, borderRadius: 29, backgroundColor: 'rgba(243,243,239,0.95)', alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 8 }, elevation: 8,

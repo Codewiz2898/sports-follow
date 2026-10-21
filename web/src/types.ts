@@ -295,7 +295,8 @@ export interface FeedItem {
   // The card's picture, an https address loaded as served: a video's thumbnail, a story's image from the publisher's
   // feed. None: a story's headline on the sport's colour; a post is words only.
   picture?: string | null
-  video?: { youtube_id: string; duration: number | null; views: number | null } | null
+  // upright: taller than it's wide (a Short), framed and played upright; missing from a server before BHA-358: wide.
+  video?: { youtube_id: string; duration: number | null; views: number | null; upright?: boolean } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
 

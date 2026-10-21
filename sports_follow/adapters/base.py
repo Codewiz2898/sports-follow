@@ -509,6 +509,11 @@ class VideoSource:
         VideoFacts.raw without the numbers); None: the card draws the title on the sport's colour."""
         return None
 
+    def upright(self, details: dict[str, Any] | None = None) -> bool:
+        """Whether one of its videos is taller than it's wide (a Short), by what facts said of it (details, as for
+        picture): the apps show and play it upright. A source that can't say: wide."""
+        return False
+
     @classmethod
     def available(cls) -> bool:
         """Whether this build can run it: a source with a key needs its key."""

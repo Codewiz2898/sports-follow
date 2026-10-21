@@ -261,3 +261,23 @@ def test_reading_a_stored_video_again_learns_its_thumbnail_sizes_and_the_feed_se
         row = s.scalar(select(FeedCandidate))
         assert row is not None and row.candidate["details"] == {"status": {"embeddable": True}, "snippet": {"thumbnails": ["default", "high", "maxres"]}}
         assert feed.judged(s, [kohli], NOW)[kohli][0].item.picture == "https://i.ytimg.com/vi/oldrow00001/maxresdefault.jpg"
+
+
+def test_reading_a_stored_video_again_learns_its_shape_and_the_feed_serves_an_upright_one_upright(world):
+    from sports_follow import feed
+
+    kohli = player("Virat Kohli")
+    with db_module.session() as s:  # stored before its shape was asked (BHA-358): served wide
+        s.add(FeedCandidate(player_id=kohli, source="youtube", external_id="shortrow001", url="https://www.youtube.com/watch?v=shortrow001",
+                            candidate={"title": "Kohli's catch", "channel_id": CHANNEL, "sport": "cricket", "details": {"status": {"embeddable": True}}},
+                            features={"views": 10}, verdict={"about_player": "subject"}, score=0.5, fetched_at=NOW, checked_at=NOW))  # fmt: skip
+    world.videos["shortrow001"] = video("shortrow001", size=(1280, 2276))
+    with db_module.session() as s:
+        [before] = feed.judged(s, [kohli], NOW)[kohli]
+        assert before.item.video is not None and not before.item.video.upright
+    assert candidates._again(SOURCE, ["shortrow001"], NOW)["read"] == 1  # pyright: ignore[reportPrivateUsage]
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate))
+        assert row is not None and row.candidate["details"]["player"] == {"width": 1280, "height": 2276}
+        [after] = feed.judged(s, [kohli], NOW)[kohli]
+        assert after.item.video is not None and after.item.video.upright

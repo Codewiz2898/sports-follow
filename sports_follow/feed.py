@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import html
 import json
 import logging
 import re
@@ -98,6 +99,7 @@ class Video(BaseModel):
     youtube_id: str  # the player loads from youtube-nocookie.com, and only once a fan taps play
     duration: int | None = None  # seconds
     views: int | None = None
+    upright: bool = False  # taller than it's wide (a Short): the apps frame and play it upright
 
 
 class Post(BaseModel):
@@ -230,8 +232,9 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                     c = _story(r, now)
                 else:
                     embed = source.embed(r.external_id) if source else None
-                    picture = source.picture(r.external_id, (r.candidate or {}).get("details")) if source else None
-                    c = _video(embed, source.name if source else "", r, now, picture, names)
+                    details = (r.candidate or {}).get("details")
+                    picture = source.picture(r.external_id, details) if source else None
+                    c = _video(embed, source.name if source else "", r, now, picture, names, upright=bool(source and source.upright(details)))
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
@@ -250,10 +253,12 @@ def fade(published: datetime | None, now: datetime) -> float:
     return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
 
 
-def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, names: Sequence[str] = ()) -> Candidate | None:
+def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, names: Sequence[str] = (),
+           upright: bool = False) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
     fades only past its pin, so it leads however old, and is never put among the evergreen. Its title tidied
-    (titles.tidy), keeping these names and its sport's title_words as they're written."""
+    (titles.tidy), keeping these names and its sport's title_words as they're written. upright: taller than it's
+    wide (VideoSource.upright)."""
     if not embed:
         return None  # a video the app's player can't play
     kept, features, verdict = r.candidate or {}, r.features or {}, r.verdict or {}
@@ -262,13 +267,13 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, pic
     published = rank.when(kept.get("published"))
     evergreen = not pinned and rank.evergreen(features, published, now)
     faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
-    channel_name = str(kept.get("channel") or source)
+    channel_name = html.unescape(str(kept.get("channel") or source))  # a search's came escaped before it read them as written
     title = titles.tidy(str(kept.get("title") or ""), channel_name, sports.of(str(kept.get("sport") or "")).title_words, names)
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=title or "A video", url=r.url,
         source=channel_name, published_at=str(kept.get("published") or "") or None,
         reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.", picture=picture,
-        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views"))),
+        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views")), upright=upright),
     )  # fmt: skip
     channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
     return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned,

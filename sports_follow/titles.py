@@ -1,6 +1,7 @@
 """A video's title as the Feed shows it (BHA-349): tidied as it's served, never as it's stored, so a better rule
 reaches every row at once. The words stay; what comes off is what shouts:
 
+- HTML's escapes, which a search's titles came with before it read them as written ("Mbappe &amp; Bijan");
 - emoji, and the flags, arrows and stars channels put round their words;
 - the hashtags at the end ("… #cricket #shorts"), and the # of one in the middle ("#ViratKohli" is a word);
 - the channel's own name after a bar or a dash at the end ("… | Sports Yaari"), and a bar with nothing after it;
@@ -16,6 +17,7 @@ reaches every row at once. The words stay; what comes off is what shouts:
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Iterable
 
@@ -54,7 +56,7 @@ def tidy(title: str, channel: str | None = None, keep: Iterable[str] = (), names
     """The title as the Feed shows it (see the module's docstring). channel: its channel's name, which comes off its
     end; keep: words written as they are when it's put in sentence case (its sport's title_words); names: people's
     names, kept as written whole and word by word ("Iyer" of "Shreyas Iyer")."""
-    raw = (title or "").strip()
+    raw = html.unescape((title or "").strip())
     text = _EMOJI.sub(" ", raw)
     text = _TRAILING_TAGS.sub("", text)
     text = _TAG_MARK.sub("", text)
