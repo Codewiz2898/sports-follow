@@ -1,9 +1,9 @@
 /* Chess: a board drawn from the FEN, --board wide, with the evaluation bar's room beside it when there is one. */
-.chess-play { --board: 280px; --bar: 0px; display: flex; flex-wrap: wrap; gap: 4px 6px; width: min(100%, calc(var(--board) + var(--bar))); flex-shrink: 0; }
+.chess-play { --board: 280px; --bar: 0px; display: flex; flex-wrap: wrap; gap: 4px 6px; width: min(100%, calc(var(--board) + var(--bar))); flex-shrink: 0; scroll-margin: 16px; }
 .chess-play.sm { --board: 176px; }
 .chess-play.eval { --bar: 28px; }
 .chess-play.sm.eval { --bar: 26px; }
-.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); flex: 1; min-width: 0; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
+.chessboard { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); flex: 1; min-width: 0; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
 .chessboard .sq { display: flex; align-items: center; justify-content: center; font-size: min(7.5vw, 30px); line-height: 1; }
 .chess-play.sm .sq { font-size: min(5vw, 19px); }
 .chessboard .light { background: #ece6d6; }
@@ -26,8 +26,39 @@
 .chess-eval .score.top { bottom: auto; top: 5px; }
 .chess-eval .score.white { color: #141414; }
 .chess-eval .score.black { color: #f4f1e8; }
+.chess-eval.waiting { background: var(--raised); }  /* an analysis board's, while its engine loads */
 .chess-depth { flex-basis: 100%; order: 1; }  /* a line of its own, under the bar and the board */
 @media (prefers-reduced-motion: reduce) { .chess-eval .fill { transition: none; } }
+/* Under a match page's board: Play from here; on the analysis board, its steps, where it is, the engine's best
+   line and its credit. */
+.chess-under { flex-basis: 100%; order: 1; margin-top: 6px; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
+.chess-under.stack { gap: 6px; }
+.chess-steps { gap: 8px; justify-content: flex-start; }
+.chess .btn.icon.chess-step { width: 36px; height: 36px; background: var(--raised); color: var(--text); }
+.chess .btn.icon.chess-step:hover { background: color-mix(in srgb, var(--raised), var(--text) 14%); }
+.chess .btn[aria-disabled='true'] { opacity: 0.45; cursor: default; }
+.chess-moved { font-weight: 800; }
+/* The analysis board's squares are buttons: the picked piece's square ringed in ink, a dot on each square it can
+   go to (a ring round a piece it can take), a king in check glowing amber (red means live here). */
+.chessboard.playable { position: relative; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.chessboard button.sq { border: 0; padding: 0; margin: 0; min-width: 0; color: inherit; cursor: pointer; touch-action: manipulation; }
+/* A finger drags the side to move's pieces: their squares keep a swipe (the rest of the board scrolls the page). */
+.chessboard .sq.mine { touch-action: none; }
+.chessboard button.sq:focus-visible { outline: 3px solid #141414; outline-offset: -3px; border-radius: 0; }
+.chessboard .sq.picked { box-shadow: inset 0 0 0 3px #141414; }
+.chessboard .sq.aim { background-image: radial-gradient(circle, rgba(20, 20, 20, 0.4) 17%, transparent 19%); }
+.chessboard .sq.aim.take { background-image: radial-gradient(circle, transparent 60%, rgba(20, 20, 20, 0.4) 62%); }
+.chessboard .sq.check { background-image: radial-gradient(circle, #f59e0b 0%, rgba(245, 158, 11, 0.55) 45%, transparent 72%); }
+.chessboard .piece.lifted { opacity: 0.35; }
+/* What a pawn on the last rank becomes, over the board. */
+.chess-promote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; display: flex; gap: 4px; padding: 6px; border-radius: 12px; background: rgba(20, 20, 20, 0.9); }
+.chess-promote button { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; background: #ece6d6; font-size: 30px; line-height: 1; cursor: pointer; }
+.chess-promote button:last-child { width: 32px; background: transparent; color: #f4f1e8; }
+/* A piece being dragged, over the page: under a mouse, or bigger and above a finger, so it's seen. */
+.chess-ghost { position: fixed; z-index: 100; transform: translate(-50%, -50%); pointer-events: none; font-size: 34px; line-height: 1; }
+.chess-ghost.touch { font-size: 48px; transform: translate(-50%, -115%); }
+.chess-ghost.w { color: #fbfaf6; text-shadow: 0 0 1px #000, 0 0 1px #000, 0 1px 1px #0006; }
+.chess-ghost.b { color: #141414; }
 .chess-clock { font-size: 22px; padding: 3px 8px; border-radius: 8px; background: var(--raised); color: var(--muted); }
 .chess-clock.running { color: var(--text); box-shadow: inset 0 0 0 2px var(--live); }
 /* Switch sides: an icon button on the clocks' raised colour, on the ink board (Today) and the sport's band (the
@@ -40,5 +71,8 @@
 .live-other .chessboard .sq { font-size: 11px; }
 .live-other .chess .tiny, .live-other .chess-turn, .live-other .chess-eval { display: none; }
 .live-other .chess-clock { font-size: 18px; padding: 2px 6px; }
-/* A finished game's moves on its match page, in pairs, as many columns as fit. */
+/* A finished game's moves on its match page, in pairs, as many columns as fit; each opens the analysis board
+   after it, where they replay. */
 .chess-moves { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+.chess-move { margin: -3px -2px; padding: 3px 5px; border: 0; border-radius: 6px; background: none; cursor: pointer; }
+.chess-move:hover { background: var(--raised); }

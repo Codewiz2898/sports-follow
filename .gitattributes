@@ -1,0 +1,3 @@
+# Stockfish.js as published (web/src/sports/engine/README.md, ours, is diffed as usual): not ours to diff or count.
+web/src/sports/engine/* -diff linguist-vendored
+web/src/sports/engine/README.md diff -linguist-vendored

@@ -13,6 +13,9 @@ export interface BoardProps<S = unknown> {
   // each other in); without it, the live block's own. A board drawn from their side (chess) has none to take when
   // they're on both.
   lines?: Stat[][]
+  // The match page's board: one the fan may explore, where its sport has a way to (a chess board's Play from
+  // here, an analysis board on the device). Elsewhere a board is the game's alone.
+  explore?: boolean
 }
 
 /** What a sport's part of a match page is drawn from: its sections (the server's Sport.match_page, by name:

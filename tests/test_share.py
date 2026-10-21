@@ -12,7 +12,11 @@ import re
 from html import unescape
 
 import pytest
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.testclient import TestClient
 
 from sports_follow import bus, campaigns, server, share, sports, week
 from sports_follow.config import APP_NAME
@@ -220,6 +224,19 @@ def test_a_preview_that_fails_never_stops_the_page_opening(built, monkeypatch):
 def test_the_builds_own_files_are_served_as_they_are(built):
     assert built.call("GET", "/sw.js").text.startswith("self.addEventListener")
     assert "og:title" in built.call("GET", "/index.html").text  # the page itself is the app's, with its tags
+
+
+def test_the_builds_assets_come_with_their_types(tmp_path):
+    """A guard, not a fix: the build's /assets, server.py's StaticFiles mount (only made when there's a build), are
+    typed by Python's mimetypes, which has .wasm as application/wasm, the only type a browser compiles as it
+    streams in: a chess analysis board's engine (web/src/sports/engine/) comes so. A platform's mime.types that
+    said otherwise would fail here."""
+    (tmp_path / "engine-1a2b.wasm").write_bytes(b"\0asm\1\0\0\0")
+    (tmp_path / "engine-1a2b.js").write_text("onmessage = () => {}")
+    client = TestClient(Starlette(routes=[Mount("/assets", StaticFiles(directory=tmp_path))]))
+    wasm = client.get("/assets/engine-1a2b.wasm")
+    assert wasm.status_code == 200 and wasm.headers["content-type"] == "application/wasm" and wasm.content == b"\0asm\1\0\0\0"
+    assert client.get("/assets/engine-1a2b.js").headers["content-type"].startswith("text/javascript")
 
 
 @pytest.mark.parametrize("path", ["/api", "/api/", "/api/admin", "/api/me/nothing", "/api/players/1/nothing"])

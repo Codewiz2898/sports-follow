@@ -2576,6 +2576,8 @@ PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
 MATCH_PAGE = re.compile(r"match/([a-z_]{1,40})/([A-Za-z0-9][A-Za-z0-9_.:-]{0,62})/?")
 GAME = re.compile(r"[0-9]{1,10}")
 
+# The build's files by their content's hash, typed by Python's mimetypes: a .wasm (a chess analysis board's engine)
+# as application/wasm, the only type a browser compiles as it streams in, which tests/test_share.py guards.
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
