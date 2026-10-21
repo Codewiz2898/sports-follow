@@ -240,9 +240,10 @@ export default function MatchScreen() {
         </View>
         {board ? (
           <View accessibilityLabel={match.title ?? undefined}>
-            {/* A state in a shape this app doesn't know shows as the plain score. */}
+            {/* A state in a shape this app doesn't know shows as the plain score. The board's live block names no
+                player of the fan's: their lines in the game do (a chess board from their side). */}
             <ErrorBoundary fallback={<PlainScore live={board} pal={pal} />} resetKey={board}>
-              <GameBoard live={board} pal={pal} />
+              <GameBoard live={board} lines={yours.map((p) => p.stats)} pal={pal} />
             </ErrorBoundary>
           </View>
         ) : null}

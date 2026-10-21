@@ -495,8 +495,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and a game is evaluated at most once every 20 s. One engine lane runs system-wide (a Redis lock) on
   one thread at low priority, about a second per position, and rests as long as it worked: at most
   half of one core. A band changes only when two evaluations agree, so a board glitch isn't a swing.
-  The live state carries the latest evaluation (`eval`), and the web board draws it as a bar beside the
-  board, White's share by Lichess's winning-chances curve (`whiteShare` in `web/src/sports/facts/chess.ts`).
+  The live state carries the latest evaluation (`eval`), and the board draws it as a bar beside the
+  board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
+  `web/src/sports/facts/chess.ts`).
 - Adapter parsers are pure functions over the source's JSON, tested against recorded responses in
   `tests/fixtures/espn` (`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`).
 - **Adding or removing a data source** is one module and one line (a source with a key of its own also
