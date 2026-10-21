@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
+import { useAutoplay } from '../autoplay'
 import { channelOf, duration, statsLine, upright, youtubeEmbed } from '../feed'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
@@ -12,8 +13,10 @@ import { ShareButton } from './Share'
  * The fan's Feed in the two layouts the server picks between (BHA-349, GET /api/me/feed/items' `layout`, which the
  * admin panel changes live): edge to edge (the S2Edge board), full-width posts down the page; and full screen (the
  * S5Reels board), one video a screen, snapping from one to the next. In both a video is YouTube's biggest thumbnail
- * until play is tapped, and only then does YouTube's no-cookie player load, in its place: an upright one (a Short) in
- * an upright frame. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
+ * until it plays, and only then does YouTube's no-cookie player load, in its place: an upright one (a Short) in an
+ * upright frame. It starts when tapped, with its sound, or by itself (BHA-359, usePlaying), muted, once more than half
+ * of it is on screen, as the fan's autoplay setting allows (autoplay.ts); one at a time, and it stops once it's off
+ * the screen. Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
  * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
  */
 
@@ -47,21 +50,100 @@ function Still({ src, className, onGone }: { src: string; className?: string; on
   return <img ref={check} className={className} src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={onGone} onLoad={(e) => check(e.currentTarget)} />
 }
 
-/** YouTube's no-cookie player, playing, in the picture's place. */
-function Player({ id, title }: { id: string; title: string }) {
+/** YouTube's no-cookie player, playing, in the picture's place; muted when it started by itself (YouTube's own
+ * button turns the sound on). */
+function Player({ id, title, muted }: { id: string; title: string; muted?: boolean }) {
   return (
-    <iframe src={youtubeEmbed(id)} title={title}
+    <iframe src={youtubeEmbed(id, muted)} title={title}
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
   )
+}
+
+/** The one Feed video playing: which item, whether it started by itself (muted), and whether the fan has touched it
+ * since (`kept`: perhaps turned its sound on with YouTube's button, which nothing outside the player can see). */
+export interface Playing { id: string; muted: boolean; kept?: boolean }
+
+/** Whether this tab is the one in front. */
+function useInFront(): boolean {
+  return useSyncExternalStore((heard) => {
+    document.addEventListener('visibilitychange', heard)
+    return () => document.removeEventListener('visibilitychange', heard)
+  }, () => document.visibilityState === 'visible')
+}
+
+/** Which of a list's videos plays (one at a time), the Android app's usePlaying. `play` starts one with its sound (a
+ * tap on its picture). The list is the elements under `box` with data-item (a video's with data-video too), in view of
+ * `root` (the screen when null, else what scrolls them), for `entries`. While the tab is in front and the fan's
+ * setting allows it now (autoplay.ts), the topmost video more than half on screen starts by itself, muted, once the
+ * list has been still for 250ms, unless one the fan started or touched is still playing. A video goes once none of it
+ * is on screen, and a muted one nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
+ * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. */
+export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[]): { playing: Playing | null; play: (id: string) => void } {
+  const [playing, setPlaying] = useState<Playing | null>(null)
+  const allowed = useAutoplay()
+  const front = useInFront()
+  const starts = useRef(false)
+  starts.current = allowed && front
+  const shown = useRef(new Map<HTMLElement, number>())  // each item, in the list's order: how much of it is on screen
+  const settle = useCallback((start: boolean) => setPlaying((was) => {
+    const items = [...shown.current]
+    const on = (id: string) => items.some(([el, ratio]) => ratio > 0 && el.dataset.item === id)
+    const now = was && on(was.id) && (starts.current || !was.muted || was.kept) ? was : null
+    if (!start || !starts.current) return now
+    const next = items.find(([el, ratio]) => ratio > 0.5 && el.dataset.video != null)?.[0].dataset.item ?? null
+    if (next && (!now || (now.muted && !now.kept)) && now?.id !== next) return { id: next, muted: true }
+    return now
+  }), [])
+  const play = useCallback((id: string) => setPlaying({ id, muted: false }), [])
+
+  const ids = entries.map((e) => e.item.id).join(' ')
+  useEffect(() => {
+    if (!box) return
+    const map = new Map<HTMLElement, number>()
+    box.querySelectorAll<HTMLElement>('[data-item]').forEach((el) => map.set(el, 0))
+    shown.current = map
+    // On the screen, what's under the phone's floating tab bar isn't in view.
+    const bar = root ? null : document.querySelector('.tabbar')?.getBoundingClientRect()
+    const under = bar?.height ? Math.max(0, Math.round(window.innerHeight - bar.top)) : 0
+    let wait = 0
+    const watch = new IntersectionObserver((rows) => {
+      for (const r of rows) map.set(r.target as HTMLElement, r.isIntersecting ? r.intersectionRatio : 0)
+      settle(false)  // gone off screen: at once
+      window.clearTimeout(wait)
+      wait = window.setTimeout(() => settle(true), 250)  // the next one: once the scroll's settled
+    }, { root, rootMargin: `0px 0px -${under}px 0px`, threshold: [0, 0.51] })
+    map.forEach((_, el) => watch.observe(el))
+    return () => { watch.disconnect(); window.clearTimeout(wait) }
+  }, [box, root, ids, settle])
+  useEffect(() => { settle(true) }, [allowed, front, settle])
+
+  // A click into the muted player (YouTube's sound button, say) moves the focus into its frame: the page's blurs.
+  const muted = playing?.muted && !playing.kept ? playing.id : null
+  useEffect(() => {
+    if (!muted) return
+    let wait = 0
+    const touched = () => {
+      wait = window.setTimeout(() => {
+        const el = document.activeElement
+        if (el instanceof HTMLIFrameElement && el.closest<HTMLElement>('[data-item]')?.dataset.item === muted) {
+          setPlaying((was) => (was?.id === muted ? { ...was, kept: true } : was))
+        }
+      })
+    }
+    window.addEventListener('blur', touched)
+    return () => { window.removeEventListener('blur', touched); window.clearTimeout(wait) }
+  }, [muted])
+  return { playing, play }
 }
 
 // ---------------------------------------------------------------- edge to edge
 
 /** One post edge to edge: who it's about (photo ringed in their sport's colour, name and under it the channel,
  * Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video upright
- * in the middle of a 4:5 one), the title, and "views · when". */
-export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
-  entry: FeedEntry; now: number; follows?: Follows; playing: boolean; onPlay: (id: string | null) => void; onMore: () => void
+ * in the middle of a 4:5 one), the title, and "views · when". `playing`: its video plays in the picture's place,
+ * `muted` when it started by itself. */
+export function EdgePost({ entry, now, follows, playing, muted, onPlay, onMore }: {
+  entry: FeedEntry; now: number; follows?: Follows; playing: boolean; muted?: boolean; onPlay: (id: string) => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const [noPicture, setNoPicture] = useState(false)
@@ -76,7 +158,7 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
   if (item.kind === 'video' && id) {
     media = (
       <div className={upright(item) ? 'epost-pic upright' : 'epost-pic'}>
-        {playing ? <Player id={id} title={item.title} /> : (
+        {playing ? <Player id={id} title={item.title} muted={muted} /> : (
           <button type="button" className="epost-play" aria-label={`Play: ${item.title}`} onClick={() => onPlay(item.id)}>
             {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
             {length && <span className="epost-dur">{length}</span>}
@@ -94,7 +176,7 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
   if (!media) return null
 
   return (
-    <article className="epost" data-sport={sportKey(who.sport)}>
+    <article className="epost" data-sport={sportKey(who.sport)} data-item={item.id} data-video={item.kind === 'video' && id ? '' : undefined}>
       <div className="epost-head">
         <Link to={`/player/${who.id}`} className="epost-who">
           <span className="epost-ring"><Face name={who.name} sport={who.sport} photo={who.photo} size={34} /></span>
@@ -125,14 +207,15 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
 // ---------------------------------------------------------------- full screen
 
 /** The full-screen Feed: one item a screen, snapping; For you and Following at the top. The next page loads as the
- * last few come up (onNear), and what plays stops once it's scrolled away. */
+ * last few come up (onNear). The video on screen plays by itself, muted, as the fan's setting allows (usePlaying), and
+ * what plays stops once it's scrolled away. */
 export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, footer }: {
   entries: FeedEntry[]; now: number; tab: FeedTabKey; onTab: (tab: FeedTabKey) => void; follows: Follows
   onMore: (entry: FeedEntry) => void; onNear: () => void; footer?: ReactNode
 }) {
-  const box = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
   const [shown, setShown] = useState(0)
-  const [playing, setPlaying] = useState<string | null>(null)
+  const { playing, play } = usePlaying(box, box, entries)
   const near = useRef(onNear)
   near.current = onNear
 
@@ -141,39 +224,40 @@ export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, foote
     document.documentElement.dataset.reels = ''
     return () => { delete document.documentElement.dataset.reels }
   }, [])
-  // Which one is on screen: what plays stops once it isn't, and the next page loads three from the end.
+  // Which one is on screen: the next page loads three from the end.
+  const ids = entries.map((e) => e.item.id).join(' ')
   useEffect(() => {
-    const root = box.current
-    if (!root) return
+    if (!box) return
     const watch = new IntersectionObserver((rows) => {
       for (const r of rows) if (r.isIntersecting) setShown(Number((r.target as HTMLElement).dataset.n))
-    }, { root, threshold: 0.6 })
-    root.querySelectorAll('.reel').forEach((el) => watch.observe(el))
+    }, { root: box, threshold: 0.6 })
+    box.querySelectorAll('.reel').forEach((el) => watch.observe(el))
     return () => watch.disconnect()
-  }, [entries.length])
+  }, [box, ids])
   useEffect(() => {
-    if (playing && entries[shown]?.item.id !== playing) setPlaying(null)
     if (shown >= entries.length - 3) near.current()
-  }, [shown, entries, playing])
+  }, [shown, entries])
   // A new tab starts from its top.
-  useEffect(() => { box.current?.scrollTo({ top: 0 }); setShown(0) }, [tab])
+  useEffect(() => { box?.scrollTo({ top: 0 }); setShown(0) }, [box, tab])
 
   return (
     <div className="reels" data-tab={tab}>
       <FeedTabs tab={tab} onTab={onTab} className="reels-tabs" />
-      <div ref={box} className="reels-snap">
+      <div ref={setBox} className="reels-snap">
         {entries.map((e, n) => (
-          <Reel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing === e.item.id}
-            onPlay={(on) => setPlaying(on ? e.item.id : null)} onMore={() => onMore(e)} />
+          <Reel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id ? playing : null}
+            onPlay={() => play(e.item.id)} onMore={() => onMore(e)} />
         ))}
-        {footer && <section className="reel reel-end">{footer}</section>}
+        {/* A new one once the first are in: Chrome keeps the screen it had snapped to (the spinner, alone) on screen as
+            they come in above it, which opened the Feed at its end. */}
+        {footer && <section key={entries.length ? 'end' : 'alone'} className="reel reel-end">{footer}</section>}
       </div>
     </div>
   )
 }
 
 function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
-  n: number; entry: FeedEntry; now: number; follows: Follows; playing: boolean; onPlay: (on: boolean) => void; onMore: () => void
+  n: number; entry: FeedEntry; now: number; follows: Follows; playing: Playing | null; onPlay: () => void; onMore: () => void
 }) {
   const { player: who, item } = entry
   const [noPicture, setNoPicture] = useState(false)
@@ -188,8 +272,8 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
 
   let frame: ReactNode
   if (item.kind === 'video' && id) {
-    frame = playing ? <div className={box}><Player id={id} title={item.title} /></div> : (
-      <button type="button" className={box} aria-label={`Play: ${item.title}`} onClick={() => onPlay(true)}>
+    frame = playing ? <div className={box}><Player id={id} title={item.title} muted={playing.muted} /></div> : (
+      <button type="button" className={box} aria-label={`Play: ${item.title}`} onClick={onPlay}>
         {picture && <Still src={picture} onGone={() => setNoPicture(true)} />}
         <span className="reel-bigplay" aria-hidden="true">{playIcon}</span>
       </button>
@@ -207,7 +291,7 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
   }
 
   return (
-    <section className="reel" data-n={n} data-sport={sportKey(who.sport)} aria-label={item.title}>
+    <section className="reel" data-n={n} data-sport={sportKey(who.sport)} data-item={item.id} data-video={item.kind === 'video' && id ? '' : undefined} aria-label={item.title}>
       {picture && <img className="reel-blur" src={picture} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" aria-hidden="true" />}
       {frame}
       <div className="reel-info">
