@@ -225,17 +225,20 @@ export function EdgeSheetExtras({ entry, onGo }: { entry: FeedEntry; onGo: () =>
 
 /** The full-screen Feed (.reels): one item a screen on ink, paging (Android's own paging scroll); For you and
  * Following over the top. The next page loads three screens from the end (onNear), and `footer` is a last screen of
- * its own (the spinner, the end, why it's empty). A new tab starts from its top. */
-export function Reels({ entries, now, tab, onTab, follows, onPlay, onMore, onNear, footer }: {
-  entries: FeedEntry[]; now: number; tab: FeedTabKey; onTab: (tab: FeedTabKey) => void; follows: Follows
+ * its own (the spinner, the end, why it's empty). A new tab, or the Feed read again from the top (`read`), starts
+ * from its top. */
+export function Reels({ entries, now, tab, read, onTab, follows, onPlay, onMore, onNear, footer }: {
+  entries: FeedEntry[]; now: number; tab: FeedTabKey; read: string | null; onTab: (tab: FeedTabKey) => void; follows: Follows
   onPlay: (item: FeedItem) => void; onMore: (entry: FeedEntry) => void; onNear?: () => void; footer?: ReactElement | null
 }) {
   const insets = useSafeAreaInsets()
   const [height, setHeight] = useState(0)
   const list = useRef<FlatList<FeedEntry>>(null)
-  useEffect(() => { list.current?.scrollToOffset({ offset: 0, animated: false }) }, [tab])
+  useEffect(() => { list.current?.scrollToOffset({ offset: 0, animated: false }) }, [tab, read])
   return (
-    <View style={r.reels} onLayout={(ev) => setHeight(Math.round(ev.nativeEvent.layout.height))}>
+    // Sideways is only ever the video player over it (watch.tsx): a screen that height would move the fan to another
+    // item, so the reels keep their upright one.
+    <View style={r.reels} onLayout={(ev) => { const box = ev.nativeEvent.layout; if (box.height >= box.width) setHeight(Math.round(box.height)) }}>
       {height > 0 ? (
         <FlatList
           ref={list}

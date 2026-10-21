@@ -120,7 +120,7 @@ export default function FeedScreen() {
     return (
       <>
         <Reels
-          entries={items} now={now} tab={tab} onTab={showTab} follows={follows} onPlay={video.play} onMore={setOpened}
+          entries={items} now={now} tab={tab} read={read} onTab={showTab} follows={follows} onPlay={video.play} onMore={setOpened}
           onNear={error ? undefined : more}
           footer={error ? (
             <View style={s.done}>
@@ -166,6 +166,7 @@ export default function FeedScreen() {
   return (
     <>
       <PageList<FeedEntry>
+        key={read ?? ''} // read again from the top (a pull, the dot, other players): shown from the top
         data={items}
         keyExtractor={(x) => x.item.id}
         renderItem={({ item: x }) => <EdgePost entry={x} now={now} follows={follows} onPlay={video.play} onMore={() => setOpened(x)} />}
