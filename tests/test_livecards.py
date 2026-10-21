@@ -128,12 +128,19 @@ def redis(monkeypatch):
 
 @pytest.fixture
 def cards(monkeypatch):
-    """The cards livecards queues to send, as (event id, kind, card), sent nowhere; and its clock, moved by hand."""
+    """The cards livecards queues to send, as (event id, kind, card), sent nowhere, and each one's board (on_board) in
+    `boards`; and its clock, moved by hand."""
     sent: list[tuple[int, str, dict | None]] = []
+    boards: list[dict[str, str]] = []
     clock = SimpleNamespace(now=1_000_000.0)
-    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made: sent.append((event_id, kind, made)))
+
+    def queue(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
+        sent.append((event_id, kind, made))
+        boards.append(board or {})
+
+    monkeypatch.setattr(livecards, "_queue", queue)
     monkeypatch.setattr(livecards.time, "time", lambda: clock.now)
-    return SimpleNamespace(sent=sent, clock=clock)
+    return SimpleNamespace(sent=sent, boards=boards, clock=clock)
 
 
 EVENT = SimpleNamespace(id=5, sport="Football", competition="Premier League", key="espn_soccer:740001", title="Arsenal vs Chelsea")
@@ -187,7 +194,7 @@ def test_a_game_sends_its_newest_card_only_and_one_at_a_time(monkeypatch):
     monkeypatch.setattr(livecards, "_sending", set())
     monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=lambda fn, *args: threads.append((fn, args))))
 
-    def sending(event_id: int, kind: str, made: dict | None) -> None:
+    def sending(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
         went.append((event_id, kind, (made or {}).get("status", "")))
         if (event_id, kind) == (5, "live"):
             livecards._queue(5, "end", None)  # the game ends while its last card is going out

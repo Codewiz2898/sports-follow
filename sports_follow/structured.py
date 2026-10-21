@@ -16,13 +16,14 @@ import copy
 import json
 import logging
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import and_, delete, func, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
 from . import bus, engine, livecards, matches, metrics, moments, naming, notify, predictions, registry, shutdown, sports, tracing
@@ -46,6 +47,13 @@ REFRESH_RETRY_MAX = 2 * 3600
 # Polls of a live event further apart than this (or three of its source's rounds) left a gap: a restart,
 # or the source failing for a while. What changed meanwhile is old news, not a moment.
 POLL_GAP = 5 * 60
+# A fixture whose poll committed this lately tells its side of a game the fan hears from the other side too
+# (told_lately): well inside POLL_GAP, so its next poll still comes in time to find the moment rather than start a
+# new baseline.
+TELLS_WITHIN = 2 * 60
+# A game's fixtures (a chess board is one of each player's) start within this of each other: a delayed round's new
+# start read by one player's refresh and not yet by the other's (boards).
+SAME_GAME = timedelta(hours=6)
 PRE_MATCH = ("scheduled", "armed", "postponed")
 UPCOMING_LIMIT = 8
 RECENT_LIMIT = 5
@@ -82,6 +90,99 @@ def board_key(key: str | None, board: str) -> str | None:
         return None
     system, _, fixture = (key or "").partition(":")
     return predictions.game_key(system, fixture, board)
+
+
+@dataclass
+class Fixtures:
+    """A game under several fixtures (a chess board is one of each player's, each polled as an event of its own), as
+    one of them knows it: the players on it here by their ids in its source, and each one's fixture of it, the same
+    all through a mini-match's games."""
+
+    players: dict[str, int]
+    events: dict[int, int]  # player id: their fixture's event
+
+
+def _boards_shown(db: Session, ids: Iterable[int]) -> dict[int, tuple[str, datetime | None, str, tuple[str, ...], str]]:
+    """These events' latest boards where a game is under several fixtures: each one's source, start, board (Sport.board,
+    the game on it now), the players on it (Sport.board_players), sorted, and which meeting of theirs it is
+    (Sport.pairing)."""
+    latest = (select(EventState.event_id, Event.key, Event.start_utc, EventState.state).join(Event, Event.id == EventState.event_id).where(EventState.event_id.in_(sorted(set(ids))))
+              .ext(distinct_on(EventState.event_id)).order_by(EventState.event_id, EventState.as_of.desc()))
+    out = {}
+    for event_id, key, start, state in db.execute(latest):
+        rules = sports.of_state(state or {})
+        board = rules.board(state or {})
+        players = tuple(sorted(rules.board_players(state or {}))) if board else ()
+        pairing = rules.pairing(state or {}) if players else ""
+        if pairing:  # one whose board can't say which meeting it is isn't taken for another's fixture: each tells its own
+            out[event_id] = ((key or "").partition(":")[0], start, board, players, pairing)
+    return out
+
+
+def boards(db: Session, event_ids: Iterable[int | None]) -> dict[int, Fixtures]:
+    """Each of these events that's one fixture of a game under several (Sport.board, by its latest state), with the
+    game's fixtures here: of the players on it (Sport.board_players), each one's event whose latest board is the same
+    meeting of theirs (Sport.pairing: not the same players in another round), from the same source, starting within
+    SAME_GAME of it (or with no start, touched in the last day); of two, the one on the same board now, else the
+    nearer start, else the newer. A fixture whose board isn't out yet isn't one of them till it is. Alerts, live cards
+    and mutes take them for one game (BHA-378). An event whose fixture is the game, or with no board yet, isn't in it."""
+    on = _boards_shown(db, {e for e in event_ids if e})
+    if not on:
+        return {}
+    pairs = {(system, p) for system, _, _, players, _ in on.values() for p in players}
+    here = {(system, external): player_id for player_id, system, external in db.execute(
+        select(PlayerIdentity.player_id, PlayerIdentity.system, PlayerIdentity.external_id).where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(pairs)))}
+    rows: list[tuple[int, int]] = []
+    if here:
+        starts = [start for _, start, _, _, _ in on.values() if start is not None]
+        lately = Event.updated_at >= func.now() - timedelta(days=1)
+        when = [and_(Event.start_utc.is_(None), lately)]
+        if starts:
+            when.append(Event.start_utc.between(min(starts) - SAME_GAME, max(starts) + SAME_GAME))
+        if len(starts) < len(on):
+            when.append(lately)  # one with no start of its own: its others may have one
+        found = select(EventPlayer.player_id, Event.id).join(Event, Event.id == EventPlayer.event_id).where(EventPlayer.player_id.in_(set(here.values())), or_(*when)).order_by(Event.id)
+        rows = [(player_id, e) for player_id, e in db.execute(found)]
+    shown = _boards_shown(db, {e for _, e in rows}) if rows else {}
+    out = {}
+    for event_id, (system, start, board, players, pairing) in on.items():
+        mine = {p: here[(system, p)] for p in players if (system, p) in here}
+        best: dict[int, tuple[tuple[bool, float, int], int]] = {}
+        for player_id, e in rows:
+            other = shown.get(e)
+            if player_id not in mine.values() or other is None or other[0] != system or other[3] != players or other[4] != pairing:
+                continue
+            apart = abs((other[1] - start).total_seconds()) if other[1] is not None and start is not None else 0.0
+            if apart > SAME_GAME.total_seconds():
+                continue
+            rank = (other[2] != board, apart, -e)
+            if player_id not in best or rank < best[player_id][0]:
+                best[player_id] = (rank, e)
+        out[event_id] = Fixtures(mine, {player_id: e for player_id, (_, e) in best.items()})
+    return out
+
+
+def told_lately(event_ids: Iterable[int]) -> set[int]:
+    """Which of these events told their side within TELLS_WITHIN (apply_poll notes each poll once it's committed), so
+    their players' moments are being found and will be: a fixture that stalls past it, or whose polls keep failing,
+    lets the other side say them; none where Redis can't say."""
+    ids = sorted(set(event_ids))
+    if not ids:
+        return set()
+    try:
+        told = cast(list, bus.sync_redis().mget([f"told_at:{e}" for e in ids]))
+    except Exception:
+        log.warning("when events %s last told their side: Redis didn't say", ids, exc_info=True)
+        return set()
+    now = time.time()
+    return {e for e, at in zip(ids, told) if at and now - float(at) <= TELLS_WITHIN}
+
+
+def game_events(db: Session, event_id: int) -> list[int]:
+    """Every event of the game an event is of, itself first: a game under several fixtures (boards) is muted, and its
+    live card stopped, under each of them."""
+    found = boards(db, [event_id]).get(event_id)
+    return [event_id, *sorted(set(found.events.values()) - {event_id})] if found else [event_id]
 
 
 def binding(db: Session, player_id: int) -> SourceBinding | None:
@@ -910,6 +1011,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     published: list[tuple[int, dict[str, Any]]] = []
     published_game: dict[str, Any] | None = None
     game_kept: tuple[str, str, int] | None = None  # the game's own poll, for Redis once this one is committed
+    several = False  # a fixture of a game under several (boards), which notes it's told its side once committed
     new_moments: list[int] = []
     with session() as db:
         event = db.get(Event, event_id)
@@ -918,6 +1020,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         people = {pid: (name, sport) for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_([w[0] for w in watchers])))}
         # Esports moments are told from the player's team's side ("Sentinels win map 2"): no line says it.
         rules = sports.of_state(snap.state)
+        several = bool(rules.board(snap.state))
         sides = _team_ids(db, adapter.system, [w[0] for w in watchers]) if rules.team_moments else {}
         latest = db.scalar(select(EventState).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1))
         # Only changes are stored, so the latest state can be old in a game polled all along (the
@@ -977,6 +1080,13 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 live = matches.board(event, snap.status, snap.score_label, snap.clock_label, snap.state, snap.source_url, now)
                 live["source"] = adapter.credit(snap)
                 published_game = matches.item(event, live)
+    if several:
+        # A fixture of a game under several has told its side (told_lately): only now, as a poll that fails before
+        # its commit has found nothing, and the other side must say it.
+        try:
+            bus.sync_redis().set(f"told_at:{event_id}", int(time.time()), ex=6 * 3600)
+        except Exception:
+            log.warning("poll %s: couldn't note it was told", event_id, exc_info=True)
     if game_kept is not None:
         # Only now: a poll whose moments weren't committed must find them again, against the poll before it.
         bus.sync_redis().set(game_kept[0], game_kept[1], ex=game_kept[2])

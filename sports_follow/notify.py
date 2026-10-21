@@ -35,7 +35,7 @@ from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -70,6 +70,9 @@ MAX_FAILURES = 5
 CALLS = ("pick", "called")
 MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
+# Redis: each moment left to its board's other side to tell (alerts.voiced), by id: the fans it was left for, when it
+# was found and its kind, till that side says it or it's sent them late (send_held).
+HELD = "held-moments"
 # A push's JSON before encryption, in bytes. Push services promise only 4,096 bytes encrypted (RFC 8030)
 # and refuse more with a 413; encryption adds about 100, so this keeps a push under 3.5 KB. A longer
 # body (then title) is cut short.
@@ -143,7 +146,8 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
         key = _key(event_id, player_id, f"{f.kind}:{f.detail}")
         new_id = db.scalar(
             insert(Moment)
-            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects)
+            .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects,
+                    about=[f.voice] if f.voice else None)
             .on_conflict_do_nothing()
             .returning(Moment.id)
         )
@@ -243,7 +247,7 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
         if not claimed:
             return 0
         rows = db.scalars(select(Moment).where(Moment.id.in_(claimed)).order_by(Moment.id)).all()
-        items = as_items(rows)
+        items = on_boards(db, rows, polled=True)
         taken_back = _taken_back(db, items)
         jobs = _plan(db, items, now, taken_back)
         # The followed teams in each of the batch's games, for the app's toasts (below).
@@ -262,6 +266,8 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             told_by.setdefault(item.event_id, set()).update(alerts.sided(item))
     for item in shown:
         moment: dict[str, Any] = {"id": item.id, "title": item.title, "body": item.body, "url": item.url, "player_id": item.player_id, "event_id": item.event_id, "kind": item.kind, "level": item.level}
+        if item.voice is not None and item.voice != item.player_id:
+            moment["voice"] = item.voice  # a board's other side tells it: a fan who follows them too sees theirs (alerts.voiced)
         if item.player_id is None and item.event_id is not None:
             sides = alerts.sided(item)
             moment["teams"] = followed.get(item.event_id, [])
@@ -274,6 +280,12 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
             bus.publish(item.player_id, told_)
         elif item.event_id is not None:
             bus.publish_match(item.event_id, told_)
+    return _deliver(jobs, items, now)
+
+
+def _deliver(jobs: list[tuple[int, tuple, dict[str, Any], int, str]], items: list[alerts.Item], now: datetime) -> int:
+    """Push planned notifications to each of their devices at once, and write back what the push services said.
+    Returns how many devices took one."""
     if not jobs:
         return 0
     futures = [(notification_id, device, _wire.submit(logs.carried(deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
@@ -285,9 +297,85 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
     # the oldest moment waited, from its poll or build finding it to its push.
     waited = max((now - item.created_at).total_seconds() for item in items)
     metrics.pushes([(_service(device), error) for (_, device, _), (_, _, error) in zip(futures, results)], waited)
-    log.info("moments %s: %d push(es) to %d of %d device(s)", claimed, pushes, sent, len(results),
-             extra={"moments": len(claimed), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
+    log.info("moments %s: %d push(es) to %d of %d device(s)", [i.id for i in items], pushes, sent, len(results),
+             extra={"moments": len(items), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
     return sent
+
+
+def held_due(now: datetime | None = None) -> list[int]:
+    """The moments left to their board's other side to tell (alerts.voiced) for longer than structured.TELLS_WITHIN,
+    for the tick to send late where that side never said them (send_held); those past their TTL are forgotten.
+    Nothing where Redis can't say."""
+    from . import structured  # how long a side has to tell its moments (structured sends through here)
+
+    at = (now or datetime.now(timezone.utc)).timestamp()
+    try:
+        redis = bus.sync_redis()
+        held = cast(dict, redis.hgetall(HELD))
+        due, stale = [], []
+        for key, raw in held.items():
+            entry = json.loads(raw)
+            if at - entry["at"] > alerts.ttl(entry["kind"]):
+                stale.append(key)
+            elif at - entry["at"] >= structured.TELLS_WITHIN:
+                due.append(int(key))
+        if stale:
+            redis.hdel(HELD, *stale)
+    except Exception:
+        log.warning("moments held for a board's other side: Redis didn't say", exc_info=True)
+        return []
+    return sorted(due)
+
+
+def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
+    """Send late, to the fans it was left for alone, a moment its board's other side was to tell them (held_due) where
+    that side never said it: no moment of that player's of the same play is stored on the board's fixtures (the side
+    crashed, stalled past a poll gap, or settled the game another way). In its own side's words, on the game's
+    notification, as a push of it is. Each is forgotten once sent, or once its other side's is found; a fan it reached
+    already isn't sent it again (this ran before, and went down before forgetting it). Returns how many devices took
+    one."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        redis = bus.sync_redis()
+        entries = {m: json.loads(raw) for m, raw in zip(moment_ids, cast(list, redis.hmget(HELD, [str(m) for m in moment_ids]))) if raw}
+    except Exception:
+        log.warning("moments %s held for a board's other side: Redis didn't say", moment_ids, exc_info=True)
+        return 0
+    jobs, late = [], []
+    with session() as db:
+        for item in on_boards(db, db.scalars(select(Moment).where(Moment.id.in_(list(entries))).order_by(Moment.id)).all()):
+            twins = [_key(e, item.voice, f"{item.kind}:{item.detail}") for e in item.fixtures] if item.voice is not None else []
+            if twins and db.scalar(select(Moment.id).where(Moment.key.in_(twins)).limit(1)) is not None:
+                continue  # its other side said it
+            told = replace(item, voice=None)  # told by its own side now
+            fans = set(entries[item.id]["fans"])
+            fans -= set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.moment_ids.contains([item.id]), Notification.delivered > 0)))
+            jobs += _plan(db, [told], now, _taken_back(db, [told]), fans=fans) if fans else []
+            late.append(told)
+    sent = _deliver(jobs, late, now)
+    if entries:  # only now: one that went down before this is sent again, never not at all
+        try:
+            redis.hdel(HELD, *[str(m) for m in entries])
+        except Exception:
+            log.warning("moments %s held for a board's other side: couldn't forget them", list(entries), exc_info=True)
+    return sent
+
+
+def _hold(held: dict[int, tuple[alerts.Item, set[str]]]) -> bool:
+    """Keep the moments a batch left to their board's other side to tell (alerts.plan's held), with the fans each was
+    left for, so they're sent late should that side never say them (held_due). Whether they were kept."""
+    if not held:
+        return True
+    try:
+        redis = bus.sync_redis()
+        for item, fans in held.values():
+            had = json.loads(cast(str, redis.hget(HELD, str(item.id))) or "{}")
+            redis.hset(HELD, str(item.id), json.dumps({"fans": sorted({*had.get("fans", []), *fans}), "at": item.created_at.timestamp(), "kind": item.kind}))
+        redis.expire(HELD, alerts.LATE_TTL)
+    except Exception:
+        log.warning("moments %s left to their board's other side: couldn't keep them, so they're sent now", list(held), exc_info=True)
+        return False
+    return True
 
 
 def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
@@ -295,6 +383,32 @@ def as_items(rows: Sequence[Moment]) -> list[alerts.Item]:
     its key. A player's says whom it's about, and each its place among its kind, once for_games() has looked them up."""
     return [alerts.Item(m.id, m.player_id, m.event_id, m.kind, m.level, m.priority, m.title, m.body, m.url, m.created_at, m.corrects,
                         frozenset(m.about or ()) if m.player_id is None else frozenset(), (m.key.split(":", 3)[3:] or [""])[0]) for m in rows]
+
+
+def on_boards(db: Session, rows: Sequence[Moment], polled: bool = False) -> list[alerts.Item]:
+    """Moments as the planner sees them (as_items), each with its game's fixtures where a game is under several
+    (structured.boards: a chess board is one of each player's), and a player's there with the player here whose side
+    tells it (Item.voice), from its stored id in the source. With `polled`, a voice is kept only where that player's
+    own fixture of the game is being polled (structured.told_lately), so their side will say it: else both sides
+    do, twice beating never. Looked up only for such games."""
+    from . import structured  # an event's board (structured sends through here)
+
+    items = as_items(rows)
+    found = structured.boards(db, {i.event_id for i in items})
+    if not found:
+        return items
+    lately = structured.told_lately(e for f in found.values() for e in f.events.values()) if polled else set()
+    out = []
+    for m, i in zip(rows, items):
+        board = found.get(i.event_id or 0)
+        if board is None:
+            out.append(i)
+            continue
+        voice = board.players.get(str(m.about[0])) if m.player_id is not None and m.about else None
+        if polled and voice is not None and voice != i.player_id and board.events.get(voice) not in lately:
+            voice = None  # their fixture isn't here, or isn't being polled: this side says it too
+        out.append(replace(i, fixtures=frozenset({i.event_id or 0, *board.events.values()}), voice=voice))
+    return out
 
 
 def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
@@ -328,9 +442,10 @@ def _taken_back(db: Session, items: list[alerts.Item]) -> set[int]:
     return {m for m in db.scalars(select(Moment.corrects).where(Moment.event_id.in_(events), Moment.corrects.is_not(None))).all() if m} if events else set()
 
 
-def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
-    """Plan every follower's pushes for a batch and log them as notification rows. Returns one job per
-    device: (notification id, (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
+def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[int] | None = None, fans: set[str] | None = None) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
+    """Plan every follower's pushes for a batch (of `fans` alone, where given) and log them as notification rows, and
+    keep what was left to a board's other side to tell (_hold). Returns one job per device: (notification id,
+    (device id, transport, endpoint, p256dh, auth), payload, ttl, topic)."""
     from . import teams  # whose team is in a game (teams reads the pipeline that sends through here)
 
     players = {i.player_id for i in items if i.player_id is not None}
@@ -338,6 +453,12 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
+    # And these fans' levels for the players whose side tells a moment of theirs (a chess board's other side, whose own
+    # fixture finds it too): one who follows both hears it from there (alerts.voiced).
+    voices = {i.voice for i in items if i.voice is not None} - players
+    theirs = select(Follow.fan_id).where(Follow.player_id.in_(players))
+    for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(voices), Follow.fan_id.in_(theirs))) if voices and levels else []:
+        levels[fan][player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
     # The batch's games that fans follow by themselves, lapsed or not: plan() keeps a lapsed follow's moments
     # found before it lapsed (the result), and a player's moment one of them already said isn't said again.
     games: dict[str, dict[int, alerts.Watch]] = {}
@@ -349,7 +470,7 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
         for event_id, (level, sides) in by_game.items():
             had = games.setdefault(fan, {}).get(event_id)
             games[fan][event_id] = alerts.Watch(had.level if had is not None and had.until is None else level, None, frozenset(sides))
-    fans = set(levels) | set(games)
+    fans = (set(levels) | set(games)) & fans if fans is not None else set(levels) | set(games)
     if games:
         items = for_games(db, items)  # whom each player moment is about, and where, to tell a game's own of the same
     devices: dict[str, list[PushSubscription]] = {}
@@ -360,19 +481,22 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             mine.append(d)
     if not devices:
         return []
+    # A game under several fixtures is muted, and its story told, under any of them (alerts.plan).
+    fixtures = events | {e for i in items for e in i.fixtures}
     muted: dict[str, set[int]] = {}
-    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(events))) if events else []:
+    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(fixtures))) if events else []:
         muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
-    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(events), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(fixtures), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
     for n in db.scalars(earlier):
         sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
-    # What earlier pushes of these games sent the fans who follow one by itself: a moment one side said there
-    # isn't said again by the other (alerts.plan).
+    # What earlier pushes of these games sent the fans who follow one by itself, or a player on a board under several
+    # fixtures: a moment one side said there isn't said again by the other (alerts.plan).
     followed = {e for watches in games.values() for e in watches}
-    earlier_ids = {m for fan in games for s in sent.get(fan, []) if s.event_id in followed for m in s.moment_ids}
-    told = {i.id: i for i in for_games(db, as_items(db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
+    on_board = {e for i in items for e in i.fixtures}
+    earlier_ids = {m for fan, theirs in sent.items() for s in theirs if (fan in games and s.event_id in followed) or s.event_id in on_board for m in s.moment_ids}
+    told = {i.id: i for i in for_games(db, on_boards(db, db.scalars(select(Moment).where(Moment.id.in_(earlier_ids))).all()))} if earlier_ids else {}
     # What the Android app draws each push with, looked up once for the batch, should any of these fans have it.
     # It reads every source's stored boards: one it can't read sends the batch plain, never not at all.
     drawn = None
@@ -382,9 +506,11 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
         except Exception:
             log.exception("moments %s: no scorecards, sent plain", [i.id for i in items])
     jobs = []
+    held: dict[int, tuple[alerts.Item, set[str]]] = {}
     for fan, fan_devices in devices.items():
-        heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) for m in s.moment_ids if m in told]
-        for p in alerts.plan(items, levels.get(fan, {}), muted.get(fan, set()), sent.get(fan, []), now, taken_back, games.get(fan, {}), heard):
+        heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) or s.event_id in on_board for m in s.moment_ids if m in told]
+        left: list[alerts.Item] = []
+        for p in alerts.plan(items, levels.get(fan, {}), muted.get(fan, set()), sent.get(fan, []), now, taken_back, games.get(fan, {}), heard, left):
             row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
             db.add(row)
             db.flush()
@@ -392,6 +518,12 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
             android = {**payload, **_scorecard_or_none(p, drawn)}
             for d in fan_devices:
                 jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+        for item in left:
+            held.setdefault(item.id, (item, set()))[1].add(fan)
+    if not _hold(held):
+        # Not kept to send late: sent now in this side's words, as if the other side's weren't coming (twice beats never).
+        for item, whom in held.values():
+            jobs += _plan(db, [replace(item, voice=None)], now, taken_back, fans=whom)
     return jobs
 
 
