@@ -67,15 +67,60 @@ export function whiteShare(ev: ChessEval): number {
 }
 
 /** An evaluation's score from White's side, in pawns as Lichess gives it: "+1.4", "−0.6", "0.0"; past ten, in
- * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates.
+ * whole pawns ("+12": long decided, and it fits a narrow bar); a forced mate, "M4", or "−M4" when Black mates,
+ * and "#" for mate on the board (an analysis board's checkmate).
  * A tenth's half rounds away from zero, in whole centipawns, as a swing alert's score does (sports/chess.py's
  * _score), so the bar and the alert agree. */
 export function evalScore(ev: ChessEval): string {
+  if (ev.mate === 0) return '#'
   if (ev.mate != null) return `${whiteShare(ev) < 50 ? '−' : ''}M${Math.abs(ev.mate)}`
   const cp = Math.round(ev.cp ?? 0)
   const tenths = Math.floor((Math.abs(cp) + 5) / 10)
   if (!tenths) return '0.0'
   return `${cp > 0 ? '+' : '−'}${tenths >= 100 ? Math.floor((tenths + 5) / 10) : `${Math.floor(tenths / 10)}.${tenths % 10}`}`
+}
+
+/** How deep the engine looked ("depth 28"), under a big board's bar and in every bar's words; none for a depth of
+ * 0 or none. */
+export function evalDepth(ev: ChessEval): string | null {
+  return ev.depth ? `depth ${ev.depth}` : null
+}
+
+/** An evaluation bar's words, for a screen reader and a small board's title: "Engine evaluation +1.4, from White's
+ * side, depth 28". */
+export function evalWords(ev: ChessEval): string {
+  const depth = evalDepth(ev)
+  return `Engine evaluation ${evalScore(ev)}, from White's side${depth ? `, ${depth}` : ''}`
+}
+
+// Each castling right a standard FEN gives, and the king and rook it needs where they start.
+const CASTLING: Record<string, string[]> = { K: ['e1K', 'h1R'], Q: ['e1K', 'a1R'], k: ['e8k', 'h8r'], q: ['e8k', 'a8r'] }
+
+/** Whether a position plays by chess's standard rules, as a move generator knows them (chess.js, and the engine
+ * without its 960 option): every castling right its FEN gives has the king and the rook on their starting
+ * squares. A Freestyle (Chess960) game's start puts them elsewhere, or names the rook's file ("HAha"), and
+ * castles another way, which a standard generator gets wrong; once neither side can castle, it plays as
+ * chess. The live state doesn't say which a game is, so the position does. */
+export function standardCastling(fen?: string | null): boolean {
+  const [placement = '', , rights = '-'] = (fen ?? '').split(' ')
+  if (rights === '-') return true
+  if (!/^[KQkq]{1,4}$/.test(rights)) return false
+  const rows = placement.split('/').map((row) => row.split('').flatMap((c) => (/\d/.test(c) ? Array<string>(Number(c)).fill('') : [c])))
+  const at = (square: string) => rows[8 - Number(square[1])]?.['abcdefgh'.indexOf(square[0])]
+  return [...rights].every((right) => CASTLING[right].every((need) => at(need.slice(0, 2)) === need[2]))
+}
+
+/** A finished game's moves (ChessPage.moves, in pairs: "1. d4 Nf6") one by one in SAN, to replay from the
+ * start: the position after the nth is the nth ply's. Null for moves that don't run from the first on (a list
+ * that starts with Black's, "1... e5", or skips a number), which can't be replayed from the start. */
+export function gameMoves(pairs: string[]): string[] | null {
+  const sans: string[] = []
+  for (const [i, pair] of pairs.entries()) {
+    const m = /^(\d+)\.\s+(\S+)(?:\s+(\S+))?$/.exec(pair.trim())
+    if (!m || Number(m[1]) !== i + 1 || (!m[3] && i < pairs.length - 1)) return null
+    sans.push(m[2], ...(m[3] ? [m[3]] : []))
+  }
+  return sans.length ? sans : null
 }
 
 /** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */

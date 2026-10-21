@@ -273,11 +273,12 @@ export function PlainScore({ live }: { live: LiveStatus }) {
 
 /** A live game's score as its sport's view draws it (sports/), or the plain score where none draws this state.
  * `teams`: the followed player's, marked on a board that lists many (a battle royale lobby); `lines`: each of
- * the fan's players' numbers, on a card of several of theirs (BoardProps). */
-export function GameBoard({ live, compact, teams, lines }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][] }) {
+ * the fan's players' numbers, on a card of several of theirs; `explore`: the match page's, which the fan may
+ * explore where its sport has a way to (BoardProps). */
+export function GameBoard({ live, compact, teams, lines, explore }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][]; explore?: boolean }) {
   const state = live.state
   const view = viewOfKind(state?.kind)
-  return view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} live={live} /> : <PlainScore live={live} />
+  return view && state && (view.draws?.(state as never) ?? true) ? <view.Board state={state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} explore={explore} live={live} /> : <PlainScore live={live} />
 }
 
 /**

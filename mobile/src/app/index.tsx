@@ -202,7 +202,7 @@ export default function TodayScreen() {
       {/* Each opens its match page; a live score the research agent read names no game, and opens the player's page. */}
       {games.map(([key, group]) => (
         <Pressable key={group[0].player_id} onPress={openMatch(group[0].live.match, `/player/${group[0].player_id}`)} style={{ gap: 8 }}>
-          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} compact seed={key} latest={latestIn(alerts, group, seen)} />
+          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} lines={group.map((c) => c.live.player_stats)} compact seed={key} latest={latestIn(alerts, group, seen)} />
           {group.length > 1 ? <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</Text> : null}
         </Pressable>
       ))}

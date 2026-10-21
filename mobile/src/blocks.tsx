@@ -221,10 +221,11 @@ export function PlainScore({ live, pal }: { live: LiveStatus; pal: Palette }) {
 }
 
 /** A live game's score as its sport's board draws it (sports/), or the plain score where none draws this
- * state. `teams`: the followed player's, marked on a board that lists many (a battle royale lobby). */
-export function GameBoard({ live, compact, teams, pal }: { live: LiveStatus; compact?: boolean; teams?: string[]; pal: Palette }) {
+ * state. `teams`: the followed player's, marked on a board that lists many (a battle royale lobby); `lines`: each
+ * of the fan's players' numbers, on a card of several of theirs or a match page (BoardProps). */
+export function GameBoard({ live, compact, teams, lines, pal }: { live: LiveStatus; compact?: boolean; teams?: string[]; lines?: Stat[][]; pal: Palette }) {
   const Board = boardFor(live)
-  return Board && live.state ? <Board state={live.state as never} clock={live.clock} compact={compact} teams={teams} live={live} pal={pal} /> : <PlainScore live={live} pal={pal} />
+  return Board && live.state ? <Board state={live.state as never} clock={live.clock} compact={compact} teams={teams} lines={lines} live={live} pal={pal} /> : <PlainScore live={live} pal={pal} />
 }
 
 /**
@@ -233,7 +234,7 @@ export function GameBoard({ live, compact, teams, pal }: { live: LiveStatus; com
  * one row with the game's `latest` moment under it; a player's page has their line on their sport's colour,
  * and the game's moments. With no `playerName` (a game on a campaign page), the board alone.
  */
-export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
+export function LiveScoreboard({ live, playerName, sport, teams, lines, compact, seed, latest }: { live: LiveStatus; playerName: string; sport?: string | null; teams?: string[]; lines?: Stat[][]; compact?: boolean; seed?: string; latest?: LatestMoment | null }) {
   const now = useNow()
   const sports = useSports()
   const tone = toneOf(sports, sport ?? live.state?.kind)
@@ -246,7 +247,7 @@ export function LiveScoreboard({ live, playerName, sport, teams, compact, seed, 
         <LiveBadge />
         {live.event ? <Eyebrow color={colour.inkMuted} style={{ textAlign: 'right', flexShrink: 1 }}>{live.event}</Eyebrow> : null}
       </View>
-      <GameBoard live={live} compact={compact} teams={teams} pal={pal} />
+      <GameBoard live={live} compact={compact} teams={teams} lines={lines} pal={pal} />
       {!playerName ? null : compact ? <LiveLine live={live} playerName={playerName} latest={latest} tone={tone} /> : <PlayerLine live={live} playerName={playerName} tone={tone} />}
       {!compact && live.moments?.length ? (
         <View style={{ gap: 8 }}>
