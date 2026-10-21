@@ -48,6 +48,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                             "preflight": CGPreflightScreenCaptureAccess(),
                             "pid": Int(getpid()), "bundle": Bundle.main.bundleIdentifier ?? "-"])
         buildMenu()
+        Task.detached(priority: .utility) {
+            let t0 = Date()
+            let seen = TopBar.warmUp()
+            Log.json("top-bar-reader-ready", ["ms": round1(Date().timeIntervalSince(t0) * 1000), "read": seen])
+        }
         hotKey = HotKey { [weak self] in DispatchQueue.main.async { self?.save(trigger: "hotkey") } }
         onSignal(SIGUSR1) { [weak self] in self?.save(trigger: "signal") }
         onSignal(SIGTERM) { [weak self] in self?.quit() }
@@ -183,8 +188,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                     NSSound(named: "Tink")?.play()
                     self.flash(edit ? "Saved ✓ · cutting…" : "Saved ✓")
                 }
-                let read = await line.value
-                let onScreen = await screen.value
+                // Neither read holds the clip up for long: past 5 s from the tap it's cut without what's late.
+                let wait = { max(0.1, 5 - Date().timeIntervalSince(tap)) }
+                let readOrLate = await within(wait(), line)
+                let screenOrLate = await within(wait(), screen)
+                let read = readOrLate ?? nil, onScreen = screenOrLate ?? nil
                 // The live game Slam knows of may not be the one on screen (another series, one's own game): a
                 // match found that way is taken only when its clock agrees with Dota's on screen. One set by
                 // hand always is.
@@ -206,7 +214,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
                 let side: [String: Any] = ["strip": moment.line, "moment": momentJSON, "apiLine": api?.text ?? "",
                                            "apiClock": api?.clock ?? "", "screenClock": onScreen?.clock ?? "",
                                            "apiMs": round1(read?.ms ?? 0), "match": match ?? "", "found": read?.match ?? "",
-                                           "savedAt": ISO8601DateFormatter().string(from: tap), "source": source.rawValue]
+                                           "savedAt": ISO8601DateFormatter().string(from: tap), "source": source.rawValue,
+                                           "late": [readOrLate == nil ? "api" : nil, screenOrLate == nil ? "screen" : nil].compactMap { $0 }]
                 Log.json("strip", side)
                 // Beside the clip, for the montage's titles.
                 if let data = try? JSONSerialization.data(withJSONObject: side, options: [.prettyPrinted, .sortedKeys]) {
@@ -511,3 +520,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, SCCo
 
 func round1(_ x: Double) -> Double { (x * 10).rounded() / 10 }
 func round2(_ x: Double) -> Double { (x * 100).rounded() / 100 }
+
+
+/// A task's answer if it comes within the time, else nil: the task goes on, and its answer is dropped.
+func within<T>(_ seconds: Double, _ task: Task<T, Never>) async -> T? {
+    let once = Once()
+    return await withCheckedContinuation { (c: CheckedContinuation<T?, Never>) in
+        Task { let v = await task.value; if once.take() { c.resume(returning: v) } }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds.isNaN ? 0 : seconds) * 1_000_000_000))
+            if once.take() { c.resume(returning: nil) }
+        }
+    }
+}
+
+/// True the first time it's asked, from any thread: which of two racers answers.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func take() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
