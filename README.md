@@ -215,10 +215,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   in what it hadn't at the whistle (and every half hour while the source says it's partial: a chess round
   still on, moves or a Dota map OpenDota hasn't parsed yet); that one is kept a week and not asked for again
   till then, so a crowd opening yesterday's final costs its source two reads. One that finds it not there
-  is the last for hours, unless it was made before the game could have begun (its start, or 15 minutes
-  after) and its start has passed (a chess round's boards aren't on its broadcast till its games begin: the
-  game is then read as any is), or, while the game is on, for half an hour, as a source can list a game
-  late. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
+  is the last for hours, unless it was made before the game's start or in the 15 minutes after, and that
+  start has passed (a chess round's boards aren't on its broadcast till its games begin: the game is then
+  read as any is), or, while the game is on, for half an hour, as a source can list a game late. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
   and draft, and the live map's gold line, buildings and heroes, come only with the page's own read (each poll's state is stored and sent to every card, so it
   stays small), as the state's `page_detail`, and show under whichever board is newest. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.

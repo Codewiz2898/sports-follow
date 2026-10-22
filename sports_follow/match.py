@@ -22,9 +22,9 @@ included), so a made-up address spends nothing; at most READS a minute of one so
 games; for a game still hours off, or called off, once every AHEAD seconds. A read that finds the game over
 is read once more CONFIRM later, when the source has filled in what it hadn't at the final whistle, and that
 one, over and whole, is the last for FINAL_KEEP, a week: so a crowd opening yesterday's final costs its source
-two reads. One that finds it not there is the last for hours, unless it was made before the game could have
-begun (its start, or LATE after it) and its start has passed (a chess round's boards aren't on its broadcast
-till its games begin), or, while the game is on, for AHEAD: a source can list a game late.
+two reads. One that finds it not there is the last for hours, unless it was made before the game's start or
+in the LATE after it, and that start has passed (a chess round's boards aren't on its broadcast till its games
+begin), or, while the game is on, for AHEAD: a source can list a game late.
 
 What the page shows under the board is its sport's (Sport.match_page): a football timeline, a cricket
 scorecard, an esports series by map or a lobby's standings, a finished chess game's moves. Over a finished
@@ -260,10 +260,10 @@ def _shown(boards: list[Board]) -> Board:
 def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: datetime) -> float:
     """How long a read of the game is served before a look asks for another: till Redis drops it after a settled
     read (over and whole), or one that found nothing (a source that hasn't got the game), but for one made
-    before the game could have begun (its start, or LATE after it), once its start has passed (a chess round's
-    boards aren't on its broadcast till its games begin): that one is stale, and the game is read as any is.
-    While the board shown is live, one that found nothing since is read again every AHEAD, for a source that
-    lists a game late, but not every minute. Else FRESH while the board shown is live (a newer one than a read
+    before the game's start or in the LATE after it, once that start has passed (a chess round's boards aren't
+    on its broadcast till its games begin): that one is stale, and the game is read as any is. While the board
+    shown is live, one that found nothing LATE or more after its start is read again every AHEAD, for a source
+    that lists a game late, but not every minute. Else FRESH while the board shown is live (a newer one than a read
     that found it over, too: a mini-match's next game); CONFIRM after a read that found it over but isn't
     settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date comes slowly, if at all),
     or to come more than SOON from its start, or with its day still to be fixed."""
