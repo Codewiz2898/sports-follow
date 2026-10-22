@@ -69,8 +69,9 @@ PARTIAL = 6 * 3600  # what a source's read of a finished game still lacks this l
 FINAL_KEEP = 7 * 86400  # a week
 LAG = 2 * 60  # how much newer than a final board a live one must be to show over it: Live now's list can lag a game's end
 # How far apart in time another board of the game may be from the one shown and still fill in what that one
-# doesn't say (Sport.fill_board): a page open reads the game every FRESH or so, and Live now's list as often.
-FILL = 3 * 60
+# doesn't say (Sport.fill_board): a page open reads the game every FRESH or so (at most a look, 30 s, later),
+# and Live now's list as often. What it fills in is that much older than the board's time says.
+FILL = 2 * 60
 LATE = 15 * 60  # how long after its start a game may still begin (a chess round's boards are listed as its games begin)
 READS = 6  # reads a minute of one source for match pages, whichever games: what fans' looks may spend
 MOMENTS = 40  # the most of a game's moments a page lists
