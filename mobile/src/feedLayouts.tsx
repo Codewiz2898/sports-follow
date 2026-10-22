@@ -26,7 +26,7 @@ import { channelOf, duration, isShort, openLabel, refusedHere, shortFrame, sourc
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
-import { useTone } from './catalog'
+import { useSports, useTone } from './catalog'
 import { useAutoplay } from './autoplay'
 import { useFollowing } from './following'
 import { BackIcon, CheckIcon, MutedIcon, PlayIcon, PlusIcon, ShareIcon, SoundIcon } from './icons'
@@ -695,13 +695,18 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
 
 // ---------------------------------------------------------------- Today
 
+const PICKED_FROM = 8 // the posts From your players picks its two from: a game picked on Today has some among them
+
 /** Today's "From your players" (the web's components/Feed.tsx): at its foot, after This week and the Wire; the two
  * best of the fan's Feed (Following) right now in the edge layout's cards, boxed (whichever layout the Feed tab
- * draws: a full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. Read
- * once the follow list is in, and again when the fan's players change, when Today is pulled (`again`) and when the
- * app comes back to the front, since Today stays open where the web's page would be loaded anew; after news (a
- * notification, a followed game moving on), only minutes later, at a moment of this phone's own (refetchFeed.ts). */
-export function FromYourPlayers({ now, again = 0 }: { now: number; again?: number }) {
+ * draws: a full-screen one doesn't sit in a page), and the way to the rest. With a game picked on Today (`game`, a
+ * sport's key), the two best of that game's among the first few; the way to the rest is to the whole Feed, so it
+ * says no count. Absent while there are none. Read once the follow list is in, and again when the fan's players
+ * change, when Today is pulled (`again`) and when the app comes back to the front, since Today stays open where the
+ * web's page would be loaded anew; after news (a notification, a followed game moving on), only minutes later, at a
+ * moment of this phone's own (refetchFeed.ts). Enough for a game picked, so picking one asks nothing more. */
+export function FromYourPlayers({ now, again = 0, game = null }: { now: number; again?: number; game?: string | null }) {
+  const sports = useSports()
   const { cards, loaded, heard } = useFollowing()
   const [back, setBack] = useState(0)
   const [told, setTold] = useState(0) // the reads after news
@@ -719,22 +724,24 @@ export function FromYourPlayers({ now, again = 0 }: { now: number; again?: numbe
   // that read's.
   useEffect(() => { if (heard) reads.current?.heard() }, [heard])
   useEffect(() => { if (key != null) reads.current?.now() }, [key])
-  const { page, hide } = useMyFeed(null, 2, key == null ? null : `${key}:${told}`)
+  const { page, hide } = useMyFeed(null, PICKED_FROM, key == null ? null : `${key}:${told}`)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   // Its videos play in their cards on a tap, never by themselves (it isn't the Feed), and stop once Today's left.
   const focused = useIsFocused()
   const front = useInFront()
   const videos = usePlaying(focused && front, false)
   const go = useGoToPlace()
-  if (!loaded || !page?.items.length) return null
+  const shown = (page?.items ?? []).filter((x) => !game || sports.info(x.player.sport).key === game).slice(0, 2)
+  if (!loaded || !page || !shown.length) return null
   const all = () => go('/feed', { tab: 'following' })
+  const count = game ? 'All' : `All ${page.count}`
   return (
     <View style={{ gap: 10 }} accessibilityLabel="From your players">
-      <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>All {page.count}</Text>} />
+      <SectionHead title="From your players" right={<Text onPress={all} accessibilityRole="link" style={[t.eyebrow, { color: colour.text, textDecorationLine: 'underline' }]}>{count}</Text>} />
       <View style={{ gap: 12 }}>
-        {page.items.map((x) => <EdgePost key={x.item.id} entry={x} now={now} boxed playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onMore={() => setOpened(x)} />)}
+        {shown.map((x) => <EdgePost key={x.item.id} entry={x} now={now} boxed playing={videos.playing?.id === x.item.id ? videos.playing : null} onPlay={videos.play} onMore={() => setOpened(x)} />)}
       </View>
-      <Btn label={`All ${page.count} in your Feed`} onPress={all} style={{ height: 52 }} />
+      <Btn label={`${count} in your Feed`} onPress={all} style={{ height: 52 }} />
       <ItemSheet item={opened?.item ?? null} name={opened?.player.name ?? ''} onClose={() => setOpened(null)} onHide={(_, verdict) => (opened ? hide(opened, verdict) : Promise.resolve())}>
         {opened ? <EdgeSheetExtras entry={opened} onGo={() => setOpened(null)} /> : null}
       </ItemSheet>

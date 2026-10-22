@@ -368,6 +368,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   other devices as a follow does (`sports` in the fan stream's list). Only the sports `/api/sports` says are on
   count: a key of another is left out, and a sport turned off in the admin panel stays in the fan's list out of
   sight, and is back when it's on again (after any the fan saved meanwhile). Dropping a sport unfollows nobody in it.
+  In the web app (`web/src/yourSports.ts`, `components/YourSports.tsx`): the welcome's tiles are every sport that's
+  on, each esports game its own, and a picked sport with no starters offers its games on now and a search for its
+  players; Following's row and Edit sheet (with none saved, the sports of who the fan follows ticked), also reached
+  from Today's game search; on Today, each of the fan's sports with something on it gets a chip (`filter.ts
+  theirGames`), "Players to follow" keeps offering their sports they follow nobody in past the first three follows,
+  and the fan's sports come first in Live now, the big rails, the Live page and search's "Try" names.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and
@@ -1235,10 +1241,11 @@ once signed in.
 
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
-`lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
-`follow.ts`), what a Share button shares (`share.ts`), what a campaign page offers and when its games are
-(`campaign.ts`), what a match page's head shows and when it looks again (`match.ts`), what a player's Feed shows
-and how its cards say when (`feed.ts`), and each sport's facts
+`lines.ts`), Today's game chips and what each leaves on the page (`filter.ts`), search's sections
+(`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`, `follow.ts`), what a Share button
+shares (`share.ts`), what a campaign page offers and when its games are (`campaign.ts`), what a match page's
+head shows and when it looks again (`match.ts`), what a player's Feed shows and how its cards say when
+(`feed.ts`), and each sport's facts
 (`sports/facts/`: the scoreboard kinds it draws, its line art, how it words a player's line, what its match
 page's part says). Only the drawing is each app's own: a sport's live board is
 `web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,

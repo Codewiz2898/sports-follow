@@ -353,8 +353,9 @@ export type FeedVerdict = 'not_interested' | 'not_about_player' | 'report'
 export interface PushSettings { ok: boolean; timezone: string; quiet_start: string | null; quiet_end: string | null }
 
 export type StreamEvent =
-  // The fan stream's first frame on every connect: GET /api/me/following's players and teams, and GET /api/me/matches's games.
-  | { type: 'following'; players: Card[]; matches?: FollowedMatch[]; teams?: FollowedTeam[] }
+  // The fan stream's first frame on every connect: GET /api/me/following's players and teams, GET /api/me/matches's games,
+  // and GET /api/me/sports's sports.
+  | { type: 'following'; players: Card[]; matches?: FollowedMatch[]; teams?: FollowedTeam[]; sports?: string[] }
   | { type: 'card'; player_id: number; card: Card }
   | { type: 'match'; event_id: number; match: FollowedMatch }  // a game followed by itself, or a team's, as its poll found it
   | { type: 'moment'; player_id: number | null; moment: PlayerMoment }

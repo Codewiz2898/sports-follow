@@ -6,14 +6,14 @@ import { router } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { shortName } from '../../../web/src/format'
-import { gamesOn, moreOn, type GameOn } from '../../../web/src/today'
-import { api, type Card, type LiveGame, type LiveSport } from '../api'
+import { moreOn, type GameOn } from '../../../web/src/today'
+import { api, type LiveGame, type LiveSport } from '../api'
 import { openMatch, OtherGameCard } from '../blocks'
 import { toneOf, useSports } from '../catalog'
 import { CheckIcon, ChevronIcon, PlusIcon } from '../icons'
 import { Rail, type RailCard } from '../rail'
 import { colour, dsp, font, RADIUS_TILE } from '../theme'
-import { ErrorBox, Eyebrow, LiveBadge, Spinner } from '../ui'
+import { ErrorBoundary, ErrorBox, Eyebrow, LiveBadge, Spinner } from '../ui'
 import { useFollowToggle } from './starters'
 
 const EVERY = 60_000 // the server reads a source again at most this often
@@ -133,37 +133,35 @@ export function OtherGame({ game, label, follow, fill }: GameOn & { follow: Foll
 }
 
 /**
- * The games on anywhere that none of the fan's players are in (gamesOn), after the fan's own live boards
- * (`mine`, their live cards; the web's AlsoLive): titled "Also live" under the fan's own; with none of theirs
- * on, it's the whole of "Live now". Today shows it to a fan who follows nobody yet, to pick players from; a
- * fan with players gets MoreLive's link instead.
+ * The games on anywhere that none of the fan's players are in (gamesOn's others: `games`), after the fan's own live
+ * boards (`theirsOn`; the web's AlsoLive): titled "Also live" under the fan's own; with none of theirs on, it's the
+ * whole of "Live now". Today shows it to a fan who follows nobody yet, to pick players from (narrowed to the game
+ * picked there); a fan with players gets MoreLive's link instead. Nothing when nothing else is on.
  */
-export function AlsoLive({ mine }: { mine: Card[] }) {
-  const sports = useLive()
+export function AlsoLive({ games, theirsOn = false }: { games: GameOn[]; theirsOn?: boolean }) {
   const follow = useFollowToggle()
-  const games = gamesOn(sports, mine).others
   if (!games.length) return null
+  const shownKey = games.map((x) => x.game.key).join(',') // `games` is new each render: a card that failed tries again on another game
   return (
-    <>
-      <Rail title={mine.length ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN}>
+    <ErrorBoundary resetKey={shownKey}>
+      <Rail title={theirsOn ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN}>
         {games.map(({ game, label }) => <OtherGame key={game.key} game={game} label={label} follow={follow} />)}
       </Rail>
       {follow.error ? <ErrorBox>{follow.error}</ErrorBox> : null}
-    </>
+    </ErrorBoundary>
   )
 }
 
 /**
- * Today's way to every other game on now, under the fan's own live boards (`mine`, their live cards; the
- * web's MoreLive): a quiet link to the Live page, "12 other games on now", or with none of theirs on, "12
- * games on now". A game of theirs isn't counted (gamesOn). Nothing when nothing else is on.
+ * Today's way to every other game on now, under the fan's own live boards (`theirsOn`; the web's MoreLive): a quiet
+ * link to the Live page, "12 other games on now", or with none of theirs on, "12 games on now". `games` are gamesOn's
+ * others (a game of theirs isn't counted), narrowed to the game picked on Today. Nothing when nothing else is on.
  */
-export function MoreLive({ mine }: { mine: Card[] }) {
-  const others = gamesOn(useLive(), mine).others.length
-  if (!others) return null
+export function MoreLive({ games, theirsOn }: { games: GameOn[]; theirsOn: boolean }) {
+  if (!games.length) return null
   return (
     <Pressable onPress={() => router.push('/live')} accessibilityRole="link" hitSlop={8} style={s.more}>
-      <Eyebrow>{moreOn(others, mine.length > 0)}</Eyebrow>
+      <Eyebrow>{moreOn(games.length, theirsOn)}</Eyebrow>
       <ChevronIcon size={16} strokeWidth={2.6} color={colour.muted} />
     </Pressable>
   )

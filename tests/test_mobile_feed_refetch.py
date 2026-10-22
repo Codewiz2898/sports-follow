@@ -158,8 +158,8 @@ def test_from_your_players_reads_at_once_only_for_its_own_reasons_and_news_throu
     body = from_your_players()
     # What it reads again on (useMyFeed's key) is who the fan follows, a pull and coming back to the front, and the
     # reads after news: never news itself.
-    call = re.search(r"useMyFeed\(null, 2, ([^\n]+)\)\n", body)
-    assert call, "From your players no longer reads its two with useMyFeed(null, 2, …)"
+    call = re.search(r"useMyFeed\(null, PICKED_FROM, ([^\n]+)\)\n", body)
+    assert call, "From your players no longer reads its first few with useMyFeed(null, PICKED_FROM, …)"
     assert not re.search(r"\bheard\b", call[1])
     key = re.search(r"const key = ([^\n]+)\n", body)
     assert key and all(re.search(rf"\b{part}\b", key[1]) for part in ("who", "again", "back")) and not re.search(r"\bheard\b", key[1])

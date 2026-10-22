@@ -3,7 +3,8 @@ import { useSyncExternalStore } from 'react'
 /**
  * Whether the Feed's videos play with their sound (BHA-381), the Android app's sound.ts, as Instagram's and YouTube
  * Shorts' do: off until the fan turns it on (the sound button beside a playing video, YouTube's own, or a tap to play
- * one), then on for every video after it until they turn it off; kept in this browser for the rest of the day.
+ * one, or M on a computer: feedKeys.ts), then on for every video after it until they turn it off; kept in this
+ * browser for the rest of the day.
  *
  * A browser lets a video start with its sound only once the page has been tapped (its autoplay rules), so one that
  * starts by itself before that plays muted with its sound held back (`held`), and the fan's next tap on the page lets
@@ -47,6 +48,9 @@ export function holdSound(by: object, to: boolean) {
   holder = to ? by : null
   told()
 }
+
+/** Whether videos play with their sound now, as the sound button shows it: on, and not held back. */
+export const soundIsOn = (): boolean => on && holder === null
 
 /** Whether videos play with their sound now: the fan's choice, and the browser letting them. */
 export function useSound(): { on: boolean; held: boolean } {

@@ -31,6 +31,12 @@ interface FollowingState {
   followTeam: (teamId: number, on: boolean) => Promise<void>
   isFollowingTeam: (teamId: number) => boolean
   setTeamAlerts: (teamId: number, level: AlertLevel) => Promise<void>
+  // The sports the fan said they watch, in their order (sports_follow/fansports.py: those the server offers now), and
+  // whether the server has said them (not while its answer fails: no list then, rather than an empty one to save
+  // over theirs); saving the list (the welcome's Next, Following's Edit), or the error's the caller's.
+  sports: string[]
+  sportsLoaded: boolean
+  saveSports: (keys: string[]) => Promise<void>
 }
 
 const Ctx = createContext<FollowingState | null>(null)
@@ -110,6 +116,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [matches, setMatches] = useState<FollowedMatch[]>([])
   const [matchesLoaded, setMatchesLoaded] = useState(false)
   const [teams, setTeams] = useState<FollowedTeam[]>([])
+  const [sports, setSports] = useState<string[]>([])
+  const [sportsLoaded, setSportsLoaded] = useState(false)
+  const savingSports = useRef(0)  // saves of the fan's sports under way: a list from before one isn't taken meanwhile
+  const sportsSaves = useRef(0)  // and how many there have been: an answer asked for before the latest isn't taken
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const gamesKey = matches.map((m) => m.event_id).sort((a, b) => a - b).join(',')
   // A followed team's games are on the stream from a day and a half before (teams.event_ids): a follow, or one of
@@ -159,6 +169,31 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const reloadMatches = useCallback(() => api.matches().then((r) => setMatches(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [])
   useEffect(() => { reloadMatches() }, [reloadMatches])
 
+  /** The fan's sports as the server has them now; true once it has said them (a list asked for before a save of this
+   * app's says what it replaced, so it isn't taken, and they're asked for again: the save may have failed). */
+  const reloadSports = useCallback(() => {
+    const asked = sportsSaves.current
+    return api.mySports().then((r) => {
+      if (savingSports.current || asked !== sportsSaves.current) return false
+      setSports(r.sports)
+      setSportsLoaded(true)
+      return true
+    }, () => false)
+  }, [])
+  // Until they've come, try again: soon, then less often (as the follow list does).
+  useEffect(() => {
+    let wait = RETRY_MS
+    let stopped = false
+    let timer: number | undefined
+    const ask = () => reloadSports().then((ok) => {
+      if (ok || stopped) return
+      timer = window.setTimeout(ask, wait)
+      wait = Math.min(wait * 2, RETRY_MAX_MS)
+    })
+    void ask()
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [reloadSports])
+
   // Until the list loads, try again: soon, then less often, and at once on coming back online or to the app.
   useEffect(() => {
     if (loaded || !failed) return
@@ -184,7 +219,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   // Back in the app after a while: what came while it was away may be in the activity list. Not on every reconnect
   // of the stream, which every open app makes at once when the server restarts (BUG-265): only one after a while
   // without it (below). And the fan's list as it is now: a stream sends it when a follow is made on another device
-  // (BUG-165), but an app following no one yet has no stream to hear it on.
+  // (BUG-165), but an app following no one yet has no stream to hear it on: nor its sports changed elsewhere.
   useEffect(() => {
     let away = document.visibilityState === 'hidden' ? Date.now() : null
     const seen = () => {
@@ -192,12 +227,13 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       if (away != null && Date.now() - away >= AWAY_MS) {
         setHeard((n) => n + 1)
         if (loadedRef.current) { void reloadRef.current(); void reloadMatches() }
+        void reloadSports()
       }
       away = null
     }
     document.addEventListener('visibilitychange', seen)
     return () => document.removeEventListener('visibilitychange', seen)
-  }, [reloadMatches])
+  }, [reloadMatches, reloadSports])
 
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {
@@ -219,6 +255,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       if (e.teams) {
         const theirs = e.teams
         setTeams((prev) => theirs.map((t) => (teamLevels.current.has(t.team_id) ? { ...t, alerts: prev.find((x) => x.team_id === t.team_id)?.alerts ?? t.alerts } : t)))
+      }
+      // The fan's sports, changed on another device too; not while this app saves its own.
+      if (e.sports && !savingSports.current) {
+        setSports(e.sports)
+        setSportsLoaded(true)
       }
     } else if (e.type === 'signed_out') {
       // Signed out elsewhere with this app open in front: the stream ends, and who this device is now is asked at
@@ -358,6 +399,18 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const dismissMoment = useCallback((id: number) => setMoments((m) => m.filter((x) => x.id !== id)), [])
 
+  const saveSports = useCallback(async (keys: string[]) => {
+    savingSports.current++
+    sportsSaves.current++
+    try {
+      const r = await api.setMySports(keys)
+      setSports(r.sports)
+      setSportsLoaded(true)
+    } finally {
+      savingSports.current--
+    }
+  }, [])
+
   const value = useMemo<FollowingState>(() => ({
     cards,
     loaded,
@@ -381,7 +434,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     followTeam,
     isFollowingTeam: (id) => teamsRef.current.some((t) => t.team_id === id),
     setTeamAlerts,
-  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen, matches, matchesLoaded, followMatch, setMatchAlerts, teams, followTeam, setTeamAlerts])
+    sports,
+    sportsLoaded,
+    saveSports,
+  }), [cards, loaded, failed, reload, progress, follow, unfollow, setAlerts, moments, dismissMoment, heard, listen, matches, matchesLoaded, followMatch, setMatchAlerts, teams, followTeam, setTeamAlerts,
+    sports, sportsLoaded, saveSports])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -47,6 +47,9 @@ export function endpoints(request: Request) {
     followMatch: (source: string, game: string, on: boolean) =>
       request<{ following: boolean; event_id?: number }>(`/api/match/${encodeURIComponent(source)}/${encodeURIComponent(game)}/follow`, { method: on ? 'PUT' : 'DELETE' }),
     matches: () => request<{ matches: FollowedMatch[] }>('/api/me/matches'),
+    // The sports the fan said they watch, in their order (sports_follow/fansports.py): the server keeps those it offers.
+    mySports: () => request<{ sports: string[] }>('/api/me/sports'),
+    setMySports: (sports: string[]) => request<{ sports: string[] }>('/api/me/sports', json('PUT', { sports })),
     // A team's page, and following it (sports_follow/teams.py): each of its games' moments, its results from its side.
     team: (teamId: number) => request<TeamPage>(`/api/teams/${teamId}`),
     followTeam: (teamId: number, on: boolean) => request<{ team_id: number; following: boolean }>(`/api/teams/${teamId}/follow`, { method: on ? 'PUT' : 'DELETE' }),

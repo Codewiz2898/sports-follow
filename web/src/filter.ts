@@ -1,7 +1,7 @@
 // Today's game filter: which games have something on Today, its chips, and Today narrowed to one of them. A game
 // is a sport (each esports title is one of its own), by its key; `keyOf` finds an item's from the sport it says
 // ("Women's football" is football's, "CS2" is cs2's), each app its own way. Shared by the web app
-// (pages/TodayPage.tsx) and, later, the Android app (mobile/), so it touches nothing of a browser's.
+// (pages/TodayPage.tsx) and the Android app (mobile/src/app/index.tsx), so it touches nothing of a browser's.
 
 import type { GameResult } from './lines'
 import type { Coming, GameOn, TeamGame } from './today'
@@ -89,9 +89,11 @@ export function gamesOnToday(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
 }
 
 /** The fan's own games on Today, by key: their players' and teams', and every game of theirs on, done or to come
- * (the games they follow by themselves among them); not the big games', nor the Wire's or This week's. */
-export function theirGames(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
-  return gamesIn(blocks, ['cards', 'teams', 'live', 'followed', 'teamGames', 'results', 'coming'], keyOf)
+ * (the games they follow by themselves among them); not the big games', nor the Wire's or This week's. And the
+ * sports they said they watch (`yours`, yourSports.ts: BHA-653), even before they follow anyone in them: each gets a
+ * chip too while something of it is on Today (gameRow), and none while nothing is. */
+export function theirGames(blocks: TodayBlocks, keyOf: KeyOf, yours: readonly string[] = []): Set<string> {
+  return new Set([...gamesIn(blocks, ['cards', 'teams', 'live', 'followed', 'teamGames', 'results', 'coming'], keyOf), ...yours])
 }
 
 /** Today's game filter: a chip of each of the fan's own games (`chips`), and the rest a search away (`more`). */
