@@ -17,7 +17,8 @@ new event is a new row, set with this module's command:
     .venv/bin/python -m sports_follow.campaigns list | show gukesh | remove gukesh | refresh
 
 Its players are registry athletes of its sport whom a running source has, checked when added as a starter is
-(players.check_source), so following one never needs AI research. Its teams are a source's (an adapter's
+(players.check_source), so following one never needs AI research. Each is pinned while on it, so no import drops
+them; taking them off, or the campaign down, takes back the pin it made. Its teams are a source's (an adapter's
 team(), find_teams()), and following one follows every player on its roster: one action over the roster's
 players with the ordinary follow, not a new kind of follow. A roster is read from the source when its team is
 added and again each day by the worker (refresh), so a change of line-up reaches the page within a day; a
@@ -45,7 +46,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from . import logs, pipeline, players, registry, search, sports
 from .adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, SourceTeam
 from .db import session
-from .models import Athlete, Campaign, Player, PlayerIdentity
+from .models import Athlete, AthleteOverride, Campaign, Player, PlayerIdentity
 
 log = logging.getLogger(__name__)
 
@@ -221,14 +222,43 @@ def add_player(db: Session, c: Campaign, athlete: Athlete) -> bool:
 
 
 def remove_player(db: Session, c: Campaign, ref: str) -> list[str]:
-    """Take players off the campaign, by registry id or any reference to them. Returns the ids taken off."""
+    """Take players off the campaign, by registry id or any reference to them, with the pin it made of them
+    (unpin). Returns the ids taken off."""
     qids = {ref.strip()} | {a.qid for a in players.find(db, ref, c.sport).athletes}
     gone = [q for q in c.players if q in qids]
     if not gone:
         raise Refused(f"{ref} isn't on /{c.slug}")
     c.players = [q for q in c.players if q not in qids]
     _changed(c, "players")
+    unpin(db, c, gone)
     return gone
+
+
+def pin(db: Session, c: Campaign, athlete: Athlete) -> None:
+    """Keep a player on the campaign in the registry, so no import drops them while they're on it: pinned "on
+    /<slug>", unless they're kept already (by an operator, as a starter or by another campaign): that pin stays
+    as it is."""
+    kept = db.scalar(select(AthleteOverride.id).where(AthleteOverride.qid == athlete.qid, AthleteOverride.sport == athlete.sport, AthleteOverride.action == "keep"))
+    if kept is None:
+        players.pin(db, athlete.qid, athlete.sport, note=f"on /{c.slug}")
+
+
+def unpin(db: Session, c: Campaign, qids: list[str]) -> None:
+    """The pins this campaign made of these players (pin), taken back as they leave it or it comes down: an import
+    may drop them again. One another campaign of theirs still has is that one's now; one anyone else made stays."""
+    for row in db.scalars(select(AthleteOverride).where(AthleteOverride.qid.in_(qids), AthleteOverride.action == "keep", AthleteOverride.note == f"on /{c.slug}")):
+        other = next((o.slug for o in db.scalars(select(Campaign).where(Campaign.id != c.id, Campaign.players.contains([row.qid])).order_by(Campaign.created_at))
+                      if row.sport in _within(o.sport)), None)
+        if other is not None:
+            row.note = f"on /{other}"
+        else:
+            db.delete(row)
+
+
+def take_down(db: Session, c: Campaign) -> None:
+    """Take a campaign's page down (`remove`), with the pins it made of its players."""
+    unpin(db, c, list(c.players))
+    db.delete(c)
 
 
 def forget(db: Session, athletes: list[Athlete]) -> int:
@@ -519,7 +549,7 @@ def main(argv: list[str]) -> int:
                 print(f"{'Made' if new else 'Changed'} /{c.slug}: {c.title} ({c.sport}).")
         elif args.command == "remove":
             with session() as db:
-                db.delete(_need(db, args.slug))
+                take_down(db, _need(db, args.slug))
             print(f"Took /{args.slug} down.")
         elif args.command == "refresh":
             for slug, n in refresh().items():
@@ -533,7 +563,7 @@ def main(argv: list[str]) -> int:
                 c = _need(db, args.slug)
                 athlete = player_athletes(db, c, args.ref)[0]
                 added = add_player(db, c, athlete)
-                players.pin(db, athlete.qid, athlete.sport, note=f"on /{c.slug}")
+                pin(db, c, athlete)
                 print(f"{'Added' if added else 'Already on it'}: {athlete.name} ({athlete.qid}) on /{c.slug}, followed live through {through}.")
         elif args.command == "player":
             with session() as db:
