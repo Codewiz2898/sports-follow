@@ -360,22 +360,6 @@
             {
                 "code": "reportOperatorIssue",
                 "range": {
-                    "startColumn": 100,
-                    "endColumn": 127,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 41,
-                    "endColumn": 95,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOperatorIssue",
-                "range": {
                     "startColumn": 20,
                     "endColumn": 47,
                     "lineCount": 1
