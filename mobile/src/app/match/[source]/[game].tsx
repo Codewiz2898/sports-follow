@@ -244,7 +244,7 @@ export default function MatchScreen() {
                 player of the fan's: their lines in the game do (a chess board from their side). The fan may explore
                 it, where its sport has a way to (a chess board's Play from here). */}
             <ErrorBoundary fallback={<PlainScore live={board} pal={pal} />} resetKey={board}>
-              <GameBoard live={board} lines={yours.map((p) => p.stats)} explore pal={pal} />
+              <GameBoard live={board} lines={yours.map((p) => p.stats)} explore page={match.page} pal={pal} />
             </ErrorBoundary>
           </View>
         ) : null}

@@ -23,13 +23,14 @@ const GONE = '!gone'
 interface Wires { talk: Talk; tell: ((line: string) => void) | null; gone: boolean }
 const WIRES = new WeakMap<Engine, Wires>()
 
-/** An engine for a board, its page in an EngineView the board draws. `ready`: it answers; `failed`: it couldn't
+/** An engine for a board, looking for its best `lines` (talkToEngine), its page in an EngineView the board
+ * draws. `ready`: it answers; `failed`: it couldn't
  * start, it stopped answering, or its page went (`gone`: Android ended its process, the phone short of memory,
  * often while the app was behind another, where another engine can start): the board says so and lets its
  * EngineView go, and its moves still play. */
-export function startEngine(on: { ready: () => void; failed: (gone: boolean) => void }): Engine {
+export function startEngine(on: { ready: () => void; failed: (gone: boolean) => void }, lines = 1): Engine {
   const wires: Wires = {
-    talk: talkToEngine({ tell: (line) => wires.tell?.(line), end: () => { wires.tell = null } }, { ready: on.ready, failed: () => on.failed(wires.gone) }),
+    talk: talkToEngine({ tell: (line) => wires.tell?.(line), end: () => { wires.tell = null } }, { ready: on.ready, failed: () => on.failed(wires.gone) }, lines),
     tell: null,
     gone: false,
   }
