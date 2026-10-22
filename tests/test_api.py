@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, follows, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -516,15 +516,8 @@ def test_a_previews_league_doesnt_make_it_a_new_one(monkeypatch):
 
 def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     # BUG-090: one fan could follow every athlete a source has, each polled every half hour for good.
-    monkeypatch.setattr(server, "PLAYERS_MAX", 2, raising=False)
-    plain = Db.scalar
-
-    def scalar(self, stmt):  # how many players a fan follows
-        if stmt.column_descriptions[0]["name"] == "count":
-            return sum(fan == _param(stmt, "fan_id") for fan, _ in api.follows)
-        return plain(self, stmt)
-
-    monkeypatch.setattr(Db, "scalar", scalar)
+    monkeypatch.setattr(follows, "MAX", 2)
+    monkeypatch.setattr(follows, "counted", lambda db, fan: sum(f == fan for f, _ in api.follows))  # how many players a fan follows
     api.follows |= {("fan", 1), ("fan", 2)}
     refused = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
     assert (refused.status_code, refused.json()["detail"]) == (429, "You follow 2 players already: unfollow one to follow another.")

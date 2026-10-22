@@ -140,7 +140,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following (a preview is
   kept 10 minutes, by the athlete, whatever `league` the link names). A fan follows at most 100 players
-  (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
+  (`follows.MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
   which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a

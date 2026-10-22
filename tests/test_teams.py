@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
+from sports_follow import accounts, bus, follows, notify, pipeline, server, sports, structured, teams
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, budget, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
@@ -886,6 +886,34 @@ def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(
     monkeypatch.setattr(sports, "ENABLED", sports.ALL)
     assert [p["player"]["name"] for p in asyncio.run(server.following("fan"))["players"]] == ["Magnus Carlsen"]
     assert asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))["player_id"] == carlsen.id  # pyright: ignore[reportArgumentType]
+
+
+@needs_db
+def test_a_turned_off_sports_hidden_players_take_none_of_the_fans_room(db, monkeypatch):
+    # BUG-291: a turned-off sport's follows, out of sight, still filled the players a fan may follow, and they couldn't
+    # see them to unfollow. As its teams (teams.counted), they take no room, and back on, the fan is over until under.
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    monkeypatch.setitem(server.state, "redis", Cards())
+    people = [Player(id=i, slug=f"p{i}", name=name, sport=sport) for i, (name, sport) in enumerate([("Magnus Carlsen", "Chess"), ("Gukesh D", "Chess"),
+                                                                                                    ("Bukayo Saka", "Football"), ("Cole Palmer", "Football")], 1)]
+    db.add_all(people)
+    db.flush()
+    db.add_all([PlayerCard(player_id=p.id, status="ready", card={"player_id": p.id, "player": {"name": p.name, "sport": p.sport}}) for p in people])
+    db.add_all([Follow(fan_id="fan", player_id=i, alert_rules={}) for i in (1, 2)])
+    db.commit()
+    monkeypatch.setattr(follows, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "chess"])
+    assert [asyncio.run(server.follow(None, {"player_id": i}, "fan"))["player_id"] for i in (3, 4)] == [3, 4]  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert follows.counted(db, "fan") == 4
+    assert asyncio.run(server.follow(None, {"player_id": 4}, "fan"))["player_id"] == 4  # pyright: ignore[reportArgumentType]: one followed already
 
 
 @needs_db

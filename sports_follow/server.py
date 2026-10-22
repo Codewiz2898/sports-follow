@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, follows, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget, served
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
@@ -470,7 +470,7 @@ async def _tell_devices(fan: str = Depends(fan_id)) -> AsyncIterator[None]:
 TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once the route's work is done, before the answer
 
 # Follows (of a player, a team or a game) one fan, and one client address, make an hour. A cookie is free, and a follow
-# without one is a new fan's, so a fan's own caps (PLAYERS_MAX, teams.MAX, matches.MAX) don't bound a script's
+# without one is a new fan's, so a fan's own caps (follows.MAX, teams.MAX, matches.MAX) don't bound a script's
 # (BUG-325). An IPv6 /64 is a household, and its /48 (_network) a home's or an office's every /64 at once; an IPv4
 # address can be a phone network's, shared by thousands of its fans (carrier-grade NAT), so it holds more, as with
 # STREAMS_PER_IPV4, and so does a /48, which a phone network may share among its subscribers too.
@@ -1417,21 +1417,16 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- following
 
-# Players a fan follows at once: a few whole squads from campaign pages and their favourites besides, as teams
-# (teams.MAX, 30) and games (matches.MAX, 20) have theirs. Each followed player is read every half hour for good.
-PLAYERS_MAX = 100
-
-
 def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None:
-    """Refuse (429) a follow past PLAYERS_MAX. A player the fan follows already is no new follow. With the player,
-    in the follow's transaction: one at a time per fan, so two follows at once can't both pass the count; without,
-    before anything is asked of a source."""
+    """Refuse (429) a follow past follows.MAX, of the follows that count (follows.counted: not a turned-off sport's).
+    A player the fan follows already is no new follow. With the player, in the follow's transaction: one at a time
+    per fan, so two follows at once can't both pass the count; without, before anything is asked of a source."""
     if player_id is not None:
         db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"follow:{fan}", 0))))
         if db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)) is not None:
             return
-    if (db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == fan)) or 0) >= PLAYERS_MAX:
-        raise HTTPException(429, f"You follow {PLAYERS_MAX} players already: unfollow one to follow another.")
+    if follows.counted(db, fan) >= follows.MAX:
+        raise HTTPException(429, f"You follow {follows.MAX} players already: unfollow one to follow another.")
 
 
 def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
@@ -1509,7 +1504,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
     AI research, and without research (config.RESEARCH) can't be followed. Asking a source counts against
-    the fan's and their address's minute (_source_lookup), and a fan follows at most PLAYERS_MAX players.
+    the fan's and their address's minute (_source_lookup), and a fan follows at most follows.MAX players.
     """
     from .config import RESEARCH
 
