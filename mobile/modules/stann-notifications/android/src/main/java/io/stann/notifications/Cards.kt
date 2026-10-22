@@ -70,8 +70,13 @@ internal object Cards {
     post(c, d["tag"] ?: "moment-${d["id"]}", builder)
   }
 
-  /** Takes every live card down (live cards turned off). */
-  fun takeDownLive(c: Context) {
+  /** Takes a game's live card down (its event: muted in the app), or every one (live cards or alerts turned off,
+   *  signed out): the server sends no end to a phone that's off it, nor before the game's next card. */
+  fun takeDownLive(c: Context, event: String? = null) {
+    if (event != null) {
+      NotificationManagerCompat.from(c).cancel(liveTag(event), ID)
+      return
+    }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
     val manager = c.getSystemService(NotificationManager::class.java) ?: return
     manager.activeNotifications.filter { it.tag?.startsWith("live-") == true }.forEach { manager.cancel(it.tag, it.id) }

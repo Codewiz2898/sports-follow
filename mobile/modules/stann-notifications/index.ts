@@ -22,6 +22,9 @@ declare class StannNotifications extends NativeModule<Events> {
   /** Whether live cards show, on this phone. */
   liveCards(): boolean
   setLiveCards(on: boolean): void
+  /** Takes a game's live card down (its event id), or every one (null): a game muted in the app, or this phone
+   * signed out or its alerts turned off, when no end would come from the server (sports_follow/livecards.py). */
+  takeDownLive(event: string | null): void
 }
 
 export default requireOptionalNativeModule<StannNotifications>('StannNotifications')

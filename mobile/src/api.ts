@@ -7,6 +7,7 @@
 import Constants from 'expo-constants'
 import { endpoints, json } from '../../web/src/endpoints'
 import type { PushSettings, SportCatalog } from '../../web/src/types'
+import { within } from './deadline'
 
 export type * from '../../web/src/types'
 
@@ -23,14 +24,18 @@ export class ApiError extends Error {
   }
 }
 
+/** Asks the API, giving up after deadline.ts's time limit (or the caller's own abort): an answer that doesn't come
+ * is "Can't reach", as a connection that fails at once is. React Native's fetch resolves once the whole body is in,
+ * so reading it can't hang after. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(API_URL + path, {
+    res = await within((signal) => fetch(API_URL + path, {
       ...init,
+      signal,
       credentials: 'include', // the fan's cookie, as on the web (React Native sends it by default too)
       headers: { accept: 'application/json', ...(init?.headers as Record<string, string> | undefined) },
-    })
+    }), init?.signal)
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
     throw new ApiError(`Can't reach ${Constants.expoConfig?.name ?? 'the server'}. Check your connection.`, 0)

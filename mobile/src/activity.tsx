@@ -5,6 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ACTIVITY, refetcher, type Refetcher } from '../../web/src/refetch'
+import StannNotifications from '../modules/stann-notifications'
 import { useAccount } from './account'
 import { api, type ActivityItem } from './api'
 import { useFollowing } from './following'
@@ -24,7 +25,7 @@ const ActivityContext = createContext<Activity | null>(null)
 const SEEN = 'stann.alerts-seen'
 
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { cards, loaded: following, heard, matches } = useFollowing()
+  const { cards, loaded: following, heard, matches, teams } = useFollowing()
   const { epoch } = useAccount()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [next, setNext] = useState<number | null>(null)
@@ -32,8 +33,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   const [seen, setSeen] = useState<number | null>(null)
   const [seenRead, setSeenRead] = useState(false)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
-  // Following someone new, or turning a player off, changes the whole list; a game too.
-  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`)].sort().join(',')
+  // Following someone new, or turning a player off, changes the whole list; a game or a team too.
+  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`),
+    ...teams.map((x) => `team${x.team_id}:${x.alerts}`)].sort().join(',')
 
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
@@ -106,6 +108,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     }
     apply(on)
     try { await api.mute(eventId, on) } catch (e) { apply(!on); throw e }
+    // Muted: its live card goes now, as the card's own Mute button takes it down, not with the server's next.
+    if (on) StannNotifications?.takeDownLive(String(eventId))
   }, [])
 
   const value = useMemo<Activity>(() => ({
