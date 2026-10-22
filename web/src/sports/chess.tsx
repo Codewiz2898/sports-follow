@@ -3,8 +3,8 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { SwapIcon } from '../components/Icons'
 import { usePwa } from '../pwa'
 import './chess.css'
-import type { Opening, Ply } from './facts/chessLine'
-import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, gameMoves, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import type { Opening, replayedMoves } from './facts/chessLine'
+import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import type { BoardProps, SportView } from './view'
 
 // The analysis board (Play from here), with chess.js and the engine's worker: loaded when a fan opens one.
@@ -54,21 +54,16 @@ function phrases(text?: string | null) {
   return text?.split(' · ').map((part, i) => <span key={i}>{i > 0 && ' · '}<span className="nowrap">{part}</span></span>)
 }
 
-/** A move of a game from its start, as it's read out: "12... Nf6" (`i`, its place from 0). */
-function said(sans: string[], i: number) {
-  return `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'} ${sans[i]}`
-}
+// A game's moves, replayed (facts/chessLine.ts replayedMoves): each in SAN, numbered, with the position after it.
+type Replayed = NonNullable<ReturnType<typeof replayedMoves>>
 
-/** A game's moves replayed (useReplay): from its start, each in SAN with the position after it, and whether they
- * end where its board is (`now`: a page's look can lag the board by more than a move). */
-interface Replay { start: string; plies: Ply[]; sans: string[]; now: boolean }
+/** A game's moves replayed (useReplay), the position they start from, and whether they end where its board is
+ * (`now`: a page's look can lag the board by more than a move). */
+interface Replay { moves: Replayed; start: string; now: boolean }
 
-/** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
- * board gave each, "d5e3"), replayed as chess from the start, each in SAN, with the board's own last move where
- * they're one short of it: a page's look lags the board a little. Replaying takes chess.js, which comes in the
- * analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where they don't replay
- * (a Freestyle game's, or one set up from a position): then the pairs show as words. A finished game's must end
- * where its board does; a live game's may lag it. */
+/** A game's moves on its match page, replayed as chess (replayedMoves, the Android app's too): that takes chess.js,
+ * which comes in the analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where
+ * they don't replay: then the pairs show as words. */
 function useReplay(page: ChessPage | undefined, state: ChessState): Replay | null {
   const [replay, setReplay] = useState<Replay | null>(null)
   const { fen, last_move: last, result } = state
@@ -76,30 +71,20 @@ function useReplay(page: ChessPage | undefined, state: ChessState): Replay | nul
   const pairs = page?.moves?.join('\n') ?? ''
   const more = page?.more?.join(' ') ?? ''
   useEffect(() => {
-    // From the start: by the pairs, or with none yet (a game kept from its first move), by the added ones alone.
-    const from = pairs ? gameMoves(pairs.split('\n')) : []
-    const added = more ? more.split(' ') : []
-    if (!from || (!from.length && !added.length) || !fen || !standardCastling(fen)) {
+    // With nothing to replay, or a position chess.js won't play, the pairs are words at once.
+    if ((!pairs && !more) || !fen || !standardCastling(fen)) {
       setReplay(null)
       return
     }
     let current = true
     // The last list stays while the next replays (no flicker each look), and goes where it doesn't.
-    const words = () => { if (current) setReplay(null) }
     import('./facts/chessLine')
-      .then(({ fenAt, lineOfGame, playedOn, samePosition }) => {
-        const start = lineOfGame(from, from.length)
-        let game = start && playedOn(start, added)
-        if (!game || game.plies.length < from.length + added.length) return words()  // one of them doesn't play
-        if (!samePosition(fenAt(game), fen) && last) {
-          const on = playedOn(game, [last])
-          if (samePosition(fenAt(on), fen)) game = on
-        }
-        const now = samePosition(fenAt(game), fen)
-        if (result && !now) return words()
-        if (current) setReplay({ start: game.start, plies: game.plies, sans: game.plies.map((p) => p.san), now })
+      .then(({ lineOfGame, replayedMoves, samePosition }) => {
+        const moves = { moves: pairs ? pairs.split('\n') : [], more: more ? more.split(' ') : [] }
+        const replayed = replayedMoves(moves, { fen, last_move: last, result })
+        if (current) setReplay(replayed && { moves: replayed, start: lineOfGame([], 0)?.start ?? '', now: samePosition(replayed[replayed.length - 1].fen, fen) })
       })
-      .catch(words)
+      .catch(() => { if (current) setReplay(null) })
     return () => { current = false }
   }, [pairs, more, fen, last, result])
   return replay
@@ -111,7 +96,7 @@ function useReplay(page: ChessPage | undefined, state: ChessState): Replay | nul
  * those added since as the board gave them (a Freestyle game's: "d6d7"). Its opening and how it ended, or of a
  * mini-match the game's number, over them. Kept scrolled to the newest as moves come, unless the fan has
  * scrolled back or stepped back (then to the move the board is after). */
-function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: string[] | null; at: number | null; open: (moves: string[], ply: number) => void }) {
+function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: Replayed | null; at: number | null; open: (moves: string[], ply: number) => void }) {
   const list = useRef<HTMLOListElement>(null)
   const pinned = useRef(true)  // at the newest: false once the fan scrolls back, true again at the end
   const stepped = useRef(at)  // where the fan has stepped back to, for its room's changes
@@ -147,15 +132,12 @@ function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: string[] 
         {about && <span className="tiny muted">{about}</span>}
       </span>
       <ol ref={list} className="chess-line" aria-label="Moves" onScroll={(e) => { const ol = e.currentTarget; pinned.current = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24 }}>
-        {sans ? sans.map((san, i) => {
-          const move = said(sans, i)
-          return (
-            <li key={i}>
-              {i % 2 === 0 && <span className="muted">{i / 2 + 1}.</span>}
-              <button type="button" className="chess-move" aria-current={i + 1 === (at ?? sans.length)} aria-label={`Play on from ${move}`} title={`Play on from ${move}`} onClick={() => open(sans, i + 1)}>{san}</button>
-            </li>
-          )
-        }) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
+        {sans ? sans.map((m, i) => (
+          <li key={i}>
+            {m.number && <span className="muted">{m.number}</span>}
+            <button type="button" className="chess-move" aria-current={i + 1 === (at ?? sans.length)} aria-label={`Play on from ${m.said}`} title={`Play on from ${m.said}`} onClick={() => open(sans.map((x) => x.san), i + 1)}>{m.san}</button>
+          </li>
+        )) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
       </ol>
     </div>
   )
@@ -184,10 +166,10 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   const playable = Boolean(explore && state.fen && standardCastling(state.fen))
   const moves = explore ? (page as ChessPage | undefined) : undefined
   const replay = useReplay(moves, state)
-  const sans = playable ? replay?.sans ?? null : null
+  const sans = playable ? replay?.moves ?? null : null
   const game = `${live.match ?? live.event_id ?? ''}:${moves?.game ?? ''}`
   // The steps along the moves: the start, after each, and the board as it is where the moves end short of it.
-  const last = playable && replay ? replay.plies.length + (replay.now ? 0 : 1) : 0
+  const last = sans && replay ? sans.length + (replay.now ? 0 : 1) : 0
   const at = stepped && stepped.game === game && stepped.at < last ? stepped.at : null  // null: the board as it is
   const stepTo = (to: number) => setStepped(to >= last ? null : { game, at: Math.max(0, to) })
   // The arrow keys, wherever the keyboard is on the page but on what has arrows of its own, and not while a
@@ -215,15 +197,14 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   }
   if (!state.white || !state.black) return null
   // The board where the fan has stepped back to, or as it is.
-  const ply = at && replay ? replay.plies[at - 1] : null
+  const ply = at && sans ? sans[at - 1] : null
   const shown = at == null || !replay ? state : { ...state, fen: ply ? ply.fen : replay.start, last_move: ply ? ply.from + ply.to : null }
   const { ranks, flip, moved } = position(shown, live, (side ?? followedSide(live, lines)) === 'black')
   // The live evaluation while the game's on: once it's over, the last one isn't what the result says (a draw
   // agreed at +3.0). Its bar stays, empty, while the fan has stepped back.
   const bar = state.result ? null : state.eval
   const ev = at == null ? bar : null
-  const after = at && sans ? said(sans, at - 1) : null
-  const where = at == null ? null : after ? `After ${after}` : 'The start'
+  const where = at == null ? null : ply ? `After ${ply.said}` : 'The start'
   // Closed: the keyboard back where it was, the move tapped in the list or Play from here.
   const leave = () => {
     setOpening(null)
@@ -242,7 +223,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   const board = ranks.length === 8 && (
     <div className={`chess-play${compact ? ' sm' : ''}${bar ? ' eval' : ''}`}>
       {bar && <EvalBar ev={ev} flip={flip} compact={compact} quiet={explore} none="for the live position only" />}
-      <div className="chessboard" role="img" aria-label={at == null ? `Position after move ${state.move ?? ''}` : after ? `Position after ${after}` : 'The starting position'}>
+      <div className="chessboard" role="img" aria-label={at == null ? `Position after move ${state.move ?? ''}` : ply ? `Position after ${ply.said}` : 'The starting position'}>
         {ranks.flat().map((sq) => (
           <span key={sq.name} className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}`}>
             {sq.piece && <span className={`piece ${sq.piece === sq.piece.toUpperCase() ? 'w' : 'b'}`}>{`${PIECES[sq.piece.toLowerCase()]}︎`}</span>}
@@ -283,7 +264,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
           {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={sans} at={at} open={openAt} /> : null}
           {(playable || depth) && (
             <div className="chess-under row">
-              {playable && <button ref={play} type="button" className="btn small" onClick={(e) => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, moves: at == null ? null : sans, ply: at ?? undefined, asked: 1, focus: true, keyed: e.detail === 0 }) }}>Play from here</button>}
+              {playable && <button ref={play} type="button" className="btn small" onClick={(e) => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, moves: at == null ? null : sans?.map((m) => m.san), ply: at ?? undefined, asked: 1, focus: true, keyed: e.detail === 0 }) }}>Play from here</button>}
               {/* Where the fan has stepped back to, said as they step (a live region there before they do, so
                   their first step is read out too), and the way back: together, on a line of their own where
                   the row is narrow. */}

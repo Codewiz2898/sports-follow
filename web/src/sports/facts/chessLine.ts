@@ -5,7 +5,7 @@
 // fan's lines stay on their device.
 
 import { Chess, type Move, type Square } from 'chess.js'
-import { standardCastling, type ChessEval, type ChessState } from './chess'
+import { gameMoves, standardCastling, type ChessEval, type ChessPage, type ChessState } from './chess'
 
 export const PIECE_NAMES: Record<string, string> = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' }
 
@@ -214,6 +214,31 @@ export function numbered(sans: string[], fen: string): string {
 // Castling as some boards send it, the king onto its rook's square (Chess960's way, never a legal king move in
 // standard chess), and as UCI writes it, the king two squares over.
 const CASTLES: Record<string, string> = { e1h1: 'e1g1', e1a1: 'e1c1', e8h8: 'e8g8', e8a8: 'e8c8' }
+
+/** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
+ * board gave each, "d5e3"), replayed as chess from the start, each in SAN and numbered (numberedMoves) with the
+ * position after it and its squares (the web's board steps back along them), with the
+ * board's own last move where they're one short of it: a page's look lags the board a little. Null where they
+ * don't replay (a Freestyle game's, or one set up from a position): the pairs show as words then. A finished
+ * game's must end where its board does; a live game's may lag it. The match page's list, the web's and the
+ * Android app's alike. */
+export function replayedMoves(page: Pick<ChessPage, 'moves' | 'more'> | undefined, state: Pick<ChessState, 'fen' | 'last_move' | 'result'>): { san: string; number: string | null; said: string; fen: string; from: string; to: string }[] | null {
+  const pairs = page?.moves ?? []
+  const added = page?.more ?? []
+  const from = pairs.length ? gameMoves(pairs) : []
+  const { fen, last_move: last, result } = state
+  if (!from || (!from.length && !added.length) || !fen || !standardCastling(fen)) return null
+  const start = lineOfGame(from, from.length)
+  let game = start && playedOn(start, added)
+  if (!game || game.plies.length < from.length + added.length) return null // one of them doesn't play
+  if (!samePosition(fenAt(game), fen) && last) {
+    const on = playedOn(game, [last])
+    if (samePosition(fenAt(on), fen)) game = on
+  }
+  if (result && !samePosition(fenAt(game), fen)) return null
+  const { plies } = game
+  return numberedMoves(plies.map((m) => m.san), game.start).map((m, i) => ({ ...m, fen: plies[i].fen, from: plies[i].from, to: plies[i].to }))
+}
 
 /** A line with moves in UCI (an engine's, or a live board's as its source gives them) played on from where the
  * board is, as far as they're legal, the board after the last: the fan's line from there gives way to them, as

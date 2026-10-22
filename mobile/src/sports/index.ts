@@ -24,8 +24,8 @@ export function boardFor(live: LiveStatus): Board | undefined {
 }
 
 /** What a match page shows under its board for a sport, by the key it's drawn as (an esports game is drawn as
- * its group: Sports.drawn): a timeline, a scorecard, maps or moves; none for a sport without one, which lists
- * the game's key events instead, if its source names any. */
+ * its group: Sports.drawn): a timeline, a scorecard or maps; none for a sport without one (chess: its moves are
+ * with its board), which lists the game's key events instead, if its source names any. */
 export function matchPartFor(key: string): MatchPart | undefined {
   return VIEWS.find((v) => v.key === key)?.Match
 }
