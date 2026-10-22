@@ -72,10 +72,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
   const dragged = useRef(false)  // a drag just played (or dropped): the click it ends with isn't a tap
   const refocus = useRef(false)  // the keyboard was on what's gone (a promotion's pieces): back to the board
   const outside = useRef(false)  // a press that began on the backdrop (outside the dialog): its click closes
-  // The fan moves along the board's squares by keyboard: they came onto it with Tab, or picked a piece there
-  // with Enter or Space. Until then (a mouse's or a finger's fan, or the board just opened) the arrow keys
-  // step along the line there too; a press of the pointer ends it.
-  const keyed = useRef(false)
+  // The fan moves along the board's squares by keyboard: they opened it by keyboard, came onto it with Tab, or
+  // picked a piece there with Enter or Space. Until then (a mouse's or a finger's fan) the arrow keys step along
+  // the line there too; a press of the pointer ends it.
+  const keyed = useRef(Boolean(opening.keyed))
   // Its keys (shortcuts, below), heard wherever the keyboard is while it's open: a tapped button that goes leaves
   // it on the page's body, under the dialog.
   const heard = useRef<(e: globalThis.KeyboardEvent) => void>(() => {})

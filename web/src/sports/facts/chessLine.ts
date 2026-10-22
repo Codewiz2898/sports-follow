@@ -40,8 +40,10 @@ export function playable(fen?: string | null): boolean {
 
 /** Where an analysis starts: the game's position when the fan opened it (`base`, with the move that led there),
  * or a finished game's moves (SAN, from its start) at a ply of theirs. `asked` changes with each new start, the
- * board open or not; `focus` puts the keyboard on the board (the web's, opened by its button, not from the moves). */
-export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean }
+ * board open or not; `focus` puts the keyboard on the board (the web's, opened by its button, not from the moves),
+ * and `keyed` says the button was pressed by keyboard (Enter or Space): the arrow keys move along the board's
+ * squares from the start, not along the line. */
+export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean; keyed?: boolean }
 
 /** The line an analysis starts with, or null for one that can't be played here: moves that don't replay (the
  * Moves list offers only those that do), or a position that isn't one, or not by the standard rules. */

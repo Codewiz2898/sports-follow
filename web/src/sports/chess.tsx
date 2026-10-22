@@ -190,10 +190,10 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   const last = playable && replay ? replay.plies.length + (replay.now ? 0 : 1) : 0
   const at = stepped && stepped.game === game && stepped.at < last ? stepped.at : null  // null: the board as it is
   const stepTo = (to: number) => setStepped(to >= last ? null : { game, at: Math.max(0, to) })
-  // The arrow keys, wherever the keyboard is on the page but on what has arrows of its own, and not while the
-  // analysis board is open (it has its own).
+  // The arrow keys, wherever the keyboard is on the page but on what has arrows of its own, and not while a
+  // dialog is open over it (the analysis board has its own; one that couldn't come leaves them to the page).
   heard.current = (e) => {
-    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || opening || !last) return
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !last || document.querySelector('dialog[open]')) return
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     const target = e.target instanceof HTMLElement ? e.target : null
     if (target && (target.isContentEditable || target.closest(OWN_ARROWS))) return
@@ -241,7 +241,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // The game's board as it is (or where the fan has stepped back to), with its bar.
   const board = ranks.length === 8 && (
     <div className={`chess-play${compact ? ' sm' : ''}${bar ? ' eval' : ''}`}>
-      {bar && <EvalBar ev={ev} flip={flip} compact={compact} quiet={explore} none="of the position now, not this one" />}
+      {bar && <EvalBar ev={ev} flip={flip} compact={compact} quiet={explore} none="for the live position only" />}
       <div className="chessboard" role="img" aria-label={at == null ? `Position after move ${state.move ?? ''}` : after ? `Position after ${after}` : 'The starting position'}>
         {ranks.flat().map((sq) => (
           <span key={sq.name} className={`sq ${sq.dark ? 'dark' : 'light'}${moved.has(sq.name) ? ' moved' : ''}`}>
@@ -283,7 +283,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
           {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={sans} at={at} open={openAt} /> : null}
           {(playable || depth) && (
             <div className="chess-under row">
-              {playable && <button ref={play} type="button" className="btn small" onClick={() => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, moves: at == null ? null : sans, ply: at ?? undefined, asked: 1, focus: true }) }}>Play from here</button>}
+              {playable && <button ref={play} type="button" className="btn small" onClick={(e) => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, moves: at == null ? null : sans, ply: at ?? undefined, asked: 1, focus: true, keyed: e.detail === 0 }) }}>Play from here</button>}
               {/* Where the fan has stepped back to, said as they step (a live region there before they do, so
                   their first step is read out too), and the way back: together, on a line of their own where
                   the row is narrow. */}
