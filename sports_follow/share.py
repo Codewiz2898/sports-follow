@@ -161,7 +161,7 @@ def of_campaign(shown: dict[str, Any]) -> Preview:
     names = [r["name"] for r in shown["players"]] or [t["name"] for t in shown["teams"]]
     follow = f"Follow {_and(names)}" if names else ""
     event = shown.get("event") or ""
-    said = " ".join(x for x in (_sentence(event) if event else "", _sentence(game) if game else "", *(shown["lines"][:1]),
+    said = " ".join(x for x in (_sentence(event) if event else "", _sentence(game) if game else "", *(_sentence(line) for line in shown["lines"][:1]),
                                 f"{follow} on {APP_NAME}: live boards and alerts." if follow else f"Live boards and alerts on {APP_NAME}.") if x)
     return Preview(
         title=f"{shown['title']} · {event}" if event else shown["title"],
@@ -452,9 +452,17 @@ def _slanted(img: Image.Image, x: int, bottom: int, text: str, font: ImageFont.F
 def _pill(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, ground: str, ink: str) -> None:
     """The tag at the top, as the app's posters have it: spaced capitals on a pill."""
     font = _font("manrope", 26)
-    text = text.upper()
     spaced = 2
-    width = sum(font.getlength(c) + spaced for c in text) - spaced
+
+    def wide(t: str) -> float:
+        return sum(font.getlength(c) + spaced for c in t) - spaced
+
+    text, most = text.upper(), WIDTH - 2 * PAD - 44  # within the picture's margins: a long event's name is cut
+    if wide(text) > most:
+        while text and wide(f"{text}…") > most:
+            text = text[:-1]
+        text = f"{text.rstrip()}…"
+    width = wide(text)
     draw.rounded_rectangle((x, y, x + width + 44, y + 48), radius=24, fill=ink)
     cx = x + 22
     for c in text:

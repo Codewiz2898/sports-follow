@@ -414,3 +414,17 @@ def test_a_crawler_gets_an_invites_a_teams_a_clips_and_a_games_page_with_its_pre
     assert not any(a[0] == "game" and a[2] == "nosuch" for a in asked)  # an address of no source asks nothing
 
 
+# ---------------------------------------------------------------- cosmetics (BUG-196)
+
+
+def test_a_campaigns_line_of_copy_ends_before_who_to_follow():
+    p = share.of_campaign({**GUKESH, "lines": ["Gukesh defends his crown in Singapore"]})
+    assert "Gukesh defends his crown in Singapore. Follow Gukesh D and Javokhir Sindarov on" in p.description
+
+
+def test_a_long_events_tag_is_cut_to_stay_within_the_picture():
+    """A campaign's event may be 120 characters (campaigns.EVENT_MAX): its pill is cut with an ellipsis at the margin."""
+    event = "FIDE World Chess Championship 2026 Match · Singapore, Resorts World Sentosa"
+    img = picture(share.png(share.Picture("#7c3aed", "#ffffff", event, "Gukesh v Sindarov"))).convert("RGB")
+    assert img.getpixel((share.PAD + 200, 60)) == (0xFF, 0xFF, 0xFF)  # the pill, above its letters
+    assert img.getpixel((share.WIDTH - 30, 60)) == (0x7C, 0x3A, 0xED)  # the block, past the margin
