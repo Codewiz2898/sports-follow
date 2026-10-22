@@ -8,11 +8,13 @@ final, 11 Oct 2026, Team Spirit 1-3 Team Yandex (tests/fixtures/opendota: OpenDo
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import json
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -240,6 +242,7 @@ def test_a_live_card_credits_opendota_beside_pandascore_once_it_has_the_map(open
 class FakeRedis:
     def __init__(self):
         self.data: dict[str, object] = {}
+        self.until: dict[str, float] = {}  # a key set with ex: when it goes
 
     def incr(self, key):
         self.data[key] = int(self.data.get(key, 0)) + 1
@@ -249,10 +252,19 @@ class FakeRedis:
         pass
 
     def get(self, key):
+        if key in self.until and self.until[key] <= time.time():
+            self.data.pop(key, None)
+            self.until.pop(key)
         return self.data.get(key)
 
-    def set(self, key, value, ex=None):
+    def set(self, key, value, ex=None, nx=False):
+        if nx and self.get(key) is not None:
+            return None
         self.data[key] = value
+        self.until.pop(key, None)
+        if ex:
+            self.until[key] = time.time() + ex
+        return True
 
 
 def test_a_match_is_kept_once_parsed_and_the_minute_is_never_overspent(monkeypatch):
@@ -800,8 +812,6 @@ def test_keeping_up_leaves_opendotas_last_third_to_pages_and_polls_and_waits_out
 
 def test_the_worker_hands_each_source_live_nows_last_read_each_minute(opendota_up, monkeypatch, caplog):
     """worker.keep_up_live -> live.keep_up -> the adapter's keep_up, which one source failing doesn't stop."""
-    from types import SimpleNamespace
-
     from sports_follow import worker
 
     def broken(games, age):
@@ -816,3 +826,104 @@ def test_the_worker_hands_each_source_live_nows_last_read_each_minute(opendota_u
     assert json.loads(redis.get(f"dota:lead:{LIVE_GAME['match_id']}")) == [[LIVE_GAME["game_time"], LIVE_GAME["radiant_lead"]]]
     assert json.loads(redis.get("dota:series:777")) == {"1": LIVE_GAME["match_id"]}  # a read 40 s old: map 1 remembered
     assert "broken couldn't keep up its games" in caplog.text
+
+
+# ---------------------------------------------------------------- found while nobody looks
+
+
+@pytest.fixture
+def nobody_looks(opendota_up, monkeypatch):
+    """PandaScore as the worker's own read of Live now asks it (live.read: its series on now, each request counted)
+    with nobody on the site, from a clock the test moves; Live now's read without a database (a series names no
+    players, and the registry here has no pros to offer for its teams). OpenDota's live list has map 1 of the series
+    in it, its horn 3 minutes after the clock starts."""
+    on = SimpleNamespace(series=[], asked=[], clock=[1_800_000_000.0], down=False)
+    rosters = {f"/teams/{SPIRIT}": {"players": ROSTER[:2]}, f"/teams/{LIQUID}": {"players": ROSTER[2:]}}
+
+    def get_json(path, ttl, **params):
+        if path != "/matches/running":
+            return rosters[path]
+        on.asked.append(params.get("filter[videogame]"))
+        if on.down:
+            raise AdapterError("PandaScore returned HTTP 502 for /matches/running")
+        return on.series
+
+    monkeypatch.setattr(pandascore, "get_json", get_json)
+    monkeypatch.setattr(ps.time, "time", lambda: on.clock[0])
+    monkeypatch.setattr(opendota, "live", lambda: opendota_up.append("live") or [dict(LIVE_GAME, building_state=dota.NO_BUILDINGS, game_time=on.clock[0] - 1_800_000_180,
+                                                                                       radiant_lead=-3 * (on.clock[0] - 1_800_000_180))])
+    monkeypatch.setattr(live, "session", contextlib.nullcontext)
+    monkeypatch.setattr(live.registry, "blocked", lambda db: set())
+    monkeypatch.setattr(live, "_ranked", lambda *args: ([], 0))
+    monkeypatch.setattr(live.matches, "learn", lambda *args: None)
+    on.adapter = ps.PandascoreEsports()
+    monkeypatch.setattr(live, "ADAPTERS", {on.adapter.system: on.adapter})
+
+    def minute() -> int:
+        """The worker's keep_up_live, then a minute on."""
+        kept = live.keep_up(datetime.fromtimestamp(on.clock[0], timezone.utc))
+        on.clock[0] += 60
+        return kept
+
+    on.minute = minute
+    return on
+
+
+def _rated(m: dict) -> dict:
+    """A series of a tournament Live now rates (an A tier one)."""
+    return {**m, "tournament": {"id": 3, "name": "Playoffs", "tier": "a"}}
+
+
+def test_a_series_that_starts_while_nobody_looks_is_found_and_read_each_minute_from_early_in_map_one(nobody_looks, opendota_up):
+    """BHA-676: Live now's read was made only while fans looked, so a series that started while nobody did got no
+    readings till someone looked. The worker makes it itself every 5 minutes then: 12 PandaScore requests an hour."""
+    on = nobody_looks
+    assert on.minute() == 0 and len(on.asked) == 1 and opendota_up == []  # nothing on: nothing of OpenDota's asked
+    on.series = [_rated(_series("running", [("running", None)]))]  # it starts: map 1's draft
+    assert [on.minute() for _ in range(4)] == [0, 0, 0, 0] and len(on.asked) == 1  # Live now's read stands for 5 minutes
+    assert [on.minute() for _ in range(5)] == [1, 1, 1, 1, 1] and len(on.asked) == 2  # found 2 minutes after the horn
+    assert on.minute() == 1 and len(on.asked) == 3  # then read every 5 minutes: 12 an hour
+    assert on.asked == [ps.game_ids(on.adapter._on())] * 3  # Live now's own read, its every game's series: a fan's look shares it
+    assert on.adapter._known_maps("777", 1, None) == {"1": LIVE_GAME["match_id"]}  # from a read just made: map 1, for its numbers once over
+    snap = ps.parse_match(on.series[0])
+    on.adapter._dota(on.series[0], snap, detail=True)  # its page opened, 11 minutes in: the line from 2 minutes after the horn
+    assert [t for t, _ in snap.state["page_detail"]["live"]["lead"]["readings"]] == [120, 180, 240, 300, 360, 420, 480]
+
+
+def test_while_fans_look_the_worker_reads_nothing_more(nobody_looks):
+    on = nobody_looks
+    on.series = [_rated(_series("running", [("running", None)]))]
+    now = datetime.fromtimestamp(on.clock[0], timezone.utc)
+    live.read(on.adapter.system, now - timedelta(seconds=ps.DOTA_READ - 30))  # a fan's look 4 minutes ago
+    on.asked.clear()
+    assert on.minute() == 1 and on.asked == []  # Live now's read is theirs: kept up from it, nothing asked
+    assert on.minute() == 1 and len(on.asked) == 1  # nobody since: the worker's own read
+
+
+def test_no_read_for_keeping_up_with_dota_off_or_no_room_for_it(nobody_looks, monkeypatch):
+    on = nobody_looks
+    monkeypatch.setattr(ps.PandascoreEsports, "running", lambda self: ("lol", "cs2"))  # Dota 2 turned off
+    assert on.adapter.keep_up_read() is None and on.minute() == 0 and on.asked == []
+    monkeypatch.setattr(ps.PandascoreEsports, "running", lambda self: ("dota2",))
+    monkeypatch.setattr(opendota, "ENABLED", False)
+    assert on.adapter.keep_up_read() is None and on.minute() == 0 and on.asked == []
+    monkeypatch.setattr(opendota, "ENABLED", True)
+    budget.observe(opendota.BUDGET, "", int(opendota.FREE_DAY * opendota.SPARE), 3600)  # OpenDota's last third: no readings to take
+    assert on.adapter.keep_up_read() is None and on.minute() == 0 and on.asked == []
+    budget.observe(opendota.BUDGET, "", 2000, 3600)
+    budget.observe(pandascore.BUDGET, "", pandascore.LIVE_RESERVE, 3600)  # PandaScore's hour down to what live series need
+    assert on.adapter.keep_up_read() is None and on.minute() == 0 and on.asked == []
+    budget.observe(pandascore.BUDGET, "", 900, 3600)
+    assert on.adapter.keep_up_read() == ps.DOTA_READ and on.minute() == 0 and len(on.asked) == 1
+
+
+def test_a_failed_read_is_asked_again_5_minutes_on_and_a_series_kept_up_goes_on(nobody_looks):
+    on = nobody_looks
+    on.series = [_rated(_series("running", [("running", None)]))]
+    on.clock[0] += 240  # the horn a minute ago
+    assert on.minute() == 1 and len(on.asked) == 1
+    on.clock[0] += ps.DOTA_READ  # nobody since
+    on.down = True
+    assert on.minute() == 1 and len(on.asked) == 2  # PandaScore down: the series it found still read
+    assert [on.minute() for _ in range(4)] == [1, 1, 1, 1] and len(on.asked) == 2  # not asked each minute
+    assert on.minute() == 1 and len(on.asked) == 3

@@ -16,7 +16,8 @@ its own (sports/esports.py); one turned off isn't read, searched or imported.
 Dota 2 series get what happens inside each map from OpenDota (dota.py): kills, the clock and the gold
 lead while a map is on, and every roster player's hero and numbers once it's over. The live map's gold line is
 drawn from readings of OpenDota's live list: each poll and match page read takes one, and the worker one a minute
-for every Dota 2 series Live now lists, whether or not anyone has it open (keep_up).
+for every Dota 2 series Live now lists, whether or not anyone has it open (keep_up); while nobody looks at Live
+now, the worker makes its read every 5 minutes, so a series that starts then is found (keep_up_read).
 """
 
 from __future__ import annotations
@@ -74,6 +75,10 @@ DOTA_GONE = 30 * 60
 # The map Live now's read says is on is taken as the live game's number only from a read this recent (Live now's own
 # limit for showing one): an older read may be a map behind.
 DOTA_TRUST = 3 * 60
+# Live now's read older than this, the worker makes it anew for keep_up (keep_up_read), so a Dota 2 series that starts
+# while nobody looks is found: at the worker's next minute, so every 5 minutes, one request (two with over a page of
+# series on) while nobody looks and none while fans do. Bharath's call (BHA-676): 12 to 24 an hour of PandaScore's 1,000.
+DOTA_READ = 4 * 60 + 30
 SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
 # The tournaments whose teams the team registry lists (teams): those the app rates (LIVE_TIERS). A team only in
 # closed qualifiers and second divisions isn't, as there are thousands; an operator adds one by hand (teams.py).
@@ -751,6 +756,15 @@ class PandascoreEsports(Adapter):
             with contextlib.suppress(Exception):
                 r.set("dota:on", json.dumps(on), ex=DOTA_GONE)
         return kept
+
+    def keep_up_read(self) -> float | None:
+        """How old Live now's read may get before the worker makes it anew for keep_up (live.keep_up), whoever is
+        looking, so a Dota 2 series that starts while nobody does is kept up from early in its first map: DOTA_READ
+        while Dota 2 runs and PandaScore's hour has room for a read nobody waits on, and OpenDota's for the readings
+        it's for (pandascore.spare, opendota.spare); otherwise None, and only fans' looks make it."""
+        if not opendota.ENABLED or GAMES["dota-2"] not in self.running() or not pandascore.spare() or not opendota.spare():
+            return None
+        return DOTA_READ
 
     def _remember_live(self, series: str, state: dict[str, Any], game: dict[str, Any]) -> None:
         """The live game as the map Live now's board says is on (the one after its finished maps), as a poll
