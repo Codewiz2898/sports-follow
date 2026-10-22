@@ -79,7 +79,11 @@ export interface AccountRow {
   devices: number
 }
 export interface AccountDetail extends AccountRow {
-  following: { id: number; name: string; sport: string; since: string }[]
+  following: { id: number; name: string; sport: string; since: string }[] // players
+  teams: { id: number; name: string; sport: string; since: string }[]
+  games: { id: number; title: string; sport: string; start: string | null; since: string; over: boolean }[] // over: the follow lapsed with the game
+  picks: number // calls made, predictions with friends
+  leagues: number
   sessions: { created_at: string; last_seen_at: string; expires_at: string }[]
   alert_devices: { created_at: string; last_ok_at: string | null; timezone: string; failures: number }[]
 }

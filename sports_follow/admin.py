@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 from . import accounts, controls, feed, feedstats, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, FEED_LAYOUT, SOURCES
-from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
+from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -401,13 +401,22 @@ def _row(a: Account, follows: int, devices: int, seen: datetime | None) -> dict[
 
 
 def account(db: Session, account_id: int) -> dict[str, Any] | None:
-    """One account: who they follow, their signed-in devices and the devices with alerts on."""
+    """One account: the players, teams and games they follow, how many calls they've made and leagues they're in,
+    their signed-in devices and the devices with alerts on."""
     a = db.get(Account, account_id)
     if a is None:
         return None
     players = db.execute(
         select(Player.id, Player.name, Player.sport, Follow.created_at).join(Follow, Follow.player_id == Player.id)
         .where(Follow.fan_id == a.fan_id).order_by(Follow.created_at.desc())
+    ).all()
+    teams = db.execute(
+        select(Team.id, Team.name, Team.sport, TeamFollow.created_at).join(TeamFollow, TeamFollow.team_id == Team.id)
+        .where(TeamFollow.fan_id == a.fan_id).order_by(TeamFollow.created_at.desc())
+    ).all()
+    games = db.execute(
+        select(Event.id, Event.title, Event.sport, Event.start_utc, MatchFollow.created_at, MatchFollow.until).join(MatchFollow, MatchFollow.event_id == Event.id)
+        .where(MatchFollow.fan_id == a.fan_id).order_by(MatchFollow.created_at.desc())
     ).all()
     sessions = db.execute(
         select(AccountSession.created_at, AccountSession.last_seen_at, AccountSession.expires_at)
@@ -421,6 +430,12 @@ def account(db: Session, account_id: int) -> dict[str, Any] | None:
     return {
         **_row(a, len(players), len(devices), seen),
         "following": [{"id": p, "name": n, "sport": sports.label(s), "since": _iso(at)} for p, n, s, at in players],
+        "teams": [{"id": t, "name": n, "sport": sports.label(s), "since": _iso(at)} for t, n, s, at in teams],
+        # A game's follow lapses when it's over (matches.py), and goes a month after (retention.py).
+        "games": [{"id": e, "title": n, "sport": sports.label(s), "start": _iso(start), "since": _iso(at), "over": until is not None}
+                  for e, n, s, start, at, until in games],
+        "picks": db.scalar(select(func.count()).select_from(Pick).where(Pick.fan_id == a.fan_id)) or 0,
+        "leagues": db.scalar(select(func.count()).select_from(LeagueMember).where(LeagueMember.fan_id == a.fan_id)) or 0,
         "sessions": [{"created_at": _iso(c), "last_seen_at": _iso(ls), "expires_at": _iso(e)} for c, ls, e in sessions],
         "alert_devices": [{"created_at": _iso(c), "last_ok_at": _iso(ok), "timezone": tz, "failures": f} for c, ok, tz, f in devices],
     }

@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, admin, controls, db as db_module
-from sports_follow.models import Account, AccountSession, Follow, Player, PushSubscription
+from sports_follow.models import Account, AccountSession, Event, Follow, League, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Question, Team, TeamFollow
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -29,7 +29,7 @@ NOW = datetime.now(timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE account, account_session, follow, push_subscription, player, control RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE account, account_session, follow, push_subscription, player, control, team, event, prediction_question, prediction_league RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -101,6 +101,27 @@ def test_one_account_shows_who_they_follow_and_their_devices(db):
     assert [p["name"] for p in shown["following"]] == ["Player 1"] and shown["following"][0]["sport"] == "Football"
     assert len(shown["sessions"]) == 1 and len(shown["alert_devices"]) == 1
     assert admin.account(db, 999) is None
+
+
+def test_one_account_shows_the_teams_and_games_they_follow_and_their_calls(db):
+    """BUG-261: the account page listed followed players only, so an account following teams and games read
+    "Following · 0, Nobody yet", though deleting it takes those too. Its picks and leagues are counted beside them."""
+    account_id, fan, _ = signed_in(db, "fan@example.com")
+    team = Team(name="Riverside XI", sport="football", system="espn_soccer", external_id="10")
+    game = Event(key="riverside-eastern", sport="football", title="Riverside XI vs Eastern Stars", start_utc=NOW)
+    asked = Question(game="espn_soccer/1", ask="result", sport="football", match="espn_soccer/1", title="Who wins?")
+    office = League(code="office123", name="Office")
+    db.add_all([team, game, asked, office])
+    db.flush()
+    db.add_all([TeamFollow(fan_id=fan, team_id=team.id), MatchFollow(fan_id=fan, event_id=game.id), Pick(question_id=asked.id, fan_id=fan, option="home"),
+                LeagueMember(league_id=office.id, fan_id=fan, name="Fan")])  # fmt: skip
+    db.add(TeamFollow(fan_id="anon-1", team_id=team.id))  # someone else's
+    db.commit()
+    shown = admin.account(db, account_id)
+    assert shown is not None
+    assert [(t["id"], t["name"], t["sport"]) for t in shown["teams"]] == [(team.id, "Riverside XI", "Football")]
+    assert [(g["title"], g["sport"], g["over"]) for g in shown["games"]] == [("Riverside XI vs Eastern Stars", "Football", False)]
+    assert (shown["picks"], shown["leagues"]) == (1, 1)
 
 
 def test_signing_an_account_out_everywhere_ends_its_sessions_and_alerts(db):

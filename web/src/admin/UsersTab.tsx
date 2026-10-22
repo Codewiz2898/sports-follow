@@ -151,10 +151,11 @@ export function UserPage() {
 
   const back = <Link to="/admin/users" className="btn icon" aria-label="All accounts"><BackIcon width={20} height={20} /></Link>
   if (!account) return <>{back}{error ? <div className="error-box" role="alert">{error}</div> : <div className="card empty"><span className="spinner" /></div>}</>
+  const following = account.following.length + account.teams.length + account.games.length
   const question: Record<Exclude<Asking, null>, string> = {
     signout: `Sign ${account.email} out on every device? Their alerts stop until they sign in again.`,
     block: account.blocked_at ? `Let ${account.email} sign in again?` : `Block ${account.email}? They're signed out everywhere and can't sign in.`,
-    delete: `Delete ${account.email}, with everyone they follow, their alert levels and devices? This can't be undone.`,
+    delete: `Delete ${account.email}, with everything they follow, their calls and places in leagues, their alert levels and devices? This can't be undone.`,
   }
   return (
     <>
@@ -193,19 +194,32 @@ export function UserPage() {
         </div>
       )}
       <section className="section" aria-label="Following">
-        <h3 className="eyebrow">Following · {account.following.length}</h3>
+        <h3 className="eyebrow">Following · {following}</h3>
         <div className="card">
-          {account.following.length ? (
+          {following ? (
             <ul className="list">
               {account.following.map((p) => (
-                <li key={p.id} className="admin-row">
+                <li key={`p${p.id}`} className="admin-row">
                   <a href={`/player/${p.id}`} className="title">{p.name}</a>
                   <span className="small muted">{p.sport} · since {day(p.since)}</span>
+                </li>
+              ))}
+              {account.teams.map((t) => (
+                <li key={`t${t.id}`} className="admin-row">
+                  <a href={`/team/${t.id}`} className="title">{t.name}</a>
+                  <span className="small muted">{t.sport} team · since {day(t.since)}</span>
+                </li>
+              ))}
+              {account.games.map((g) => (
+                <li key={`g${g.id}`} className="admin-row">
+                  <span className="title">{g.title}</span>
+                  <span className="small muted">{g.sport} game{g.start ? ` on ${day(g.start)}` : ''} · {g.over ? 'over' : `since ${day(g.since)}`}</span>
                 </li>
               ))}
             </ul>
           ) : <div className="empty small">Nobody yet.</div>}
         </div>
+        <span className="small muted">{count(account.picks)} {account.picks === 1 ? 'call' : 'calls'} made · in {count(account.leagues)} {account.leagues === 1 ? 'league' : 'leagues'}</span>
       </section>
       <section className="section" aria-label="Signed-in devices">
         <h3 className="eyebrow">Signed in on · {account.sessions.length}</h3>
