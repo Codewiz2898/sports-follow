@@ -186,16 +186,21 @@ class _Command:
         return self.run().__await__()
 
 
-def test_the_tick_keeps_its_minute_while_long_jobs_hold_every_slot(monkeypatch):
-    """arq runs a cron job in a job slot, like any job: with MAX_JOBS poll sessions running (about 20 followed chess
-    players live in a broadcast, each board its own ten-minute poll) the tick waited for one to end, and nothing was
-    armed or swept meanwhile. Here every slot of a real arq Worker holds a board's poll session, and the tick still
-    runs each time it's due; once the worker stops, it doesn't."""
-    monkeypatch.setattr(worker, "TICK_EVERY", 0.5, raising=False)  # a minute, made short
+def _every_slot_held(monkeypatch) -> tuple[dict[str, list[tuple[float, int]]], dict[str, int]]:
+    """A real arq Worker, with its own settings and hooks (on MemoryArq), every slot of it holding a board's poll
+    session, for a little over two seconds, then stopped, then a second more. Returns when the tick and the
+    prediction pushes ran, each with how many slots were taken then, and how many runs of each there were when it
+    stopped. A minute is half a second here."""
+    monkeypatch.setattr(worker, "MINUTE", 0.5, raising=False)
     monkeypatch.setattr(structured, "poll_event", lambda event_id: shutdown.sleep(600))  # polls till the worker stops
     arq_worker: Worker | None = None
-    ticks: list[tuple[float, int]] = []  # when each tick began, and how many slots were taken then
-    monkeypatch.setattr(pipeline, "due_work", lambda: ticks.append((time.time(), arq_worker.job_counter if arq_worker else -1)) or pipeline.Due())
+    ran: dict[str, list[tuple[float, int]]] = {"tick": [], "prediction_pushes": []}
+
+    def now(name: str) -> None:
+        ran[name].append((time.time(), arq_worker.job_counter if arq_worker else -1))
+
+    monkeypatch.setattr(pipeline, "due_work", lambda: now("tick") or pipeline.Due())
+    monkeypatch.setattr(predictions_push, "run", lambda: now("prediction_pushes") or 0)
     monkeypatch.setattr(engine, "needs_lane", lambda: False)
     monkeypatch.setattr(notify, "pending", lambda: [])
     monkeypatch.setattr(notify, "held_due", lambda: [])
@@ -203,7 +208,7 @@ def test_the_tick_keeps_its_minute_while_long_jobs_hold_every_slot(monkeypatch):
     redis = MemoryArq()
     redis.data[worker.STARTERS_DONE] = redis.data[worker.TEAMS_DONE] = b"1"  # no startup refresh or import: they'd read sources
 
-    async def broadcast() -> int:
+    async def broadcast() -> dict[str, int]:
         nonlocal arq_worker
         for board in range(worker.MAX_JOBS):
             await redis.enqueue_job("poll_event", board)
@@ -213,22 +218,45 @@ def test_the_tick_keeps_its_minute_while_long_jobs_hold_every_slot(monkeypatch):
         running.cancel()
         await asyncio.wait([running])
         await arq_worker.close()  # the worker stops: its jobs are cancelled, then its shutdown hook runs
-        stopped = len(ticks)
+        stopped = {name: len(runs) for name, runs in ran.items()}
         await asyncio.sleep(1)
         return stopped
 
     try:
-        stopped = asyncio.run(broadcast())
+        return ran, asyncio.run(broadcast())
     finally:
         db.size_pool(15)
-    full = [at for at, taken in ticks[1:] if taken == worker.MAX_JOBS]  # after the one at startup
+
+
+def _on_time(at: float) -> bool:
+    """Whether a run began within 0.2 s of a half-second, the minute _every_slot_held keeps."""
+    return abs(at - round(at / 0.5) * 0.5) < 0.2
+
+
+def test_the_tick_keeps_its_minute_while_long_jobs_hold_every_slot(monkeypatch):
+    """arq runs a cron job in a job slot, like any job: with MAX_JOBS poll sessions running (about 20 followed chess
+    players live in a broadcast, each board its own ten-minute poll) the tick waited for one to end, and nothing was
+    armed or swept meanwhile. Here every slot of a real arq Worker holds a board's poll session, and the tick still
+    runs each time it's due; once the worker stops, it doesn't."""
+    ran, stopped = _every_slot_held(monkeypatch)
+    full = [at for at, taken in ran["tick"][1:] if taken == worker.MAX_JOBS]  # after the one at startup
     assert len(full) >= 3, f"ticks while every slot was held: {full}"
-    assert all(abs(at - round(at / 0.5) * 0.5) < 0.2 for at in full), full  # each on its half-second
-    assert len(ticks) == stopped  # none once the worker stopped
+    assert all(_on_time(at) for at in full), full
+    assert len(ran["tick"]) == stopped["tick"]  # none once the worker stopped
+
+
+def test_the_prediction_pushes_keep_their_minute_while_long_jobs_hold_every_slot(monkeypatch):
+    """"Make your pick" before a game matters most on a launch day's big chess event, just when its boards hold every
+    slot, and as an arq cron job the pushes waited for one as the tick did. They keep their minute beside the jobs."""
+    ran, stopped = _every_slot_held(monkeypatch)
+    full = [at for at, taken in ran["prediction_pushes"] if taken == worker.MAX_JOBS]
+    assert len(full) >= 3, f"prediction pushes while every slot was held: {full}"
+    assert all(_on_time(at) for at in full), full
+    assert len(ran["prediction_pushes"]) == stopped["prediction_pushes"]  # none once the worker stopped
 
 
 def test_a_tick_that_fails_or_finds_redis_down_doesnt_stop_the_next(monkeypatch, caplog):
-    monkeypatch.setattr(worker, "TICK_EVERY", 0.2)
+    monkeypatch.setattr(worker, "MINUTE", 0.2)
     monkeypatch.setattr(engine, "needs_lane", lambda: False)
     monkeypatch.setattr(notify, "pending", lambda: [])
     monkeypatch.setattr(notify, "held_due", lambda: [])
@@ -253,7 +281,7 @@ def test_a_tick_that_fails_or_finds_redis_down_doesnt_stop_the_next(monkeypatch,
             return await super().set(key, value, nx=nx, ex=ex, px=px)
 
     async def a_second() -> None:
-        ticker = asyncio.create_task(worker._ticker({"redis": Flaky()}))
+        ticker = asyncio.create_task(worker._on_the_clock({"redis": Flaky()}, worker.tick, 0, 900, True))
         await asyncio.sleep(1.1)
         ticker.cancel()
         await asyncio.wait([ticker])
@@ -307,35 +335,38 @@ def _cron_job(name: str):
 
 def test_a_sleep_doesnt_replay_every_missed_cron_run(monkeypatch):
     runs = []
-    monkeypatch.setattr(predictions_push, "run", lambda: runs.append(1))
-    # The laptop slept from 11:50:05 to 12:00:20. arq's next run of the every-minute job at :50 is still
-    # 11:50:50, and each heartbeat queues one missed run: 11:50:50, 11:51:50 ... 11:59:50, then it's caught up.
-    woke = datetime(2026, 10, 13, 12, 0, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(worker, "_warm_sources", lambda: runs.append(1))
+    # The laptop slept from 10:50:35 to 12:31:00. arq's next run of the job every ten minutes at :30 is still
+    # 11:00:30, and each heartbeat queues one missed run: 11:00:30, 11:10:30 ... 12:30:30, then it's caught up.
+    woke = datetime(2026, 10, 13, 12, 31, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(worker, "time", SimpleNamespace(time=woke.timestamp), raising=False)
-    pushes = _cron_job("cron:prediction_pushes")
-    pushes.calculate_next(datetime(2026, 10, 13, 11, 50, 5, tzinfo=timezone.utc))
+    warm = _cron_job("cron:warm_sources")
+    warm.calculate_next(datetime(2026, 10, 13, 10, 50, 35, tzinfo=timezone.utc))
     queue = Queue()
-    scheduler = SimpleNamespace(cron_jobs=[pushes], pool=queue, queue_name="arq:queue", timezone=timezone.utc)
+    scheduler = SimpleNamespace(cron_jobs=[warm], pool=queue, queue_name="arq:queue", timezone=timezone.utc)
 
     async def wake_up() -> None:
         for _ in range(15):  # heartbeats, half a second apart
             await Worker.run_cron(scheduler, woke, 0.5)
         redis = Redis()
         for job_id in queue.job_ids:
-            await worker.prediction_pushes({"redis": redis, "job_id": job_id})
+            await worker.warm_sources({"redis": redis, "job_id": job_id})
 
     asyncio.run(wake_up())
-    assert len(queue.job_ids) == 10  # arq still queues every missed minute
-    assert len(runs) == 2  # the first late one, and 11:59:50's, 30 seconds after its time
+    assert len(queue.job_ids) == 10  # arq still queues every missed run
+    assert len(runs) == 2  # the first late one, and 12:30:30's, 30 seconds after its time
 
 
-def test_after_a_sleep_or_a_long_tick_the_next_is_at_the_next_minute():
-    """The tick isn't arq's (_ticker), so arq never queues its missed minutes: it runs once, at the next one."""
+def test_after_a_sleep_or_a_long_run_the_next_is_at_the_next_minute():
+    """The tick and the prediction pushes aren't arq's (ON_THE_CLOCK), so arq never queues their missed minutes: each
+    runs once, at its next one."""
     noon = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc).timestamp()
-    assert worker._next_tick(noon, noon + 0.3) == noon + 60
-    assert worker._next_tick(noon + 17.5, noon + 17.6) == noon + 60  # the one at startup: then on the minute
-    assert worker._next_tick(noon, noon + 610) == noon + 660  # slept ten minutes, or a tick ran that long
-    assert worker._next_tick(noon, noon - 0.001) == noon + 60  # woken a moment early: not 12:00 again
+    assert worker._next_run(noon, noon + 0.3) == noon + 60
+    assert worker._next_run(noon + 17.5, noon + 17.6) == noon + 60  # the tick at startup: then on the minute
+    assert worker._next_run(noon, noon + 610) == noon + 660  # slept ten minutes, or a tick ran that long
+    assert worker._next_run(noon, noon - 0.001) == noon + 60  # woken a moment early: not 12:00 again
+    assert worker._next_run(noon + 17.5, noon + 17.5, at=50) == noon + 50  # the pushes, from startup: 12:00:50
+    assert worker._next_run(noon + 50, noon + 50.2, at=50) == noon + 110  # then 12:01:50
 
 
 def test_a_late_tick_still_runs_once_in_a_while(monkeypatch):
@@ -428,14 +459,14 @@ def test_every_job_and_cron_run_is_logged():
     assert all(hasattr(getattr(f, "coroutine", f), "__wrapped__") for f in worker.WorkerSettings.functions)  # or arq's func(), for a timeout
     assert all(hasattr(j.coroutine, "__wrapped__") for j in worker.WorkerSettings.cron_jobs)
     names = {j.name for j in worker.WorkerSettings.cron_jobs}
-    assert names >= {"cron:prune", "cron:prediction_pushes"}  # arq still names them after the job
-    assert "cron:tick" not in names  # it would wait for a free slot: it runs beside the jobs (_ticker)
+    assert names >= {"cron:prune", "cron:warm_sources"}  # arq still names them after the job
+    assert not names & {"cron:tick", "cron:prediction_pushes"}  # they'd wait for a free slot: they're ON_THE_CLOCK
 
 
 def test_a_worker_starting_without_a_recent_starters_refresh_or_team_import_queues_one(monkeypatch):
     """A fresh server, or one whose last refresh or import failed, needn't wait for 04:40 or Monday; a deploy's
     restart after them doesn't spend the sources again."""
-    monkeypatch.setattr(worker, "_ticker", lambda ctx: asyncio.sleep(0))  # no tick: it would read the database
+    monkeypatch.setattr(worker, "_on_the_clock", lambda ctx, *job: asyncio.sleep(0))  # no tick: it would read the database
     queued = []
 
     class Redis:
