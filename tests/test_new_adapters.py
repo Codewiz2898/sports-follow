@@ -126,7 +126,7 @@ def test_tennis_walkovers_and_retirements_say_so():
     assert snap.clock_label == "(9) Alex de Minaur (AUS) bt Alex Molcan (SVK) w/o"
     snap = espn_tennis.parse_match(*espn_tennis.find_match(data, "184881"))
     assert snap.state["ending"] == "retired" and snap.score_label == "A. Mannarino 6-3 2-2 N. Basilashvili"
-    assert (snap.lines[MANNARINO].headline, snap.lines[BASILASHVILI].headline) == ("Won, opponent retired", "Retired")
+    assert (snap.lines[MANNARINO].headline, snap.lines[BASILASHVILI].headline) == ("Won, opponent retired", "Lost, retired from the match")
     snap = espn_tennis.parse_match(*espn_tennis.find_match(data, "184950"))
     assert (snap.state["ending"], snap.lines[DE_MINAUR].headline) == (None, "Won in 2 sets")
     # One set, should a match be one: no "1 sets".
@@ -135,6 +135,18 @@ def test_tennis_walkovers_and_retirements_say_so():
     comp["competitors"][0]["linescores"] = comp["competitors"][0]["linescores"][:1]
     comp["competitors"][1]["linescores"] = comp["competitors"][1]["linescores"][:1]
     assert {l.headline for l in espn_tennis.parse_match(event, comp).lines.values()} == {"Won in 1 set", "Lost in 1 set"}
+
+
+def test_a_player_retiring_mid_match_is_told_as_a_loss_not_a_retirement():
+    # BUG-240: Basilashvili retiring at 3-6 2-2 was pushed as "Nikoloz Basilashvili: Retired", which reads as the end
+    # of his career.
+    from sports_follow import moments
+
+    snap = espn_tennis.parse_match(*espn_tennis.find_match(load("espn/tennis-scoreboard-walkover"), "184881"))
+    line = snap.lines[BASILASHVILI]
+    now = moments.Seen("final", snap.state, {"headline": line.headline, "stats": line.stats}, snap.score_label, snap.clock_label)
+    [final] = moments.detect("Tennis", "Nikoloz Basilashvili", BASILASHVILI, moments.Seen("live"), now)
+    assert (final.kind, final.title) == ("final", "Nikoloz Basilashvili: Lost, retired from the match")
 
 
 def test_a_cancelled_tennis_match_is_no_result():

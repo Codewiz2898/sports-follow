@@ -144,6 +144,17 @@ def test_no_upset_for_a_walkover_or_a_retirement():
     assert kinds(detect("Tennis", "Qualifier Q", "77", Seen("live"), played)) == [("final", ""), ("upset", "")]
 
 
+def test_an_upset_is_a_win_over_a_much_better_seed():
+    # BUG-240: any win over a lower seed number was a loud upset: [2] Rybakina beating [1] Sabalenka in a final.
+    def upset(mine: int | None, theirs: int) -> bool:
+        players = [{"id": "1", "name": "A", "winner": True, "seed": mine}, {"id": "2", "name": "B", "winner": False, "seed": theirs}]
+        final = Seen("final", state={"kind": "tennis", "players": players, "ending": None}, line=line("Won in 2 sets", Sets="2–0"))
+        return [f.kind for f in detect("Tennis", "A", "1", Seen("live"), final)] == ["final", "upset"]
+
+    assert [upset(2, 1), upset(4, 1), upset(12, 9), upset(1, 2)] == [False] * 4
+    assert [upset(5, 1), upset(20, 3), upset(None, 32)] == [True] * 3  # unseeded beating any seed is one
+
+
 def test_chess_game_start_and_result():
     start = detect("Chess", "Magnus Carlsen", "1503014", Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Playing White vs Gukesh D", Opponent="Gukesh D")))
     assert [(f.kind, f.title, f.body) for f in start] == [("start", "Magnus Carlsen is playing", "Round 5 · vs Gukesh D")]
