@@ -60,6 +60,7 @@ TAKEN = frozenset({
     "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
     "feed",  # the Android app's Feed tab (the web's is /me/feed)
     "clip", "competition",  # clips (BHA-367): one clip (/clip/<id>), a competition's clips (/competition/<name>/clips)
+    "docs", "redoc",  # FastAPI's own docs, on a development server that asks for them (SPORTS_FOLLOW_API_DOCS)
 })
 NEAR = timedelta(hours=3)  # a player's game this close to one on their campaign's schedule is that game (player_ids)
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in
@@ -74,6 +75,13 @@ ROSTER_MOST = 12  # a team's players the page offers: a roster with its substitu
 
 class Refused(ValueError):
     """What an operator asked for can't be done as asked; the message says why."""
+
+
+def address(typed: str) -> str | None:
+    """The campaign address a link names, whatever its case: stann.in/Gukesh, retyped from a poster, is /gukesh. None
+    for one no campaign can have. Only a-z is lower-cased (a K from another script never becomes a "k")."""
+    slug = typed.lower() if typed.isascii() else ""
+    return slug if SLUG.fullmatch(slug) else None
 
 
 def get(db: Session, slug: str) -> Campaign | None:

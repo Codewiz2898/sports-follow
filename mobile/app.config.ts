@@ -9,9 +9,10 @@
 //
 // The site's links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
 // needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
-// (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android trusts the
-// claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed it
-// (README.md, "Android app").
+// (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android matches a path as
+// it's typed, capitals and all, so that pattern takes them: the server finds a campaign whatever its case. Android
+// trusts the claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed
+// it (README.md, "Android app").
 
 /// <reference types="node" />
 import fs from 'node:fs'
@@ -56,7 +57,7 @@ function pages(): ExpoConfigAndroidIntentFiltersData[] {
     const route = f.name.replace(/\.tsx$/, '')
     if (f.isDirectory()) return [{ pathPrefix: `/${route}/` }]
     if (route === 'index') return [{ path: '/' }, { path: '' }] // "https://stann.in/", and without its slash
-    if (route === '[slug]') return [{ pathAdvancedPattern: '/[a-z0-9-]+' }]
+    if (route === '[slug]') return [{ pathAdvancedPattern: '/[a-zA-Z0-9-]+' }] // as typed: /Gukesh is /gukesh to the server
     return /^[a-z]+$/.test(route) ? [{ path: `/${route}` }] : [] // not _layout or +not-found
   })
 }

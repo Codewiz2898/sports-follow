@@ -29,6 +29,9 @@ LOG_LEVEL = os.environ.get("SPORTS_FOLLOW_LOG_LEVEL", "INFO").strip().upper()
 # The commit the image was built from (deploy.sh, through the Dockerfile): /api/health says it, so the
 # deploy workflow and its summary know what's live. Empty outside a deployed image.
 COMMIT = os.environ.get("SPORTS_FOLLOW_COMMIT", "").strip()
+# FastAPI's own docs (/docs, /redoc and /openapi.json), which list every route: "1" on a development server
+# that wants them, never on the site.
+API_DOCS = os.environ.get("SPORTS_FOLLOW_API_DOCS", "").strip() == "1"
 # The app's public address: compose sets it from DOMAIN (https://<domain>). Empty in development.
 SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
 # Where fans write about their data: the privacy page shows it (and has no Questions part without it),

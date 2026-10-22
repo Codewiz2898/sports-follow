@@ -351,9 +351,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
   now, live, last or next; a game of theirs (`/player/<id>?g=<event id>`, the link a This week poster
   shares) says its big moment in the sport's own words, as This week does (`week.game`); a campaign page
-  (`/<slug>`, below) says its event, its next game and who to follow; every other page says what the app is.
+  (`/<slug>`, below) says its event, its next game and who to follow; a league's invite (`/j/<code>`) says join
+  it, who asked and how many are in it, never its code; a team's page says who and its game on now, last or
+  next; a clip's says its caption, moment and game; a game's (`/match/<source>/<game>`) its score, who won or
+  when it starts; every other page says what the app is. A preview is what anyone with the link may see, read
+  from what's stored: it counts no invite as opened and asks no source.
   Each has a 1200 × 630 picture drawn by the server with Pillow (`/api/players/<id>/share.png`, `?g=` for a
-  game; `/api/campaigns/<slug>/share.png`; `/api/share.png` for the app): a block of the sport's
+  game; `/api/campaigns/<slug>/share.png`; `/api/leagues/<code>/share.png`; `/api/teams/<id>/share.png`;
+  `/api/clips/<id>/share.png`; `/api/match/<source>/<game>/share.png`; `/api/share.png` for the app): a block of the sport's
   colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
@@ -471,7 +476,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   that doesn't answer keeps the roster last read. Its players are registry athletes a running source has
   (checked as a starter is), so following never needs AI research. A campaign is a row in `campaign`, set
   with a command; a later one (the WPL, the IPL) is a new row. Its address is any one word the app doesn't
-  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes). A campaign of a sport
+  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes), in lower case; a link
+  typed with capitals (`stann.in/Gukesh`, from a poster) is the same page, its preview and the Android app's
+  too, and the web app moves it to `/gukesh`. A campaign of a sport
   that's turned off has no page, and a player removed with `players remove` leaves every campaign.
 
       python -m sports_follow.campaigns set gukesh --sport chess --title "Gukesh v Sindarov" --event "World Chess Championship" --line "…"
@@ -1075,6 +1082,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LINEAR_FREE_ISSUES` | `250` | the issues Linear's Free plan holds (not counting archived ones), which the panel counts against; Linear's API doesn't say it |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
+| `SPORTS_FOLLOW_API_DOCS` | off | `1` serves FastAPI's own docs (`/docs`, `/redoc`, `/openapi.json`) on a development server; they list every route, the admin panel's too, so never on the site |
 | `SPORTS_FOLLOW_COMMIT` | none | the commit the image was built from, which `/api/health` says; `deploy.sh` passes it to the build, so set it by hand only to test |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
@@ -1191,8 +1199,8 @@ needs a new app build, not only new JavaScript. Removing chess removes the modul
 **stann.in links open the app** when it's installed (Android App Links), at the same page: a player
 shared on WhatsApp, a campaign's link in a launch post. The app claims the addresses it has a page for,
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/match/…`,
-`/search` and the rest, and any one-word address for a campaign (Android 12 and later; older phones open
-campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
+`/search` and the rest, and any one-word address for a campaign, capitals and all, since Android matches a
+path as it's typed (Android 12 and later; older phones open campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
 app's "Not found"; typed into Chrome, it stays there. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
 certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.slam.app` and

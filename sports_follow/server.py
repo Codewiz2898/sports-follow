@@ -43,7 +43,7 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, released, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
@@ -72,8 +72,10 @@ async def lifespan(app: FastAPI):
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
-# Nor does it log validation failures, which carry what a client sent.
-app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+# Nor does it log validation failures, which carry what a client sent. Its own docs (/docs, /redoc and the schema
+# they read) list every route, the admin panel's too: only on a development server that asks for them (API_DOCS).
+app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False},
+              docs_url="/docs" if API_DOCS else None, redoc_url="/redoc" if API_DOCS else None, openapi_url="/openapi.json" if API_DOCS else None)
 
 
 class Route(APIRoute):
@@ -914,9 +916,11 @@ async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 
 def _campaign_slug(slug: str) -> str:
-    if not campaigns.SLUG.fullmatch(slug):
+    """The campaign at a link's address, whatever its case (stann.in/Gukesh is /gukesh); a 404 for one no campaign can have."""
+    found = campaigns.address(slug)
+    if found is None:
         raise HTTPException(404, "No such page.")
-    return slug
+    return found
 
 
 @app.get("/api/campaigns/{slug}")
@@ -2709,6 +2713,51 @@ def watch_page(player: str, plays: str, request: Request) -> Response:
     return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
+# ---------------------------------------------------------------- link previews of invites, teams, clips and games
+
+
+@app.get("/api/leagues/{code}/share.png")
+async def invite_picture(code: LeagueCode) -> Response:
+    """The picture a league's invite link shows (share.of_invite): its name, who asked and how many are in it, never
+    its code. Only read: drawing it counts no opening."""
+    invite = await in_db(predictions.about, code)
+    if invite is None:
+        raise HTTPException(404, "No such league.")
+    return await _picture(share.of_invite(invite).picture)
+
+
+@app.get("/api/teams/{team_id}/share.png")
+async def team_picture(team_id: RowId) -> Response:
+    """The picture a link to a team's page shows (share.of_team): who it is, and its game on now, last or next."""
+    team = await in_db(teams.page, team_id, None)
+    if team is None:
+        raise HTTPException(404, "No such team.")
+    preview = share.of_team(team)
+    if preview is None:
+        raise HTTPException(404, "No such team.")
+    return await _picture(preview.picture)
+
+
+@app.get("/api/clips/{slug}/share.png")
+async def clip_picture(slug: str) -> Response:
+    """The picture a link to a clip shows (share.of_clip): its caption, its moment and its game, drawn."""
+    clip = await in_db(clips.one, slug)
+    if clip is None:
+        raise HTTPException(404, "No such clip.")
+    return await _picture(share.of_clip(clip).picture)
+
+
+@app.get("/api/match/{system}/{game}/share.png")
+async def game_picture(system: str, game: str) -> Response:
+    """The picture a link to a game's page shows (share.of_match): the game, and the score, who won or when it starts.
+    From what's stored: a made-up address asks nothing of a source."""
+    shown = (await in_db(lambda db: match.view(db, None, system, game)[0])) if system in KNOWN and match.ID.fullmatch(game) else None
+    preview = share.of_match(shown) if shown else None
+    if preview is None:
+        raise HTTPException(404, "No such game.")
+    return await _picture(preview.picture)
+
+
 # ---------------------------------------------------------------- the built frontend (production)
 
 # Served fresh every time, so a new build reaches installed apps: the page, the service worker that
@@ -2721,6 +2770,10 @@ PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
 # A game's page, with a question of it (?q=<question id>, the link its card shares): the question's preview.
 MATCH_PAGE = re.compile(r"match/([a-z_]{1,40})/([A-Za-z0-9][A-Za-z0-9_.:-]{0,62})/?")
 GAME = re.compile(r"[0-9]{1,10}")
+# A league's invite (/j/<code>, the link a member shares), a team's page, and a clip's: each with its own preview.
+INVITE_PAGE = re.compile(r"j/([A-Za-z0-9]{4,16})/?")
+TEAM_PAGE = re.compile(r"team/([0-9]{1,10})/?")
+CLIP_PAGE = re.compile(r"clip/([A-Za-z0-9_-]{1,16})/?")
 
 # The build's files by their content's hash, typed by Python's mimetypes: a .wasm (a chess analysis board's engine)
 # as application/wasm, the only type a browser compiles as it streams in, which tests/test_share.py guards.
@@ -2733,12 +2786,22 @@ def _site(request: Request) -> str:
     return SITE_URL or f"{request.url.scheme}://{request.url.netloc}"
 
 
+async def _looked_up(path: str, read: Callable[[Session], T]) -> T | None:
+    """What a page's preview reads, or None when that fails."""
+    try:
+        return await in_db(read)
+    except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+        log.warning("link preview of /%s", path, exc_info=True)
+        return None
+
+
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
     """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, a question's (a game's page
-    with ?q=), or None for the app's own."""
-    if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
+    with ?q=), a league's invite, a team's, a clip's or a game's, or None for the app's own. Never as a fan sees it:
+    a crawler is no one."""
+    if (slug := campaigns.address(path.rstrip("/"))) and slug not in campaigns.TAKEN:
         try:
-            shown = await in_db(campaigns.page, path.rstrip("/"), None)
+            shown = await in_db(campaigns.page, slug, None)
         except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
             log.warning("link preview of /%s", path, exc_info=True)
             return None
@@ -2751,6 +2814,8 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
             log.warning("link preview of /%s", path, exc_info=True)
             return None
         return share.of_question(q) if q and q["match"] == f"{g[1]}/{g[2]}" else None
+    if found := await _shared(path):
+        return found
     m = PLAYER_PAGE.fullmatch(path)
     if not m or int(m[1]) > MAX_ID:
         return None
@@ -2760,6 +2825,24 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
     except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
         log.warning("link preview of /%s", path, exc_info=True)
         return None
+
+
+async def _shared(path: str) -> share.Preview | None:
+    """The preview of a league's invite, a team's page, a clip's or a game's at `path`; None for another page, or one
+    of these there's none of (no such league, a team of a sport turned off, a game no source has named here)."""
+    if m := INVITE_PAGE.fullmatch(path):
+        invite = await _looked_up(path, lambda db: predictions.about(db, m[1]))
+        return share.of_invite(invite) if invite else None
+    if (m := TEAM_PAGE.fullmatch(path)) and int(m[1]) <= MAX_ID:
+        team = await _looked_up(path, lambda db: teams.page(db, int(m[1]), None))
+        return share.of_team(team) if team else None
+    if m := CLIP_PAGE.fullmatch(path):
+        clip = await _looked_up(path, lambda db: clips.one(db, m[1]))
+        return share.of_clip(clip) if clip else None
+    if (m := MATCH_PAGE.fullmatch(path)) and m[1] in KNOWN and match.ID.fullmatch(m[2]):
+        game = await _looked_up(path, lambda db: match.view(db, None, m[1], m[2])[0])  # what's stored: a preview asks no source
+        return share.of_match(game) if game else None
+    return None
 
 
 def _built(path: str) -> Path | str | None:

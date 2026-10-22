@@ -5,7 +5,8 @@ no JavaScript. So the server writes each page's Open Graph and Twitter card tags
 (server.spa): a player's page (/player/<id>) says who they are and what they're doing now, live, last or
 next; a game of theirs (/player/<id>?g=<event id>, the link a This week poster shares) says its big moment,
 as This week words it (week.game, Sport.poster); a campaign page (/<slug>, campaigns.py) says its event, its
-next game and who to follow; every other page says what the app is.
+next game and who to follow; a league's invite (/j/<code>) says join it, who asked and how many are in it; a
+team's page, a clip's and a game's say who, what and where it's at; every other page says what the app is.
 
 Each has a 1200 × 630 picture, drawn here: a block of the sport's colour (Sport.colour) with the words in
 the app's own type (Anton, slanted, for the name and the moment's word; Manrope for the lines) and a paper
@@ -160,7 +161,7 @@ def of_campaign(shown: dict[str, Any]) -> Preview:
     names = [r["name"] for r in shown["players"]] or [t["name"] for t in shown["teams"]]
     follow = f"Follow {_and(names)}" if names else ""
     event = shown.get("event") or ""
-    said = " ".join(x for x in (_sentence(event) if event else "", _sentence(game) if game else "", *(shown["lines"][:1]),
+    said = " ".join(x for x in (_sentence(event) if event else "", _sentence(game) if game else "", *(_sentence(line) for line in shown["lines"][:1]),
                                 f"{follow} on {APP_NAME}: live boards and alerts." if follow else f"Live boards and alerts on {APP_NAME}.") if x)
     return Preview(
         title=f"{shown['title']} · {event}" if event else shown["title"],
@@ -196,6 +197,106 @@ def of_question(q: dict[str, Any]) -> Preview:
         path=f"/match/{q['match']}?q={q['id']}",
         picture=Picture(ground, ink, label, word, name, tuple(line for line in lines if line)),
         image=f"/api/predictions/{q['id']}/share.png",
+    )
+
+
+def of_invite(shown: dict[str, Any]) -> Preview:
+    """A league's invite (predictions.about), as its page (/j/<code>) says it: "You're invited", the league's name in
+    big type, who asked and how many are in it, on the app's own blue (a league calls any sport's games). Its code is
+    in the link alone, never in the words or the picture: a screenshot of the preview is no invite."""
+    asked = f"{shown['by']} asked you" if shown.get("by") else "You're asked"  # its maker left: still an invite
+    together = f"{asked} to call the games together"
+    count = f"{shown['members']} in it so far"
+    return Preview(
+        title=f"Join {shown['name']} on {APP_NAME}",
+        description=f"{together} on {APP_NAME}: {count}. Call each game before it starts; bragging rights only.",
+        path=f"/j/{shown['code']}",
+        picture=Picture(BRAND, "#ffffff", "You're invited", shown["name"], "", (together, count)),
+        image=f"/api/leagues/{shown['code']}/share.png",
+    )
+
+
+def of_team(shown: dict[str, Any]) -> Preview | None:
+    """A team's page (teams.page), as a player's says theirs: its name in big type on its sport's colour, then its
+    game on now, else its last result from its side ("Won 88–80"), else its next game, else what it plays in. None
+    for a team with no name."""
+    name = (shown.get("name") or "").strip()
+    if not name:
+        return None
+    label = sports.label(shown["sport"])
+    ground, ink = _colours(sports.of(shown["sport"]))
+    live = shown.get("live") or {}
+    recent = shown.get("recent") or []
+    upcoming = [u for u in shown.get("upcoming") or [] if u.get("status") not in ("final", "postponed")]
+    tag = label
+    if live.get("is_live"):
+        tag = _joined("Live", label)
+        lines = (_joined(live.get("event"), live.get("competition")), _joined(live.get("score"), live.get("clock")))
+        said = f"Live now: {_joined(live.get('event'), live.get('score'), sep=', ')}."
+    elif recent:
+        last = recent[0]
+        lines = (_joined("Last game", last.get("title"), sep=": "), last.get("result") or "")
+        said = f"Last game: {_joined(last.get('title'), last.get('result'), sep=', ')}."
+    elif upcoming:
+        nxt = upcoming[0]
+        lines = (_joined("Next", nxt.get("title"), sep=": "), nxt.get("competition") or "")
+        said = f"Next: {_joined(nxt.get('title'), nxt.get('competition'), sep=', ')}."
+    else:
+        lines = (shown.get("detail") or "",)
+        said = _sentence(_joined(label, shown.get("detail"), sep=", "))
+    return Preview(
+        title=f"{name} · {label}" if label else name,
+        description=f"{said} Live scores, results and alerts for {name} on {APP_NAME}.".strip(),
+        path=f"/team/{shown['team_id']}",
+        picture=Picture(ground, ink, tag, name, "", tuple(line for line in lines if line)),
+        image=f"/api/teams/{shown['team_id']}/share.png",
+    )
+
+
+def of_clip(clip: dict[str, Any]) -> Preview:
+    """A clip (clips.one, /clip/<id>): its caption in big type, else its moment, on its sport's colour (ink for a fan's
+    own game, of no sport), then the moment and its game. Drawn, as every preview is: never a frame of the clip."""
+    sport = sports.get(clip.get("sport"))
+    ground, ink = _colours(sports.of(clip.get("sport")))
+    word = clip.get("caption") or clip.get("line") or clip.get("game_title") or f"A clip on {APP_NAME}"  # its title as shared (web/src/share.ts)
+    lines = tuple(x for x in (clip.get("line") or "", _joined(clip.get("game_title"), clip.get("competition"))) if x and x != word)
+    return Preview(
+        title=word,
+        description=f"{_sentence(_joined(*lines, sep=', '))} Watch it on {APP_NAME}.".strip(),
+        path=f"/clip/{clip['id']}",
+        picture=Picture(ground, ink, _joined("Clip", sports.label(sport.key) if sport else ""), word, "", lines),
+        image=f"/api/clips/{clip['id']}/share.png",
+    )
+
+
+def of_match(shown: dict[str, Any]) -> Preview | None:
+    """A game's page (match.view, /match/<source>/<game>): its title in big type on its sport's colour, its
+    competition, and where it's at: the score while it's on, who won once it's over, else when it starts in the home
+    audience's time (campaigns.said). None for a game with no title."""
+    title = (shown.get("title") or "").strip()
+    if not title:
+        return None
+    sport = sports.get(shown.get("sport"))
+    label = sports.label(sport.key) if sport else ""
+    ground, ink = _colours(sports.of(shown.get("sport")))
+    board = shown.get("live") or {}
+    tag = label
+    if shown.get("status") == "live":
+        tag = _joined("Live", label)
+        where = _joined(board.get("score"), board.get("clock"))
+    elif shown.get("status") == "final":
+        where = shown.get("verdict") or _joined(board.get("score"), "Final")
+    elif shown.get("status") == "postponed":
+        where = "Postponed"
+    else:
+        where = campaigns.said(shown["start_utc"]) if shown.get("start_utc") else ""
+    lines = tuple(x for x in (_joined(shown.get("competition"), shown.get("detail")), where) if x)
+    return Preview(
+        title=_joined(title, shown.get("competition")),
+        description=f"{_sentence(_joined(*lines, sep=', '))} Live scores, key moments and the result on {APP_NAME}.".strip(),
+        path=f"/match/{shown['match']}",
+        picture=Picture(ground, ink, tag, title, "", lines),
+        image=f"/api/match/{shown['match']}/share.png",
     )
 
 
@@ -351,9 +452,17 @@ def _slanted(img: Image.Image, x: int, bottom: int, text: str, font: ImageFont.F
 def _pill(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, ground: str, ink: str) -> None:
     """The tag at the top, as the app's posters have it: spaced capitals on a pill."""
     font = _font("manrope", 26)
-    text = text.upper()
     spaced = 2
-    width = sum(font.getlength(c) + spaced for c in text) - spaced
+
+    def wide(t: str) -> float:
+        return sum(font.getlength(c) + spaced for c in t) - spaced
+
+    text, most = text.upper(), WIDTH - 2 * PAD - 44  # within the picture's margins: a long event's name is cut
+    if wide(text) > most:
+        while text and wide(f"{text}…") > most:
+            text = text[:-1]
+        text = f"{text.rstrip()}…"
+    width = wide(text)
     draw.rounded_rectangle((x, y, x + width + 44, y + 48), radius=24, fill=ink)
     cx = x + 22
     for c in text:

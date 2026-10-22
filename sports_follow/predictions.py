@@ -606,6 +606,17 @@ def invite(db: Session, code: str, fan: str | None) -> dict[str, Any]:
     return {"code": league.code, "name": league.name, "members": len(names), "by": names.get(league.owner or ""), "member": member}
 
 
+def about(db: Session, code: str) -> dict[str, Any] | None:
+    """What an invite link's preview says (share.of_invite): the league's name, how many are in it and who made it (by
+    their name in it), as the invite page shows anyone with the link; None for no such league. Only read: a crawler
+    drawing the preview isn't a fan opening the invite."""
+    league = find(db, code)
+    if league is None:
+        return None
+    names: dict[str, str] = {f: n for f, n in db.execute(select(LeagueMember.fan_id, LeagueMember.name).where(LeagueMember.league_id == league.id))}
+    return {"code": league.code, "name": league.name, "members": len(names), "by": names.get(league.owner or "")}
+
+
 def was_shared(db: Session, fan: str, code: str) -> None:
     """A member shared the invite from the app: counted for the launch numbers."""
     league = find(db, code)
