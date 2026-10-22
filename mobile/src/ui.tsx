@@ -3,7 +3,7 @@
 
 import { router, type ErrorBoundaryProps } from 'expo-router'
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
+import { AccessibilityInfo, ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { BackIcon } from './icons'
 import { colour, dsp, dspInk, font, GUTTER, RADIUS_CARD, t } from './theme'
@@ -25,14 +25,28 @@ export function alpha(hex: string, a: number): string {
 
 let pulse: Animated.Value | null = null
 
-/** One pulse for every live dot on screen, as the web's @keyframes pulse: full, then 0.3, every 1.4 s. */
+/** One pulse for every live dot on screen, as the web's @keyframes pulse: full, then 0.3, every 1.4 s. Held full while
+ * the phone is set to remove animations, as the web's stops for prefers-reduced-motion: React Native's Animated
+ * doesn't ask by itself. */
 function usePulse(): Animated.Value {
   if (!pulse) {
-    pulse = new Animated.Value(1)
-    Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 0.3, duration: 700, useNativeDriver: true }),
-      Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-    ])).start()
+    const value = (pulse = new Animated.Value(1))
+    let loop: Animated.CompositeAnimation | null = null
+    const motion = (reduced: boolean) => {
+      loop?.stop()
+      loop = null
+      if (reduced) {
+        value.setValue(1)
+        return
+      }
+      loop = Animated.loop(Animated.sequence([
+        Animated.timing(value, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+        Animated.timing(value, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]))
+      loop.start()
+    }
+    AccessibilityInfo.isReduceMotionEnabled().then(motion, () => motion(false))
+    AccessibilityInfo.addEventListener('reduceMotionChanged', motion)
   }
   return pulse
 }
