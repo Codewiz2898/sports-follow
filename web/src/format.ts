@@ -208,12 +208,13 @@ const SPACING = 0.005
  * so the name breaks between words, never inside one. A hyphen ends a word, as a line may break after it.
  */
 export function longestWordEms(name: string): number {
-  return Math.max(1, ...capitals(name).split(/(?<=-)|\s+/).filter(Boolean).map(ems))
+  return Math.max(1, ...capitals(name).split(/(?<=-)|\s+/).filter(Boolean).map((word) => ems(word)))
 }
 
-/** How wide a text is on one line in the display face, in ems, its spaces too (longestWordEms: its longest word). */
-export function lineEms(text: string): number {
-  return ems(capitals(text))
+/** How wide a text is on one line in the display face, in ems, its spaces too (longestWordEms: its longest word):
+ * set slanted as a name is (.dsp), or with another lean and letter spacing (upright .num: 0 and 0.01). */
+export function lineEms(text: string, lean = LEAN, spacing = SPACING): number {
+  return ems(capitals(text), lean, spacing)
 }
 
 /** A text in plain capitals, as the width table has them ("BODO" for "Bodø"): what it has kept as it is ("½", which
@@ -225,8 +226,8 @@ function capitals(text: string): string {
 }
 
 /** The width of a run of capitals (capitals()), in ems: each one's, its letter spacing, and the lean at its ends. */
-function ems(run: string): number {
-  return [...run].reduce((sum, c) => sum + (ANTON[c] ?? WIDEST) + SPACING, LEAN)
+function ems(run: string, lean = LEAN, spacing = SPACING): number {
+  return [...run].reduce((sum, c) => sum + (ANTON[c] ?? WIDEST) + spacing, lean)
 }
 
 /** A team name reduced for exact comparison, as the server's espn.team_key: "Australia 'A'" is "australia a". */
@@ -277,17 +278,20 @@ export function resultOutcome(r: { result: string; title?: string | null; outcom
   return r.outcome !== undefined ? r.outcome : outcome(r.result, teams, sidesOf(r.title))
 }
 
-const STAT_NUMBER = 34  // a stat as a number, in px (.stat .num)
 const STAT_WORDS = 22  // a stat in words, in px (.stat.words .num)
-const STAT_ROOM = 76  // a stat tile's room for its value: 104px less its padding (a wide card's tiles are about that)
+const STAT_ROOM = 76  // a stat tile's room for its words: 104px less its padding (a wide card's tiles are about that)
+const NUM_SPACING = 0.01  // .num's letter spacing, in ems: upright, so no lean
 
-/** How a stat tile sets its value: big as a number ("2712", "82*"), or, when it's words ("Black", an opponent's name),
- * smaller so it breaks only between words; over two tiles when it wouldn't fit one on a line at its size (a name of
- * two words, "V Pranav", rather than a word a line; a clock, "1:24:50", rather than cut at a colon). A word is three
- * letters or more, so "3rd" and "W" stay numbers. */
-export function statFit(value: string): { words: boolean; wide: boolean } {
+/** How a stat tile sets its value, and how wide it is on a line as .num sets it (`ems`). As a number ("2712", "82*"),
+ * big, but smaller where its tile hasn't the room (.stat-grid: a wide card's tiles, for a clock's "1:24:50"), its
+ * digits each counted as wide as most are, so a clock keeps its size as it runs ("32:09", "32:10"). As words
+ * ("Black", an opponent's name), smaller so it breaks only between words, and over two tiles when it wouldn't fit
+ * one on a line ("V Pranav", rather than a word a line). A word is three letters or more, so "3rd" and "W" stay
+ * numbers. */
+export function statFit(value: string): { words: boolean; wide: boolean; ems: number } {
   const words = /\p{L}{3,}/u.test(value)
-  return { words, wide: lineEms(value) * (words ? STAT_WORDS : STAT_NUMBER) > STAT_ROOM }
+  const ems = lineEms(words ? value : value.replace(/\d/g, '0'), 0, NUM_SPACING)
+  return { words, wide: words && ems * STAT_WORDS > STAT_ROOM, ems }
 }
 
 /** "22 PTS · 11 REB · 10 AST" as numbers and labels, when the whole line reads that way. */

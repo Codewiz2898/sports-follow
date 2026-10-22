@@ -49,9 +49,9 @@ export function StatGrid({ stats, empty = 'No stats yet.' }: { stats?: Stat[]; e
   return (
     <div className="stat-grid">
       {stats.map((s) => {
-        const { words, wide } = statFit(s.value)
+        const { words, wide, ems } = statFit(s.value)
         return (
-          <div className={`stat${words ? ' words' : ''}${wide ? ' wide' : ''}`} key={s.label}>
+          <div className={`stat${words ? ' words' : ''}${wide ? ' wide' : ''}`} style={words ? undefined : ({ '--ems': ems } as CSSProperties)} key={s.label}>
             <span className="num">{s.value}</span>
             <span className="tiny">{s.label}</span>
           </div>

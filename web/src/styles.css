@@ -224,10 +224,15 @@ a.photo-credit:hover { text-decoration: underline; }
 .stat { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 16px; background: var(--surface); min-width: 0; }
 .stat .num { font-size: 34px; overflow-wrap: anywhere; }
 /* A value in words ("Black", an opponent's name: format.statFit): smaller, broken only between words, where a number's
-   size would cut it a letter a line. Any value that wouldn't fit one tile on a line at its size is two tiles wide
-   (.wide: "V Pranav", a clock's "1:24:50"). */
+   size would cut it a letter a line; two tiles wide where it wouldn't fit one on a line ("V Pranav"). */
 .stat.words .num { font-size: 22px; line-height: 1.1; overflow-wrap: break-word; }
 .stat.wide { grid-column: span 2; }
+/* A number in a grid's tile shrinks to fit it on a line (--ems: its width in ems, format.statFit), where a wide card's
+   tiles, about 104px, would cut a clock at a colon ("1:24:" / "50"); a phone's two tiles a row have room for it. */
+@supports (width: 1cqi) {
+  .stat-grid > .stat { container-type: inline-size; }
+  .stat-grid > .stat:not(.words) > .num { font-size: min(34px, 100cqi / (var(--ems, 1) + 0.1)); }
+}
 .stat .tiny { font-weight: 700; color: var(--muted); }
 
 .tabs { display: flex; gap: 18px; border-bottom: 2px solid var(--line); overflow-x: auto; scrollbar-width: none; }
