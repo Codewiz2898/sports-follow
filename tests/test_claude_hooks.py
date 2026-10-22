@@ -17,9 +17,10 @@ HOOKS = Path(__file__).parent.parent / ".claude" / "hooks"
 PYTHON = os.environ.get("HOOK_PYTHON", sys.executable)
 
 
-def run(hook: str, command: str, cwd: Path | str = "/") -> int:
+def run(hook: str, command: str, cwd: Path | str = "/", env: dict[str, str] | None = None) -> int:
     call = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
-    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True).returncode
+    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True,
+                          env=env).returncode
 
 
 @pytest.mark.parametrize("path", sorted(HOOKS.glob("*.py")), ids=lambda p: p.name)
@@ -152,7 +153,6 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
         f"gh api {run_path}/pending_deployments --jq '.[] | \"env=\\(.environment.name) \\(.current_user_can_approve)\"'",
         f"gh api -X GET {run_path}/pending_deployments",
         "gh api repos/Codewiz2898/sports-follow/environments/production",
-        "gh workflow run deploy.yml -f action=deploy",  # starts a run that waits for his approval
         "gh run list --workflow deploy.yml --limit 5",
         "gh run watch 39126691465 --exit-status",
         "gh api repos/Codewiz2898/sports-follow/issues/131/comments -f body='The hook now blocks approveDeployments'",
@@ -275,6 +275,82 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
     # A file named relative to a folder the command cds to is read from there, wherever the session is.
     assert run("deploy_gate.py", f"cd {tmp_path} && gh api graphql -F query=@approve.graphql", "/") == 2
     assert run("deploy_gate.py", f"cd {tmp_path} && gh api graphql -F query=@viewer.graphql", "/") == 0
+
+
+def test_starting_or_rerunning_a_deploy_is_bharaths(tmp_path):
+    # In a private repository GitHub can't hold a run for his approval, so starting one deploys at once.
+    # Which workflow a run is, the hook asks GitHub; this gh answers for runs 111 (Deploy) and 222 (CI).
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text("""#!/bin/sh
+case "$2" in
+  */actions/runs/111) echo .github/workflows/deploy.yml ;;
+  */actions/runs/222) echo .github/workflows/ci.yml ;;
+  */actions/jobs/333) echo 111 ;;
+  */actions/jobs/444) echo 222 ;;
+  *) echo 'HTTP 404: Not Found' >&2; exit 1 ;;
+esac
+""")
+    (bin_dir / "gh").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    repo = "repos/Codewiz2898/sports-follow/actions"
+    passes = [
+        "gh run list --workflow deploy.yml --limit 5",
+        "gh workflow view deploy.yml",
+        "gh workflow run deploy-summary.yml",
+        'gh workflow run "Deploy summary"',
+        "gh workflow run ci.yml --ref main",
+        f"gh api -X POST {repo}/workflows/ci.yml/dispatches -f ref=main",
+        "gh run rerun 222 --failed",
+        "gh run rerun 222 --job 444",
+        f"gh api -X POST {repo}/runs/222/rerun-failed-jobs",
+        f"gh api -X POST {repo}/jobs/444/rerun",
+        "gh run rerun --help",
+        "gh alias set prs 'pr list --author @me'",
+        "gh workflow run --help",
+        "gh workflow run CI --ref main",
+        "gh workflow run -f x=1 ci.yml",
+        "grep -n workflow_run .github/workflows/deploy.yml",
+        'grep -n "workflow run" .github/workflows/deploy.yml',
+        'git log --grep "workflow run 5" --oneline',
+        "echo 'Actions → Deploy → Run workflow, with the commit'",
+    ]
+    stops = [
+        "gh workflow run deploy.yml -f action=deploy",
+        "gh workflow run deploy.yml -f action=deploy -f commit=b886678",
+        "gh workflow run Deploy",
+        "gh workflow run 'Deploy' -f action=rollback",
+        "gh workflow run --ref main .github/workflows/deploy.yml",
+        "gh workflow run 201234567",
+        'gh workflow run "$WF"',
+        "echo deploy.yml | xargs gh workflow run",
+        "gh workflow run $(gh workflow list | grep -w Deploy | cut -f3)",
+        "gh workflow run ./.github/workflows/deploy.yml",
+        "gh workflow run -f action=deploy",  # no workflow named: gh would ask, or read stdin
+        "/opt/homebrew/bin/gh workflow run deploy.yml",
+        'gh alias set d "workflow run deploy.yml"',
+        "gh alias set rr 'run rerun'",
+        "gh alias import aliases.yml",
+        "gh -R Codewiz2898/sports-follow workflow run deploy.yml",
+        "bash -c 'gh workflow run deploy.yml'",
+        "python3 -c \"import subprocess; subprocess.run(['gh', 'workflow', 'run', 'deploy.yml'])\"",
+        f"gh api -X POST {repo}/workflows/deploy.yml/dispatches -f ref=main",
+        f"gh api -X POST {repo}/workflows/201234567/dispatches -f ref=main",
+        f"gh api -X POST {repo}/workflows/$WF/dispatches -f ref=main",
+        f"curl -X POST -H 'Authorization: Bearer x' https://api.github.com/{repo}/workflows/deploy.yml/dispatches -d '{{\"ref\":\"main\"}}'",
+        "gh run rerun 111",
+        "gh run rerun 111 --failed",
+        "gh run rerun 222 --job 333",  # a job of a Deploy run
+        "gh run rerun 999",  # GitHub can't say what it is
+        "gh run rerun $RUN",
+        "gh run list --workflow deploy.yml --json databaseId --jq '.[0].databaseId' | xargs gh run rerun",
+        f"gh api -X POST {repo}/runs/111/rerun",
+        f"gh api -X POST {repo}/runs/111/rerun-failed-jobs",
+        "gh api -X POST repos/$GITHUB_REPOSITORY/actions/jobs/333/rerun",
+        f"gh api -X POST {repo}/runs/$RUN/rerun",
+    ]
+    assert [c for c in passes if run("deploy_gate.py", c, tmp_path, env) != 0] == []
+    assert [c for c in stops if run("deploy_gate.py", c, tmp_path, env) != 2] == []
 
 
 @pytest.mark.parametrize("command, blocked", [

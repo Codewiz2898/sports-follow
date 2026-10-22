@@ -1,5 +1,6 @@
-# Every morning, while a deploy waits for your approval: what it brings, the issues it closes, whether CI
-# passed, and the link to approve it (deploy/deploy-summary.sh). By email through Resend (RESEND_KEY and
+# Every morning, while a deploy waits for your approval (in a private repository, while one is ready: main
+# has a commit CI passed that isn't live): what it brings, the issues it closes, whether CI passed, and the
+# link to approve or start it (deploy/deploy-summary.sh). By email through Resend (RESEND_KEY and
 # DEPLOY_SUMMARY_TO), as a push to an ntfy topic (DEPLOY_SUMMARY_URL), or both: repository secrets, not
 # the production environment's, which would make this wait for approval too. Nothing when none waits.
 # Run it by hand to send one now (Actions → Deploy summary → Run workflow).
@@ -25,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0       # the commits since the live one
           filter: blob:none    # their messages, not their files
-      - name: Send it, if a deploy is waiting
+      - name: Send it, if a deploy is waiting or ready
         env:
           GH_TOKEN: ${{ github.token }}
           APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address

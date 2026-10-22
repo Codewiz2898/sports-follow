@@ -9,10 +9,14 @@
 # replaced stops before it waits. With no required reviewer on production, nothing deploys by itself.
 # By hand too (Actions → Deploy → Run workflow), which also waits for approval. Never on pull_request: a
 # fork's PR must not reach the deploy key.
+#
+# GitHub holds a run for a required reviewer only in a public repository (in a private one, only on
+# Enterprise). So in a private repository a merge's run sends you what it would deploy and stops there,
+# and you deploy by hand, with the commit it named: starting the run is your approval.
 name: Deploy
 run-name: >-
   ${{ inputs.action == 'rollback' && 'Roll back to the previous deploy' ||
-      format('Deploy {0}', github.event.workflow_run.head_sha || github.sha) }}
+      format('Deploy {0}', github.event.workflow_run.head_sha || inputs.commit || github.sha) }}
 
 on:
   workflow_dispatch:
@@ -22,6 +26,10 @@ on:
         type: choice
         options: [deploy, rollback]
         default: deploy
+      commit:
+        description: the commit to deploy, as its summary names it (blank deploys the tip of main)
+        type: string
+        default: ""
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -47,23 +55,49 @@ jobs:
       deployments: read     # the summary: the last deploy
       pull-requests: read   # the summary: what each pull request brings
     outputs:
-      go: ${{ steps.newest.outputs.go }}
+      go: ${{ steps.newest.outputs.go }}          # this run's commit is the one to bring you
+      deploy: ${{ steps.newest.outputs.deploy }}  # and the deploy job runs
+      sha: ${{ steps.newest.outputs.sha }}
     env:
       GH_TOKEN: ${{ github.token }}
       ACTION: ${{ inputs.action || 'deploy' }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      COMMIT: ${{ inputs.commit }}
     steps:
-      - name: Still the newest, and production waits for approval
+      - name: Still the newest, and who says go
         id: newest
         run: |
-          go=true
-          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
-            # Without a required reviewer the deploy job wouldn't wait, so a merge would go live unseen.
-            reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
-              --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-            if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
-              echo "::error::The production environment has no required reviewer, so ${SHA:0:7} won't deploy by itself. Add one (deploy/README.md, Deploying), or run Deploy by hand."
+          go=true deploy=true
+          # Read now, not from the event: a run re-run after the repository went private keeps the payload
+          # it started with. Anything but a plain "false" counts as private, which deploys nothing by itself.
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private || true)
+          [ "$private" = false ] || private=true
+          if [ -n "$COMMIT" ] && [ "$ACTION" = deploy ]; then
+            # The commit a summary named, in full, and on main (deploy.sh refuses any other too).
+            if ! [[ $COMMIT =~ ^[0-9a-f]{7,40}$ ]] ||
+                ! full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT" --jq .sha 2>/dev/null) || [ -z "$full" ]; then
+              echo "::error::\"$COMMIT\" isn't a commit here: paste the one the summary names, or leave it blank for the tip of main."
               exit 1
+            fi
+            case $(gh api "repos/$GITHUB_REPOSITORY/compare/$full...main" --jq .status) in
+              ahead | identical) SHA=$full ;;
+              *) echo "::error::${full:0:7} isn't on main."; exit 1 ;;
+            esac
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            if [ "$private" = true ]; then
+              # Nothing would hold the deploy job for you here: this run brings you the summary, and you
+              # deploy it by hand.
+              echo "::notice::To deploy ${SHA:0:7}: Actions → Deploy → Run workflow, with $SHA as the commit."
+              deploy=false
+            else
+              # Without a required reviewer the deploy job wouldn't wait, so a merge would go live unseen.
+              reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
+                --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+              if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
+                echo "::error::The production environment has no required reviewer, so ${SHA:0:7} won't deploy by itself. Add one (deploy/README.md, Deploying), or run Deploy by hand."
+                exit 1
+              fi
             fi
             # CI on main runs one push at a time (ci.yml's concurrency), so CI passes in order, but a re-run
             # can pass an older commit late.
@@ -71,11 +105,12 @@ jobs:
               --jq '.workflow_runs[0].head_sha // empty')
             if [ -n "$newest" ] && [ "$newest" != "$SHA" ] &&
                 [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$newest" --jq .status)" = ahead ]; then
-              echo "::notice::${newest:0:7} came after ${SHA:0:7} and passed CI too: its own Deploy run is the one to approve."
+              echo "::notice::${newest:0:7} came after ${SHA:0:7} and passed CI too: its own Deploy run is the one to go by."
               go=false
             fi
           fi
-          echo "go=$go" >>"$GITHUB_OUTPUT"
+          [ "$go" = true ] || deploy=false
+          { echo "go=$go"; echo "deploy=$deploy"; echo "sha=$SHA"; echo "private=$private"; } >>"$GITHUB_OUTPUT"
       # A run waiting for approval holds the production concurrency group, so the next one would queue
       # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
       # a deploy that's running isn't stopped: each run is read again just before its cancel and skipped
@@ -107,24 +142,31 @@ jobs:
           filter: blob:none    # their messages, not their files
       # On this run's page, above the Review deployments button. The first deploy to wait since the last
       # one went out is also sent now; one that replaces a waiting deploy comes with the morning's summary
-      # (deploy-summary.yml). A summary that fails never stops the deploy.
+      # (deploy-summary.yml). In a private repository, the first change since what's live is sent, and a
+      # run you start says what it's deploying. A summary that fails never stops the deploy.
       - name: What it brings
         if: steps.newest.outputs.go == 'true' && env.ACTION == 'deploy'
         continue-on-error: true
         env:
+          SHA: ${{ steps.newest.outputs.sha }}
+          PRIVATE: ${{ steps.newest.outputs.private }}
           REPLACED: ${{ steps.replaced.outputs.count }}
           APP_URL: ${{ vars.APP_URL }}   # a repository variable, if set; else the last deploy's address
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
           DEPLOY_SUMMARY_TO: ${{ secrets.DEPLOY_SUMMARY_TO }}
           DEPLOY_SUMMARY_URL: ${{ secrets.DEPLOY_SUMMARY_URL }}
         run: |
-          send=()
-          [ "$GITHUB_EVENT_NAME" != workflow_run ] || [ "$REPLACED" != 0 ] || send=(--send)
-          deploy/deploy-summary.sh "${send[@]}" "$SHA" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          how=()
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            if [ "$PRIVATE" = true ]; then how=(--send-first)
+            elif [ "$REPLACED" = 0 ]; then how=(--send); fi
+          elif [ "$PRIVATE" = true ]; then how=(--deploying)
+          fi
+          deploy/deploy-summary.sh "${how[@]}" "$SHA" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
   deploy:
     needs: newest
-    if: needs.newest.outputs.go == 'true'
+    if: needs.newest.outputs.deploy == 'true'
     # One deploy at a time, and one run queued behind it. On the job, not the workflow, so the newest job
     # above can run (and cancel the waiting ones) while another run holds the group.
     concurrency:
@@ -133,20 +175,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # The secrets live in this environment, which only main may use and which waits for your approval
-    # (Settings → Environments → production).
+    # (Settings → Environments → production; in a private repository it can't wait).
     environment:
       name: production
       url: ${{ vars.APP_URL }}
     env:
       ACTION: ${{ inputs.action || 'deploy' }}
-      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      SHA: ${{ needs.newest.outputs.sha }}
     steps:
       - name: CI passed for this commit
         if: env.ACTION == 'deploy'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq .total_count)
+          # A push to main's CI, not a pull request's: a branch's own commit passes there but isn't main.
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=success&per_page=1" --jq .total_count)
           if [ "$passed" -eq 0 ]; then
             echo "::error::CI hasn't passed for ${SHA:0:7} (yet?). Deploy once it has."
             exit 1
