@@ -834,7 +834,7 @@ async def _read_team(system: str, team_id: int) -> bool:
         ask = await state["redis"].incr(spent) <= teams.READS
         await state["redis"].expire(spent, 120, nx=True)
         if ask:
-            await enqueue("refresh_team", team_id)
+            await enqueue("refresh_team", team_id, _job_id=f"refresh-team:{team_id}")
         return ask
     except Exception:
         log.warning("teams: couldn't ask for team %s's games", team_id, exc_info=True)
@@ -1231,7 +1231,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         # With a live source: scores and fixtures in seconds, and the profile from Wikidata and Wikipedia.
         # Without one: the profile, and the agent's research for an athlete Wikipedia has no article on.
         if ref is not None:
-            await enqueue("refresh_structured", player_id)
+            await enqueue("refresh_structured", player_id, _job_id=f"refresh-structured:{player_id}")
         await enqueue("build_card", player_id)
     return player_id
 
@@ -2463,7 +2463,7 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         if bus.is_locked(f"structured:{player_id}"):
             return {"queued": False, "reason": "A refresh is already running."}
         await _refresh_due(player_id)
-        await enqueue("refresh_structured", player_id)
+        await enqueue("refresh_structured", player_id, _job_id=f"refresh-structured:{player_id}")
         return {"queued": True}
     if not AGENT_LIVE:
         return {"queued": False, "reason": "Live scores aren't available for this sport yet."}
