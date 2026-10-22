@@ -895,8 +895,11 @@ class LichessChess(Adapter):
         return {"round": round_id, "fide": fide} if self.fixture_pattern.fullmatch(source_id) else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
-        snap = parse_board(data, locator["fide"], waited=self._waited(data, locator["fide"]))
+        def read(ttl: float) -> Snapshot:  # the round match() and Live now read, too
+            data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=ttl)
+            return parse_board(data, locator["fide"], waited=self._waited(data, locator["fide"]))
+
+        snap = self.read_snapshot(read, final, 5)
         if snap.status == "live":
             self._moves_so_far(locator["round"], snap.state, read=False)  # one move on: added to its page's list
         return snap

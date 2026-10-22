@@ -569,14 +569,18 @@ class PandascoreEsports(Adapter):
         match_id = str(locator["match"])
         if final and match_id in self._seen:
             return parse_match(self._seen[match_id])
-        # A short cache lets every followed player in one series share each poll's fetch.
-        data = pandascore.get_json(f"/matches/{match_id}", ttl=24 * 3600 if final else 30)
-        if not isinstance(data, dict) or not data.get("id"):
-            raise AdapterError(f"PandaScore has no match {match_id}")
-        self._keep([data])
-        snap = parse_match(data)
+        read: list[dict[str, Any]] = []
+
+        def series(ttl: float) -> Snapshot:  # the request match() makes for its page, too
+            data = pandascore.get_json(f"/matches/{match_id}", ttl=ttl)
+            if not isinstance(data, dict) or not data.get("id"):
+                raise AdapterError(f"PandaScore has no match {match_id}")
+            read[:] = self._keep([data])
+            return parse_match(data)
+
+        snap = self.read_snapshot(series, final, 30)
         if not final:
-            self._dota(data, snap)
+            self._dota(read[0], snap)
         return snap
 
     @staticmethod

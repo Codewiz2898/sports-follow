@@ -384,9 +384,22 @@ class Adapter:
         raise NotImplementedError
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        """The event now. final=True may serve a cached copy: a finished match doesn't change. Called from
-        several threads at once: a refresh reads a player's recent finals side by side."""
+        """The event now. final=True may serve a cached copy: a finished match doesn't change (read_snapshot).
+        Called from several threads at once: a refresh reads a player's recent finals side by side."""
         raise NotImplementedError
+
+    @staticmethod
+    def read_snapshot(read: Callable[[float], Snapshot], final: bool, live: float, kept: float = 24 * 3600) -> Snapshot:
+        """An event's snapshot by read(ttl), its read through the source's cache with that ttl, for snapshot().
+        A live read takes a copy up to `live` seconds old: a short cache lets every followed player in one game
+        share each poll's fetch. A final read takes one up to `kept` old, as a finished game doesn't change; but
+        the cache keeps a game's copy a day however it was read (cache.KEEP), so the copy may be from while it
+        was on (a live poll's, its match page's, a squad check's), and one not over is read again as a live
+        read would be. A refresh's, the history lane's and a preview's final reads all come through here."""
+        if not final:
+            return read(live)
+        snap = read(kept)
+        return snap if snap.status == "final" else read(live)
 
     # Optional, for a source that fetches many events in one request (Sportmonks football):
     #   def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]

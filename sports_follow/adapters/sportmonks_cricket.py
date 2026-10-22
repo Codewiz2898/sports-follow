@@ -620,12 +620,7 @@ class SportmonksCricket(Adapter):
         return data["data"]
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        # A short cache lets every followed player in one match share each poll's fetch. A finished match
-        # is kept a day, but a copy cached before it finished is read again.
-        x = self._match(locator["fixture"], 24 * 3600 if final else 5)
-        if final and _status(x.get("status")) != "final":
-            x = self._match(locator["fixture"], 5)
-        return parse_match(x)
+        return self.read_snapshot(lambda ttl: parse_match(self._match(locator["fixture"], ttl)), final, 5)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many matches at once: the live lane's fetch a round. Every match in play comes in one livescores

@@ -336,8 +336,8 @@ class EspnBasketball(espn.EspnAdapter, Adapter):
         return [f for f in parse_schedule(data, league) if f.status == "final"]
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        data = espn.get_json(f"{espn.SITE}/basketball/{locator['league']}/summary?event={locator['event']}", ttl=24 * 3600 if final else 5)
-        return parse_summary(data)
+        url = f"{espn.SITE}/basketball/{locator['league']}/summary?event={locator['event']}"
+        return self.read_snapshot(lambda ttl: parse_summary(espn.get_json(url, ttl=ttl)), final, 5)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)
