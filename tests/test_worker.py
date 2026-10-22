@@ -57,6 +57,31 @@ def test_the_tick_runs_while_long_jobs_hold_every_thread(monkeypatch):
     asyncio.run(busy_minute())
 
 
+def test_the_prediction_pushes_run_while_long_jobs_hold_every_thread(monkeypatch):
+    """They need no job slot (ON_THE_CLOCK), and no job's thread either: a job arq timed out keeps its thread."""
+    pushed = []
+    monkeypatch.setattr(predictions_push, "run", lambda: pushed.append(1) or 0)
+    polling, session_over = threading.Event(), threading.Event()
+
+    def poll_session() -> None:  # ten minutes of a board
+        polling.set()
+        session_over.wait()
+
+    async def busy_minute() -> None:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        poll = asyncio.ensure_future(asyncio.to_thread(poll_session))
+        while not polling.is_set():  # it has the thread
+            await asyncio.sleep(0.01)
+        try:
+            await asyncio.wait_for(worker.prediction_pushes({"redis": None}), 2)
+        finally:
+            session_over.set()
+            await poll
+
+    asyncio.run(busy_minute())
+    assert pushed == [1]
+
+
 # ---------------------------------------------------------------- the tick beside the jobs (BUG-173)
 
 
@@ -298,7 +323,8 @@ def test_every_thread_that_reaches_the_database_gets_a_connection():
     try:
         asyncio.run(worker.WorkerSettings.on_startup({}))
         pool = db.engine.pool
-        assert pool.size() + pool._max_overflow >= worker.MAX_JOBS + 4 + worker._tick_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers
+        threads = worker.MAX_JOBS + 4 + worker._tick_pool._max_workers + worker._pushes_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers
+        assert pool.size() + pool._max_overflow >= threads
     finally:
         db.size_pool(15)
 
