@@ -21,8 +21,9 @@ story known by its address written one way (NewsSource articles' url), so two fe
   only the name before it counts.
 
 A story is never kept whole: its headline, its link, when it was published and the feed's own short description,
-which the Feed shows as they are, crediting the publisher. Stories about the same thing (clusters, read by rank.py)
-are one item in the Feed with the number of outlets that ran it.
+which the Feed shows as they are, crediting the publisher; as the publisher changes them at the same address (a
+corrected headline), so does the row (changed). Stories about the same thing (clusters, read by rank.py) are one
+item in the Feed with the number of outlets that ran it.
 
 A candidate goes with the player (ON DELETE CASCADE). The curator's weekly prune drops stories older than
 PRUNE_AFTER, but those an admin approved or pinned (evergreen).
@@ -39,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -285,8 +286,13 @@ def candidate(found: Linked) -> dict[str, Any]:
     }  # fmt: skip
 
 
+# What a publisher may change of a story at the same address, which a kept row takes (keep).
+CHANGES = ("title", "description", "image", "published")
+
+
 def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
-    """Store what's new of what was found, one row per player and story; returns how many."""
+    """Store what's new of what was found, one row per player and story; returns how many. A story kept before that
+    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed)."""
     kept = 0
     with db.session() as session:
         for f in found:
@@ -297,10 +303,34 @@ def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
                         player_id=f.player_id, source=source.system, external_id=external_id(f.article.url), url=f.article.url,
                         candidate=candidate(f), features={"outlets": 1}, fetched_at=now, checked_at=now,
                     ).on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))  # fmt: skip
-                    kept += added is not None
+                    if added is not None:
+                        kept += 1
+                    else:
+                        changed(session, f)
             except Exception as exc:  # noqa: BLE001
                 log.info("feed: story %s for player %s not kept: %s", f.article.url, f.player_id, type(exc).__name__)
     return kept
+
+
+def changed(session: Session, found: Linked) -> bool:
+    """Give a kept story what its feed says of it now, where that changed (CHANGES): fans read a publisher's
+    correction, not the first wording for good. Only from the feed it was kept from: another feed's copy of it,
+    worded its own way, isn't the publisher's change. Words that now tell another story (same_story) go back to
+    the judge, the story unserved until it has said again; a smaller change keeps its verdict. Whether it changed."""
+    row = session.execute(select(FeedCandidate.id, FeedCandidate.candidate).where(FeedCandidate.player_id == found.player_id,
+                          FeedCandidate.external_id == external_id(found.article.url)).with_for_update()).first()  # fmt: skip
+    kept = (row.candidate or {}) if row is not None else {}
+    now = candidate(found)
+    if row is None or kept.get("channel_id") != now["channel_id"] or all(kept.get(k) == now[k] for k in CHANGES):
+        return False
+    values: dict[str, Any] = {"candidate": {**kept, **{k: now[k] for k in CHANGES}}}
+    before = story(row.id, None, str(kept.get("title") or ""), str(kept.get("description") or ""), [found.name])
+    again = not same_story(before, story(row.id, None, str(now["title"] or ""), str(now["description"] or ""), [found.name]))
+    if again:  # SQL's NULL, not JSON's null: the judge asks for rows with no verdict
+        values |= {"verdict": null(), "judged_at": None, "score": None, "judge_tries": 0, "judge_error": None, "judge_after": None}
+    session.execute(update(FeedCandidate).where(FeedCandidate.id == row.id).values(**values))
+    log.info("feed: story %s for player %s changed at its address%s", found.article.url, found.player_id, ", to be judged again" if again else "")
+    return True
 
 
 def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:

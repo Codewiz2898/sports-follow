@@ -174,6 +174,62 @@ def test_the_best_story_of_a_group_is_served_with_its_outlets_as_the_feeds_the_p
     assert candidates.check(NOW)["dropped"] == 0
 
 
+def test_a_headline_the_publisher_corrects_at_the_same_address_reaches_the_card_and_the_wire(world, monkeypatch):
+    # BUG-245: the first wording was kept for good, so fans read "ruled out of the series" after the publisher had
+    # corrected it. A change that tells another story goes back to the judge; a small one keeps its verdict; another
+    # feed's copy of the story at the same address changes nothing.
+    maker, feeds = world
+    monkeypatch.setattr(publisher_rss, "FEED_TTL", 1e-6)  # every poll reads the feeds again
+    asha = player("Asha Verma", ["Riverside XI"], card={"player": {"name": "Asha Verma"}, "news": []})
+    link = "https://wicket.example.com/v/1"
+    feeds[WICKET] = rss(("Verma ruled out of the series with a back injury", link, "The opener will miss all three Tests.", 3))
+    feeds[GAZETTE] = rss()
+    news.poll(NOW)
+    judged: list[str] = []
+
+    def judge_many(cands):
+        cands = list(cands)
+        judged.extend(c.title for c in cands)
+        return [curate.Verdict.model_validate(said()) for c in cands]
+
+    monkeypatch.setattr(curate, "judge_many", judge_many)
+    monkeypatch.setattr(bus, "store_card", lambda pid, card: None)
+
+    def run() -> tuple[list[str], list[str]]:
+        rank.judge(NOW)
+        rank.rescore(NOW)
+        rank.cards(NOW)
+        s = maker()
+        try:
+            card = s.get(PlayerCard, asha)
+            assert card is not None
+            return [st["headline"] for st in card.card.get("stories") or []], [r["text"] for r in week.wire(s, "fan", NOW)]
+        finally:
+            s.close()
+
+    assert run() == (["Verma ruled out of the series with a back injury"], ["Verma ruled out of the series with a back injury"])
+    feeds[WICKET] = rss(("Verma to miss only the first Test", link, "Scans showed a minor strain; she is expected back for the second Test.", 3))
+    assert news.poll(NOW + timedelta(minutes=20))["cricket"]["kept"] == 0  # no new row: the same one, changed
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate))
+        assert row is not None and row.candidate["title"] == "Verma to miss only the first Test" and row.verdict is None and row.score is None
+    assert run() == (["Verma to miss only the first Test"], ["Verma to miss only the first Test"])
+    assert judged == ["Verma ruled out of the series with a back injury", "Verma to miss only the first Test"]
+
+    # A small change says the same story: its verdict stands, and fans read the new words at once.
+    feeds[WICKET] = rss(("Verma to miss only the first Test, board says", link, "Scans showed a minor strain; she is expected back for the second Test.", 3))
+    news.poll(NOW + timedelta(minutes=40))
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate))
+        assert row is not None and row.verdict is not None and row.score is not None
+    assert run() == (["Verma to miss only the first Test, board says"], ["Verma to miss only the first Test, board says"])
+    assert len(judged) == 2
+    # Another feed's copy of it, worded its own way, isn't the publisher's correction.
+    feeds[GAZETTE] = rss(("Verma blow eases", link, "A syndicated copy.", 2))
+    news.poll(NOW + timedelta(minutes=60))
+    assert stories() == [(asha, link, "Daily Wicket")] and run()[0] == ["Verma to miss only the first Test, board says"]
+
+
 # Stories from three publishers' real feeds of 16-21 Oct 2026 (BUG-249), their words retold here, their facts (who,
 # when, the figures) kept: (player, outlet, published, headline, description). Few words of the same story are the
 # same from one outlet to the next ("Bavuma's 179" from three, "give up hope" from two); a series' words are in all
