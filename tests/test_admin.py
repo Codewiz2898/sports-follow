@@ -415,6 +415,30 @@ def test_the_panel_turns_a_sport_off_for_the_app_too(api, password):
     assert sport not in sports.ENABLED
 
 
+def test_an_allowance_changed_since_the_panel_showed_it_isnt_written_over(api, password, scarce):
+    """BUG-262: the form sent the whole allowance as it was drafted, so a second tab, or one whose view came from another
+    API process's copy (up to controls.REFRESH behind), silently undid a change just saved. The form says what the view
+    showed saved; an allowance saved since is refused (409), and the panel's views read what's stored."""
+    cookie = admin_cookie(sign_in(api))
+    seen = api.call("GET", "/api/admin/sources", headers=cookie).json()["budgets"][0]  # two tabs' view
+    assert seen["saved"] is None
+    first = {"windows": [{"seconds": 3600, "requests": 30, "margin": 1}], "reserve": 3, "fan": 2, "pause": 60}
+    other = {**first, "windows": [{"seconds": 3600, "requests": 20, "margin": 1}], "reserve": 5}
+    saved = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**first, "based_on": seen["saved"]})
+    assert saved.status_code == 200 and saved.json()["budgets"][0]["saved"] == first
+    stale = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**other, "based_on": seen["saved"]})
+    assert stale.status_code == 409 and "changed since" in stale.json()["detail"]
+    assert budget.effective(scarce).windows[0].requests == 30  # the first tab's stands
+    again = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**other, "based_on": saved.json()["budgets"][0]["saved"]})
+    assert again.status_code == 200 and budget.effective(scarce).reserve == 5
+    # Changed by another process (its row written, this process's copy not read again yet): the panel shows it.
+    controls.STORE.rows[f"{controls.BUDGET}{scarce.name}"] = first
+    controls.STORE.rows[controls.SPORTS_OFF] = [sports.ALL[0].key]
+    assert api.call("GET", "/api/admin/sources", headers=cookie).json()["budgets"][0]["saved"] == first
+    assert next(s for s in api.call("GET", "/api/admin/sports", headers=cookie).json()["sports"] if s["key"] == sports.ALL[0].key)["on"] is False
+    controls.turn_sport(sports.ALL[0].key, True)
+
+
 def test_the_panel_sets_and_resets_an_allowance(api, password, scarce):
     cookie = admin_cookie(sign_in(api))
     good = {"windows": [{"seconds": 60, "requests": 30, "margin": 2}], "reserve": 10, "fan": 5, "pause": 120}

@@ -81,6 +81,19 @@ def test_the_controls_are_rows_every_process_reads(db):
     controls.reset(controls.MemoryStore())
 
 
+def test_a_change_from_an_older_view_of_an_allowance_is_refused_and_the_row_kept(db):
+    """BUG-262, against the rows every process reads: a change made from a view that showed nothing saved, when
+    something was saved since, raises Stale and leaves the row as it was."""
+    controls.reset(controls.DbStore())
+    try:
+        controls.set_budget("lichess", {"windows": [], "reserve": 0, "fan": None, "pause": 30}, based_on=None)
+        with pytest.raises(controls.Stale):
+            controls.set_budget("lichess", {"windows": [], "reserve": 0, "fan": None, "pause": 90}, based_on=None)
+        assert db.execute(text("SELECT value FROM control WHERE key = 'budget:lichess'")).scalar_one()["pause"] == 30
+    finally:
+        controls.reset(controls.MemoryStore())
+
+
 def test_accounts_are_listed_newest_first_and_found_by_address(db):
     signed_in(db, "first@example.com")
     signed_in(db, "second@example.org")

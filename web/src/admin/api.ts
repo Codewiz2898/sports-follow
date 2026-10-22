@@ -42,6 +42,7 @@ export interface Allowance {
   declared: Limits
   limits: Limits
   changed: boolean
+  saved: Limits | null // what the panel saved, as stored (null: nothing): a change made from this view sends it back as based_on
   standing: Standing
   usage: LaneUse[]
 }
@@ -167,7 +168,9 @@ export const admin = {
   setSport: (key: string, on: boolean) => request<{ sports: AdminSport[] }>(at(`sports/${encodeURIComponent(key)}`), json('PUT', { on })),
   sources: () => request<SourcesView>(at('sources')),
   setSource: (system: string, on: boolean) => request<SourcesView>(at(`sources/${encodeURIComponent(system)}`), json('PUT', { on })),
-  setLimits: (name: string, limits: Limits) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', limits)),
+  /** basedOn: what the view the change was made from had saved; changed since (another tab), it's a 409. */
+  setLimits: (name: string, limits: Limits, basedOn: Limits | null) =>
+    request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', { ...limits, based_on: basedOn })),
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   linear: () => request<LinearStatus>(at('linear')),
   feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),

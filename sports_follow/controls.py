@@ -228,10 +228,25 @@ def turn_source(system: str, on: bool) -> None:
     _switch(SOURCES_OFF, system, on)
 
 
-def set_budget(name: str, change: dict[str, Any] | None) -> None:
+class Stale(Exception):
+    """A change made from a view of the rows that's no longer what's stored: they were changed since."""
+
+
+ANYTHING: Any = object()  # a change's based_on when it wasn't made from a view: it's made whatever is stored
+
+
+def set_budget(name: str, change: dict[str, Any] | None, based_on: Any = ANYTHING) -> None:
     """What the panel changes of a budget (budget.effective says what each field means); None goes back to
-    what its source declares."""
-    STORE.change(f"{BUDGET}{name}", lambda _: change or None)
+    what its source declares. based_on: what the panel's view showed saved of it (None for nothing), for a change
+    made from one; Stale if that's no longer what's stored, so a tab drafted from an older view (or from another
+    process's copy, up to REFRESH behind) never undoes a change saved since without saying so."""
+
+    def fn(value: Any) -> dict[str, Any] | None:
+        if based_on is not ANYTHING and (value or None) != (based_on or None):
+            raise Stale(name)
+        return change or None
+
+    STORE.change(f"{BUDGET}{name}", fn)
     load()
 
 

@@ -169,7 +169,7 @@ def sports_view() -> list[dict[str, Any]]:
     """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, whether
     fans are offered it (sports.offered: a sport on with no source running and research off isn't, and the
     panel says to turn it off), and the group it's one of (each esports game is a sport, under "Esports")."""
-    off = controls.current().sports_off
+    off = controls.load().sports_off  # what's stored: this process's copy may be a read behind another's change
     running = sports.ENABLED
     rows = []
     for s in sports.ALL:
@@ -211,7 +211,7 @@ def _limits(b: budget.Budget) -> dict[str, Any]:
 def sources_view(now: float | None = None) -> dict[str, Any]:
     """Every source this app knows, in order of preference, with why it does or doesn't run; and every
     allowance they spend: as declared, as the panel has it, where it stands now and what was spent."""
-    off = controls.current().sources_off
+    off = controls.load().sources_off  # what's stored: this process's copy may be a read behind another's change
     can = {a.system for a in ALL}
     running = ADAPTERS.now()
     sport_on = {s.key for s in sports.ENABLED}
@@ -286,6 +286,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
+            "saved": controls.current().budgets.get(b.name),  # what the panel saved, as stored: a change from this view says it (set_limits)
             "standing": budget.standing(b, now),
             "usage": [{"lane": lane, **{k: v for k, v in used[(b.name, lane)].items() if k not in ("source", "lane")}} for lane in budget.LANES if (b.name, lane) in used],
         })
@@ -339,14 +340,19 @@ def checked_limits(name: str, body: dict[str, Any]) -> dict[str, Any]:
     return {"windows": out, "reserve": reserve, "fan": fan, "pause": pause}
 
 
+Stale = controls.Stale  # a change made from a view of the panel's that's no longer what's stored
+
+
 def set_limits(name: str, body: dict[str, Any] | None) -> None:
-    """Change what a source may spend (checked_limits), or go back to what it declares (None)."""
+    """Change what a source may spend (checked_limits), or go back to what it declares (None). A change made from
+    the panel's view says what that showed saved ("based_on": sources_view's "saved", null for nothing): Stale if
+    it was changed since (another tab, or a view from another process's older copy)."""
     if body is None:
         if name not in {b.name for b in budget.known()}:
             raise LookupError(name)
         controls.set_budget(name, None)
         return
-    controls.set_budget(name, checked_limits(name, body))
+    controls.set_budget(name, checked_limits(name, body), body["based_on"] if "based_on" in body else controls.ANYTHING)
 
 
 # ---------------------------------------------------------------- accounts

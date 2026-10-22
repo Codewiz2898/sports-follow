@@ -1928,13 +1928,16 @@ def admin_set_source(system: str, body: dict = Body(...)) -> dict[str, Any]:
 @app.put("/api/admin/budgets/{name}", dependencies=AdminOnly)
 def admin_set_budget(name: str, body: dict = Body(...)) -> dict[str, Any]:
     """What a source may spend (admin.checked_limits): its allowance a minute, an hour or a day, the
-    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429."""
+    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429. One
+    changed since the view this change was made from ("based_on") is a 409: the panel shows the newer one."""
     try:
         admin.set_limits(name, body)
     except LookupError:
         raise HTTPException(404, "There's no such allowance.") from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except admin.Stale:
+        raise HTTPException(409, "These limits were changed since you opened them (in another tab?): here they are now. Change them again if you still want to.") from None
     admin_log.info("admin panel: allowance %s set to %s", name, json.dumps(body, sort_keys=True))
     return admin.sources_view()
 
