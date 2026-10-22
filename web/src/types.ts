@@ -99,6 +99,7 @@ export interface RecentResult {
   result: string
   date?: string | null  // the UTC day, or an agent's bare date
   start_utc?: string | null  // when the game started: the app shows the fan's local day of it
+  ended_utc?: string | null  // when the server found it over: Today's since yesterday dates it so (format.ts: endedOn)
   player_contribution?: string | null
   competition?: string | null
   source_url?: string | null
@@ -522,6 +523,7 @@ export interface LeagueGame {
   competition: string
   detail?: string | null
   start_utc: string
+  ended_utc?: string | null  // when it was found over, where it's an event here: a Test's last day (format.ts: endedOn)
   rank: number
   word: string  // "4–1", "By 6 wickets", a lobby's winner; "" for a game to come
   line: string  // "Arsenal beat Chelsea"; "" says the title
