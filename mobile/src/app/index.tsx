@@ -64,12 +64,13 @@ function Head({ now }: { now: number }) {
   )
 }
 
-/** Once a fan follows someone without an account: signing in keeps them. Dismissed for good. */
+/** Once a fan follows someone without an account: signing in keeps them. Dismissed for good, by this fan. */
 function SaveNudge() {
-  const { me } = useAccount()
+  const { me, epoch } = useAccount()
   const { cards, teams } = useFollowing()
   const [hidden, setHidden] = useState(true)
-  useEffect(() => { AsyncStorage.getItem(NUDGE).then((v) => setHidden(v === 'dismissed')).catch(() => {}) }, [])
+  // Read again for each fan: a sign-in or out forgets it (fanChange.ts), and the next fan on the phone is offered it.
+  useEffect(() => { AsyncStorage.getItem(NUDGE).then((v) => setHidden(v === 'dismissed')).catch(() => {}) }, [epoch])
   if (hidden || !me || me.signed_in || cards.length + teams.length === 0) return null
   const dismiss = () => { setHidden(true); AsyncStorage.setItem(NUDGE, 'dismissed').catch(() => {}) }
   return (

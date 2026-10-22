@@ -18,7 +18,9 @@ export function welcome(added: number, teamsDropped = 0): string {
  * What a device keeps of the fan it is, each under the key of the part of the app that keeps it: the fan's last look
  * at Alerts (activity.tsx), at the Feed tab and at each player's circle (feedSeen.ts), and the address a sign-in code
  * went to (the account page). Forgotten as the device becomes another fan, so the next person on it isn't shown the
- * last one's (BUG-169). The web keeps them in localStorage, the Android app in AsyncStorage.
+ * last one's (BUG-169). The web keeps them in localStorage, the Android app in AsyncStorage. The Android app also
+ * forgets Today's save nudge dismissed and the link the fan came from told (visit.ts), so the next fan is offered the
+ * one and counted from the other (BUG-281).
  */
 export const WEB_KEPT = ['sf-alerts-seen', 'sf-feed-opened', 'sf-feed-seen', 'sf-signin']
-export const PHONE_KEPT = ['stann.alerts-seen', 'stann.feed-opened', 'stann.feed-seen', 'stann.signin']
+export const PHONE_KEPT = ['stann.alerts-seen', 'stann.feed-opened', 'stann.feed-seen', 'stann.signin', 'stann.save-nudge', 'stann.source-noted']

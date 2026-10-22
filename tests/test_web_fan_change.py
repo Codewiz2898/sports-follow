@@ -59,6 +59,9 @@ def test_every_key_a_device_keeps_of_its_fan_is_forgotten_as_it_becomes_another(
     assert set(found["web"]) == {kept("web/src/activity.tsx", "SEEN"), kept("web/src/feedSeen.ts", "OPENED"), kept("web/src/feedSeen.ts", "SEEN"),
                                  kept("web/src/pages/AccountPage.tsx", "PENDING")}
     assert set(found["phone"]) == {kept("mobile/src/activity.tsx", "SEEN"), kept("mobile/src/feedSeen.ts", "OPENED"), kept("mobile/src/feedSeen.ts", "SEEN"),
-                                   kept("mobile/src/app/account.tsx", "PENDING")}
+                                   kept("mobile/src/app/account.tsx", "PENDING"),
+                                   # Today's save nudge dismissed, and the link the fan came from told (BUG-281): the next
+                                   # fan on the phone is offered the one and counted from the other.
+                                   kept("mobile/src/app/index.tsx", "NUDGE"), kept("mobile/src/visit.ts", "NOTED")}
     # Both apps forget them all as they start over, not one of them.
     assert "WEB_KEPT" in (ROOT / "web/src/account.tsx").read_text() and "PHONE_KEPT" in (ROOT / "mobile/src/account.tsx").read_text()
