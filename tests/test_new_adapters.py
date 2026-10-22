@@ -676,7 +676,7 @@ def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_init
         ref = lichess_chess.ref_for({"id": player["fideId"], "name": player["name"]})
         fixtures = chess.fixtures(ref)
         assert [a for a in asked if "/search?" in a] == [f"/api/broadcast/search?q={query}"], ref.name
-        assert not any(t["id"] in a for a in asked for t in (group_d,)), ref.name  # no "Group D" event read
+        assert not any(group_d["id"] in a for a in asked), ref.name  # no "Group D" event read
         # Their game in round 1 (paired), and round 2, not paired yet, as theirs: the event lists them.
         assert [(f.source_id, f.status) for f in fixtures] == [(f"Round001-{player['fideId']}", "scheduled"), (f"Round002-{player['fideId']}", "scheduled")], ref.name
         assert opponent in fixtures[0].title and fixtures[1].detail == "Pairings not published yet"
