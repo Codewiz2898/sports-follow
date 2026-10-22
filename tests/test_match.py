@@ -122,12 +122,13 @@ def test_a_chess_games_moves_come_with_each_ones_evaluation(monkeypatch):
               2: {"cp": 25, "mate": None, "depth": 20, "best": "g1f3", "fen": e5},
               3: {"cp": -31, "mate": None, "depth": 18, "best": "b8c6", "fen": qh5},
               5: {"cp": 0, "mate": None, "depth": 18, "best": None, "fen": "8/8/8/8/8/8/8/8 b - - 0 3"},  # the move before it never seen
-              6: {"cp": None, "mate": None, "depth": 0, "best": None, "fen": "8/8/8/8/8/8/8/8 w - - 0 4"}}  # stopped before it had a score
+              6: {"cp": None, "mate": None, "depth": 0, "best": None, "fen": "8/8/8/8/8/8/8/8 w - - 0 4"},  # stopped before it had a score
+              7: {"cp": None, "mate": -3, "depth": 18, "best": None, "fen": "8/8/8/8/8/8/8/8 b - - 0 4"}}  # so nothing to judge this by
     monkeypatch.setattr(engine, "plies", lambda game, r=None: looked if game == "g2" else {})
     live = {"kind": "chess", "game_id": "g2", "fen": qh5, "page_detail": {"game_id": "g2", "moves": [[1, "e4", "e5"]], "more": ["d1h5"]}}
     page = chess.match_page(live, [], {}, {})
     assert page["evals"] == {"0": {"cp": 15, "depth": 18}, "1": {"cp": -120, "depth": 18}, "2": {"cp": 25, "depth": 20},
-                             "3": {"cp": -31, "depth": 18, "mark": "?!", "best_uci": "g1f3"}, "5": {"cp": 0, "depth": 18}}
+                             "3": {"cp": -31, "depth": 18, "mark": "?!", "best_uci": "g1f3"}, "5": {"cp": 0, "depth": 18}, "7": {"mate": -3, "depth": 18}}
     assert page["evals_from"] is None
     assert chess.match_page({**over, "game_id": "g2", "evals": {}, "evals_from": None}, [], {}, {})["evals"] == page["evals"]
     assert "evals" not in chess.match_page({**live, "game_id": "g3", "page_detail": {**live["page_detail"], "game_id": "g3"}}, [], {}, {})

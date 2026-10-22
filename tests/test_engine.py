@@ -212,6 +212,9 @@ def test_each_move_keeps_the_deepest_reading_of_its_position():
     engine._record(r, "A", D4, {"cp": 25, "mate": None, "depth": 18}, on=False)  # put by, of another line: kept out
     assert engine.plies("A", r) == {0: {"cp": 15, "mate": None, "depth": 18, "best": "e2e4", "fen": START},
                                      1: {"cp": 31, "mate": None, "depth": 26, "best": "c7c5", "fen": E4}}
+    engine._put_by(r, "A", E4E5, now=99)  # put by while E4 was being looked at: the game's next move
+    engine._record(r, "A", E4, {"cp": 31, "mate": None, "depth": 26, "best": "c7c5"})
+    assert engine.take_put_by(r, now=100) == ("A", E4E5)
     engine._record(r, "A", E4E5, {"cp": 25, "mate": None, "depth": 18})
     engine._put_by(r, "A", E4E5, now=100)
     engine._record(r, "A", D4, {"cp": 30, "mate": None, "depth": 18})  # the relay corrects White's first move
@@ -372,7 +375,7 @@ def test_each_move_the_polls_saw_is_looked_at_in_the_lanes_spare_time(monkeypatc
     looked, started = run_lane(monkeypatch, stopping, r, [18, 20, 21, 22, 16])
     assert (looked, started) == ([E4, E4, E4, E4, START], [E4])
     assert {ply: (k["fen"], k["depth"]) for ply, k in engine.plies("A", r).items()} == {0: (START, 16), 1: (E4, 22)}
-    assert engine.latest("A", r)["fen"] == E4  # type: ignore[index]  # a position put by goes to its move alone
+    assert (engine.latest("A", r) or {})["fen"] == E4  # a position put by goes to its move alone
 
 
 def test_an_unwatched_games_positions_put_by_are_looked_at_straight_after(monkeypatch, stopping):

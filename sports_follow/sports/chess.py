@@ -119,6 +119,8 @@ def evals(state: dict[str, Any]) -> dict[str, Any]:
         if "cp" not in ev and "mate" not in ev:
             continue
         before = looked.get(at - 1)
+        if before is not None and before.get("cp") is None and before.get("mate") is None:
+            before = None  # no score to hold the move against
         best = (before or {}).get("best")
         if before is not None and not played(before.get("fen"), reading.get("fen"), best) and (mark := judge(before, reading, white=at % 2 == 1)):
             ev["mark"] = mark
@@ -380,7 +382,7 @@ class Chess(Sport):
         mini-match's next one is another), with its opening, and those added since as the board gives its last
         move ("d5e3": more), which the app writes as moves; a game kept from its first move has those alone.
 
-        With them, each move's evaluation where there's one (evals()), and whose it is ("evals_by")."""
+        With them, each move's evaluation where there's one (evals()), and whose it is ("evals_from")."""
         told = {} if state.get("moves") else state.get("page_detail") or {}
         if told.get("game_id") != state.get("game_id"):
             told = {}

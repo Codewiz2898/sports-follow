@@ -51,8 +51,8 @@ Every reading of a game's position is kept as its move's evaluation too (plies()
 deepest so far, with the engine's best move there), for the match page's bar, graph and marks while the game
 is on; a position put by takes its turn after the games' new positions, and, while a game is being deepened,
 every PUT_BY_EVERY slices. A move the polls never saw (two moves between polls) has none. A finished game's
-evaluations are Lichess's analysis of it (lichess_chess.parse_pgn_game), so a game the source calls over has
-its positions put by dropped (drop()).
+evaluations are its source's analysis of it where the source has one (Sport.match_page), so a game the source
+calls over has its positions put by dropped (drop()).
 
 Stockfish (GPL) runs as its own process, spoken to over UCI. Without it installed, nothing is
 evaluated and chess notifications keep to starts and results.
@@ -173,7 +173,7 @@ def request(game: str, fen: str, r: Any = None, now: float | None = None, by: ob
 
 def drop(game: str, r: Any = None, by: object | None = None) -> None:
     """Stop evaluating a game for one of its fixtures (`by`), or for all of them (it's over, or not on:
-    nothing of it waits either, its positions put by too: Lichess's analysis has its moves). Once no
+    nothing of it waits either, its positions put by too: its source's analysis has its moves). Once no
     fixture wants it deepened, its position isn't; the lane lets go of it before its next slice."""
     r = r or bus.sync_redis()
     if by is None:
@@ -256,17 +256,20 @@ def plies(game: str, r: Any = None) -> dict[int, dict[str, Any]]:
 
 def _record(r: Any, game: str, fen: str, reading: dict[str, Any], on: bool = True) -> None:
     """Keep a reading of one of a game's positions (keep()'s: the deepest of it so far) as its move's evaluation. The
-    position the game is on (`on`) is its move's whatever was kept for that move before (a relay correcting it), and
-    the moves after it go (taken back); one put by is kept only where its move has none of another position."""
+    position the game is on (`on`) is its move's whatever was kept for that move before, and where it's taken back
+    a move or more, or a relay has corrected it (moves kept after it, or another position kept for it), the moves
+    after it go, put by or kept; one put by is kept only where its move has none of another position."""
     at = ply(fen)
     if at is None:
         return
     key = f"engine:plies:{game}"
     kept = r.hgetall(key) or {}
-    if not on and str(at) in kept and json.loads(kept[str(at)]).get("fen") != fen:
+    other = str(at) in kept and json.loads(kept[str(at)]).get("fen") != fen
+    if not on and other:
         return
     r.hset(key, str(at), json.dumps({**{k: reading.get(k) for k in READING}, "fen": fen}))
-    if on:
+    if on and (other or any(int(k) > at for k in kept)):
+        # Not otherwise: positions put by while this one was looked at are the game's next moves.
         for later in (k for k in kept if int(k) > at):
             r.hdel(key, later)
         for later in (k for k in r.hgetall(f"engine:put-by:{game}") or {} if int(k) > at):
@@ -291,16 +294,17 @@ def take_put_by(r: Any, now: float) -> tuple[str, str] | None:
     while games := r.zrange(PUT_BY, 0, 0):
         game = games[0]
         waiting = r.hgetall(f"engine:put-by:{game}") or {}
-        if not waiting:
-            r.zrem(PUT_BY, game)
-            continue
-        first = min(waiting, key=int)
-        r.hdel(f"engine:put-by:{game}", first)
+        first = min(waiting, key=int) if waiting else None
+        if first is not None:
+            r.hdel(f"engine:put-by:{game}", first)
         if len(waiting) > 1:
             r.zadd(PUT_BY, {game: now})
         else:
             r.zrem(PUT_BY, game)
-        return game, waiting[first]
+            if r.hgetall(f"engine:put-by:{game}"):
+                r.zadd(PUT_BY, {game: now})  # one a poll put by meanwhile: its game waits again
+        if first is not None:
+            return game, waiting[first]
     return None
 
 
@@ -698,8 +702,8 @@ def run_lane() -> None:
         bus.release(LOCK, token)
         wall = time.monotonic() - started
         if evaluated or hits or slices:
-            log.info("engine: %d position(s) evaluated, %d from cache, %d of them put by, %d deeper slice(s), busy %.0fs of %.0fs (%.0f%% of one core), %d game(s) waiting, %d to deepen, %d with positions put by",
-                     evaluated, put_by, hits, slices, busy, wall, 100 * busy / max(wall, 1), r.zcard(QUEUE), r.zcard(DEEPEN), r.zcard(PUT_BY))
+            log.info("engine: %d position(s) evaluated, %d from cache, %d look(s) at positions put by, %d deeper slice(s), busy %.0fs of %.0fs (%.0f%% of one core), %d game(s) waiting, %d to deepen, %d with positions put by",
+                     evaluated, hits, put_by, slices, busy, wall, 100 * busy / max(wall, 1), r.zcard(QUEUE), r.zcard(DEEPEN), r.zcard(PUT_BY))
 
 
 def _lost(engine: Engine | None, exc: Exception) -> None:
