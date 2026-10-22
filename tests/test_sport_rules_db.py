@@ -12,6 +12,7 @@ import copy
 import os
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -330,6 +331,27 @@ def test_a_result_whose_summary_never_comes_is_told_after_a_poll_or_two(db, push
         _espn_poll(_espn(""))
         told += heard(pushed)
     assert told == [("kohli", "Virat Kohli: Result")]  # once, held at most two polls
+    assert db.get(Event, 1, populate_existing=True).status == "final"
+
+
+def test_a_match_long_over_first_seen_without_its_summary_tells_nothing(db, pushed, monkeypatch):
+    # BUG-259, reopened: a first look at a match long over (its sport turned back on, a worker down for days) is old news,
+    # but one whose row has no word yet on who won was held as still on, for its summary, and the poll after the hold
+    # told "Rohit Opener: Result" to his fans and the game's, five days late.
+    player(db, 1, "Rohit Opener", "sportmonks_cricket", OPENER)
+    game(db, 1, "sportmonks_cricket:71215", CRICKET, 1)
+    event = db.get(Event, 1)
+    event.start_utc, event.status = datetime.now(timezone.utc) - timedelta(days=5), "live"
+    db.commit()
+    fan(db, "rohit", player=1)
+    fan(db, "game", game=1)
+    polls = iter([False, True, True, True])  # the first look after a gap, then polled all along
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: next(polls))
+    xi = [_picked(OPENER, IND), _picked(SPINNER, AFG)]
+    over = _row("Finished", [FIRST, {"team_id": AFG, "inning": 2, "score": 94, "wickets": 10, "overs": 14.1}], xi, batting=[_bat(OPENER, 70, 40, "Clean Bowled", **BOWLED)])
+    for _ in range(4):
+        cricket(over, [(1, str(OPENER))])
+    assert heard(pushed) == set()
     assert db.get(Event, 1, populate_existing=True).status == "final"
 
 
