@@ -113,6 +113,23 @@ def _balls(overs: Any) -> int | None:
     return int(whole) * 6 + int(part or 0) if whole.isdigit() and (part or "0").isdigit() else None
 
 
+def _bowled(state: dict[str, Any]) -> int:
+    """Balls bowled in a match so far, every innings on its board."""
+    return sum(_balls(i.get("overs")) or 0 for i in state.get("innings") or [] if isinstance(i, dict))
+
+
+def _in_line(line: dict[str, Any] | None) -> int | None:
+    """Balls a player has faced and bowled in a match, from their line: every innings its headline lists, else its
+    stats' latest; None where it says neither."""
+    bats, bowls = innings((line or {}).get("headline"))
+    if bats or bowls:
+        return sum(b for _, _, b in bats) + sum(_balls(o) or 0 for _, _, o in bowls)
+    faced, overs = stat(line, "Balls"), stat(line, "Overs")
+    if faced is None and overs is None:
+        return None
+    return number(faced) + (_balls(overs) or 0)
+
+
 def _haul(wickets: int) -> int:
     """A wicket haul's priority: a five-for is near a hundred."""
     return 90 if wickets >= 5 else 75 if wickets == 4 else 70
@@ -189,6 +206,28 @@ class Cricket(Sport):
 
     def lineup_title(self, who: str, starting: bool) -> str:
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"
+
+    def starts_unlisted(self, now: Seen) -> bool:
+        """Nobody has a line at the first ball, so the start is told for a player in the XI, or for anyone where the
+        source has no team sheet: not for a substitute, or someone the XI leaves out."""
+        return now.role == "starting" or not now.squad_known
+
+    def left_out(self, now: Seen) -> bool:
+        """The XI is out (the team sheet: its eleven and any substitutes) and the player isn't in it: a squad player
+        rested, or another format's."""
+        return now.squad_known and now.role is None
+
+    def first_line_is_news(self, before: Seen, now: Seen) -> bool:
+        """A cricketer has no line till they face a ball or bowl one, so their first can be their first ball (a
+        first-ball duck): news where the balls in it are no more than the match has bowled since the last poll, and
+        one more for a no-ball. A longer one is a first look: a follow mid-innings, or a source's scorecard catching up."""
+        balls = _in_line(now.line)
+        return balls is not None and balls <= _bowled(now.state) - _bowled(before.state) + 1
+
+    def result_pending(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """The source's summary, which says who won ("India won by 57 runs"), can come a poll or two after it says the
+        match is over ("Result")."""
+        return not self.verdict(state, score, clock)
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,

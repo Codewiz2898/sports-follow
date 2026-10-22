@@ -570,6 +570,7 @@ def _refresh(player_id: int) -> None:
         if kind and kind.group and sports.get(player.sport) is not kind:
             player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
         events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
+        dropped = unpicked(db, adapter, player_id, fixtures)
         for f, snap in recent:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
@@ -603,8 +604,8 @@ def _refresh(player_id: int) -> None:
         if ref.profile_url and ref.profile_url not in card.get("sources", []):
             card["sources"] = [ref.profile_url, *card.get("sources", [])]
         live = card.get("live") or {}
-        if live.get("is_live") and not live.get("event_id"):
-            # The agent's reading of a live game gives way to the poller's.
+        if (live.get("is_live") and not live.get("event_id")) or live.get("event_id") in dropped:
+            # The agent's reading of a live game gives way to the poller's; a game they were left out of isn't theirs.
             card["live"] = {"is_live": False, "player_stats": []}
             card_row.is_live = False
         card["freshness"] = {**card.get("freshness", {}), "fixtures": stamp, "stats": stamp}
@@ -613,6 +614,22 @@ def _refresh(player_id: int) -> None:
         card_row.version = card["version"]
         card_row.freshness = card["freshness"]
     bus.store_card(player_id, card)
+
+
+def unpicked(db: Session, adapter: Adapter, player_id: int, fixtures: list[Fixture]) -> set[int]:
+    """Take a player out of the games still to come or on that their source no longer lists for them, where it lists
+    only the games a player is picked for and reads them whole (its picked_only: a match's XI once it's out, else
+    the squad): one they've been left out of isn't polled, shown live or told for them, and their fans don't get its
+    live card. A read that lists nothing at all says nothing about any one game. Returns the games they're out of."""
+    if not getattr(adapter, "picked_only", False) or not fixtures:
+        return set()
+    listed = [f"{adapter.system}:{f.source_id}" for f in fixtures]
+    gone = set(db.scalars(select(Event.id).join(EventPlayer, EventPlayer.event_id == Event.id).where(
+        EventPlayer.player_id == player_id, Event.key.like(f"{adapter.system}:%"), Event.key.not_in(listed), Event.status.in_(("scheduled", "armed", "live")))))
+    if gone:
+        db.execute(delete(EventPlayer).where(EventPlayer.player_id == player_id, EventPlayer.event_id.in_(gone)))
+        log.info("refresh %s: %s no longer lists event(s) %s for them; taken out", player_id, adapter.system, ", ".join(map(str, sorted(gone))))
+    return gone
 
 
 def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
@@ -1025,18 +1042,30 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
         state["eval"] = settled
 
 
-def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True) -> moments.Seen | None:
+def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot, recent: bool = True, line: dict[str, Any] | None = None) -> moments.Seen | None:
     """What a player's moments are found against: the event's last state, with their last line. A first
     look at a game already under way is the baseline (None), which tells only a result or a line-up: no
     earlier state; a gap in polling (recent is False: a restart, an hour of a source's errors), so what
     happened meanwhile is old news; a game last seen before the start and now over, or (football) well
-    past kick-off; or, from a source with player lines, no earlier line for them while it was live.
+    past kick-off; or, from a source with player lines, no earlier line for them while it was live, unless
+    the line they have now (`line`) is news since (first_line_news: a batter's first ball, a first-ball duck).
     Esports has no player lines, so its earlier state alone is enough."""
-    if latest is None or not recent or (last is None and latest.status == "live" and snap.lines):
+    if latest is None or not recent or (last is None and latest.status == "live" and snap.lines and not first_line_news(latest, snap, line)):
         return None
     if latest.status in PRE_MATCH and (snap.status == "final" or (snap.status == "live" and _under_way(snap))):
         return None
     return moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
+
+
+def first_line_news(latest: EventState, snap: Snapshot, line: dict[str, Any] | None) -> bool:
+    """Whether a player's first line in a game polled all along, with none at its last poll while it was live, is
+    news since that poll, as their sport says (Sport.first_line_is_news): a cricketer has none till their first
+    ball, so it may be a first-ball duck. Not where every player has one from the start: a follow, or the source's
+    lines, came mid-game."""
+    if line is None:
+        return False
+    was = moments.Seen(latest.status, latest.state or {}, None, latest.score_label or "", latest.clock_label or "")
+    return sports.of_state(snap.state).first_line_is_news(was, moments.Seen(snap.status, snap.state, line, snap.score_label, snap.clock_label))
 
 
 def _under_way(snap: Snapshot) -> bool:
@@ -1128,6 +1157,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         # Only changes are stored, so the latest state can be old in a game polled all along (the
         # minutes before kick-off); whether polling had a gap comes from the polls themselves.
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
+        snap = hold_result(rules, snap, latest)
         if rules.engine:
             _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -1155,20 +1185,31 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 if line_changed:
                     db.add(PlayerLine(event_id=event_id, player_id=player_id, as_of=now, stats=line_json))
             # What happened to this player since the last poll.
+            name, sport = people.get(player_id, ("", ""))
+            seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments,
+                                teams=sides.get(player_id, []), squad_known=bool(snap.squad))
             if changed or line_changed:
-                before = baseline(latest, last, snap, recent)
-                name, sport = people.get(player_id, ("", ""))
-                seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
+                before = baseline(latest, last, snap, recent, line_json)
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue
             card_row.live_checked_at = now
-            if not (changed or line_changed) and card_row.is_live == (snap.status == "live"):
+            # A player the team sheet leaves out (Sport.left_out) isn't in the game: their page doesn't show it live, nor
+            # its result as theirs; it's taken down if it went up before the sheet was out.
+            out = snap.status in ("live", "final") and sports.of(sport).left_out(seen)
+            if out:
+                if ((card_row.card or {}).get("live") or {}).get("event_id") != event.id:
+                    continue
+            elif not (changed or line_changed) and card_row.is_live == (snap.status == "live"):
                 continue
             card = copy.deepcopy(card_row.card)
-            _apply_snapshot(card, event, snap, line, adapter, now)
+            if out:
+                card["live"] = {"is_live": False, "player_stats": []}
+                card["freshness"] = {**card.get("freshness", {}), "live": now.isoformat()}
+            else:
+                _apply_snapshot(card, event, snap, line, adapter, now)
             card["version"] = (card_row.version or 0) + 1
             card_row.card = card
             card_row.version = card["version"]
@@ -1239,6 +1280,20 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
     value = json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str)
     return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}"), (key, value, gap)
+
+
+HOLD_RESULT = 2  # polls in a row a finished game's result waits for its source to say who won (hold_result)
+
+
+def hold_result(rules: sports.Sport, snap: Snapshot, latest: EventState | None) -> Snapshot:
+    """A poll of a finished game whose result is still to come from its source (Sport.result_pending: cricket's
+    "Result" before "India won by 57 runs"), as it's applied: still on, for up to HOLD_RESULT polls in a row, so it's
+    polled again and its fans hear who won; then over, however it reads. Its state counts the polls held ("held").
+    One already over here isn't held."""
+    if snap.status != "final" or (latest is not None and latest.status == "final") or not rules.result_pending(snap.state, snap.score_label, snap.clock_label):
+        return snap
+    polls = int(((latest.state if latest is not None else None) or {}).get("held") or 0)
+    return snap if polls >= HOLD_RESULT else replace(snap, status="live", state={**snap.state, "held": polls + 1})
 
 
 def _roster_names(event: Event) -> dict[str, str]:

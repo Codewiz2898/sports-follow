@@ -807,7 +807,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
   side in its words: `side_final`), its Wikidata ids and registry rules, what its players' pages read from
   Wikidata (`profile_nation`, `profile_role` and the awards worth naming, `honours`: wiki.py), its moments (start, result,
-  line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
+  line-up, what happens during a game, whether a player's first line in a game polled all along is news
+  (`first_line_is_news`: a cricketer's first ball) and whether a result is still to come (`result_pending`: cricket's
+  summary a poll behind its "Result"), what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
