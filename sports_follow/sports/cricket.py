@@ -207,7 +207,9 @@ class Cricket(Sport):
     priorities = {"fifty": 70, "hundred": 90, "out": 60, "wickets": 70}
     stats_title = "Overview"
 
-    def lineup_title(self, who: str, starting: bool) -> str:
+    def lineup_title(self, who: str, starting: bool, several: bool = False) -> str:
+        if several:
+            return f"{who} are in the XI" if starting else f"{who} are named substitutes"
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"
 
     def starts_unlisted(self, now: Seen) -> bool:

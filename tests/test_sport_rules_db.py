@@ -24,7 +24,7 @@ from sports_follow.sports.base import DRAW
 
 from .test_adapters import load
 from .test_match_follow import Store
-from .test_sportmonks_cricket import AFG, FIRST, IND, OPENER, SEAMER, SPINNER, _bat, _match, _picked, _row
+from .test_sportmonks_cricket import AFG, FIRST, IND, KEEPER, OPENER, SEAMER, SPINNER, _bat, _match, _picked, _row
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -201,6 +201,31 @@ def test_a_cricketer_left_out_of_the_xi_hears_no_result_and_their_page_doesnt_sh
     assert heard(pushed) == {("rohit", "Rohit Opener: India won by 127 runs")}
     card = db.get(PlayerCard, 2, populate_existing=True)
     assert not card.is_live and card.card["recent_results"] == []  # not a game he played
+
+
+# ---------------------------------------------------------------- two followed teammates (BUG-206, BUG-300)
+
+
+def test_a_fan_of_two_teammates_hears_the_xi_the_start_and_the_result_once_in_words_for_both(db, pushed):
+    # One push each, naming both: the XI was said in one player's words ("Rishabh Pant and Rohit Sharma is in the XI"),
+    # and the result twice, each with its own line under it.
+    player(db, 1, "Rohit Sharma", "sportmonks_cricket", OPENER)
+    player(db, 2, "Rishabh Pant", "sportmonks_cricket", KEEPER)
+    game(db, 1, "sportmonks_cricket:71215", CRICKET, 1, 2)
+    fan(db, "two", player=1)
+    db.add(Follow(fan_id="two", player_id=2, alert_rules={"level": "key"}))
+    db.commit()
+    xi = [_picked(OPENER, IND), _picked(KEEPER, IND), _picked(SPINNER, AFG)]
+    watched = [(1, str(OPENER)), (2, str(KEEPER))]
+    cricket(_row("NS", lineup=xi), watched)
+    cricket(_row("1st Innings", innings(0, 0, 0), xi, batting=[_bat(OPENER, 0, 0, None)]), watched)
+    cricket(_row("Finished", [FIRST, {"team_id": AFG, "inning": 2, "score": 94, "wickets": 10, "overs": 14.1}], xi, note="India won by 127 runs", winner_team_id=IND,
+                 batting=[_bat(OPENER, 70, 40, "Clean Bowled", **BOWLED), _bat(KEEPER, 20, 10, "Clean Bowled", sort=2, **BOWLED)]), watched)
+    assert [(title, body.split("\n")) for _, title, body in pushed] == [
+        ("Rishabh Pant and Rohit Sharma are in the XI", ["India v Afghanistan · line-ups are out"]),
+        ("Rishabh Pant and Rohit Sharma's game has started", ["IND 0/0 (0 ov) · 1st Innings", "Rishabh Pant and Rohit Sharma are in the XI"]),
+        ("Rishabh Pant and Rohit Sharma: India won by 127 runs", ["Rishabh Pant · 20 (10)", "Rohit Sharma · 70 (40)", "Rohit Sharma out for 70", "Rohit Sharma reaches 50", "Rishabh Pant out for 20"]),
+    ]
 
 
 class Listed(sc.SportmonksCricket):

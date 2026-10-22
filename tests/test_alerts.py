@@ -252,3 +252,26 @@ def test_a_result_teammates_tell_with_lines_of_their_own_is_one_line_with_each_o
     # Two of their outs in one poll are two plays, whatever their words: each stays theirs.
     ducks = [told(5, "out", "Rohit Sharma out for 0", rohit, "0 (1) · b Farooqi", 65), told(6, "out", "Rishabh Pant out for 0", pant, "0 (2) · lbw b Farooqi", 65)]
     assert len(plan(ducks, {pant: "key", rohit: "key"}, set(), [], NOW)[0].lines) == 2
+
+
+def test_several_players_in_one_line_are_told_in_words_for_several():
+    # BUG-300: the fold put several names in one player's words: "Rishabh Pant and Rohit Sharma is in the XI". Their sport
+    # words them for several.
+    rice, saka = 3, 4
+
+    def told(id: int, kind: str, title: str, who: int, sport: str, detail: str = "", body: str = "Arsenal v Chelsea · line-ups are out") -> Item:
+        return replace(item(id, kind, title, player=who, body=body), who={rice: "Declan Rice", saka: "Bukayo Saka"}[who], sport=sport, detail=detail)
+
+    def said(*pair: Item) -> list[str]:
+        return plan(list(pair), {rice: "everything", saka: "everything"}, set(), [], NOW)[0].lines
+
+    assert said(told(1, "lineup", "Declan Rice starts", rice, "Football", "starting"), told(2, "lineup", "Bukayo Saka starts", saka, "Football", "starting")) == ["Bukayo Saka and Declan Rice start"]
+    assert said(told(1, "lineup", "Declan Rice is on the bench", rice, "Football", "bench"), told(2, "lineup", "Bukayo Saka is on the bench", saka, "Football", "bench")) == ["Bukayo Saka and Declan Rice are on the bench"]
+    assert said(told(1, "on", "Declan Rice comes on", rice, "Football", body="1–0 · 60'"), told(2, "on", "Bukayo Saka comes on", saka, "Football", body="1–0 · 60'")) == ["Bukayo Saka and Declan Rice come on"]
+    assert said(told(1, "lineup", "Declan Rice is in the XI", rice, "Cricket", "starting"), told(2, "lineup", "Bukayo Saka is in the XI", saka, "Cricket", "starting")) == ["Bukayo Saka and Declan Rice are in the XI"]
+    assert said(told(1, "lineup", "Declan Rice is named a substitute", rice, "Cricket", "bench"), told(2, "lineup", "Bukayo Saka is named a substitute", saka, "Cricket", "bench")) == ["Bukayo Saka and Declan Rice are named substitutes"]
+    assert said(told(1, "start", "Declan Rice is playing", rice, "BGMI", body="Finals · BGMI"), told(2, "start", "Bukayo Saka is playing", saka, "BGMI", body="Finals · BGMI")) == ["Bukayo Saka and Declan Rice are playing"]
+    # Words that read right for several are as they were.
+    assert said(told(1, "start", "Declan Rice's game has started", rice, "Football", body="0–0"), told(2, "start", "Bukayo Saka's game has started", saka, "Football", body="0–0")) == ["Bukayo Saka and Declan Rice's game has started"]
+    # One alone is told as before.
+    assert plan([told(1, "lineup", "Declan Rice is in the XI", rice, "Cricket", "starting")], {rice: "key"}, set(), [], NOW)[0].lines == ["Declan Rice is in the XI"]

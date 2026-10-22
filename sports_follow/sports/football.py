@@ -371,6 +371,12 @@ class Football(Sport):
             found.append(Found("on", "minor", f"{who} comes on", where))
         return found
 
+    def told_by_several(self, kind: str, detail: str, title: str, who: str, names: str) -> str:
+        """A double substitution: "Rice and Saka come on"."""
+        if kind == "on" and title == f"{who} comes on":
+            return f"{names} come on"
+        return super().told_by_several(kind, detail, title, who, names)
+
     def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
         """A goal fans were told about that VAR has ruled out, and the assist on it: one that doesn't stand
         in the source's events (_standing: no one's goal now, nor a play of theirs moved or re-credited),

@@ -886,7 +886,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wikidata (`profile_nation`, `profile_role` and the awards worth naming, `honours`: wiki.py), its moments (start, result,
   line-up, what happens during a game, whether a player's first line in a game polled all along is news
   (`first_line_is_news`: a cricketer's first ball) and whether a result is still to come (`result_pending`: cricket's
-  summary a poll behind its "Result"), what a source takes back (`taken_back`), what its own kinds of moment are
+  summary a poll behind its "Result"), what a source takes back (`taken_back`), how one reads naming several of a fan's
+  players at once (`told_by_several`: "Pant and Rohit are in the XI"), what its own kinds of moment are
   worth (`priorities`: a goal 85, a yellow card 20; the kinds every sport has are `moments.PRIORITY`'s), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game

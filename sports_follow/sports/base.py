@@ -437,8 +437,22 @@ class Sport:
         names = [t.get("name") for t in state.get("teams") or []]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
 
-    def lineup_title(self, who: str, starting: bool) -> str:
+    def lineup_title(self, who: str, starting: bool, several: bool = False) -> str:
+        """A player's line-up moment's title ("Saka starts", "Saka is on the bench"), or `several` players' at once
+        (told_by_several: "Rice and Saka start")."""
+        if several:
+            return f"{who} start" if starting else f"{who} are on the bench"
         return f"{who} starts" if starting else f"{who} is on the bench"
+
+    def told_by_several(self, kind: str, detail: str, title: str, who: str, names: str) -> str:
+        """A moment several of a fan's players tell alike as one line naming them all (alerts.fold), from one's title, which
+        names them as `who`, and all their names (`names`: "Declan Rice and Bukayo Saka"): a line-up in its words for
+        several (lineup_title), anything else with the names in place of theirs, which reads right after a colon or as a
+        possessive ("TenZ and zekken: Sentinels win 2–0", "Rice and Saka's game has started"). A sport whose own words for
+        one player don't (football's "comes on") says them for several here (BUG-300)."""
+        if kind == "lineup" and detail in ("starting", "bench"):
+            return self.lineup_title(names, detail == "starting", several=True)
+        return names + title[len(who):] if who and title.startswith(who) else title
 
     def starts_unlisted(self, now: Seen) -> bool:
         """Whether a game starting is told for a player with no line in it yet (one player a side)."""
