@@ -15,7 +15,7 @@ import { useFollowing } from '../following'
 import { Rail, type RailCard } from '../rail'
 import { ShareButton } from '../share'
 import { colour, dsp, font, RADIUS_TILE } from '../theme'
-import { breakable, Pill } from '../ui'
+import { breakable, Pill, Section } from '../ui'
 
 interface Week { posters: WeekPoster[]; wire: WireRow[] }
 const NONE: Week = { posters: [], wire: [] }
@@ -110,13 +110,15 @@ function Line({ row, now, last }: { row: WireRow; now: number; last: boolean }) 
 }
 
 /** The Wire on Today: a white card of who's out and who's back, line-ups and news, the fan's players' first. Nothing
- * when there's none. */
+ * when there's none. Its title always: under This week's posters, the card would otherwise read as part of This week. */
 export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
   if (!rows.length) return null
   return (
-    <View style={s.wire}>
-      {rows.map((r, i) => <Line key={r.id} row={r} now={now} last={i === rows.length - 1} />)}
-    </View>
+    <Section title="The wire">
+      <View style={s.wire}>
+        {rows.map((r, i) => <Line key={r.id} row={r} now={now} last={i === rows.length - 1} />)}
+      </View>
+    </Section>
   )
 }
 

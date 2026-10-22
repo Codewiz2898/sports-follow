@@ -689,11 +689,11 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
 
 // ---------------------------------------------------------------- Today
 
-/** Today's "From your players" (the web's components/Feed.tsx): after Results, before Coming up; the two best of
- * the fan's Feed (Following) right now in the edge layout's cards, boxed (whichever layout the Feed tab draws: a
- * full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. Read once the
- * follow list is in, and again when it comes back changed, when Today is pulled (`again`) and when the app comes
- * back to the front, since Today stays open where the web's page would be loaded anew. */
+/** Today's "From your players" (the web's components/Feed.tsx): at its foot, after This week and the Wire; the two
+ * best of the fan's Feed (Following) right now in the edge layout's cards, boxed (whichever layout the Feed tab
+ * draws: a full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. Read
+ * once the follow list is in, and again when it comes back changed, when Today is pulled (`again`) and when the app
+ * comes back to the front, since Today stays open where the web's page would be loaded anew. */
 export function FromYourPlayers({ now, again = 0 }: { now: number; again?: number }) {
   const { cards, loaded, heard } = useFollowing()
   const [back, setBack] = useState(0)

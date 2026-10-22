@@ -31,7 +31,7 @@
 .chess-eval .score.top { bottom: auto; top: 5px; }
 .chess-eval .score.white { color: #141414; }
 .chess-eval .score.black { color: #f4f1e8; }
-.chess-eval.waiting { background: var(--raised); }  /* an analysis board's, while its engine loads */
+.chess-eval.waiting { background: var(--raised); }  /* an analysis board's while its engine loads; the match page's while the fan has stepped back */
 .chess-depth { flex-basis: 100%; order: 1; }  /* a line of its own, under the bar and the board */
 @media (prefers-reduced-motion: reduce) { .chess-eval .fill { transition: none; } }
 /* Under a match page's board: Play from here, and how deep the engine looked. */
