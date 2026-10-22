@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, delete, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, candidates, controls, curate, db as db_module, feed, news, rank, registry, week
-from sports_follow.adapters import publisher_rss
+from sports_follow.adapters import Article, publisher_rss
 from sports_follow.models import Athlete, Event, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -101,13 +101,20 @@ def test_a_common_surname_in_the_registry_names_a_player_only_with_their_side(wo
 
 
 def test_a_handle_two_of_the_registrys_pros_go_by_is_one_a_shared_feed_needs_more_for(world):
-    # BUG-252: the registry knows a handle is another game's pro's too.
+    # BUG-252: the registry knows a handle is another game's pro's too. Its pros are each under their game, as the
+    # rosters write them ("lol", "cs2"; "esports" for one whose game can't be told), never all under "esports": the
+    # registry was asked for "esports" alone, found nobody, and HLTV's Zeus still went to the LoL one.
     with db_module.session() as s:
-        s.add_all(Athlete(qid=f"pandascore:{i}", sport="esports", name=n, league=game, search_text=registry.search_text(n, [])) for i, (n, game) in
-                  enumerate([("Zeus", "league-of-legends"), ("Zeus", "cs-go"), ("Boaster", "valorant")]))  # fmt: skip
-        group = [candidates.Followed(41, "lol", "Zeus"), candidates.Followed(42, "valorant", "Boaster")]
-        usual = news.common(s, group, news.names(group))
-        assert ("lol", "zeus") in usual and {w for _, w in usual} == {"zeus"}  # Boaster is the only one
+        s.add_all(Athlete(qid=f"pandascore:{i}", sport=game, name=n, search_text=registry.search_text(n, [])) for i, (n, game) in
+                  enumerate([("Zeus", "lol"), ("Zeus", "cs2"), ("Boaster", "valorant"), ("Dev Park", "lol"), ("Ann Park", "cs2"), ("Joe Park", "esports")]))  # fmt: skip
+        group = [candidates.Followed(41, "lol", "Zeus", teams=["Hanwha Life Esports"]), candidates.Followed(42, "valorant", "Boaster"),
+                 candidates.Followed(43, "lol", "Dev Park", teams=["T1"])]  # fmt: skip
+        found = news.names(group)
+        usual = news.common(s, group, found)
+    assert {("lol", "zeus"), ("lol", "park")} <= usual and "boaster" not in {w for _, w in usual}  # three pros of any game are Parks
+    hltv = Article(url="https://hltv.example.com/1", title="Zeus returns to coach Natus Vincere", description="The Ukrainian legend is back.",
+                   published=NOW, outlet="HLTV", feed="https://hltv.example.com/rss", image=None)
+    assert news.link([hltv], group, found, usual, shared=True) == []
 
 
 def test_a_surname_the_registry_writes_with_accents_is_as_common_as_it_is(world):
