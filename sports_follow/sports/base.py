@@ -649,6 +649,11 @@ class Sport:
         once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
 
+    def question_board(self, state: dict[str, Any]) -> str:
+        """The board a game's questions are asked and settled under (predictions.ensure): board's, unless a game goes on
+        over several boards (a chess mini-match's games), whose questions stay with the board they were asked of."""
+        return self.board(state)
+
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
         """Who's on a game under several fixtures (board), by their ids in the source, each with a fixture of their
         own: its fixtures here are theirs, so alerts, live cards and mutes take them for one game (structured.boards).

@@ -43,6 +43,13 @@ MAX_TOURS = 6  # the most recent tournaments a player is followed through
 PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a few times a month
 STALE_PAGE = 7 * 24 * 3600  # what the last copy read listed, kept in Redis while Lichess refuses a new one
 LIVE_MOVES_KEEP = 6 * 3600  # a live board's moves so far, kept in Redis this long after the last move added
+# A player's one game over in a round still on, where their pairing's next game may follow it (may_follow): the next
+# game's chapter shows only as it starts, a break of ten or twenty minutes in a tiebreak or before an armageddon, so the
+# board waits this long for it before it's over, where Lichess doesn't say the round is first.
+GRACE = 30 * 60
+OVER_KEEP = 24 * 3600  # when such a game was first seen over, kept in Redis this long
+# Words a knockout's event or round goes by ("8-player Knockout", "Tiebreaks", "Armageddon", "Playoffs").
+KNOCKOUT = re.compile(r"\b(?:knock-?outs?|ko|tie-?breaks?|tie breaks?|armageddon|play-?offs?)\b", re.I)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _lock = threading.Lock()  # one request at a time from each process, as Lichess asks
@@ -386,10 +393,31 @@ def fmt_points(x: float) -> str:
     return f"{whole if whole or x == 0 else ''}{'½' if x % 1 else ''}"
 
 
-def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: datetime) -> str:
+def may_follow(round_data: dict[str, Any], games: list[dict[str, Any]]) -> bool:
+    """Whether a player's game in a round may be followed by another with the same opponent in it: a mini-match's next
+    game, a tiebreak, an armageddon, each shown only once the one before is over. So in a knockout's round (its event's
+    or round's name, or Lichess's format for the event, says so; or a pairing in it already has several games) and in a
+    round of their pairing alone (a match's: a World Championship's tiebreak); not in a round robin's or a Swiss's."""
+    rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
+    if KNOCKOUT.search(" ".join(str(x or "") for x in (tour.get("name"), rnd.get("name"), (tour.get("info") or {}).get("format")))):
+        return True
+    pairs: dict[frozenset[str], int] = {}
+    for g in round_data.get("games") or games:
+        pair = frozenset(str(p.get("fideId")) for p in g.get("players") or [])
+        pairs[pair] = pairs.get(pair, 0) + 1
+    return len(pairs) <= 1 or max(pairs.values()) > 1
+
+
+def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: datetime, follows: bool = False, waited: float | None = None) -> str:
+    """A player's board in a round: scheduled, live, final, or postponed. Their games all decided, it's over once the
+    round is, as a mini-match is (a tiebreak can follow); one game, at once, unless its pairing's next may follow it
+    (`follows`: may_follow): then GRACE after it was first seen over (`waited`, in seconds; None for not known yet)."""
     if games and all(_result(g.get("status")) for g in games):
-        # A single game is over when it's decided; a match only when its round is (a tiebreak can follow).
-        return "final" if len(games) == 1 or round_info.get("finished") or not round_info.get("ongoing") else "live"
+        if round_info.get("finished") or not round_info.get("ongoing"):
+            return "final"
+        if len(games) > 1 or (follows and (waited is None or waited < GRACE)):
+            return "live"
+        return "final"
     if round_info.get("finished"):
         return "final" if games else "postponed"
     starts = _dt(round_info.get("startsAt"))
@@ -432,13 +460,13 @@ def live_boards(round_data: dict[str, Any], system: str, now: datetime | None = 
     return out
 
 
-def parse_game(round_data: dict[str, Any], fide_id: str, system: str, now: datetime | None = None) -> LiveGame | None:
+def parse_game(round_data: dict[str, Any], fide_id: str, system: str, now: datetime | None = None, waited: float | None = None) -> LiveGame | None:
     """A broadcast round -> one player's board in it as a game for its match page, with both players and the
-    fixture each has it under; None when they aren't paired in it."""
+    fixture each has it under; None when they aren't paired in it. `waited` as parse_board's."""
     rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
     if not rnd.get("id") or not games_of(round_data, fide_id):
         return None
-    snap = parse_board(round_data, fide_id, now)
+    snap = parse_board(round_data, fide_id, now, waited)
     refs = [PlayerRef(system=system, athlete_id=s["id"], name=s["name"], team_ids=[s["id"]], team_names=[s["name"]]) for s in (snap.state.get("white"), snap.state.get("black")) if s and s.get("id")]
     return LiveGame(
         source_id=f"{rnd['id']}-{fide_id}",
@@ -451,13 +479,16 @@ def parse_game(round_data: dict[str, Any], fide_id: str, system: str, now: datet
     )
 
 
-def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None = None) -> Snapshot:
+def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None = None, waited: float | None = None) -> Snapshot:
     """One player's board in a broadcast round -> snapshot: the game in play (or the last one), and
-    over a multi-game round the match score. Lines for both players, keyed by FIDE id."""
+    over a multi-game round the match score, who's ahead in it and its first game (the board its
+    questions were asked of: Chess.question_board). Lines for both players, keyed by FIDE id. A
+    game over whose pairing's next may follow it in the round is live till GRACE after it was
+    first seen over (`waited`: LichessChess._waited) or the round is (round_status)."""
     now = now or datetime.now(timezone.utc)
     rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
     games = games_of(round_data, fide_id)
-    status = round_status(rnd, games, now)
+    status = round_status(rnd, games, now, may_follow(round_data, games), waited)
     game = current_game(games)
     if game is None:
         return Snapshot(
@@ -527,16 +558,19 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
             "turn": turn,
             "move": move,
             "result": result,
-            "match": {"games": decided, "score": f"{fmt_points(pts)}–{fmt_points(decided - pts)}"} if is_match else None,
+            "match": {"games": decided, "score": f"{fmt_points(pts)}–{fmt_points(decided - pts)}", "first": str(games[0].get("id") or ""),
+                      "ahead": me_side["id"] if pts * 2 > decided else opp_side["id"] if pts * 2 < decided else None} if is_match else None,
         },
         lines=lines,
         source_url=f"{rnd['url']}/{game['id']}" if rnd.get("url") and game.get("id") else rnd.get("url"),
     )
 
 
-def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str, Any]], fide_id: str, now: datetime) -> Fixture:
-    """A player's fixture in one round: their game (or match) once paired, the round itself before that."""
-    status = round_status(rnd, games, now)
+def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str, Any]], fide_id: str, now: datetime,
+                follows: bool = False, waited: float | None = None) -> Fixture:
+    """A player's fixture in one round: their game (or match) once paired, the round itself before that.
+    `follows` and `waited` as round_status's: a refresh calls a game over no sooner than its polls do."""
+    status = round_status(rnd, games, now, follows, waited)
     title = f"{tour.get('name', '')} · {rnd.get('name', '')}"
     result = None
     if games:
@@ -820,7 +854,8 @@ class LichessChess(Adapter):
                         continue
                 mine = games_of(data, ref.athlete_id)
                 if mine:
-                    games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now))
+                    read = {**data, "round": rnd, "tour": tour}
+                    games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now, may_follow(read, mine), self._waited(read, ref.athlete_id)))
                 elif not data.get("games") and not rnd.get("finished"):
                     unpaired.append(rnd)  # starting soon, pairings not out
                 # else: paired without them (a bye, or not in this section)
@@ -860,10 +895,32 @@ class LichessChess(Adapter):
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         data = get_json(f"{API}broadcast/-/-/{locator['round']}", ttl=24 * 3600 if final else 5)
-        snap = parse_board(data, locator["fide"])
+        snap = parse_board(data, locator["fide"], waited=self._waited(data, locator["fide"]))
         if snap.status == "live":
             self._moves_so_far(locator["round"], snap.state, read=False)  # one move on: added to its page's list
         return snap
+
+    @staticmethod
+    def _waited(round_data: dict[str, Any], fide_id: str) -> float | None:
+        """How long ago, in seconds, a player's one game in a round still on was first seen over, where their pairing's
+        next game may follow it (may_follow): what round_status waits GRACE on. The first look at it over starts the
+        clock, kept in Redis for the worker and the API alike. None where nothing waits; with Redis down, GRACE: the
+        game's over now, as before, rather than polled with no end."""
+        rnd = round_data.get("round") or {}
+        games = games_of(round_data, fide_id)
+        if len(games) != 1 or not games[0].get("id") or not _result(games[0].get("status")) or rnd.get("finished") or not rnd.get("ongoing"):
+            return None
+        if not may_follow(round_data, games):
+            return None
+        key, now = f"lichess:over:{games[0]['id']}", time.time()
+        try:
+            r: Any = bus.sync_redis()
+            first = r.get(key)
+            if first is None:
+                r.set(key, str(now), ex=OVER_KEEP)
+            return now - float(first or now)
+        except Exception:
+            return GRACE
 
     @staticmethod
     def _moves_so_far(round_id: str, state: dict[str, Any], read: bool) -> dict[str, Any] | None:
@@ -907,13 +964,14 @@ class LichessChess(Adapter):
         whoever follows it, for its match page: its position, clocks and match score, and both players. One
         round request, the one Live now and a followed player's live poll make; while the game is on, its moves
         so far (_moves_so_far: its PGN once, then kept up a move at a time by every look at the board); and once
-        it's over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A board
-        whose moves couldn't be read, or whose round is still on (a mini-match's next game may follow a decided
-        one), is partial: match.py reads it again later, and keeps it a week once the round is over (or, if
-        Lichess never says so, once it has waited long enough: match.PARTIAL)."""
+        it's over, one more for its moves (its PGN: a broadcast round is a study, each board a chapter). A game
+        over that its pairing's next may follow is live till GRACE after it was first seen over (_waited); a board
+        whose moves couldn't be read, or over with its round still on, is partial: match.py reads it again later,
+        and keeps it a week once the round is over (or, if Lichess never says so, once it has waited long enough:
+        match.PARTIAL)."""
         round_id, _, fide = source_id.partition("-")
         data = get_json(f"{API}broadcast/-/-/{round_id}", ttl=30)
-        game = parse_game(data, fide, self.system)
+        game = parse_game(data, fide, self.system, waited=self._waited(data, fide))
         state = game.snapshot.state if game else {}
         if game and game.snapshot.status == "live":
             # The moves so far, as the page's detail: it shows under whichever board is newest (match.py), a
