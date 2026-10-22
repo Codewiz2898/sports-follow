@@ -233,7 +233,7 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
         return ""
     a, b = r["teams"]
     ours, theirs = (a, b) if a["id"] in team_ids else (b, a) if b["id"] in team_ids else (None, None)
-    if ours is None:
+    if ours is None or theirs is None:
         return f"{a['name']} {a['score']}–{b['score']} {b['name']}"
     if r.get("forfeit"):
         return "Won by forfeit" if ours.get("winner") else "Lost by forfeit" if theirs.get("winner") else "Forfeit"
