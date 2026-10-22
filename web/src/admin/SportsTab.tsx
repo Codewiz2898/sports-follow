@@ -19,23 +19,26 @@ export function SportsTab() {
     return () => clearInterval(timer)
   }, [load])
 
-  const turn = async (sport: AdminSport) => {
+  const change = async (sport: AdminSport, call: () => Promise<{ sports: AdminSport[] }>) => {
     setBusy(sport.key)
     setError(null)
     try {
-      setSports((await admin.setSport(sport.key, !sport.on)).sports)
+      setSports((await call()).sports)
     } catch (e) {
       setError(failed(e))
     } finally {
       setBusy(null)
     }
   }
+  const turn = (sport: AdminSport) => change(sport, () => admin.setSport(sport.key, !sport.on))
+  const turnLogos = (sport: AdminSport) => change(sport, () => admin.setLogos(sport.key, !sport.logos))
 
   return (
     <section className="section" aria-label="Sports">
       <Note>
         A sport turned off isn't searched, imported or polled, its sources stop, and the app stops offering it. The pages of players
-        fans already follow stay as they are. Every server process picks a change up within 10 seconds; fans' apps within a few minutes.
+        fans already follow stay as they are. With a sport's logos off, its teams show our badge (their short code) in place of their
+        logos, wherever they are. Every server process picks a change up within 10 seconds; fans' apps within a few minutes.
       </Note>
       {error && <div className="error-box" role="alert">{error}</div>}
       {!sports ? <div className="card empty"><span className="spinner" /></div> : groups(sports).map(([group, theirs]) => (
@@ -51,6 +54,13 @@ export function SportsTab() {
                   <button
                     type="button" role="switch" className="switch" aria-checked={s.allowed && s.on} aria-label={`${s.label} on`}
                     disabled={!s.allowed || busy === s.key} onClick={() => void turn(s)}
+                  />
+                </div>
+                <div className="row">
+                  <span className="small">{s.logos ? "Teams' logos" : "Teams' logos off: our badges"}</span>
+                  <button
+                    type="button" role="switch" className="switch" aria-checked={s.logos} aria-label={`${s.label} teams' logos`}
+                    disabled={busy === s.key} onClick={() => void turnLogos(s)}
                   />
                 </div>
               </article>

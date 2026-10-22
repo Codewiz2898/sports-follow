@@ -191,6 +191,9 @@ class SourceTeam:
     # How big a team the source makes it, where it rates them (the tier of its tournaments; a top league's), on
     # Fixture.tier's scale: 3 a world event's, 2 a top league's, 1 a smaller one's; 0 unrated. Search's tie-break.
     tier: int = 0
+    # Where the source keeps the team's logo (a national cricket side's is its flag), on one of the source's
+    # logo_hosts: logos.py keeps our own copy of it, which is what the app shows. "" for none.
+    logo: str = ""
 
 
 @dataclass
@@ -351,6 +354,9 @@ class Adapter:
     # The Wikidata property that holds its athlete ids, where Wikidata keeps them (Liquipedia's pages,
     # P10918): a pro from its roster is then matched to their Wikidata person by id (roster_wikidata.py).
     wikidata_property: str | None = None
+    # The hosts its teams' logos (SourceTeam.logo) are on: logos.py downloads one from nowhere else, so a logo
+    # address in a source's reply can't send the server anywhere it shouldn't go. Empty: it has none.
+    logo_hosts: tuple[str, ...] = ()
 
     @classmethod
     def available(cls) -> bool:

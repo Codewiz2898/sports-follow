@@ -5,7 +5,24 @@ import { ApiError, json, request } from '../api'
 
 /** A sport: whether the server's settings let it run (SPORTS_FOLLOW_SPORTS), whether the panel has it on, its running
  * sources, and the group it's one of ("Esports" for each game; "" for none). */
-export interface AdminSport { key: string; label: string; group: string; allowed: boolean; on: boolean; running: boolean; sources: string[]; offered: boolean }
+export interface AdminSport { key: string; label: string; group: string; allowed: boolean; on: boolean; running: boolean; sources: string[]; offered: boolean; logos: boolean }
+
+/** Two colours a team is drawn in (sports_follow/logos.py). */
+export interface TeamColours { fill: string; accent: string }
+/** How the app draws a team (logos.look): its logo's address (null: our badge), its colours (null: its sport's), its logo's own colours. */
+export interface TeamLook { logo: string | null; short: string; colours: TeamColours | null; tones: string[]; set: boolean }
+/** A team in the Teams tab (logos.for_admin): its look, the colours read from its logo, and whether its logo is taken down. */
+export interface AdminTeam {
+  id: number
+  key: string
+  name: string
+  sport: string
+  detail: string
+  look: TeamLook
+  read: TeamColours | null
+  hidden: boolean
+  logo_status: 'ok' | 'failed' | 'refused' | 'waiting' | 'none'
+}
 
 /** A source this app knows, and why it does or doesn't run. */
 export interface AdminSource {
@@ -204,6 +221,10 @@ export const admin = {
   logout: () => request<{ admin: false }>(at('logout'), { method: 'POST' }),
   sports: () => request<{ sports: AdminSport[] }>(at('sports')),
   setSport: (key: string, on: boolean) => request<{ sports: AdminSport[] }>(at(`sports/${encodeURIComponent(key)}`), json('PUT', { on })),
+  setLogos: (key: string, on: boolean) => request<{ sports: AdminSport[] }>(at(`sports/${encodeURIComponent(key)}/logos`), json('PUT', { on })),
+  teams: (q: string) => request<{ teams: AdminTeam[] }>(at(`teams?q=${encodeURIComponent(q)}`)),
+  /** colours null: the ones read from its logo. */
+  setTeamLook: (id: number, change: { colours?: TeamColours | null; hidden?: boolean }) => request<{ team: AdminTeam }>(at(`teams/${id}/look`), json('PUT', change)),
   sources: () => request<SourcesView>(at('sources')),
   setSource: (system: string, on: boolean) => request<SourcesView>(at(`sources/${encodeURIComponent(system)}`), json('PUT', { on })),
   /** basedOn: what the view the change was made from had saved; changed since (another tab), it's a 409. */

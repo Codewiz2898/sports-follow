@@ -403,7 +403,8 @@ def parse_teams(season: dict[str, Any], league: dict[str, Any], system: str = "s
     for t in season.get("teams") or []:
         name = str(t.get("name") or "").strip()
         if t.get("id") and name:
-            out.append(SourceTeam(system=system, team_id=str(t["id"]), name=name, short=str(t.get("code") or ""), competition=_plays_in(t, league)))
+            out.append(SourceTeam(system=system, team_id=str(t["id"]), name=name, short=str(t.get("code") or ""), competition=_plays_in(t, league),
+                                  logo=str(t.get("image_path") or "")))
     return out
 
 
@@ -419,7 +420,8 @@ def parse_squad(team: dict[str, Any], league: dict[str, Any] | None = None, syst
         who = str(p.get("fullname") or "").strip()
         if p.get("id") and who:
             players.setdefault(str(p["id"]), PlayerRef(system, str(p["id"]), who, [team_id], [name], born=born(p.get("dateofbirth"))))
-    return SourceTeam(system=system, team_id=team_id, name=name, players=list(players.values()), short=str(team.get("code") or ""), competition=_plays_in(team, league))
+    return SourceTeam(system=system, team_id=team_id, name=name, players=list(players.values()), short=str(team.get("code") or ""), competition=_plays_in(team, league),
+                      logo=str(team.get("image_path") or ""))
 
 
 def squad_match(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, Any] | None:
@@ -446,6 +448,7 @@ class SportmonksCricket(Adapter):
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Cricket"
+    logo_hosts = sportmonks.LOGO_HOSTS  # a national side's logo is its flag
     live_cadence = 10  # one livescores request for every live match: 360 an hour, of the 2,000 it allows
     # A player's fixtures are only the matches they're picked for (in_match: the XI once it's out, else the squad), and
     # a read lists them all or fails: a match still to come or on that a refresh no longer lists is one they've been

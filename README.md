@@ -32,6 +32,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
+                                ├─ fetch_logos, every 30 min: teams' logos from their sources, kept and served by us (logos.py)
                                 ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
                                 ├─ refresh_campaigns, daily: each campaign page's teams' rosters from their sources (campaigns.py)
                                 └─ tick, every minute, beside the jobs (no slot): arm events, queue polls, refreshes and rebuilds
@@ -677,7 +678,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `teams` and `team_fixtures` for a source fans can follow teams from (every team it covers in its sports that
   run, read weekly for the team registry in a few requests, and one team's games, finished and to come, over
   the window `fixtures` reads for a player; `sports_follow/teams.py`; its `team` gives the team page its squad,
-  and its `result_label` says each result from the team's side),
+  and its `result_label` says each result from the team's side; where it has teams' logos, each `SourceTeam.logo`
+  says where, and `logo_hosts` the hosts they're on: `sports_follow/logos.py` keeps our own copy and serves it),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).

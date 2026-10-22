@@ -8,6 +8,7 @@ import { FeedTab } from './FeedTab'
 import { Failure } from './shared'
 import { SourcesTab } from './SourcesTab'
 import { SportsTab } from './SportsTab'
+import { TeamsTab } from './TeamsTab'
 import { UserPage, UsersTab } from './UsersTab'
 import './admin.css'
 
@@ -57,6 +58,7 @@ export default function AdminApp() {
         <nav className="admin-tabs" aria-label="Admin">
           <NavLink to="/admin" end>Sports</NavLink>
           <NavLink to="/admin/sources">Sources and limits</NavLink>
+          <NavLink to="/admin/teams">Teams</NavLink>
           <NavLink to="/admin/users">Users</NavLink>
           <NavLink to="/admin/feed">Feed</NavLink>
           <NavLink to="/admin/clips">Clips</NavLink>
@@ -64,6 +66,7 @@ export default function AdminApp() {
         <Routes>
           <Route index element={<SportsTab />} />
           <Route path="sources" element={<SourcesTab />} />
+          <Route path="teams" element={<TeamsTab />} />
           <Route path="users" element={<UsersTab />} />
           <Route path="users/:id" element={<UserPage />} />
           <Route path="feed" element={<FeedTab />} />

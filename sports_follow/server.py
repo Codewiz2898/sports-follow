@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, google_signin, league, linear, live, logos, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget, served
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
@@ -637,6 +637,25 @@ async def player_photo(name: str) -> Response:
         raise HTTPException(404, "No such photo.")
     data, media_type = found
     return Response(data, media_type=media_type, headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/logos/{name}")
+async def team_logo(name: str) -> Response:
+    """A team's logo (logos.py), from our own copy, while its sport's logos are on and its own isn't taken down: its
+    address is its content, so it's kept a year. One taken down stops being served at once, and looks stop naming it."""
+    data = await in_db(logos.serve, name)
+    if data is None:
+        raise HTTPException(404, "No such logo.")
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/looks")
+async def team_looks(teams_: str = Query("", alias="teams", max_length=4000)) -> JSONResponse:
+    """How the app draws these teams ("system:team id", comma-separated, logos.LOOKS_MOST at most), by the ids a game's
+    board, its fixtures and Call it carry: each one's logo address (null: our badge, its short code), its two colours
+    (null: its sport's) and its logo's own. Teams the registry hasn't are left out. The same for every fan."""
+    found = await in_db(logos.looks, [k for k in teams_.split(",") if k][: logos.LOOKS_MOST])
+    return JSONResponse({"looks": found}, headers={"Cache-Control": "public, max-age=300"})
 
 
 # ---------------------------------------------------------------- link previews (share.py)
@@ -2235,6 +2254,39 @@ def admin_set_sport(key: str, body: dict = Body(...)) -> dict[str, Any]:
         raise HTTPException(404, "There's no such sport.") from None
     admin_log.info("admin panel: sport %s turned %s", key, "on" if on else "off")
     return {"sports": admin.sports_view()}
+
+
+@app.put("/api/admin/sports/{key}/logos", dependencies=AdminOnly)
+def admin_set_logos(key: str, body: dict = Body(...)) -> dict[str, Any]:
+    """Show a sport's team logos, or our badges in their place (logos.py), within seconds."""
+    on = _switch(body, "on")
+    try:
+        admin.set_logos(key, on)
+    except LookupError:
+        raise HTTPException(404, "There's no such sport.") from None
+    admin_log.info("admin panel: %s logos turned %s", key, "on" if on else "off")
+    return {"sports": admin.sports_view()}
+
+
+@app.get("/api/admin/teams", dependencies=AdminOnly)
+def admin_teams(q: str = Query("", max_length=100), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The registry's teams named like this, with their logos and colours (the Teams tab)."""
+    return {"teams": admin.teams_view(db, q)}
+
+
+@app.put("/api/admin/teams/{team_id}/look", dependencies=AdminOnly)
+def admin_team_look(team_id: RowId, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Set a team's colours ({"colours": {"fill", "accent"}}, null for its logo's), or take its logo down or put it
+    back ({"hidden": true})."""
+    try:
+        team = admin.set_team_look(db, team_id, body)
+    except LookupError:
+        raise HTTPException(404, "There's no such team.") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    db.commit()
+    admin_log.info("admin panel: team %s's look changed (%s)", team_id, ", ".join(sorted(k for k in body if k in ("colours", "hidden"))))
+    return {"team": team}
 
 
 @app.get("/api/admin/sources", dependencies=AdminOnly)

@@ -142,7 +142,7 @@ def upsert(db: Session, system: str, t: SourceTeam, sport: str, now: datetime) -
     """A source's team as the registry keeps it: written anew from what the source says of it now."""
     competitions = [c for c in (t.competition or "").split(" · ") if c]
     values = {"name": t.name.strip()[:200], "sport": sport, "competitions": competitions, "short": (t.short or "")[:20], "country": (t.country or None) and t.country[:120],
-              "tier": t.tier, "search_text": search_text(t.name, t.short or ""), "seen_at": now}
+              "tier": t.tier, "search_text": search_text(t.name, t.short or ""), "seen_at": now, "logo_url": t.logo or None}
     db.execute(insert(Team).values(system=system, external_id=t.team_id, **values).on_conflict_do_update(index_elements=["system", "external_id"], set_=values))
     return db.scalars(select(Team).where(Team.system == system, Team.external_id == t.team_id)).one()
 
@@ -280,6 +280,7 @@ def summary(team: Team, followers: int = 0, following: bool = False) -> dict[str
     nxt = next(iter(card.get("upcoming") or []), None)
     return {
         "team_id": team.id,
+        "key": f"{team.system}:{team.external_id}",  # how the app asks for its look (logos.looks)
         "name": team.name,
         "short": team.short,
         "sport": team.sport,
@@ -489,14 +490,14 @@ def _versus(f: Fixture, external: str) -> str:
 
 def _upcoming(f: Fixture, event: Event, external: str) -> dict[str, Any]:
     return {"title": f.title, "competition": f.competition, "start_utc": f.start_utc.isoformat() if f.start_utc else None, "venue": f.venue, "notes": f.detail,
-            "status": event.status, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external)}
+            "status": event.status, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external), "sides": list(f.team_ids)}
 
 
 def result(adapter: Adapter, f: Fixture, event: Event, external: str) -> dict[str, Any]:
     """A finished game from the team's side, as its page lists it ("Won 2–1")."""
     return {"title": f"{f.title} · {f.detail}" if f.detail else f.title, "result": adapter.result_label(f, [external]) or "",
             "date": f.start_utc.date().isoformat() if f.start_utc else None, "start_utc": f.start_utc.isoformat() if f.start_utc else None,
-            "competition": f.competition, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external)}
+            "competition": f.competition, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external), "sides": list(f.team_ids)}
 
 
 def on_board(adapter: Any, external: str) -> str:
@@ -740,7 +741,8 @@ def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], ev
     shown = sorted((t for t in found.values() if followable(t.sport)), key=lambda t: (order.get(t.id, len(pairs)), t.id))
     theirs = _following(db, fan, [t.id for t in shown])
     can = readable(ADAPTERS.get(system))
-    return [{"team_id": t.id, "name": t.name, "sport": t.sport, "following": t.id in theirs, "can_follow": can} for t in shown]
+    return [{"team_id": t.id, "key": f"{t.system}:{t.external_id}", "short": t.short, "name": t.name, "sport": t.sport, "following": t.id in theirs, "can_follow": can}
+            for t in shown]
 
 
 def ended(db: Session, event_id: int) -> None:

@@ -326,7 +326,8 @@ def parse_team(t: dict[str, Any]) -> SourceTeam | None:
     ]
     # Its sport too, as teams() gives it: a team an operator adds by hand is of its own game, not the source's first.
     return SourceTeam(system="pandascore_esports", team_id=team_id, name=name, game=game_name(slug), players=players, sport=GAMES[slug],
-                      short=(t.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(t.get("location")) or "")
+                      short=(t.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(t.get("location")) or "",
+                      logo=str(t.get("image_url") or ""))
 
 
 def parse_teams(tournaments: list[dict[str, Any]], slugs: list[str]) -> list[SourceTeam]:
@@ -345,7 +346,8 @@ def parse_teams(tournaments: list[dict[str, Any]], slugs: list[str]) -> list[Sou
                 continue
             listed = out.setdefault(str(team["id"]), SourceTeam(
                 system="pandascore_esports", team_id=str(team["id"]), name=name, game=game_name(slug), sport=GAMES[slug],
-                short=(team.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(team.get("location")) or ""))
+                short=(team.get("acronym") or "").strip(), competition=game_name(slug) or "", country=country(team.get("location")) or "",
+                logo=str(team.get("image_url") or "")))
             listed.tier = max(listed.tier, tier)
     return list(out.values())
 
@@ -406,6 +408,7 @@ class PandascoreEsports(Adapter):
     name = "PandaScore"
     provider = pandascore.PROVIDER
     covers = "Valorant, CS2, League of Legends, Dota 2 and other team games"
+    logo_hosts = pandascore.LOGO_HOSTS
     sports = tuple(dict.fromkeys(GAMES.values()))
     games = tuple(GAMES)  # its own names for them, beside Liquipedia's: players never move between them
     no_team_is_real = True  # a pro with no current team has none: between teams, or retired

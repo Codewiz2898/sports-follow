@@ -26,7 +26,7 @@ from arq import cron, func
 from arq.connections import RedisSettings
 from arq.constants import in_progress_key_prefix
 
-from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, predictions_push, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
+from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logos, logs, match, metrics, notify, photos, pipeline, predictions, predictions_push, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
 from .config import REDIS_URL
 
@@ -402,6 +402,13 @@ async def fetch_photos(ctx) -> None:
     await on_thread(photos.run)
 
 
+async def fetch_logos(ctx) -> None:
+    """Teams' logos from their sources, every half hour: those not kept yet, or due again (logos.py)."""
+    if await _missed(ctx, "fetch_logos"):
+        return
+    await on_thread(logos.run)
+
+
 def _late(ctx) -> bool:
     """Whether this cron run starts more than LATE seconds after its time. arq names a run by its time
     in milliseconds ("cron:tick:1760342400123"); a job called any other way isn't late."""
@@ -557,6 +564,7 @@ class WorkerSettings:
         cron(_logged(import_teams), weekday="mon", hour=2, minute=50, second=0, timeout=1800),
         cron(_logged(prune, deep=False), hour=2, minute=15, second=0, timeout=3 * 3600),
         cron(_logged(fetch_photos, quiet=True), minute={7, 22, 37, 52}, second=40, run_at_startup=True, timeout=900),
+        cron(_logged(fetch_logos, quiet=True), minute={14, 44}, second=10, run_at_startup=True, timeout=900),
         # Before Europe's matchdays get going, and after most of the day's news is in.
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),

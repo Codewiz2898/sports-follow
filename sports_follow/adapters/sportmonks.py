@@ -59,6 +59,8 @@ PROVIDER = Provider(
 
 RateLimited = budget.RateLimited
 
+LOGO_HOSTS = ("cdn.sportmonks.com",)  # where a team's image_path points (Adapter.logo_hosts)
+
 
 @lru_cache(maxsize=1)
 def token() -> str | None:

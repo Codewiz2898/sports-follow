@@ -83,6 +83,7 @@ def _dump(system: str, sport: str, f: Fixture, n: Notable) -> dict[str, Any]:
         "word": n.word,
         "line": n.line,
         "why": n.why,
+        "sides": list(f.team_ids),  # its teams by the source's ids, for their looks (logos.looks)
     }
 
 
