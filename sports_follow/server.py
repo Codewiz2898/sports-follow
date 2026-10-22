@@ -18,6 +18,7 @@ import re
 import secrets
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -549,13 +550,23 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
 # ---------------------------------------------------------------- health
 
 
+# Health's own threads for its database check, not the request threads in_db uses: a burst that kept all of those busy
+# (a herd of phones opening the Feed) held its answer, the proxy's and the uptime check's, for seconds (BUG-324).
+_health_threads = ThreadPoolExecutor(max_workers=2, thread_name_prefix="health")
+
+
 @app.get("/api/health")
 async def health(response: Response) -> dict[str, Any]:
     """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't.
     Also the commit this image was built from (null outside a deployed one), which the deploy workflow checks."""
     checks = {"db": False, "redis": False}
+
+    def db_answers() -> bool:
+        with session() as db:
+            return db.execute(select(1)).scalar() == 1
+
     try:
-        checks["db"] = await in_db(lambda db: db.execute(select(1)).scalar() == 1)
+        checks["db"] = await asyncio.get_running_loop().run_in_executor(_health_threads, db_answers)
     except Exception:  # noqa: BLE001 — any failure is "down"
         pass
     try:

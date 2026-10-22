@@ -312,6 +312,32 @@ def test_health_says_which_commit_the_image_was_built_from(api, monkeypatch):
     assert api.call("GET", "/api/health").json()["commit"] is None
 
 
+def test_health_answers_while_every_request_thread_is_busy(api, monkeypatch):
+    """BUG-324: health's database check waited for one of the request threads like any route, so a CPU-bound burst that
+    kept all of them busy (a herd of phones opening the Feed) held its answer, the proxy's and the uptime check's, for
+    seconds. It has threads of its own."""
+
+    class Answers:
+        def execute(self, statement):
+            return SimpleNamespace(scalar=lambda: 1)
+
+    @contextmanager
+    def session():
+        yield Answers()
+
+    async def ping():
+        return True
+
+    async def busy(fn, *args):
+        raise TimeoutError("waited for a request thread until the burst was over")
+
+    monkeypatch.setattr(server, "session", session)
+    monkeypatch.setattr(api.redis, "ping", ping, raising=False)
+    monkeypatch.setattr(server, "run_in_threadpool", busy)
+    answer = api.call("GET", "/api/health")
+    assert answer.status_code == 200 and answer.json() | {"commit": None} == {"ok": True, "db": True, "redis": True, "commit": None}
+
+
 # ---------------------------------------------------------------- AI research (BUG-011)
 
 
