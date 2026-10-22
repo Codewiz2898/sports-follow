@@ -1,21 +1,28 @@
 """The API's database use and its streams: async routes never wait for a connection on the event loop,
 a stream holds none for its life (BUG-010), and the fan stream opens with the fan's players, so a
-reconnect catches up (BUG-026)."""
+reconnect catches up (BUG-026). A hundred requests at once all get answers, and health stays quick: no
+request holds a connection while it waits for a thread (BUG-264; against Postgres, skipped without one)."""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
 import json
+import os
+import time
+from collections import Counter
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import HTTPException, Response
 from fastapi.routing import APIRoute
 
-from sports_follow import server
+from sports_follow import db as db_module, server
 from sports_follow.db import engine, get_db
+
+URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 
 FOLLOWS = [(1, {}), (2, {"level": "off"})]  # (player_id, alert_rules), as the follow table has them
 HOT = {1: {"player_id": 1, "version": 4, "status": "ready", "live": {"is_live": True, "score": "1-0"}}, 2: {"player_id": 2, "version": 9, "status": "ready", "live": {"is_live": False, "score": "2-2"}}}
@@ -188,3 +195,49 @@ def test_no_async_route_takes_a_request_session():
 
 def test_a_full_pool_gives_up_in_seconds():
     assert engine.pool.timeout() == 5
+
+
+def test_every_sync_route_gives_its_connection_back_as_it_returns():
+    """server.Route has each sync route commit get_db's session on its own thread (db.released); a route added
+    some other way (a router of its own) would hold its connection until its answer was sent (BUG-264)."""
+    sync = [r for r in server.app.routes if isinstance(r, APIRoute) and not inspect.iscoroutinefunction(r.endpoint)]
+    assert {"/api/me/matches", "/api/me/week", "/api/me/activity"} <= {r.path for r in sync}
+    assert [r.path for r in sync if getattr(r.endpoint, "__wrapped__", None) is None] == []
+
+
+@pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
+def test_a_hundred_requests_at_once_all_get_answers_and_health_stays_quick(monkeypatch):
+    """One API process with its own pool (15 connections) and anyio's 40 threads, 100 requests at once to a sync
+    route that reads the database, as every open app's Today asks after a goal. A sync route's answer is checked on
+    one of those threads, and get_db let go of its connection only after the answer was sent: the 15 connections
+    were held by answers waiting for a thread, the 40 threads by requests waiting for a connection, and nothing
+    moved until the pool gave up after 5 s (40 of 70 failed; health took 5-15 s)."""
+    monkeypatch.setattr(db_module, "DATABASE_URL", URL)
+    monkeypatch.setitem(server.state, "redis", Redis())
+    monkeypatch.setattr(server, "cookie_key", lambda: b"a test key for fan cookies, 32+ bytes")
+    was = db_module.engine
+    db_module.size_pool(15)  # the API's pool, on the test database
+    cookie = {"cookie": f"{server.FAN_COOKIE}={server.sign_fan('a-fan-in-the-crowd')}"}
+
+    async def burst():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as client:
+            async def ask(path: str) -> tuple[int, float]:
+                started = time.perf_counter()
+                answer = await client.get(path, headers=cookie)
+                return answer.status_code, time.perf_counter() - started
+
+            crowd = asyncio.gather(*(ask("/api/me/matches") for _ in range(100)))
+            await asyncio.sleep(0.1)  # the crowd's requests are in
+            health = await ask("/api/health")
+            return await crowd, health
+
+    try:
+        answers, (health, took) = asyncio.run(burst())
+    finally:
+        db_module.engine.dispose()
+        db_module.engine = was
+        db_module.SessionLocal.configure(bind=was)
+    assert Counter(status for status, _ in answers) == {200: 100}
+    assert health == 200 and took < 2, f"health took {took:.1f}s"
+    assert max(seconds for _, seconds in answers) < 4

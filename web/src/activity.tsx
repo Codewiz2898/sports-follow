@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type ActivityItem } from './api'
 import { useFollowing } from './following'
+import { ACTIVITY, refetcher, type Refetcher } from './refetch'
 
 interface ActivityState {
   items: ActivityItem[]
@@ -15,7 +16,6 @@ interface ActivityState {
 
 const Ctx = createContext<ActivityState | null>(null)
 const SEEN = 'sf-alerts-seen'
-const SETTLE_MS = 1500  // one poll can bring several moments: fetch once they've all arrived
 
 function readSeen(): number | null {
   try {
@@ -59,16 +59,20 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     return () => { stale = true }
   }, [following, who])
 
+  // New moments, once the stream has brought one the fan hears about (following.tsx's heard): asked after a wait
+  // of this app's own (refetch.ts), so the apps that heard the same goal don't all ask at once.
+  const later = useRef<Refetcher | null>(null)
   useEffect(() => {
-    if (!heard) return
-    const timer = window.setTimeout(() => {
-      api.activity().then((r) => setItems((prev) => {
+    const r = refetcher(ACTIVITY, () => {
+      api.activity().then((res) => setItems((prev) => {
         const newest = prev[0]?.id ?? 0
-        return [...r.items.filter((i) => i.id > newest), ...prev]
+        return [...res.items.filter((i) => i.id > newest), ...prev]
       })).catch(() => {})
-    }, SETTLE_MS)
-    return () => window.clearTimeout(timer)
-  }, [heard])
+    })
+    later.current = r
+    return () => r.stop()
+  }, [])
+  useEffect(() => { if (heard) later.current?.heard() }, [heard])
 
   const more = useCallback(async () => {
     if (next == null) return

@@ -3,7 +3,8 @@
 // (web/src/activity.tsx). "Seen" is per device, kept on the phone.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { createContext, use, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ACTIVITY, refetcher, type Refetcher } from '../../web/src/refetch'
 import { useAccount } from './account'
 import { api, type ActivityItem } from './api'
 import { useFollowing } from './following'
@@ -67,19 +68,24 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   }, [following, who, seenRead])
 
   // New moments, when there may be some (following.tsx's heard): the follow list came back changed, a followed
-  // game's status or score moved on, a notification came, or the app came back to the front.
+  // game's status or score moved on, a notification came, or the app came back to the front. Asked after a wait
+  // of this phone's own (web/src/refetch.ts): every phone that got the same goal's notification hears it at once.
+  const later = useRef<Refetcher | null>(null)
   useEffect(() => {
-    if (!heard) return
     let stale = false
-    api.activity().then((r) => {
-      if (stale) return
-      setItems((prev) => {
-        const newest = prev[0]?.id ?? 0
-        return [...r.items.filter((i) => i.id > newest), ...prev]
-      })
-    }).catch(() => {})
-    return () => { stale = true }
-  }, [heard, epoch])
+    const r = refetcher(ACTIVITY, () => {
+      api.activity().then((res) => {
+        if (stale) return
+        setItems((prev) => {
+          const newest = prev[0]?.id ?? 0
+          return [...res.items.filter((i) => i.id > newest), ...prev]
+        })
+      }).catch(() => {})
+    })
+    later.current = r
+    return () => { stale = true; r.stop() }
+  }, [epoch])
+  useEffect(() => { if (heard) later.current?.heard() }, [heard])
 
   const more = useCallback(async () => {
     if (next == null) return

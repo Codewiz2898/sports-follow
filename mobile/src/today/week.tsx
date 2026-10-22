@@ -3,9 +3,10 @@
 // in an ink card, theirs first, then a few of the best-known players they don't follow.
 
 import { router } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { safeHref, shortName } from '../../../web/src/format'
+import { refetcher, WEEK, type Refetcher } from '../../../web/src/refetch'
 import { sharePoster } from '../../../web/src/share'
 import { longestWord, posterWhen, wireText, wireWhen } from '../../../web/src/today'
 import { api, type WeekPoster, type WireRow } from '../api'
@@ -19,18 +20,31 @@ import { breakable, Pill } from '../ui'
 interface Week { posters: WeekPoster[]; wire: WireRow[] }
 const NONE: Week = { posters: [], wire: [] }
 
-/** This week and the Wire: loaded when the follow list changes, and again when it comes back changed. A fan who
- * follows nobody still has a Wire: the best-known players' facts. */
+/** This week and the Wire: loaded when the follow list changes, and again a minute or two after there may be news
+ * (following.tsx's heard), no more than every five minutes (web/src/refetch.ts). A fan who follows nobody still has
+ * a Wire: the best-known players' facts. */
 export function useWeek(): Week {
   const { cards, loaded, heard } = useFollowing()
   const [week, setWeek] = useState<Week>(NONE)
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
+  const asks = useRef(0) // only the latest ask's answer is shown
+  const later = useRef<Refetcher | null>(null)
+  useEffect(() => {
+    let gone = false
+    const r = refetcher(WEEK, () => {
+      const n = ++asks.current
+      api.week().then((res) => { if (!gone && n === asks.current) setWeek(res) }).catch(() => {})
+    })
+    later.current = r
+    return () => { gone = true; r.stop() }
+  }, [])
   useEffect(() => {
     if (!loaded) return
-    let stale = false
-    api.week().then((r) => { if (!stale) setWeek(r) }).catch(() => {})
-    return () => { stale = true }
-  }, [loaded, who, heard])
+    later.current?.asked()
+    const n = ++asks.current
+    api.week().then((r) => { if (n === asks.current) setWeek(r) }).catch(() => {})
+  }, [loaded, who])
+  useEffect(() => { if (heard) later.current?.heard() }, [heard])
   return week
 }
 
