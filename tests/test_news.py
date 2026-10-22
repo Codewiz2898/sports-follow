@@ -320,6 +320,30 @@ def test_a_word_that_isnt_a_name_or_is_part_of_another_name_names_nobody():
     assert hits("Head Coach Speaks After Defeat") == [11]  # so title case can't tell this one: the judge does
 
 
+def test_a_nickname_names_a_player_only_written_as_one_and_a_lone_surname_is_their_own_names():
+    # BUG-251: every alias of two words or more matched as a plain phrase, and its last word as a lone surname:
+    # "backs to the wall" was Dravid's, "the joker in the pack" Jokić's, and "Player ratings" a footballer's whose
+    # registry alias is "Mikhail Vorobyov (football player)".
+    group = [
+        Followed(31, "cricket", "Rahul Dravid", aliases=["rahul dravid", "The Wall", "Jammy", "Mr. Dependable", "Rahul Sharad Dravid"], teams=["India"]),
+        Followed(32, "basketball", "Nikola Jokić", aliases=["nikola jokic", "the Joker", "The Serbian King"], teams=["Denver Nuggets", "Serbia"]),
+        Followed(33, "football", "Mikhail Vorobyov", aliases=["Mikhail Vorobyev", "Mikhail Vorobyov (football player)"], teams=["Rostov"]),
+        Followed(34, "football", "Neymar", aliases=["Neymar Junior", "Neymar da Silva Santos Júnior"], teams=["Santos", "Brazil"]),
+    ]
+
+    def hits(title: str, description: str = "") -> list[int]:
+        return sorted(f.player_id for f in news.link([story(title, description)], group, news.names(group), set()))
+
+    for title in ("India's backs to the wall in Adelaide as Kohli falls early", "Wall of sound at the MCG", "Lakers' bench was the joker in the pack against Boston",
+                  "Who is the king of the West now?", "Player ratings: Liverpool 2-0 Chelsea", "Junior doctors strike again",
+                  "The Wall Street Journal on cricket's money", "Backs To The Wall In Adelaide"):  # fmt: skip
+        assert hits(title) == [], title
+    assert hits("The Wall says goodbye to coaching") == [31] and hits("Mr. Dependable steps in again") == [31]
+    assert hits("Denver win as the Joker drops 40") == [32] and hits("Nuggets win", "The Serbian King rested.") == [32]
+    assert hits("Dravid named coach") == [31] and hits("Vorobyov signs on at Rostov") == [33]  # their own surnames still
+    assert hits("Neymar Junior back for Santos") == [34]  # a full name still
+
+
 def test_a_feed_that_names_its_encoding_only_in_its_xml_declaration_keeps_its_accents():
     body = '<?xml version="1.0" encoding="ISO-8859-1"?><rss><channel><item><title>Müller scores</title><link>https://x.example.com/1</link></item></channel></rss>'.encode("latin-1")
     assert publisher_rss.decode(body, None).count("Müller") == 1

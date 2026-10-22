@@ -10,9 +10,11 @@ story known by its address written one way (NewsSource articles' url), so two fe
 - their full name (in any of its spellings, or as a hashtag) names them as it does in a video (candidates.phrases);
   so does their own one-word name or handle that no other followed player of the sport shares, but only written
   as they write it, capitalised or not ("Less" the pro; not "less accurate"), and not as part of another name
-  ("Mortal Kombat");
-- their surname alone, or a one-word name fans found them by, names them only when nothing else does: a surname
-  no other followed player of the sport has, and fewer than COMMON athletes of the sport in the registry ("Bumrah";
+  ("Mortal Kombat"); and a nickname of two words or more, one that has none of their own name's words ("The
+  Wall"), only written capitalised, outside a headline In Title Case, and not as part of another name ("The Wall
+  Street Journal"): "backs to the wall" is nobody. A registry's note in brackets ("(football player)") isn't a name;
+- their surname alone (the last word of their own name), or a one-word name fans found them by, names them only
+  when nothing else does: a surname no other followed player of the sport has, and fewer than COMMON athletes of the sport in the registry ("Bumrah";
   not "Smith" or "Sharma"); else only when the story also names one of their sides (a team, their country), and
   no other player whose name it is (two Sharmas followed: the story about Mumbai Indians is Rohit's). Only
   capitalised ("head coach" isn't Travis Head), and never next to another capitalised name, which makes it someone
@@ -123,6 +125,15 @@ class Names:
     single: dict[str, bool]
     sides: list[tuple[str, ...]]
     own: dict[str, bool] = field(default_factory=dict)  # their own one-word name, in full: whether they capitalise it
+    nick: set[tuple[str, ...]] = field(default_factory=set)  # of the full names, their nicknames ("the wall"): _written
+
+
+_BRACKETS = re.compile(r"\s*\([^()]*\)")  # a registry's note on a name: "Mikhail Vorobyov (football player)"
+
+
+def _bare(name: str) -> str:
+    """A name without a registry's notes in brackets."""
+    return _BRACKETS.sub("", name).strip()
 
 
 def names(players: Sequence[Followed]) -> dict[int, Names]:
@@ -130,7 +141,7 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
     owners: dict[str, set[int]] = {}
     for p in players:
         for name in (p.name, *p.aliases):
-            for spelling in naming.spellings(name):
+            for spelling in naming.spellings(_bare(name)):
                 for word in spelling:
                     owners.setdefault(word, set()).add(p.player_id)
     out = {}
@@ -138,21 +149,29 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
         full: set[tuple[str, ...]] = set()
         single: dict[str, bool] = {}
         own: dict[str, bool] = {}
+        nick: set[tuple[str, ...]] = set()
+        theirs = [[w for w in spelling if len(w) > 1] for spelling in naming.spellings(_bare(p.name))]  # their own name's words, no initials
+        for spelt in theirs:
+            if len(spelt) >= 2 or (spelt and len(spelt) < len(naming.words(p.name))):  # "Gukesh D": Gukesh
+                if len(spelt[-1]) >= SHORT_NAME:
+                    single[spelt[-1]] = True  # their surname: only ever their own name's
+        mine = {w for spelt in theirs for w in spelt}
         for name in (p.name, *p.aliases):
+            name = _bare(name)
             for spelling in naming.spellings(name):
                 if len(spelling) >= 2:
-                    full.add(tuple(spelling))
-                    if len(spelling) <= 3:
-                        full.add(("".join(spelling),))  # a hashtag of it
-                    if len(spelling[-1]) >= SHORT_NAME:
-                        single[spelling[-1]] = True
-                elif spelling and name == p.name and len(spelling[0]) >= 3 and owners.get(spelling[0]) == {p.player_id}:
+                    found = {tuple(spelling), *([("".join(spelling),)] if len(spelling) <= 3 else [])}  # with a hashtag of it
+                    full |= found
+                    if not mine & set(spelling):
+                        nick |= found  # none of their own name's words: a nickname ("The Wall")
+                elif spelling and name == _bare(p.name) and len(spelling[0]) >= 3 and owners.get(spelling[0]) == {p.player_id}:
                     full.add(tuple(spelling))  # their own one-word name or handle, no one else's
                     own[spelling[0]] = p.name.strip()[:1].isupper()
                 elif spelling and len(spelling[0]) >= SHORT_NAME:
                     single.setdefault(spelling[0], False)
+        nick -= {phrase for spelling in naming.spellings(_bare(p.name)) for phrase in (tuple(spelling), ("".join(spelling),))}
         sides = [tuple(w) for side in p.teams if (w := naming.words(side))]
-        out[p.player_id] = Names(_longest_first(full), {w: s for w, s in single.items() if (w,) not in full}, sides, own)
+        out[p.player_id] = Names(_longest_first(full), {w: s for w, s in single.items() if (w,) not in full}, sides, own, nick)
     return out
 
 
@@ -226,6 +245,30 @@ def _named(text: str, word: str, names: Names, capital: bool | None = None) -> b
     return False
 
 
+def _written(text: str, phrase: tuple[str, ...], names: Names) -> bool:
+    """Whether the text has this nickname (Names.nick) as the player's: its words capitalised but the small ones a name
+    may start with (BEFORE_A_NAME: "the Joker", "The Wall"), in a text not In Title Case, where capitals say nothing,
+    and not next to another capitalised word that isn't theirs, which would make it part of another name ("The Wall
+    Street Journal")."""
+    found = list(_TOKEN.finditer(text))
+    words = [(w, i) for i, m in enumerate(found) for w in naming.words(_POSSESSIVE.sub("", m[0]))]
+    up = [m[0][:1].isupper() for m in found]
+    lettered = [u for m, u in zip(found, up) if m[0][:1].isalpha()]
+    if len(lettered) >= 4 and sum(lettered) >= TITLE_CASE * len(lettered):
+        return False
+    mine = {w for p in names.full for w in p} | {w for side in names.sides for w in side} | set(names.single) | BEFORE_A_NAME
+    plain = [w for w, _ in words]
+    for at in _find(plain, phrase):
+        first, last = words[at][1], words[at + len(phrase) - 1][1]
+        if not all(up[words[at + k][1]] or w in BEFORE_A_NAME for k, w in enumerate(phrase)):
+            continue
+        if any(0 <= j < len(found) and up[j] and not text[found[min(i, j)].end():found[max(i, j)].start()].strip()
+               and "".join(naming.words(found[j][0])) not in mine for i, j in ((first, first - 1), (last, last + 1))):  # fmt: skip
+            continue
+        return True
+    return False
+
+
 def _find(words: list[str], phrase: tuple[str, ...]) -> list[int]:
     n = len(phrase)
     return [i for i, w in enumerate(words) if w == phrase[0] and tuple(words[i:i + n]) == phrase]
@@ -252,6 +295,8 @@ def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[i
                 for phrase in n.full:
                     at = _find(words, phrase)
                     if at and len(phrase) == 1 and phrase[0] in n.own and not _named(raw[where], phrase[0], n, n.own[phrase[0]]):
+                        continue
+                    if at and phrase in n.nick and not _written(raw[where], phrase, n):
                         continue
                     if at:
                         hits.setdefault(pid, (" ".join(phrase), where))
