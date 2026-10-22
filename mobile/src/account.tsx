@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
 import { createContext, use, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Pressable, Text } from 'react-native'
+import StannNotifications from '../modules/stann-notifications'
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './icons'
 import { t } from './theme'
@@ -57,12 +58,16 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0)), [startOver])
+  // Signed out or deleted, the phone is off the server (its session's devices go): its live cards, the account's
+  // games, would stay on the lock screen with nothing to end them, so they go now.
   const signOut = useCallback(async (everywhere = false) => {
     await api.signOut(everywhere)
+    StannNotifications?.takeDownLive(null)
     startOver('/', everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.')
   }, [startOver])
   const deleteAccount = useCallback(async () => {
     await api.deleteAccount()
+    StannNotifications?.takeDownLive(null)
     startOver('/', 'Your account and everything kept with it are deleted.')
   }, [startOver])
 

@@ -5,6 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ACTIVITY, refetcher, type Refetcher } from '../../web/src/refetch'
+import StannNotifications from '../modules/stann-notifications'
 import { useAccount } from './account'
 import { api, type ActivityItem } from './api'
 import { useFollowing } from './following'
@@ -106,6 +107,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
     }
     apply(on)
     try { await api.mute(eventId, on) } catch (e) { apply(!on); throw e }
+    // Muted: its live card goes now, as the card's own Mute button takes it down, not with the server's next.
+    if (on) StannNotifications?.takeDownLive(String(eventId))
   }, [])
 
   const value = useMemo<Activity>(() => ({

@@ -81,13 +81,14 @@ async function register(token: string, previous: string | null): Promise<void> {
   changed()
 }
 
-/** Takes this phone off the server, if it's on. */
+/** Takes this phone off the server, if it's on, and its live cards down: nothing would come to update or end them. */
 async function unregister(): Promise<void> {
   const token = await stored<string>(TOKEN)
   if (!token) return
   await api.unregisterPush(token)
   await AsyncStorage.removeItem(TOKEN)
   StannNotifications?.registered(null)
+  StannNotifications?.takeDownLive(null)
   changed()
 }
 
