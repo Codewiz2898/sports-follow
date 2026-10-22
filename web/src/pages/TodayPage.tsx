@@ -294,6 +294,7 @@ export function TodayPage() {
   const [game, pick] = useGame(row)
   const shown = narrow(all, game?.key ?? null, sportKey)
   useNarrowSide(game?.key ?? null)  // a wide screen's side column: its scores and games starting soon too
+  const shownKey = useMemo(() => [railKey, game?.key], [railKey, game?.key])  // and a rail that failed tries again on a pick
 
   const header = (
     <header className="page-head home-head">
@@ -347,7 +348,7 @@ export function TodayPage() {
       {header}
       {filter}
       {shown.cards.length + shown.teams.length > 0 && (
-        <ErrorBoundary fallback={<div className="mobile-only"><BlockError /></div>} resetKey={railKey}>
+        <ErrorBoundary fallback={<div className="mobile-only"><BlockError /></div>} resetKey={shownKey}>
           <PlayersStrip cards={shown.cards} teams={shown.teams} now={now} />
         </ErrorBoundary>
       )}
@@ -373,7 +374,7 @@ export function TodayPage() {
       {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. */}
       <MoreLive games={shown.moreLive} theirsOn={shown.live.length > 0} />
 
-      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+      <ErrorBoundary fallback={<BlockError />} resetKey={shownKey}>
         {resultCount > 0 && (
           <Rail title={own.length ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
             all={own.length ? `Every result ${done?.day ? `on ${done.day}` : 'since yesterday'}${shown.bigResults.length ? ', and the big ones' : ''}` : 'Every big result'} max={own.length + TAIL}>
@@ -386,7 +387,7 @@ export function TodayPage() {
 
       <SaveNudge />
 
-      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+      <ErrorBoundary fallback={<BlockError />} resetKey={shownKey}>
         {comingCount > 0 && (
           <Rail title={shown.coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
             all={`Every ${shown.coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${shown.coming.length && shown.bigComing.length ? ', and the big ones' : ''}`} max={shown.coming.length + TAIL}>
@@ -410,7 +411,7 @@ export function TodayPage() {
 
       {/* What fans and the players themselves shared: after the day's facts, two posts tall, so they don't push
           what's next down the page; the game picked's alone. */}
-      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+      <ErrorBoundary fallback={<BlockError />} resetKey={shownKey}>
         <FromYourPlayers now={now} game={game?.key ?? null} />
       </ErrorBoundary>
 
