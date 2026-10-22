@@ -15,6 +15,7 @@ import { useNotificationTaps, usePushRegistration } from '../push'
 import { TabBar } from '../tabbar'
 import { colour } from '../theme'
 import { PageError } from '../ui'
+import { useVisitNoted } from '../visit'
 
 /** What's around the pages failing (a provider, the tab bar) shows PageError instead of closing the app. */
 export { PageError as ErrorBoundary }
@@ -33,8 +34,10 @@ function Push() {
   return null
 }
 
-/** The fan's own state (which starts over when this phone signs in or out: account.tsx's epoch). */
+/** The fan's own state (which starts over when this phone signs in or out: account.tsx's epoch), and where they came
+ * from, told once their fan is made (visit.ts). */
 function Fan() {
+  useVisitNoted()
   return (
     <FollowingProvider>
       <ActivityProvider>
