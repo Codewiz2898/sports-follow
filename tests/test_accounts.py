@@ -5,6 +5,7 @@ replaced by a small in-memory stand-in. What that database work does to real row
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -36,6 +37,7 @@ class Accounts:
         self.made = 0
         self.bumped = False
         self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
+        self.dropped = 0  # the device's teams that don't fit in the account (teams.merge)
 
     def find_or_create(self, db, email):
         found = next((i for i, e in self.emails.items() if e == email), None)
@@ -52,7 +54,7 @@ class Accounts:
         self.sessions[accounts.token_hash(token)] = signed
         if anon:
             self.adopted.append((anon, account_id))
-        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0)
+        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0)
 
     def session_for(self, db, token_hash):
         self.lookups += 1
@@ -154,7 +156,22 @@ def test_asking_for_a_code_says_the_same_whether_or_not_the_address_has_an_accou
     assert store.emails == {1: "known@example.com"}  # asking makes nothing
 
 
-@pytest.mark.parametrize("email", ["", "fan", "fan@", "@example.com", "fan@example", "a b@example.com", "x" * 250 + "@example.com"])
+def test_asking_for_a_code_doesnt_say_whether_an_address_is_blocked(api, store, outbox):
+    """BUG-102: asking for a code answered 403 "blocked" for a blocked account's address, so anyone could find out
+    whether an address was one. It answers as for any address; the code it sends says so to whoever holds the
+    inbox, and signs nobody in."""
+    store.emails.update({1: "blocked@example.com", 2: "fan@example.com"})
+    store.blocked_ids.add(1)
+    blocked = api.call("POST", "/api/auth/email/start", body={"email": "blocked@example.com"}, address=PUBLIC)
+    other = api.call("POST", "/api/auth/email/start", body={"email": "fan@example.com"}, address=PUBLIC)
+    assert blocked.status_code == other.status_code == 200 and blocked.json() == other.json()
+    refused = api.call("POST", "/api/auth/email/verify", body={"email": "blocked@example.com", "code": outbox["blocked@example.com"]}, address=PUBLIC)
+    assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
+    assert "sf_session" not in set_cookies(refused) and store.sessions == {}
+
+
+@pytest.mark.parametrize("email", ["", "fan", "fan@", "@example.com", "fan@example", "a b@example.com", "x" * 250 + "@example.com",
+                                   "fan\x01x@example.com", "fan\u200bx@example.com"])  # a control or an invisible character (BUG-096)
 def test_an_address_that_isnt_one_is_refused(api, store, outbox, email):
     assert api.call("POST", "/api/auth/email/start", body={"email": email}).status_code == 400
     assert outbox == {}
@@ -218,6 +235,29 @@ def test_networks_other_than_the_one_that_asked_share_a_few_tries_at_a_code(api,
     tries = [verify(api, wrong_to(code), f"81.2.69.{20 + i // 4}").status_code for i in range(server.CODE_TRIES_ELSEWHERE + 2)]
     assert tries == [400] * server.CODE_TRIES_ELSEWHERE + [429, 429]  # four a network: each under its own five
     assert verify(api, code).status_code == 200
+
+
+def test_one_code_signs_in_once_however_many_requests_bring_it_at_once(api, store, outbox, monkeypatch):
+    """BUG-095: the code was read, checked and only then deleted, so two Verifies sent together (a double tap, or
+    someone else holding the code) each signed in, and one left a year's session nobody held. Now the code is used
+    up as it's checked: the second request finds it gone."""
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 200
+    code = outbox["fan@example.com"]
+    counted, other = server._code_tries, []
+
+    async def together(tries, network, asked_here):
+        allowed = await counted(tries, network, asked_here)
+        if not other:  # the first request has read the code: the second comes in before it goes on
+            other.append(None)
+            other[0] = await asyncio.to_thread(verify, api, code)
+        return allowed
+
+    monkeypatch.setattr(server, "_code_tries", together)
+    first = verify(api, code)
+    assert sorted([first.status_code, other[0].status_code]) == [200, 400]
+    assert len(store.sessions) == 1
+    late = first if first.status_code == 400 else other[0]
+    assert late.json()["detail"] == "That code has run out. Ask for a new one." and "sf_session" not in set_cookies(late)
 
 
 def test_a_new_code_waits_a_minute_and_an_address_gets_five_an_hour(api, store, outbox):
@@ -562,6 +602,19 @@ def test_continue_with_google_signs_in_and_brings_the_device(api, store, google)
     assert store.emails == {1: "fan@gmail.com"} and store.adopted == [("anon-g", 1)]
 
 
+def test_the_fan_is_told_how_many_of_the_devices_teams_didnt_fit_in_the_account(api, store, outbox, google):
+    """BUG-228: an account follows at most teams.MAX teams, and a sign-in that brought more dropped the rest without a
+    word. The answer says how many, and so does Google's way back to the app."""
+    store.dropped = 15
+    answer = sign_in(api, outbox, headers=cookies(fan="anon-1"))
+    assert (answer.json()["players_added"], answer.json()["teams_dropped"]) == (2, 15)
+    _, back = go_to_google(api, google)
+    assert back.headers["location"] == "/account?welcome=2&teams_dropped=15"
+    store.dropped = 0
+    _, back = go_to_google(api, google, fan="anon-h")
+    assert back.headers["location"] == "/account?welcome=2"
+
+
 @pytest.mark.parametrize("claims", [
     good_claims(aud="someone-elses-app"),
     good_claims(iss="https://evil.example"),
@@ -600,8 +653,6 @@ def test_a_blocked_account_signs_in_neither_with_google_nor_with_a_code_from_bef
     refused = api.call("POST", "/api/auth/email/verify", body={"email": "fan@gmail.com", "code": outbox["fan@gmail.com"]}, address=PUBLIC)
     assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
     assert "sf_session" not in set_cookies(refused)
-    asked = api.call("POST", "/api/auth/email/start", body={"email": "fan@gmail.com"}, address=PUBLIC)
-    assert asked.status_code == 403 and "auth-wait:" + accounts.email_key("fan@gmail.com") not in api.redis.data
     _, back = go_to_google(api, google)
     assert back.headers["location"] == "/account?error=blocked" and "sf_session" not in set_cookies(back)
     assert store.sessions == {}

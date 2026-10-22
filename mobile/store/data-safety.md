@@ -72,7 +72,10 @@ Notes for the form's follow-up questions:
 - **What's collected before you act:** the fan id (the cookie the app is given on its first request), the
   address counters, and on Android 12 and older the push token. There's no sign-up wall.
 - **Account deletion** removes every row above at once (`accounts.py` delete), and daily backups are kept 14
-  days: say so in the Account deletion declaration.
+  days: say so in the Account deletion declaration. The app then carries on as a new anonymous fan, and with
+  alerts on it registers the phone again at once, without a tap (`push.ts`, as after signing out): its push token,
+  time zone and quiet hours, nothing of the deleted account's. Turning alerts off first (Alerts' Settings) keeps
+  the phone off the server.
 
 ## When this changes
 

@@ -130,6 +130,64 @@ class SameOriginWrites:
         await self.app(scope, receive, send)
 
 
+NUL_REFUSED = "That has a character in it (NUL) that can't be kept."
+
+
+def _holds_nul(value: Any) -> bool:
+    """Is there a NUL in any string of a JSON value, a key or a value, however deep?"""
+    left = [value]
+    while left:
+        item = left.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, dict):
+            left.extend(item.keys())
+            left.extend(item.values())
+        elif isinstance(item, list):
+            left.extend(item)
+    return False
+
+
+class NoNul:
+    """A NUL character in an API request's text (%00 in its path or query, \\u0000 in its JSON body) is refused with a
+    400 before any route sees it. Postgres can't keep one, so a sign-in address, a clip's address or a league member's
+    name with one in it failed in the query, a server error anyone could raise at will (BUG-096). A write's body is
+    read whole here (the API's are small JSON) and handed on as it came."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+            return await self.app(scope, receive, send)
+        refused = JSONResponse({"detail": NUL_REFUSED}, status_code=400)
+        if "\x00" in scope["path"] or b"%00" in scope["query_string"]:
+            return await refused(scope, receive, send)
+        if scope["method"] not in UNSAFE:
+            return await self.app(scope, receive, send)
+        came: list[MutableMapping[str, Any]] = []
+        while True:
+            message = await receive()
+            came.append(message)
+            if message["type"] != "http.request" or not message.get("more_body"):
+                break
+        body = b"".join(m.get("body", b"") for m in came if m["type"] == "http.request")
+        if b"\\u0000" in body:  # the only way JSON carries a NUL; the body may still spell one out as text ("\\u0000")
+            try:
+                held = _holds_nul(json.loads(body))
+            except (ValueError, RecursionError):
+                held = False  # not JSON: the route says so
+            if held:
+                return await refused(scope, receive, send)
+
+        async def again() -> MutableMapping[str, Any]:
+            return came.pop(0) if came else await receive()
+
+        await self.app(scope, again, send)
+
+
+app.add_middleware(NoNul)
 app.add_middleware(SameOriginWrites)
 
 
@@ -1476,7 +1534,8 @@ async def _forget_sessions(token_hashes: list[str]) -> None:
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
-    session this device already had (signing in again, or as someone else) ends."""
+    session this device already had (signing in again, or as someone else) ends. The answer says how many
+    players came, and how many of the device's teams didn't fit in the account (teams.MAX), so the fan is told."""
     anon = await asyncio.to_thread(_cookie_fan, request)
     done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
     if signed:
@@ -1493,7 +1552,7 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
-    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players}
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}
 
 
 @app.get("/api/me/account")
@@ -1561,10 +1620,8 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
-    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
-    if await in_db(accounts.blocked, email):
-        await state["redis"].delete(f"auth-wait:{who}")
-        raise HTTPException(403, BLOCKED)
+    # A blocked account's address is answered as any other, so asking says nothing of whether one is (BUG-102): its code
+    # goes out, and only whoever holds the inbox hears it's blocked, when the code signs nobody in (email_verify).
     code = f"{secrets.randbelow(10**6):06d}"
     # A new code: its tries are counted afresh, and the network that asked for it keeps its own (_code_tries).
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
@@ -1600,7 +1657,10 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].incr(fails)
         await state["redis"].expire(fails, 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
+    # Used up as it's checked: of requests that bring it at once (a double tap), one signs in (BUG-095).
+    if not await state["redis"].delete(f"auth-code:{who}"):
+        raise HTTPException(400, "That code has run out. Ask for a new one.")
+    await state["redis"].delete(f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
     if await in_db(accounts.blocked, email):
         raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
@@ -1659,7 +1719,8 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
         return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
-    response.headers["location"] = f"/account?welcome={done['players_added']}"
+    dropped = f"&teams_dropped={done['teams_dropped']}" if done["teams_dropped"] else ""
+    response.headers["location"] = f"/account?welcome={done['players_added']}{dropped}"
     return response
 
 
@@ -2247,7 +2308,9 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
 
     The token is the device's alone (no other app, page or person is shown it, and this server never logs
     it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
-    whoever it is now, after a sign-in or a lost cookie, and the device moves with it."""
+    whoever it is now, after a lost cookie, and the device moves with it. Not a device signed in to an account,
+    though, which moves into it as it signs in (accounts.adopt) and goes with its session: no other fan takes it,
+    nor does an account take an anonymous fan's device, which then couldn't take it back (BUG-103)."""
     if not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     token = body.get("token")
@@ -2274,10 +2337,12 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
     stmt = stmt.on_conflict_do_update(
         index_elements=["endpoint"],
         set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id, **({} if live is None else {"live_cards": live})},
-        where=PushSubscription.transport == "fcm",
+        where=(PushSubscription.transport == "fcm")
+        & ((PushSubscription.fan_id == fan) | (PushSubscription.session_id.is_(None) & stmt.excluded.session_id.is_(None))),
     )
     if db.execute(stmt.returning(PushSubscription.id)).first() is None:
-        raise HTTPException(409, "That device's notifications belong to someone else.")  # a Web Push endpoint by that name: never a token
+        # Another fan's signed-in device, an anonymous fan's for an account, or a Web Push endpoint by that name.
+        raise HTTPException(409, "That device's notifications belong to someone else.")
     notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
     db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
