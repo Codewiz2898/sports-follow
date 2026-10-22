@@ -467,16 +467,18 @@ is still there. Deploys never run for pull requests: a fork's PR must not reach 
 
 What a deploy does: fetches main from GitHub (a commit that isn't on main is refused), builds the image
 on the server and tags it with the commit, runs the migrations on their own, then swaps the containers
-and waits until the API is healthy and the worker hasn't crashed. Then Caddy reloads
+and waits until the API is healthy and neither the worker nor the curator has crashed. Then Caddy reloads
 `caddy/Caddyfile` (nothing happens if it's unchanged, and HTTPS doesn't drop if it has), and the backup
 container restarts if `backup.sh` changed. Fans see about two seconds of errors during the swap. The
 old worker's jobs (a live poll, a card build) stop and free their locks within five seconds, and the
 new worker starts them again as soon as it's up.
 
-- **A migration fails:** nothing is replaced; the old version keeps serving.
+- **The build or a migration fails:** nothing is replaced; the old version keeps serving, and the
+  server's checkout goes back to its commit.
 - **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
   by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
-  config until then.
+  config until then. If the previous one doesn't get healthy in time either, it still runs, and
+  `status` names it as live.
 - **It's healthy but wrong:** `rollback` starts the previous deploy's image again, with its Caddyfile
   and backup script. The newer migrations stay in the database; if the older code can't run with them,
   undo them first, while the newer image is still live:

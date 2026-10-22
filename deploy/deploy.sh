@@ -52,7 +52,11 @@ do_deploy() {
   say "deploying $(git log -1 --format='%h %s' "$sha")${was:+ (live now: ${was:0:7})}"
 
   git checkout --quiet --detach "$sha"
-  SPORTS_FOLLOW_COMMIT="$sha" c build --quiet   # the image knows its commit: /api/health says it
+  if ! SPORTS_FOLLOW_COMMIT="$sha" c build --quiet; then   # the image knows its commit: /api/health says it
+    # Back to what runs: Caddy's and Alloy's config come from this checkout, for a restart to pick up.
+    [ -z "$was" ] || git checkout --quiet --detach "$was"
+    die "${sha:0:7} didn't build, so nothing was replaced${was:+ (${was:0:7} is still live)}"
+  fi
   docker tag sports-follow:latest "sports-follow:$sha"
   # Migrations on their own first: `up` would stop the old API and worker before running them, so a
   # failed migration would leave nothing running. This way the old code keeps serving.
@@ -100,9 +104,10 @@ do_rollback() {
   # Not the migrate service: the older code doesn't know the newer migrations, and the database keeps them.
   # The curator too, where that commit has one; one from before it had none, and --remove-orphans stops this one's.
   c up -d --no-build --no-deps --remove-orphans caddy api worker gateway backup $(c config --services | grep -x curator || true)
-  wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
+  # Its image runs now, healthy or not: status, the deploy summary and the next deploy go by what's written here.
   echo "$to" >"$STATE/live"
   rm -f "$STATE/previous"   # a second rollback would only go back to the bad deploy
+  wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
   pick_up_files || die "${to:0:7} is live again, but Caddy or the backup container didn't take its files"
   say "${to:0:7} is live again; ${was:0:7}'s migrations, if it had any, are still applied"
 }
@@ -115,21 +120,25 @@ do_status() {
   c ps --format 'table {{.Service}}\t{{.Status}}'
 }
 
-# The API's own health check (the database and Redis answer), and no crash from the API or the worker.
+# The API's own health check (the database and Redis answer), and no crash from the API, the worker or the
+# curator (where the commit has one: the same image, with no health check of its own).
 wait_healthy() {
-  local deadline=$((SECONDS + HEALTH_TIMEOUT)) api=missing worker=missing
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) api=missing worker=missing curator=""
+  if c config --services 2>/dev/null | grep -qx curator; then curator=missing; fi
   while [ $SECONDS -lt $deadline ]; do
     sleep 5
     api=$(container api)
     worker=$(container worker)
+    [ -z "$curator" ] || curator=$(container curator)
     case "$api" in
-      *,healthy) [[ "$worker" == running,0,* ]] && return 0 ;;
+      *,healthy) [[ "$worker" == running,0,* ]] && [[ -z "$curator" || "$curator" == running,0,* ]] && return 0 ;;
       *,unhealthy|restarting,*|exited,*|*,[1-9]*,*) break ;;   # unhealthy, or crashed at least once
     esac
     case "$worker" in restarting,*|exited,*|*,[1-9]*,*) break ;; esac
+    case "$curator" in restarting,*|exited,*|*,[1-9]*,*) break ;; esac
   done
-  echo "deploy: api: $api; worker: $worker" >&2
-  c logs --tail 30 api worker >&2 || true
+  echo "deploy: api: $api; worker: $worker${curator:+; curator: $curator}" >&2
+  c logs --tail 30 api worker ${curator:+curator} >&2 || true
   return 1
 }
 # status,restarts,health of a service's container (stopped ones too): e.g. running,0,healthy
