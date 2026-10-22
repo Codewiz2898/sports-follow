@@ -98,6 +98,20 @@ def _goals(x: dict[str, Any]) -> dict[str, str]:
     return {s["score"]["participant"]: str(s["score"]["goals"]) for s in current}
 
 
+def _pens(x: dict[str, Any]) -> dict[str, int]:
+    """Each side's penalties in a shootout ({"home": 4, "away": 2}), as it goes and once it's over; {} without one.
+    The game's goals (CURRENT) don't count them."""
+    kicks = [s for s in x.get("scores") or [] if s.get("description") == "PENALTY_SHOOTOUT"]
+    return {s["score"]["participant"]: int(s["score"]["goals"] or 0) for s in kicks}
+
+
+def _won(side: dict[str, Any], status: str) -> dict[str, bool]:
+    """Whether a side won, as Sportmonks marks it once the game is over (its meta's winner: a shootout's too), for a
+    board; nothing before, or where it doesn't say."""
+    won = (side.get("meta") or {}).get("winner")
+    return {"winner": won} if status == "final" and isinstance(won, bool) else {}
+
+
 def _competition(x: dict[str, Any]) -> str:
     """The league's name, without the number Sportmonks gives its friendlies tables ("Club Friendlies 1")."""
     return re.sub(r"^(Club Friendlies)\s+\d+$", r"\1", (x.get("league") or {}).get("name") or "")
@@ -128,10 +142,11 @@ def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
             continue
         places = [_place(home), _place(away)]
         status = _status(x.get("state"), _start(x))
-        goals = _goals(x)
+        goals, pens = _goals(x), _pens(x)
         result = None
         if status == "final":
-            result = {side: {"id": str(p["id"]), "name": p.get("name"), "score": goals.get(side, ""), "winner": (p.get("meta") or {}).get("winner")} for side, p in (("home", home), ("away", away))}
+            result = {side: {"id": str(p["id"]), "name": p.get("name"), "score": goals.get(side, ""), "winner": (p.get("meta") or {}).get("winner"), "pens": pens.get(side)}
+                      for side, p in (("home", home), ("away", away))}
         out.append(Fixture(
             source_id=str(x["id"]),
             title=f"{home.get('name')} vs {away.get('name')}",
@@ -205,7 +220,7 @@ def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
     and cards, for its match page's timeline, not only the newest a poll keeps."""
     home, away = _sides(x)
     status = _status(x.get("state"), _start(x))
-    goals = _goals(x)
+    goals, pens = _goals(x), _pens(x)
     events = sorted(x.get("events") or [], key=lambda e: (e.get("minute") or 0, e.get("extra_minute") or 0, e.get("sort_order") or 0))
 
     def minute(e: dict[str, Any]) -> str:
@@ -248,16 +263,20 @@ def parse_match(x: dict[str, Any], every: bool = False) -> Snapshot:
             "team_id": str(e.get("participant_id")), "assist": e.get("related_player_name") if tag == "GOAL" and kind != "OWNGOAL" else None, "own_goal": kind == "OWNGOAL",
         })
 
+    # Each side as the board has it: a shootout's penalties (pens) and, once it's over, who won, so a game level on
+    # goals and settled on penalties says who went through (sports.football).
     state = {
         "kind": "football",
-        "home": {"id": str(home.get("id")), "name": home.get("name"), "abbr": home.get("short_code"), "score": goals.get("home", ""), "scorers": scorers(home.get("id"))},
-        "away": {"id": str(away.get("id")), "name": away.get("name"), "abbr": away.get("short_code"), "score": goals.get("away", ""), "scorers": scorers(away.get("id"))},
+        "home": {"id": str(home.get("id")), "name": home.get("name"), "abbr": home.get("short_code"), "score": goals.get("home", ""), "scorers": scorers(home.get("id")),
+                 **_won(home, status), **({"pens": pens["home"]} if "home" in pens else {})},
+        "away": {"id": str(away.get("id")), "name": away.get("name"), "abbr": away.get("short_code"), "score": goals.get("away", ""), "scorers": scorers(away.get("id")),
+                 **_won(away, status), **({"pens": pens["away"]} if "away" in pens else {})},
         "detail": (x.get("state") or {}).get("name"),
         "cancelled": (x.get("state") or {}).get("developer_name") in _CALLED_OFF,
     }
     return Snapshot(
         status=status,
-        score_label=f"{home.get('name')} {goals.get('home', '')} – {goals.get('away', '')} {away.get('name')}",
+        score_label=f"{home.get('name')} {goals.get('home', '')} – {goals.get('away', '')} {away.get('name')}{football.pens(pens.get('home'), pens.get('away'))}",
         clock_label=clock(x),
         state=state,
         lines=parse_lines(x, status),

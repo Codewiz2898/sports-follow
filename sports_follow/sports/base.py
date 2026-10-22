@@ -54,6 +54,8 @@ class Seen:
     events: list[dict[str, Any]] = field(default_factory=list)
     # The player's team ids, where moments are told from the team's side (esports: no player lines).
     teams: list[str] = field(default_factory=list)
+    # The source has the game's team sheet (Snapshot.squad), so a player with no role on it isn't in the game.
+    squad_known: bool = False
 
 
 @dataclass
@@ -438,6 +440,18 @@ class Sport:
         """Known not to be in the game: the line-ups are out and the player isn't in them."""
         return False
 
+    def first_line_is_news(self, before: Seen, now: Seen) -> bool:
+        """Whether a player's first line in a game polled all along (none at the last poll, while it was live) is news
+        since that poll rather than a first look (structured.baseline, game_during): all of it could have come since.
+        False where every player in a game has a line from its start (a footballer's "Started"): a first line then
+        means the follow, or the source's lines, came mid-game, and what it says happened before."""
+        return False
+
+    def result_pending(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Whether a finished game's result is still to come from its source, though it says the game is over: its
+        final is held a poll or two (structured.apply_poll), so fans hear who won. False where the board says it."""
+        return False
+
     def start(self, who: str, now: Seen) -> Found:
         return Found("start", "key", f"{who}'s game has started", joined(now.score, now.clock))
 
@@ -576,15 +590,15 @@ class Sport:
         wicket haul, 30 points), each about that player, in the same words a fan of theirs gets, and their detail
         led by the player's id ("253802:out", "253802:i2:100"; a correction's, the moment's it takes back): each
         player's out is the game's own, not the first one's alone (alerts.same reads it without). A game whose
-        earlier poll had no lines yet while it was live (the source's first lines) tells none: what they say
-        happened before. A sport whose moments are a side's, or the board's (football's goals, chess's turning,
-        esports' maps), overrides it."""
-        if before.status == "live" and not before.lines and now.lines:
-            return []
+        earlier poll had no lines yet while it was live (the source's first lines) tells only the lines its sport
+        says could all have come since (first_line_is_news: a batter's first ball): the rest say what happened
+        before. A sport whose moments are a side's, or the board's (football's goals, chess's turning, esports'
+        maps), overrides it."""
+        first = before.status == "live" and not before.lines
         found = []
         for athlete_id in now.lines:
             who = now.names.get(athlete_id)
-            if not who:
+            if not who or (first and not self.first_line_is_news(before.seen(athlete_id), now.seen(athlete_id))):
                 continue
             for f in self.during(who, athlete_id, before.seen(athlete_id), now.seen(athlete_id)):
                 kind, said, detail = f.detail.partition(":") if f.kind == "correction" else ("", "", f.detail)
