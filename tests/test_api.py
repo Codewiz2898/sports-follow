@@ -1378,6 +1378,16 @@ def test_an_athlete_an_operator_removed_cant_be_followed_or_previewed_by_their_s
     assert api.call("GET", "/api/athletes/espn_soccer/231388").status_code == 404
 
 
+def test_a_pick_with_a_removed_athletes_name_and_birth_date_cant_be_followed(api, monkeypatch):
+    # A source the removal couldn't ask has them under an id nobody blocked (BUG-098): refused, and no page made.
+    ref = PlayerRef("espn_soccer", "231388", "Some One", ["1"], ["A Club"], born="1990-01-02")
+    monkeypatch.setattr(registry, "blocked", lambda db: set())
+    monkeypatch.setattr(registry, "removed", lambda db, sport, pick: (sport, pick) == ("Football", ref))
+    monkeypatch.setattr(ADAPTERS["espn_soccer"], "player", lambda athlete_id, league=None: ref)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, pick: pytest.fail("made a page"))
+    assert api.call("POST", "/api/follows", fan="fan", body={"system": "espn_soccer", "athlete_id": "231388"}).status_code == 404
+
+
 def test_a_registry_athlete_is_looked_up_only_with_a_sport_that_can_be_stored(monkeypatch):
     monkeypatch.setattr(registry, "get", lambda db, qid, sport: pytest.fail(f"looked up {sport!r}"))
     assert server._registry_athlete(None, {"qid": "Q1354960", "sport": "foot\x00ball"}) is None

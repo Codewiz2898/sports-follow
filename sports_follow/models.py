@@ -125,7 +125,8 @@ class AthleteOverride(Base):
 
     keep: an athlete added by hand, or one pinned so an import never drops them; imports may refresh the
     row but never delete it. remove: taken out, with their page; an import never writes the row again,
-    and search and following leave out their ids in the sources.
+    and search and following leave out their ids in the sources, and following a pick with their name and
+    birth date.
     """
 
     __tablename__ = "athlete_override"
@@ -137,6 +138,9 @@ class AthleteOverride(Base):
     action: Mapped[str] = mapped_column(String(10))  # keep | remove
     name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
     ids: Mapped[dict] = mapped_column(JSONB, default=dict)  # their ids in the sources: {"espn_cricket": "253802"}
+    # A removed athlete's, as the registry had it: a pick with their name and birth date is them, in a source
+    # whose id for them nobody knew when they were removed (registry.removed).
+    birth_date: Mapped[date | None] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
 

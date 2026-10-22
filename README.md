@@ -911,7 +911,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
-  for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
+  for following, in every source of their sport (`remove` asks each it has no id in, by name and birth date),
+  and so is a pick with their name and birth date from a source added since. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
   shown with someone else's face: it takes the match and photo back at once (off every card showing it,
   followed or not, and off the Credits page) and
   no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
@@ -930,13 +931,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   follows goes by itself; a followed one stays.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
-  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
+  a cookie's follow is its own), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
   them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
-  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
-  player takes their pin with them, and takes them off every campaign page.
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, without research
+  a page no live source has isn't offered, and removing a player takes their pin with them, and takes them off
+  every campaign page.
 - **The Feed's content judge** (`sports_follow/curate.py`, BHA-297) decides whether a share about a player (an
   unofficial video, a news headline, the player's own post) is fit to show, before any fan sees it. Given a
   `Candidate` (what was found, who posted it, and who it was found for, with their own accounts) it returns a

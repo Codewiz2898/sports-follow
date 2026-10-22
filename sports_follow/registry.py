@@ -46,8 +46,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from . import bus, logs, naming, sports
-from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, budget, for_sport
-from .config import USER_AGENT
+from .adapters import ADAPTERS, ALL, KNOWN, Adapter, AdapterError, PlayerRef, Rostered, budget, for_sport, pick
+from .config import SOURCES, USER_AGENT
 from .db import session
 from .models import Athlete, AthleteOverride, Player, PlayerIdentity
 
@@ -348,8 +348,25 @@ def upsert(db: Session, rows: list[dict[str, Any]], photos: bool = True) -> None
 
 def blocked(db: Session) -> set[tuple[str, str]]:
     """The source ids of every athlete an operator removed (players.py), as (system, id): search leaves
-    them out and following refuses them, so a source's own search can't bring them back."""
+    them out and following refuses them, so a source's own search can't bring them back. Removing one finds
+    them in every source of their sport this build may run (everywhere), not only the one followed."""
     return {(system, str(xid)) for ids in db.scalars(select(AthleteOverride.ids).where(AthleteOverride.action == "remove")) for system, xid in (ids or {}).items()}
+
+
+def removed(db: Session, sport: str | None, ref: PlayerRef) -> bool:
+    """Whether a source's athlete, in this sport, is one an operator removed (players.py): by their id in that
+    source (blocked), or, in a source that had no id for them then (one switched to or added since, or one that
+    didn't answer), by the same name and birth date. A pick with no birth date isn't taken for anyone: a
+    namesake can still be followed."""
+    if (ref.system, str(ref.athlete_id)) in blocked(db):
+        return True
+    if not ref.born:
+        return False
+    key = sports.family(sport)
+    within = [key, *([group] if (group := sports.of(key).group) else [])]  # removed as "esports": every game's
+    gone = db.execute(select(AthleteOverride.name, AthleteOverride.birth_date).where(
+        AthleteOverride.action == "remove", AthleteOverride.sport.in_(within), AthleteOverride.birth_date.is_not(None))).all()
+    return any(same_day(born, ref.born) and naming.names_match(name, ref.name) for name, born in gone)
 
 
 def db_now() -> datetime:
@@ -736,17 +753,43 @@ def resolve(person: Person) -> tuple[Adapter, PlayerRef] | None:
     adapter = for_sport(person.sport)
     if adapter is None:
         return None
-    live = adapter.system
-    if person.ids.get(live):
-        ref = adapter.player(person.ids[live], person.league)
-        return (adapter, ref) if ref else None
+    ref = _resolve_in(adapter, person)
+    if ref is None:
+        return None
+    if not person.ids.get(adapter.system):
+        learn(person.qid, person.sport, adapter.system, ref.athlete_id)
+    return adapter, ref
+
+
+def _resolve_in(adapter: Adapter, person: Person) -> PlayerRef | None:
+    """The person in one source: by the id they have there, or by name and birth date (same_person)."""
+    if person.ids.get(adapter.system):
+        return adapter.player(person.ids[adapter.system], person.league)
     tried: set[str] = set()
     for name in [person.name, *person.aliases[:2]]:
         for ref in _candidates(adapter, name, person.league, tried):
             if same_person(person, ref):
-                learn(person.qid, person.sport, live, ref.athlete_id)
-                return adapter, ref
+                return ref
     return None
+
+
+def everywhere(person: Person) -> dict[str, str]:
+    """The person's ids in every source of their sport this build may run, running now or not (the admin panel
+    turns one back on, and a sport's source can be switched): the ids they have, and in each source they have
+    none in, the one its search finds by name and birth date. A source that doesn't answer is left out. Learns
+    nothing, so it can run in the transaction that takes them out (players.remove)."""
+    ids = dict(person.ids)
+    for adapter in pick(ALL, SOURCES, sports.ALLOWED).values():
+        if person.sport not in adapter.sports or adapter.system in ids:
+            continue
+        try:
+            ref = _resolve_in(adapter, person)
+        except Exception:  # one source's failure (down, its allowance spent, an answer it changed) never stops a removal
+            log.warning("registry: %s (%s) couldn't be looked up in %s", person.name, person.sport, adapter.system, exc_info=True)
+            continue
+        if ref is not None:
+            ids[adapter.system] = ref.athlete_id
+    return ids
 
 
 def learn(qid: str, sport: str, system: str, athlete_id: str) -> None:

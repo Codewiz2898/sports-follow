@@ -23,8 +23,10 @@ undo it. Adding puts an athlete no source lists in the registry, keyed "op:…",
 drop: search finds them, and following binds the source ids given. Removing deletes the player's page with
 everything that hangs off it (follows, moments, results, bindings: the database cascades) and its hot card
 in Redis, deletes their registry rows and blocks them: imports never write them again, and search and
-following leave out their ids in the sources. A name typed for research isn't blocked; the agent decides
-who that is. Removing shows what it will delete and asks first, unless given --yes.
+following leave out their ids in the sources, in every source of their sport (each one they have no id in
+is asked for them by name and birth date), and following refuses a pick with their name and birth date from
+a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
+Removing shows what it will delete and asks first, unless given --yes.
 
 Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
 (roster_wikidata.py): it takes the match and photo back at once, off every card showing it and the
@@ -49,7 +51,7 @@ import argparse
 import re
 import secrets
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any, Sequence, get_args
 
@@ -126,17 +128,21 @@ def describe(db: Session, found: Found) -> list[str]:
     return lines
 
 
-def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict[str, str], note: str | None) -> None:
-    stmt = insert(AthleteOverride).values(qid=qid, sport=sport, action=action, name=name[:200], ids=ids, note=note)
-    db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport"], set_={"action": action, "name": name[:200], "ids": ids, "note": note, "created_at": func.now()}))
+def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict[str, str], note: str | None, born: date | None = None) -> None:
+    stmt = insert(AthleteOverride).values(qid=qid, sport=sport, action=action, name=name[:200], ids=ids, note=note, birth_date=born)
+    db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport"], set_={"action": action, "name": name[:200], "ids": ids, "note": note, "birth_date": born, "created_at": func.now()}))
 
 
 def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
     """Take out what a reference found: delete the pages (the database cascades their follows, moments,
-    results and bindings) and the registry rows, and block each athlete. Returns the deleted pages' ids,
-    whose hot cards the caller clears once this commits."""
+    results and bindings) and the registry rows, and block each athlete: by their ids in every source of their
+    sport, which are asked for those it has no id in (registry.everywhere), and by name and birth date
+    (registry.removed). Returns the deleted pages' ids, whose hot cards the caller clears once this commits."""
     if not found.players and not found.athletes:
         raise Refused("nothing to remove: no page or registry athlete has that id")
+    # Who goes, each with their ids in the sources, found before anything is written: no row is held while the
+    # sources are asked.
+    people: list[tuple[registry.Person, Athlete | None]] = []
     covered: set[int] = set()
     for a in found.athletes:
         ids = dict(a.ids or {})
@@ -144,14 +150,18 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
             if sports.family(p.sport) == a.sport:
                 ids |= _source_ids(db, p.id)
                 covered.add(p.id)
-        _decide(db, a.qid, a.sport, "remove", a.name, ids, note)
-        db.execute(delete(Athlete).where(Athlete.id == a.id))
-    starters.remove(db, found.athletes)
-    campaigns.forget(db, found.athletes)
+        people.append((replace(registry.Person.of(a), ids=ids), a))
     for p in found.players:
         if p.id not in covered:
             # A page no registry row stands for (an agent-built one): its source ids are still blocked.
-            _decide(db, f"player:{p.id}", sports.family(p.sport) or "other", "remove", p.name, _source_ids(db, p.id), note)
+            people.append((registry.Person(f"player:{p.id}", sports.family(p.sport) or "other", p.name, [], None, list(p.teams or []), None, _source_ids(db, p.id)), None))
+    everywhere = [registry.everywhere(person) for person, _ in people]
+    for (person, a), ids in zip(people, everywhere):
+        _decide(db, person.qid, person.sport, "remove", person.name, ids, note, person.birth_date)
+        if a is not None:
+            db.execute(delete(Athlete).where(Athlete.id == a.id))
+    starters.remove(db, found.athletes)
+    campaigns.forget(db, found.athletes)
     gone = [p.id for p in found.players]
     if gone:
         from . import clips  # clips reads match pages, which read this

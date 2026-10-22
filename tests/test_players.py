@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select, text, update
@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -36,7 +36,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -120,6 +120,65 @@ def test_a_page_no_registry_row_has_is_blocked_by_its_source_ids(db):
     [o] = db.scalars(select(AthleteOverride)).all()
     assert (o.qid, o.sport, o.ids) == ("player:2", "basketball", {"espn_basketball": "99"})
     assert ("espn_basketball", "99") in registry.blocked(db)
+
+
+def shutte(db) -> None:
+    """Ryan Shutte, a Zimbabwe cricketer Wikidata knows by his ESPNcricinfo id alone, followed through it."""
+    db.add(Player(id=5, slug="ryan-shutte", name="Ryan Shutte", sport="Cricket", wikidata_qid="Q101095505"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=5, status="ready", card={}), PlayerIdentity(player_id=5, system="wikidata", external_id="Q101095505", confidence=1.0),
+                PlayerIdentity(player_id=5, system="espn_cricket", external_id="38606", confidence=1.0), Follow(fan_id="a", player_id=5, alert_rules={})])
+    registry.upsert(db, [athlete("Q101095505", "cricket", "Ryan Shutte", {"espn_cricket": "38606"}, birth_date=date(1996, 2, 13), birth_precision=registry.DAY, teams=["Zimbabwe"])])
+    db.commit()
+
+
+def shutte_elsewhere(xid: str, name: str = "Ryan Shutte", born: str | None = "1996-02-13") -> PlayerRef:
+    return PlayerRef("sportmonks_cricket", xid, name, ["1"], ["Zimbabwe"], born=born)
+
+
+def cricket_sources(monkeypatch, search) -> None:
+    """The cricket sources this build can run: ESPNcricinfo, which has Shutte's id (so is never searched), and a
+    second whose own search answers as `search` does."""
+    first = SimpleNamespace(system="espn_cricket", sports=("cricket",), search=lambda name, league=None: pytest.fail("searched a source for an id it was given"))
+    second = SimpleNamespace(system="sportmonks_cricket", sports=("cricket",), search=search)
+    monkeypatch.setattr(registry, "ALL", (first, second))
+
+
+def test_removing_a_player_blocks_them_in_their_sports_other_sources(db, monkeypatch):
+    """Removing Ryan Shutte blocked only his ESPNcricinfo id. The other cricket source lists him under its own, so
+    Live now, a match page or a switch of cricket's source offered him again, and a tap made a new page (BUG-098)."""
+    shutte(db)
+    asked: list[str] = []
+    cricket_sources(monkeypatch, lambda name, league=None: asked.append(name) or [shutte_elsewhere("9990002", born="1980-05-05"), shutte_elsewhere("9990001")])
+    assert players.main(["remove", "5", "--yes"]) == 0
+    blocked = registry.blocked(db)
+    assert ("espn_cricket", "38606") in blocked and ("sportmonks_cricket", "9990001") in blocked
+    assert ("sportmonks_cricket", "9990002") not in blocked  # a namesake, born another day
+    assert asked == ["Ryan Shutte"]
+    [o] = db.scalars(select(AthleteOverride)).all()
+    assert (o.ids, o.birth_date) == ({"espn_cricket": "38606", "sportmonks_cricket": "9990001"}, date(1996, 2, 13))
+
+
+def test_a_pick_with_a_removed_players_name_and_birth_date_is_refused(db, monkeypatch):
+    """A source the removal couldn't ask (down then, or added since) has him under an id nobody blocked: a pick with
+    his name and birth date is him all the same (BUG-098)."""
+    shutte(db)
+
+    def down(name, league=None):
+        raise AdapterError("the second source didn't answer")
+
+    cricket_sources(monkeypatch, down)
+    assert players.main(["remove", "5", "--yes"]) == 0  # removed all the same
+    assert ("sportmonks_cricket", "9990001") not in registry.blocked(db)
+    assert registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
+    assert registry.removed(db, "Cricket", PlayerRef("espn_cricket", "38606", "R Shutte", [], []))  # by the id blocked, as before
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990002", born="1980-05-05"))  # a namesake
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990003", born=None))  # nothing to tell them apart by
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990004", name="Ryan Burl"))  # born the same day
+    assert not registry.removed(db, "Chess", shutte_elsewhere("9990001"))
+    # Restored, he can be followed again.
+    assert players.main(["restore", "Q101095505"]) == 0
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
 
 
 def test_an_added_athlete_is_kept_through_the_weekly_import(db, monkeypatch):
@@ -394,30 +453,70 @@ def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, cap
 NOW = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 
+def signed_in(db, n: int, blocked: int = 0) -> list[str]:
+    """n fans with accounts (the last `blocked` of them blocked by an admin): their fan ids."""
+    ids = [f"acct-{i}" for i in range(n)]
+    db.add_all([Account(email=f"{f}@example.com", fan_id=f, blocked_at=LONG_AGO if i >= n - blocked else None) for i, f in enumerate(ids)])
+    db.flush()
+    return ids
+
+
 def test_starters_mix_whos_playing_the_most_followed_and_the_best_known(db, pools):
     system = chess_starters(db)
+    fans = signed_in(db, 4)
 
-    def page(pid: int, name: str, fans: int) -> None:
+    def page(pid: int, name: str, followers: int) -> None:
         db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Chess"))
         db.flush()
         db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0),
-                    *[Follow(fan_id=f"f{i}", player_id=pid, alert_rules={}) for i in range(fans)]])
+                    *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in fans[:followers]]])
 
-    page(1, "Live Larry", 3)
-    page(2, "Soon Sam", 2)
-    page(3, "Idle Ida", 1)
+    page(1, "Live Larry", 4)
+    page(2, "Soon Sam", 3)
+    page(3, "Idle Ida", 2)
     db.commit()
     # The worker's live cards: one on now, one in two hours. The morning's top pool: one tomorrow, one within the hour.
     pools.cards = {1: {"live": {"is_live": True, "headline": "Round 3"}}, 2: {"upcoming": [{"title": "Round 4", "start_utc": (NOW + timedelta(hours=2)).isoformat()}]}}
     pools.top["chess"] = [{"qid": "Q10", "start_utc": (NOW + timedelta(hours=30)).isoformat(), "title": "Tata Steel", "competition": "Tata Steel"},
                           {"qid": "Q11", "start_utc": (NOW + timedelta(hours=1)).isoformat(), "title": "Norway Chess", "competition": "Norway Chess"}]
-    [offer] = starters.offer(db, "f0", NOW)
+    [offer] = starters.offer(db, fans[0], NOW)
     # The pools take turns (playing, followed, top); someone in two keeps their first place, and playing now
     # outranks being followed: Soon Sam came in as followed and plays in two hours.
     assert [(r["name"], r["why"]) for r in offer["players"]] == [
         ("Live Larry", "live"), ("Gukesh D", "top"), ("R Praggnanandhaa", "soon"), ("Soon Sam", "soon"), ("Idle Ida", "followed")]
-    assert [r["following"] for r in offer["players"]] == [True, False, False, True, True]  # f0 follows every page
+    assert [r["following"] for r in offer["players"]] == [True, False, False, True, True]  # the first fan follows every page
     assert offer["players"][1]["next"]["title"] == "Tata Steel" and offer["players"][3]["next"]["title"] == "Round 4"
+
+
+def test_only_signed_in_fans_make_a_player_a_starter_and_only_a_page_a_live_source_has_is_offered(db, pools, monkeypatch):
+    """Four cookies following a fourth-tier player put him first for every new fan, ahead of Messi and Salah,
+    and a page no live source has (a namesake the agent wrote, or Messi before his source id was known) was
+    offered though it shows no scores or alerts (BUG-085)."""
+    from sports_follow import config
+
+    system = registry.live_system("football")
+    if system is None:
+        pytest.skip("no live football source in this build")
+    fans = signed_in(db, 4, blocked=1)
+
+    def page(pid: int, name: str, followers: list[str], live: bool = True) -> None:
+        db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Football"))
+        db.flush()
+        ident = PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0) if live else PlayerIdentity(player_id=pid, system="wikidata", external_id=f"Q{pid}", confidence=1.0)
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), ident, *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in followers]])
+
+    page(29, "Tenzin Samdup", ["cookie-1", "cookie-2", "cookie-3", "cookie-4"])  # four anonymous cookies, one script
+    page(28, "Lionel Messi", fans[:3], live=False)  # followed, but no live source has his page
+    page(27, "Mohamed Salah", fans[:2])
+    page(26, "Mohammed Sallah", [fans[0], fans[3]])  # one account, and one an admin blocked
+    page(25, "Someone Real", [fans[1], "cookie-1"])  # one account: not yet enough
+    db.commit()
+    [offer] = starters.offer(db, "someone new", NOW)
+    assert offer["key"] == "football"
+    assert [(r["name"], r["why"], r["live_scores"]) for r in offer["players"]] == [("Mohamed Salah", "followed", True)]
+    # With research on, a page with no live source is one the agent keeps up, and may be offered.
+    monkeypatch.setattr(config, "RESEARCH", True)
+    assert [r["name"] for r in starters.offer(db, "someone new", NOW)[0]["players"]] == ["Lionel Messi", "Mohamed Salah"]
 
 
 def test_with_nobody_followed_or_pinned_the_best_known_are_offered(db, pools):
