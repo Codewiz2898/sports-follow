@@ -344,6 +344,24 @@ def test_a_nickname_names_a_player_only_written_as_one_and_a_lone_surname_is_the
     assert hits("Neymar Junior back for Santos") == [34]  # a full name still
 
 
+def test_a_handle_another_games_pro_goes_by_names_a_pro_in_a_feed_every_game_reads_only_with_their_side_or_game():
+    # BUG-252: HLTV's, VLR's and the general esports feeds are read for every game's pros, so "Zeus" in a Counter-Strike
+    # story went to the League of Legends pro of that name.
+    group = [Followed(41, "lol", "Zeus", teams=["Hanwha Life Esports", "South Korea"]), Followed(42, "valorant", "Boaster", teams=["Fnatic"])]
+    found = news.names(group)
+    usual = {("lol", "zeus")}  # common(): two of the registry's pros go by it
+
+    def hits(title: str, description: str = "", shared: bool = True) -> list[int]:
+        return sorted(f.player_id for f in news.link([story(title, description)], group, found, usual, shared=shared))
+
+    assert hits("Zeus returns to coaching with Monte") == [] and hits("Zeus: 'We were not ready for the major'") == []
+    assert hits("Zeus leads Hanwha Life Esports to the final") == [41] and hits("Zeus on his League of Legends career") == [41]
+    assert hits("Boaster takes a break") == [42]  # a handle nobody else goes by: as before
+    assert hits("Zeus returns to coaching with Monte", shared=False) == [41]  # a feed of one game's: its pros alone
+    listed = news.feeds(NEWS["publisher_rss"])
+    assert all(f.shared for f in listed.values() if "valorant" in f.sports) and not any(f.shared for f in listed.values() if "cricket" in f.sports)
+
+
 def test_a_feed_that_names_its_encoding_only_in_its_xml_declaration_keeps_its_accents():
     body = '<?xml version="1.0" encoding="ISO-8859-1"?><rss><channel><item><title>Müller scores</title><link>https://x.example.com/1</link></item></channel></rss>'.encode("latin-1")
     assert publisher_rss.decode(body, None).count("Müller") == 1

@@ -100,6 +100,16 @@ def test_a_common_surname_in_the_registry_names_a_player_only_with_their_side(wo
     assert stories() == [(smith, "https://wicket.example.com/s/2", "Daily Wicket")]
 
 
+def test_a_handle_two_of_the_registrys_pros_go_by_is_one_a_shared_feed_needs_more_for(world):
+    # BUG-252: the registry knows a handle is another game's pro's too.
+    with db_module.session() as s:
+        s.add_all(Athlete(qid=f"pandascore:{i}", sport="esports", name=n, league=game, search_text=registry.search_text(n, [])) for i, (n, game) in
+                  enumerate([("Zeus", "league-of-legends"), ("Zeus", "cs-go"), ("Boaster", "valorant")]))  # fmt: skip
+        group = [candidates.Followed(41, "lol", "Zeus"), candidates.Followed(42, "valorant", "Boaster")]
+        usual = news.common(s, group, news.names(group))
+        assert ("lol", "zeus") in usual and {w for _, w in usual} == {"zeus"}  # Boaster is the only one
+
+
 def test_a_surname_the_registry_writes_with_accents_is_as_common_as_it_is(world):
     # BUG-250: namesakes were counted by an unaccented match on the registry's names, which keep their accents, so
     # Giménez, Sørensen and Yıldırım counted as rare and a namesake's story went to the followed player.

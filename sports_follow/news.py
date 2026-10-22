@@ -20,7 +20,10 @@ story known by its address written one way (NewsSource articles' url), so two fe
   capitalised ("head coach" isn't Travis Head), and never next to another capitalised name, which makes it someone
   else's ("Deepti Sharma" isn't Rohit, "Rahul Dravid" isn't KL Rahul), so a word inside a full name already found
   ("Rohit Sharma") names nobody else either. In a headline Written In Title Case, where every word is capitalised,
-  only the name before it counts.
+  only the name before it counts;
+- in a feed several sports read (every esports game reads HLTV's), a one-word name or handle that two or more of
+  the registry's athletes of the sport go by (a League of Legends "Zeus" and a Counter-Strike one) names a player
+  only when the story also names one of their sides or their sport ("League of Legends").
 
 A story is never kept whole: its headline, its link, when it was published and the feed's own short description,
 which the Feed shows as they are, crediting the publisher; as the publisher changes them at the same address (a
@@ -58,6 +61,7 @@ AHEAD = timedelta(hours=1)  # nor one dated further ahead than this (a feed's cl
 PRUNE_AFTER = timedelta(days=30)  # stories older than this go, weekly, but an admin's evergreen ones
 EVERGREEN = ("approved", "pinned")  # an admin's word that keeps a story past PRUNE_AFTER (rank.REVIEWS)
 COMMON = 3  # a surname this many of the sport's athletes in the registry share names a player only with their side
+HANDLES = 2  # and a handle this many go by, in a feed several sports read (two games' "Zeus")
 # Two stories about one player are one story when published within CLUSTER_WITHIN of each other and they say the
 # same (same_story), in their words (headline and description) less the player's names and words every story has:
 # the same figure ("179") with FIGURE_AND more words (one more for a figure under 100, not all of them usual); or
@@ -95,11 +99,13 @@ years your
 @dataclass
 class Listed:
     """A feed a running sport lists: the publisher's name for it, the sports whose players its stories are looked at
-    for (with their groups'), and which sport's count it goes in (a group's, for an esports game's)."""
+    for (with their groups'), which sport's count it goes in (a group's, for an esports game's), and whether more
+    than one sport lists it (shared: a name there may be another sport's player's)."""
 
     outlet: str
     sports: set[str] = field(default_factory=set)
     counted: str = ""
+    shared: bool = False
 
 
 def feeds(source: NewsSource) -> dict[str, Listed]:
@@ -109,6 +115,7 @@ def feeds(source: NewsSource) -> dict[str, Listed]:
         for url, outlet in sport.news_feeds.items():
             if source.feed_pattern.fullmatch(url):
                 listed = out.setdefault(url, Listed(outlet, counted=sport.group or sport.key))
+                listed.shared = listed.shared or bool(listed.sports - {sport.key, sport.group})
                 listed.sports.update({sport.key, *([sport.group] if sport.group else [])})
     return out
 
@@ -177,23 +184,32 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
 
 def common(session: Session, players: Sequence[Followed], found: dict[int, Names]) -> set[tuple[str, str]]:
     """The (sport, surname) pairs of these players' surnames that COMMON or more of the sport's athletes in the
-    registry share, however their names are accented ("Giménez" and "Gimenez" are one): one query a sport, over the
-    registry's names as search reads them (Athlete.search_text, plain words)."""
+    registry share, however their names are accented ("Giménez" and "Gimenez" are one); and of their own one-word
+    names or handles (Names.own) that HANDLES or more go by, as their name or another of theirs (two games' "Zeus").
+    One query a sport, over the registry's names as search reads them (Athlete.search_text, plain words)."""
     wanted: dict[str, set[str]] = {}
+    handles: dict[str, set[str]] = {}
     for p in players:
         registry = sports.of(p.sport).group or p.sport
         wanted.setdefault(registry, set()).update(w for w, surname in found[p.player_id].single.items() if surname)
+        handles.setdefault(registry, set()).update(found[p.player_id].own)
     out: set[tuple[str, str]] = set()
     for registry, words in wanted.items():
-        if not words:
+        mine = handles.get(registry, set())
+        if not words and not mine:
             continue
-        counts: dict[str, int] = {}
-        rows = session.scalars(select(Athlete.name).where(Athlete.sport == registry, or_(*(Athlete.search_text.like(f"% {w} |%") for w in sorted(words)))))
-        for name in rows:
+        surnames: dict[str, int] = {}
+        goes_by: dict[str, int] = {}
+        # A name ending in the surname; a whole name or another of theirs that's the handle (registry.search_text).
+        either = [*(Athlete.search_text.like(f"% {w} |%") for w in sorted(words)),
+                  *(Athlete.search_text.like(f"{at} {w} |%") for w in sorted(mine) for at in ("", "%|"))]  # fmt: skip
+        for name, text in session.execute(select(Athlete.name, Athlete.search_text).where(Athlete.sport == registry, or_(*either))):
             last = naming.words(name)[-1:]
             if last and last[0] in words:
-                counts[last[0]] = counts.get(last[0], 0) + 1
-        out |= {(registry, w) for w, n in counts.items() if n >= COMMON}
+                surnames[last[0]] = surnames.get(last[0], 0) + 1
+            for w in mine & {n.strip() for n in (text or "").split("|")}:
+                goes_by[w] = goes_by.get(w, 0) + 1
+        out |= {(registry, w) for w, n in surnames.items() if n >= COMMON} | {(registry, w) for w, n in goes_by.items() if n >= HANDLES}
     return {(p.sport, w) for p in players for registry, w in out if registry == (sports.of(p.sport).group or p.sport)}
 
 
@@ -274,10 +290,12 @@ def _find(words: list[str], phrase: tuple[str, ...]) -> list[int]:
     return [i for i, w in enumerate(words) if w == phrase[0] and tuple(words[i:i + n]) == phrase]
 
 
-def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[int, Names], usual: set[tuple[str, str]]) -> list[Linked]:
+def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[int, Names], usual: set[tuple[str, str]],
+         shared: bool = False) -> list[Linked]:
     """Each story, once for each of these players it names (the module's docstring says how). found: names(players);
-    usual: common()."""
+    usual: common(); shared: the feed is one several sports read (Listed.shared)."""
     by_id = {p.player_id: p for p in players}
+    sport_names = {p.sport: [w for name in (sports.of(p.sport).label, *sports.of(p.sport).names) if (w := tuple(naming.words(name)))] for p in players}
     owners: dict[str, list[int]] = {}
     for pid, n in found.items():
         for word in n.single:
@@ -298,6 +316,9 @@ def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[i
                         continue
                     if at and phrase in n.nick and not _written(raw[where], phrase, n):
                         continue
+                    if at and shared and len(phrase) == 1 and phrase[0] in n.own and (by_id[pid].sport, phrase[0]) in usual \
+                            and not any(_holds(every, side) for side in (*n.sides, *sport_names[by_id[pid].sport])):
+                        continue  # another sport's athlete goes by it too: theirs only with their side or sport
                     if at:
                         hits.setdefault(pid, (" ".join(phrase), where))
                         covered |= {i + k for i in at for k in range(len(phrase))}
@@ -419,7 +440,7 @@ def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:
             counts["feeds"] += 1
             fresh = [a for a in stories if a.published is not None and now - KEEP_FOR <= a.published <= now + AHEAD]
             counts["read"] += len(fresh)
-            found = link(fresh, *by_sports[frozenset(listed.sports)])
+            found = link(fresh, *by_sports[frozenset(listed.sports)], shared=listed.shared)
             counts["matched"] += len(found)
             counts["kept"] += keep(source, found, now)
     metrics.feed("kept", sum(c["kept"] for c in done.values()))
