@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -319,9 +320,28 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     state = game.snapshot.state
     assert (len(state["moves"]), state["moves"][:2], state["moves"][-1]) == (86, [[1, "d4", "Nf6"], [2, "c4", "e6"]], [86, "Ke6", None])  # comments and side lines left out
     assert (state["opening"], state["ending"]) == ("Queen's Gambit Declined: Ragozin Defense", "resigned")
+    # Lichess's analysis of it, by ply: every move's evaluation from White's side, a mistake marked with what was best.
+    evals = state["evals"]
+    assert (len(evals), evals["1"], evals["171"], state["evals_from"]) == (171, {"cp": 15}, {"mate": 3}, "Lichess")
+    assert {k: v for k, v in evals.items() if "mark" in v} == {"160": {"mark": "??", "cp": 8115, "best": "Rf8"}, "162": {"mark": "?!", "mate": 18, "best": "Ke7"}}
     chess = sports.get("chess")
     page = chess.match_page(state, [], {}, {})
     assert (page["moves"][0], page["moves"][-1], len(page["moves"]), page["game"]) == ("1. d4 Nf6", "86. Ke6", 86, None)
+    assert (page["evals"], page["evals_from"]) == (evals, "Lichess")
+
+    # Read before Lichess analysed it: read again once the copy is ANALYSED old, and partial (read again later) while
+    # it's still not there.
+    bare = re.sub(r"\{[^}]*\}|\([^()]*\)", " ", pgn)  # as it is a minute after the game, before its analysis
+    asked.clear()
+    ttls: list[float] = []
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: asked.append(url) or ttls.append(ttl) or (bare if url.endswith(".pgn") else single))
+    early = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert early is not None and early.partial and len(early.snapshot.state["moves"]) == 86
+    assert (early.snapshot.state["evals"], early.snapshot.state["evals_from"], ttls[1:]) == ({}, None, [24 * 3600, lichess_chess.ANALYSED])
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: (pgn if ttl == lichess_chess.ANALYSED else bare) if url.endswith(".pgn") else single)
+    later = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+    assert later is not None and not later.partial and later.snapshot.state["evals"] == evals
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
     assert chess.verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Magnus Carlsen won"
 
     # A game still being played: its moves so far, from its PGN without clocks (never the finished game's copy), as
@@ -919,6 +939,21 @@ def test_a_games_moves_are_placed_by_their_move_numbers():
 1... e5 2. Nf3 $1 Nc6 3. e8Q -- 4. 0-0 {castled} (4. d4 exd4) 4...0-0-0 5.Bb5 1/2-1/2"""
     # A game set up with Black to move, a glyph, odd moves and zeros castling: each move on its own side.
     assert lichess_chess.parse_pgn_game(pgn)["moves"] == [[1, None, "e5"], [2, "Nf3", "Nc6"], [3, "e8Q", "--"], [4, "O-O", "O-O-O"], [5, "Bb5", None]]
+    assert lichess_chess.parse_pgn_game(pgn)["evals"] == {}  # a glyph of an annotator's, not Lichess's analysis
+
+
+def test_lichess_analysis_of_a_game_is_read_move_by_move():
+    # As Lichess exports a broadcast board it has analysed: an evaluation on each move, a move it judged badly marked
+    # (glyph or NAG) with its word and the line it preferred, whose own comments aren't the game's.
+    pgn = """[Event "x"]
+
+1. e4 { [%eval 0.18] [%clk 1:30:58] } 1... e5 { [%eval 0.25] } 2. Qh5?! { [%eval -0.31] } { Inaccuracy. Nf3 was best. }
+(2. Nf3 { [%eval 0.3] } { (a quiet move) } 2... Nc6) 2... Nc6 { [%eval -0.2] } 3. Bc4 { [%eval -0.1] } 3... Nf6 $4 { [%eval #2] }
+{ Checkmate is now unavoidable. g6 was best. } 4. Qxf7# 1-0"""
+    read = lichess_chess.parse_pgn_game(pgn)
+    assert read["moves"] == [[1, "e4", "e5"], [2, "Qh5?!", "Nc6"], [3, "Bc4", "Nf6"], [4, "Qxf7#", None]]
+    assert read["evals"] == {"1": {"cp": 18}, "2": {"cp": 25}, "3": {"mark": "?!", "cp": -31, "best": "Nf3"}, "4": {"cp": -20}, "5": {"cp": -10},
+                             "6": {"mark": "??", "mate": 2, "best": "g6"}}
 
 
 def test_chess_rate_limit_fails_the_whole_read(monkeypatch):

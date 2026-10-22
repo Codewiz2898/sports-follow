@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING, Any
 
+from .. import engine
 from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, outcome, stat, words
 
 if TYPE_CHECKING:
@@ -29,6 +31,103 @@ ENGINE_LICENCE = f"https://github.com/nmrugg/stockfish.js/blob/{ENGINE_BUILT_FRO
 # -1 worse, -2 losing. +3.0 and +1.4 are 75% and 63% winning chances in Lichess's model; a forced
 # mate is winning. Leaving a band takes MARGIN more, so a score sitting on a line doesn't flap.
 WINNING, BETTER, MARGIN = 300, 140, 30
+
+
+# How badly a move went, as Lichess's analysis judges it (its Advice): by how much it lowered its side's winning
+# chances (winning()): by 0.3 a blunder, 0.2 a mistake, 0.1 an inaccuracy. A move that let a forced mate in, or let
+# one go, by how far ahead its side was without it: 10 pawns or more an inaccuracy, 7 a mistake, else a blunder.
+JUDGEMENTS = ((0.3, "??"), (0.2, "?"), (0.1, "?!"))
+
+
+def winning(cp: int) -> float:
+    """White's winning chances at an evaluation, from -1 to 1, in Lichess's model: the curve the app's bar draws
+    (whiteShare in web/src/sports/facts/chess.ts), which stops at ten pawns; Lichess's judgements don't."""
+    return 2 / (1 + math.exp(-0.00368208 * cp)) - 1
+
+
+def judge(before: dict[str, Any], after: dict[str, Any], white: bool) -> str | None:
+    """A move as Lichess's analysis marks it: "?!", "?", "??", or None, from the evaluations of the positions
+    either side of it (from White's side, "cp" or "mate"; mate 0, mate on the board), `white` if White made it.
+    Its analysis doesn't mark the move its engine would have made (played()), whatever the evaluations say."""
+    side = 1 if white else -1
+    was = before["mate"] * side if before.get("mate") is not None else None  # plus: the mover mates
+    now = after["mate"] * side if after.get("mate") is not None else None
+    if was is None and now is not None and now < 0:  # a mate let in
+        ahead = (before.get("cp") or 0) * side
+        return "?!" if ahead < -999 else "?" if ahead < -700 else "??"
+    if was is not None and was > 0 and (now is None or now < 0):  # a mate let go
+        ahead = (after.get("cp") or 0) * side if now is None else -1000
+        return "?!" if ahead > 999 else "?" if ahead > 700 else "??"
+    if was is not None or now is not None or before.get("cp") is None or after.get("cp") is None:
+        return None
+    lost = (winning(before["cp"]) - winning(after["cp"])) * side
+    return next((mark for least, mark in JUDGEMENTS if lost >= least), None)
+
+
+def _board(fen: str | None) -> dict[str, str] | None:
+    """A FEN's pieces by square ({"e1": "K", "e8": "k", …}); None for one that doesn't say."""
+    rows = (fen or "").split(" ")[0].split("/")
+    if len(rows) != 8:
+        return None
+    board: dict[str, str] = {}
+    for rank, row in zip("87654321", rows):
+        file = 0
+        for c in row:
+            if c.isdigit():
+                file += int(c)
+            elif file < 8:
+                board["abcdefgh"[file] + rank] = c
+                file += 1
+    return board
+
+
+def played(before: str | None, after: str | None, move: str | None) -> bool:
+    """Whether a move (UCI: "g1f3", "e1g1" castling, "e7e8q") takes one position (FEN) to the other: whether the
+    engine's best move there was the one made."""
+    was, now = _board(before), _board(after)
+    squares = re.fullmatch(r"([a-h][1-8])([a-h][1-8])([qrbn])?", move or "")
+    if was is None or now is None or squares is None or squares[1] not in was:
+        return False
+    start, to, promoted = squares[1], squares[2], squares[3]
+    piece = was.pop(start)
+    if piece in "Kk" and abs(ord(start[0]) - ord(to[0])) == 2:  # castling: the rook goes over the king
+        rook = ("h" if to[0] == "g" else "a") + start[1]
+        if rook in was:
+            was[("f" if to[0] == "g" else "d") + start[1]] = was.pop(rook)
+    elif piece in "Pp" and start[0] != to[0] and to not in was:  # en passant: the pawn taken is beside where it went
+        was.pop(to[0] + start[1], None)
+    was[to] = (promoted.upper() if piece.isupper() else promoted) if promoted else piece
+    return was == now
+
+
+def evals(state: dict[str, Any]) -> dict[str, Any]:
+    """Each move's evaluation, for a match page's bar, graph and marks ("evals"): by the ply it made as a string ("1",
+    White's first; "0", the starting position, where the engine looked at it), from White's side ({"cp": 31},
+    {"mate": -4}; mate 0, mate on the board), with how deep the engine looked where it's ours ("depth"), and for a
+    move judged badly, how badly ("mark": "?!", "?" or "??") and the move that was best instead ("best" in SAN, or
+    "best_uci" as the engine gives it). A finished game's are its source's analysis of it where it has one (its
+    read's: "evals", with whose they are, "evals_from"); else ours (engine.plies), each move the engine looked at,
+    marked as Lichess's analysis would mark it (judge(): unless it was the engine's best) where the position before
+    it was looked at too. {} where there are none."""
+    if said := state.get("evals"):
+        return {"evals": said, "evals_from": state.get("evals_from")}
+    game = state.get("game_id")
+    looked = engine.plies(game) if game else {}
+    out: dict[str, dict[str, Any]] = {}
+    for at, reading in sorted(looked.items()):
+        ev = {k: reading[k] for k in ("cp", "mate", "depth") if reading.get(k) is not None}
+        if "cp" not in ev and "mate" not in ev:
+            continue
+        before = looked.get(at - 1)
+        if before is not None and before.get("cp") is None and before.get("mate") is None:
+            before = None  # no score to hold the move against
+        best = (before or {}).get("best")
+        if before is not None and not played(before.get("fen"), reading.get("fen"), best) and (mark := judge(before, reading, white=at % 2 == 1)):
+            ev["mark"] = mark
+            if best:
+                ev["best_uci"] = best
+        out[str(at)] = ev
+    return {"evals": out, "evals_from": None} if out else {}
 
 
 def _level(cp: int) -> int:
@@ -281,7 +380,9 @@ class Chess(Sport):
         last game's, the one on the board (game: its number). While it's on, the moves so far as its source's
         reads keep them (state["page_detail"], under whichever board is newest, but only the same game's: a
         mini-match's next one is another), with its opening, and those added since as the board gives its last
-        move ("d5e3": more), which the app writes as moves; a game kept from its first move has those alone."""
+        move ("d5e3": more), which the app writes as moves; a game kept from its first move has those alone.
+
+        With them, each move's evaluation where there's one (evals()), and whose it is ("evals_from")."""
         told = {} if state.get("moves") else state.get("page_detail") or {}
         if told.get("game_id") != state.get("game_id"):
             told = {}
@@ -296,8 +397,8 @@ class Chess(Sport):
         match = state.get("match") or {}
         if told:
             game = match["games"] + (0 if state.get("result") else 1) if isinstance(match.get("games"), int) else None  # the one being played
-            return {"moves": pairs, "more": more, "opening": told.get("opening"), "ending": None, "game": game}
-        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": match.get("games")}
+            return {"moves": pairs, "more": more, "opening": told.get("opening"), "ending": None, "game": game, **evals(state)}
+        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": match.get("games"), **evals(state)}
 
     def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
         """White and Black by name, each with their points: of a mini-match so far (state["match"]: its score is

@@ -105,6 +105,68 @@ def test_a_live_chess_game_lists_its_moves_so_far_and_those_added_since():
     assert sports.get("chess").match_page(over, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6", "3. Nf3 d5"], "opening": "QGD", "ending": "resigned", "game": None}
 
 
+def test_a_chess_games_moves_come_with_each_ones_evaluation(monkeypatch):
+    from sports_follow import engine
+
+    chess = sports.get("chess")
+    # Over: its source's analysis of it, as its read has it.
+    said = {"1": {"cp": 18}, "2": {"cp": 25}, "3": {"cp": -31, "mark": "?!", "best": "Nf3"}}
+    over = {"kind": "chess", "game_id": "g1", "moves": [[1, "e4", "e5"], [2, "Qh5", None]], "evals": said, "evals_from": "Lichess"}
+    assert {k: chess.match_page(over, [], {}, {})[k] for k in ("evals", "evals_from")} == {"evals": said, "evals_from": "Lichess"}
+    # On (or over, before its source has analysed it): ours, each move the engine looked at, marked as Lichess's
+    # analysis would mark it where the position before was looked at too, and not where its best move was made.
+    start, e4, e5 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+    qh5 = "rnbqkbnr/pppp1ppp/8/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 1 2"
+    looked = {0: {"cp": 15, "mate": None, "depth": 18, "best": "e2e4", "fen": start},
+              1: {"cp": -120, "mate": None, "depth": 18, "best": "e7e5", "fen": e4},  # lower, but the engine's own move
+              2: {"cp": 25, "mate": None, "depth": 20, "best": "g1f3", "fen": e5},
+              3: {"cp": -31, "mate": None, "depth": 18, "best": "b8c6", "fen": qh5},
+              5: {"cp": 0, "mate": None, "depth": 18, "best": None, "fen": "8/8/8/8/8/8/8/8 b - - 0 3"},  # the move before it never seen
+              6: {"cp": None, "mate": None, "depth": 0, "best": None, "fen": "8/8/8/8/8/8/8/8 w - - 0 4"},  # stopped before it had a score
+              7: {"cp": None, "mate": -3, "depth": 18, "best": None, "fen": "8/8/8/8/8/8/8/8 b - - 0 4"}}  # so nothing to judge this by
+    monkeypatch.setattr(engine, "plies", lambda game, r=None: looked if game == "g2" else {})
+    live = {"kind": "chess", "game_id": "g2", "fen": qh5, "page_detail": {"game_id": "g2", "moves": [[1, "e4", "e5"]], "more": ["d1h5"]}}
+    page = chess.match_page(live, [], {}, {})
+    assert page["evals"] == {"0": {"cp": 15, "depth": 18}, "1": {"cp": -120, "depth": 18}, "2": {"cp": 25, "depth": 20},
+                             "3": {"cp": -31, "depth": 18, "mark": "?!", "best_uci": "g1f3"}, "5": {"cp": 0, "depth": 18}, "7": {"mate": -3, "depth": 18}}
+    assert page["evals_from"] is None
+    assert chess.match_page({**over, "game_id": "g2", "evals": {}, "evals_from": None}, [], {}, {})["evals"] == page["evals"]
+    assert "evals" not in chess.match_page({**live, "game_id": "g3", "page_detail": {**live["page_detail"], "game_id": "g3"}}, [], {}, {})
+
+
+def test_moves_are_marked_as_lichess_analysis_marks_them():
+    import gzip
+    import re
+    from pathlib import Path
+
+    from sports_follow.adapters.lichess_chess import parse_pgn_game
+    from sports_follow.sports.chess import judge, played
+
+    # By how much a move lowered its side's winning chances; a mate let in or let go by how far ahead the side was.
+    assert (judge({"cp": 90}, {"cp": 321}, white=False), judge({"cp": 58}, {"cp": 117}, white=False), judge({"cp": 15}, {"cp": 25}, white=True)) == ("??", "?!", None)
+    assert (judge({"cp": 851}, {"mate": 11}, white=False), judge({"cp": -300}, {"mate": -2}, white=True)) == ("?", "??")
+    assert (judge({"mate": 3}, {"cp": 1200}, white=True), judge({"mate": 3}, {"mate": -4}, white=True), judge({"mate": 2}, {"mate": 0}, white=True)) == ("?!", "??", None)
+    # On Lichess's own evaluations of the recorded broadcasts, every move it marked is marked the same; the few more
+    # marked here were its engine's own moves, which it doesn't mark (played(): the evaluations alone can't say).
+    agree = more = other = 0
+    for name in ("tour-ewc-playoffs", "tour-sevilla-round1", "game-final"):
+        with gzip.open(Path(__file__).parent / "fixtures" / "lichess" / f"{name}.pgn.gz", "rt") as f:
+            games = re.split(r"\n\n(?=\[Event )", f.read())
+        for evals in (parse_pgn_game(g)["evals"] for g in games):
+            for ply, after in evals.items():
+                before = evals.get(str(int(ply) - 1), {"cp": 15} if ply == "1" else {})
+                if {"cp", "mate"} & before.keys() and {"cp", "mate"} & after.keys():
+                    ours, theirs = judge(before, after, white=int(ply) % 2 == 1), after.get("mark")
+                    agree, more, other = agree + (ours == theirs), more + (ours is not None and theirs is None), other + (ours != theirs and theirs is not None)
+    assert agree > 4000 and other == 0 and more < agree / 100
+    # Whether a move takes one position to the other: a castling's rook goes over, an en passant's pawn goes, a pawn promotes.
+    start, e4 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    assert played(start, e4, "e2e4") and not played(start, e4, "e2e3") and not played(start, e4, None) and not played(start, e4, "e7e5")
+    assert played("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "r3k2r/8/8/8/8/8/8/R4RK1 b kq - 1 1", "e1g1")
+    assert played("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 2", "4k3/8/3P4/8/8/8/8/4K3 b - - 0 2", "e5d6")
+    assert played("4k3/P7/8/8/8/8/8/4K3 w - - 0 1", "Q3k3/8/8/8/8/8/8/4K3 b - - 0 1", "a7a8q")
+
+
 def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
     state = {"kind": "chess", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", None]], "opening": "Queen's Gambit Declined", "ending": "resigned",
              "match": {"games": 8, "score": "6–2"}}

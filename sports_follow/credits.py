@@ -157,7 +157,7 @@ def credits(sources: Mapping[str, Any] | None = None, stockfish: bool | None = N
         also.append({
             "name": "Stockfish",
             "url": "https://stockfishchess.org",
-            "what": "The chess engine behind \"winning\", \"in trouble\" and turnaround alerts, run on our server.",
+            "what": "The chess engine behind a live game's evaluation of each move and the \"winning\", \"in trouble\" and turnaround alerts, run on our server.",
             "licence": "GPL-3.0",
             "licence_url": "https://www.gnu.org/licenses/gpl-3.0.html",
         })

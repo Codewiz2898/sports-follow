@@ -9,8 +9,9 @@ worker job the scheduler tick starts), and the CPU it may use is bounded every w
 - Positions are cached (board, side to move, castling, en passant), so openings and repeated
   positions are evaluated once across all games.
 - Fair: the game that has waited longest goes first, so one fast blitz game can't starve the rest.
-- Each game at most once every GAME_INTERVAL seconds. Moves in between are skipped; a swing still
-  shows between the evaluations either side of them.
+- Each game at most once every GAME_INTERVAL seconds. The positions of moves in between are put by and
+  looked at in the lane's spare time (_put_by); a swing still shows between the evaluations either side of
+  them, and alerts go by the newest positions alone.
 - One lane for the whole system (a Redis lock), one engine thread running at a time, a fixed node
   budget for a look and as long a slice of a deep search (about a second on one core), at most
   POSITION_NODES in any one position, low CPU priority, and a duty cycle: the engine works at most
@@ -45,6 +46,13 @@ size); one search reaches depth 30 after 4-22M nodes, 9M typically (about 20 s o
 same depth at the same nodes when it's paused between 1 s slices. Searched again after a look
 elsewhere, it needs a third to four fifths of its nodes again to get back: hence a process of its own
 for looks, and long turns. Each process is about 250 MB besides its hash table.
+
+Every reading of a game's position is kept as its move's evaluation too (plies(), by the ply it made, the
+deepest so far, with the engine's best move there), for the match page's bar, graph and marks while the game
+is on; a position put by takes its turn after the games' new positions, and, while a game is being deepened,
+every PUT_BY_EVERY slices. A move the polls never saw (two moves between polls) has none. A finished game's
+evaluations are its source's analysis of it where the source has one (Sport.match_page), so a game the source
+calls over has its positions put by dropped (drop()).
 
 Stockfish (GPL) runs as its own process, spoken to over UCI. Without it installed, nothing is
 evaluated and chess notifications keep to starts and results.
@@ -104,8 +112,10 @@ LATEST_TTL = 6 * 3600
 WANT = "engine:want"  # game -> {"fen", "at"}: the newest position waiting
 QUEUE = "engine:queue"  # game -> the time it may be evaluated from; lowest first
 DEEPEN = "engine:deepen"  # game -> when it last had the engine (it stays in through its turn); lowest first
+PUT_BY = "engine:put-by"  # game -> when it last had a position put by looked at; lowest first
+PUT_BY_EVERY = 3  # a deep search's slices between looks at positions put by, while a game is being deepened
 LOCK = "engine-lane"
-READING = ("cp", "mate", "depth")
+READING = ("cp", "mate", "depth", "best")  # "best": the engine's best move there (UCI), the first of its line
 
 
 def enabled() -> bool:
@@ -152,6 +162,8 @@ def request(game: str, fen: str, r: Any = None, now: float | None = None, by: ob
         return
     r.zrem(DEEPEN, game)
     waiting = json.loads(r.hget(WANT, game) or "null") or {}
+    if waiting.get("fen") and waiting["fen"] != fen:
+        _put_by(r, game, waiting["fen"], now)  # the game moved on before the engine got to it
     asked = waiting.get("asked", now) if waiting.get("fen") == fen else now
     r.hset(WANT, game, json.dumps({"fen": fen, "at": now, "asked": asked}))
     # The interval counts from when the polls asked for the last position, not from when the lane got to it,
@@ -160,13 +172,14 @@ def request(game: str, fen: str, r: Any = None, now: float | None = None, by: ob
 
 
 def drop(game: str, r: Any = None, by: object | None = None) -> None:
-    """Stop evaluating a game for one of its fixtures (`by`: nobody there wants its swings any more), or
-    for all of them (it's over, or not on: nothing of it waits either). Once no fixture wants it
-    deepened, its position isn't; the lane lets go of it before its next slice."""
+    """Stop evaluating a game for one of its fixtures (`by`), or for all of them (it's over, or not on:
+    nothing of it waits either, its positions put by too: its source's analysis has its moves). Once no
+    fixture wants it deepened, its position isn't; the lane lets go of it before its next slice."""
     r = r or bus.sync_redis()
     if by is None:
-        r.delete(f"engine:deepen:{game}")
+        r.delete(f"engine:deepen:{game}", f"engine:put-by:{game}")
         r.hdel(WANT, game)
+        r.zrem(PUT_BY, game)
     else:
         r.hdel(f"engine:deepen:{game}", str(by))
     if not deepened(r, game):
@@ -216,6 +229,85 @@ def on_it(r: Any, game: str, fen: str, now: float | None = None) -> bool:
     return deepened(r, game, now) and not r.hget(WANT, game) and (latest(game, r) or {}).get("fen") == fen
 
 
+# ---------------------------------------------------------------- each move's evaluation
+
+
+def ply(fen: str) -> int | None:
+    """The ply a position comes after, by its move number and side to move (1: after White's first move; "… b - - 4
+    25", after White's 25th, 49); None for a FEN that doesn't say."""
+    fields = fen.split()
+    if len(fields) < 6 or fields[1] not in ("w", "b") or not fields[5].isdigit():
+        return None
+    return (int(fields[5]) - 1) * 2 + (fields[1] == "b")
+
+
+def plies(game: str, r: Any = None) -> dict[int, dict[str, Any]]:
+    """The game's evaluation of each move the engine has looked at, by the ply it made: the deepest reading of the
+    position after it, from White's side ("cp" or "mate", "depth") with the engine's best move there ("best", UCI:
+    what was better than the next move) and the position ("fen"). {} where Redis can't say."""
+    try:
+        redis: Any = r or bus.sync_redis()
+        kept = redis.hgetall(f"engine:plies:{game}") or {}
+    except Exception:
+        log.warning("engine: %s's moves' evaluations couldn't be read", game, exc_info=True)
+        return {}
+    return {int(k): json.loads(v) for k, v in kept.items()}
+
+
+def _record(r: Any, game: str, fen: str, reading: dict[str, Any], on: bool = True) -> None:
+    """Keep a reading of one of a game's positions (keep()'s: the deepest of it so far) as its move's evaluation. The
+    position the game is on (`on`) is its move's whatever was kept for that move before, and where it's taken back
+    a move or more, or a relay has corrected it (moves kept after it, or another position kept for it), the moves
+    after it go, put by or kept; one put by is kept only where its move has none of another position."""
+    at = ply(fen)
+    if at is None:
+        return
+    key = f"engine:plies:{game}"
+    kept = r.hgetall(key) or {}
+    other = str(at) in kept and json.loads(kept[str(at)]).get("fen") != fen
+    if not on and other:
+        return
+    r.hset(key, str(at), json.dumps({**{k: reading.get(k) for k in READING}, "fen": fen}))
+    if on and (other or any(int(k) > at for k in kept)):
+        # Not otherwise: positions put by while this one was looked at are the game's next moves.
+        for later in (k for k in kept if int(k) > at):
+            r.hdel(key, later)
+        for later in (k for k in r.hgetall(f"engine:put-by:{game}") or {} if int(k) > at):
+            r.hdel(f"engine:put-by:{game}", later)
+    r.expire(key, LATEST_TTL)
+
+
+def _put_by(r: Any, game: str, fen: str, now: float) -> None:
+    """A position the game moved on from before the engine looked at it (GAME_INTERVAL): looked at later, in the
+    lane's spare time (take_put_by), for its move's evaluation alone."""
+    at = ply(fen)
+    if at is None:
+        return
+    r.hset(f"engine:put-by:{game}", str(at), fen)
+    r.expire(f"engine:put-by:{game}", LATEST_TTL)
+    r.zadd(PUT_BY, {game: now}, nx=True)
+
+
+def take_put_by(r: Any, now: float) -> tuple[str, str] | None:
+    """A position put by, with its game: the earliest move of the game that has waited longest, which then waits
+    behind the others for its next."""
+    while games := r.zrange(PUT_BY, 0, 0):
+        game = games[0]
+        waiting = r.hgetall(f"engine:put-by:{game}") or {}
+        first = min(waiting, key=int) if waiting else None
+        if first is not None:
+            r.hdel(f"engine:put-by:{game}", first)
+        if len(waiting) > 1:
+            r.zadd(PUT_BY, {game: now})
+        else:
+            r.zrem(PUT_BY, game)
+            if r.hgetall(f"engine:put-by:{game}"):
+                r.zadd(PUT_BY, {game: now})  # one a poll put by meanwhile: its game waits again
+        if first is not None:
+            return game, waiting[first]
+    return None
+
+
 # Set the game's settled evaluation only if it's still the one this one was settled from; else the one there.
 SETTLE = """local held = redis.call('get', KEYS[1])
 if (held or '') == ARGV[1] then
@@ -259,7 +351,7 @@ def settled(game: str, ev: dict[str, Any], settle: Callable[[dict[str, Any] | No
 
 def needs_lane() -> bool:
     r = bus.sync_redis()
-    return enabled() and bool(r.zcard(QUEUE) or r.zcard(DEEPEN)) and not bus.is_locked(LOCK)
+    return enabled() and bool(r.zcard(QUEUE) or r.zcard(DEEPEN) or r.zcard(PUT_BY)) and not bus.is_locked(LOCK)
 
 
 def position_key(fen: str) -> str:
@@ -394,7 +486,7 @@ class Engine:
 
     def _go(self, fen: str, limits: str) -> None:
         self.halt()
-        self.fen, self.reading, self.searching = fen, {"cp": None, "mate": None, "depth": 0, "nodes": 0}, True
+        self.fen, self.reading, self.searching = fen, {"cp": None, "mate": None, "depth": 0, "nodes": 0, "best": None}, True
         self._send(f"position fen {fen}")
         self._send(f"go {limits}")
 
@@ -425,6 +517,8 @@ class Engine:
                 cp, mate, depth = parse_score(line)
                 cp, mate = from_white(self.fen, cp, mate)
                 self.reading.update(cp=cp, mate=mate, depth=depth)
+                if pv := re.search(r" pv (\S+)", line):
+                    self.reading["best"] = pv.group(1)
         elif line.startswith("bestmove"):
             self.searching = False
             return True
@@ -498,10 +592,28 @@ def run_lane() -> None:
     looks: Engine | None = None  # first looks
     searches: Engine | None = None  # deep searches
     deep: Deepening | None = None
-    evaluated = hits = slices = 0
+    evaluated = hits = slices = put_by = 0
+    since_put_by = 0  # the deep search's slices since the last look at a position put by
     busy = 0.0
     started = idle_since = deep_since = time.monotonic()  # deep_since: when the deep search's engine last worked, or failed
     deep_fails = 0.0  # when it last failed
+
+    def look(fen: str) -> tuple[dict[str, Any] | None, float]:
+        """A position's first look, from the cache or the looks' engine, and the seconds the engine took."""
+        nonlocal looks, evaluated, hits
+        done = cached(r, fen)
+        if done and done.get("look"):
+            hits += 1
+            return done, 0.0
+        looks = looks or Engine(hash_mb=LOOK_HASH_MB)
+        t = time.monotonic()
+        result = looks.evaluate(fen)
+        evaluated += 1
+        # One the clock stopped is shown, but isn't the position's look: no alert goes by it. One stopped before it
+        # had a score shows nothing.
+        scored = result.get("cp") is not None or result.get("mate") is not None
+        return (keep(r, fen, result, look=not result.get("capped")) if scored else None), time.monotonic() - t
+
     try:
         while time.monotonic() - started < SESSION and not shutdown.stopping.is_set():
             if not bus.extend(LOCK, 120, token):
@@ -517,24 +629,22 @@ def run_lane() -> None:
             if job := take(r, now):
                 # A new position goes first, from the cache or a look; a deep search under way stays paused.
                 game, fen, asked = job
-                done = cached(r, fen)
-                if done and done.get("look"):
-                    hits += 1
-                else:
-                    looks = looks or Engine(hash_mb=LOOK_HASH_MB)
-                    t = time.monotonic()
-                    result = looks.evaluate(fen)
-                    spent = time.monotonic() - t
-                    evaluated += 1
-                    # One the clock stopped is shown, but isn't the position's look: no alert goes by it. One
-                    # stopped before it had a score shows nothing.
-                    scored = result.get("cp") is not None or result.get("mate") is not None
-                    done = keep(r, fen, result, look=not result.get("capped")) if scored else None
+                done, spent = look(fen)
                 if done is not None:
                     first = time.time()
                     r.set(f"engine:latest:{game}", json.dumps({**done, "fen": fen, "at": first, "first": first, "asked": asked}), ex=LATEST_TTL)
+                    _record(r, game, fen, done)
                     if deepened(r, game) and not deep_enough(done) and not r.hget(WANT, game):
                         r.zadd(DEEPEN, {game: first})
+            elif (since_put_by >= PUT_BY_EVERY or (deep is None and not r.zcard(DEEPEN))) and (put := take_put_by(r, now)):
+                # Then a position put by, for its move's evaluation alone; while a game is being deepened, one
+                # every PUT_BY_EVERY slices.
+                game, fen = put
+                done, spent = look(fen)
+                if done is not None:
+                    _record(r, game, fen, done, on=False)
+                put_by += 1
+                since_put_by = 0
             elif time.monotonic() - deep_fails < DEEP_IDLE:
                 # Its engine failed a moment ago: looks go on, and deepening after a rest.
                 if time.monotonic() - idle_since > IDLE_EXIT:
@@ -565,6 +675,7 @@ def run_lane() -> None:
                     reading, over = searches.run(SLICE)
                     spent, deep_since = time.monotonic() - t, time.monotonic()
                     slices += 1
+                    since_put_by += 1
                     _note(r, deep, reading)
                     if over:
                         deep = None  # deep enough
@@ -591,8 +702,8 @@ def run_lane() -> None:
         bus.release(LOCK, token)
         wall = time.monotonic() - started
         if evaluated or hits or slices:
-            log.info("engine: %d position(s) evaluated, %d from cache, %d deeper slice(s), busy %.0fs of %.0fs (%.0f%% of one core), %d game(s) waiting, %d to deepen",
-                     evaluated, hits, slices, busy, wall, 100 * busy / max(wall, 1), r.zcard(QUEUE), r.zcard(DEEPEN))
+            log.info("engine: %d position(s) evaluated, %d from cache, %d look(s) at positions put by, %d deeper slice(s), busy %.0fs of %.0fs (%.0f%% of one core), %d game(s) waiting, %d to deepen, %d with positions put by",
+                     evaluated, hits, put_by, slices, busy, wall, 100 * busy / max(wall, 1), r.zcard(QUEUE), r.zcard(DEEPEN), r.zcard(PUT_BY))
 
 
 def _lost(engine: Engine | None, exc: Exception) -> None:
@@ -612,6 +723,7 @@ def _note(r: Any, deep: Deepening, reading: dict[str, Any]) -> None:
     deep.counted = nodes
     if (done.get("depth") or 0) > deep.shown and on_it(r, deep.game, deep.fen):
         r.set(f"engine:latest:{deep.game}", json.dumps({"look": deep.look, **done, "fen": deep.fen, "at": time.time(), "first": deep.first, "asked": deep.asked}), ex=LATEST_TTL)
+        _record(r, deep.game, deep.fen, done)
         deep.shown = done["depth"]
 
 
