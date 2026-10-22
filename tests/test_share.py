@@ -18,7 +18,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.testclient import TestClient
 
-from sports_follow import bus, campaigns, server, share, sports, week
+from sports_follow import bus, campaigns, clips, match, predictions, server, share, sports, teams, week
 from sports_follow.config import APP_NAME
 
 from .test_api import api  # noqa: F401  (the fixture)
@@ -305,5 +305,112 @@ def test_the_apis_own_docs_arent_on_the_site(built, path):
     got = built.call("GET", path)
     assert got.status_code == 200 and got.headers["content-type"].startswith("text/html") and meta(got.text)["og:title"] == APP_NAME
     assert "swagger" not in got.text.lower() and "redoc" not in got.text.lower() and "/api/admin" not in got.text
+
+
+# ---------------------------------------------------------------- a league's invite, a team, a clip and a game (BUG-192)
+
+INVITE = {"code": "38KWAS", "name": "Chess gang", "members": 3, "by": "Asha"}
+TEAM = {"team_id": 45, "name": "Indiana Fever", "sport": "basketball", "detail": "WNBA · United States", "live": None,
+        "upcoming": [{"title": "Indiana Fever v Chicago Sky", "competition": "WNBA", "start_utc": "2099-06-01T23:00:00+00:00", "status": "scheduled"}],
+        "recent": [{"title": "Las Vegas Aces v Indiana Fever", "result": "Won 88–80", "competition": "WNBA"}]}
+CLIP = {"id": "aB3_xY9-kQ2z", "caption": "Faker's Ryze outplay", "line": "T1 12–9 GEN · 26:00 · Game 2", "sport": "lol", "competition": "Worlds 2026",
+        "game_title": "T1 v Gen.G", "match": "pandascore_esports/777", "video": "https://clips.example/clips/aB3_xY9-kQ2z.mp4",
+        "poster": "https://clips.example/clips/aB3_xY9-kQ2z.jpg"}
+GAME = {"key": "pandascore_esports:777", "match": "pandascore_esports/777", "sport": "lol", "title": "T1 v Gen.G", "competition": "Worlds 2026",
+        "detail": "Final", "start_utc": "2099-11-14T03:30:00+00:00", "status": "scheduled", "live": None, "verdict": ""}
+
+
+def test_a_leagues_invite_says_join_it_who_asked_and_how_many_are_in_it_and_never_its_code():
+    p = share.of_invite(INVITE)
+    assert (p.title, p.path, p.image) == (f"Join Chess gang on {APP_NAME}", "/j/38KWAS", "/api/leagues/38KWAS/share.png")
+    assert (p.picture.ground, p.picture.tag, p.picture.word) == (share.BRAND, "You're invited", "Chess gang")
+    assert p.picture.lines == ("Asha asked you to call the games together", "3 in it so far")
+    assert p.description == f"Asha asked you to call the games together on {APP_NAME}: 3 in it so far. Call each game before it starts; bragging rights only."
+    assert "38KWAS" not in repr(p.picture) and "38KWAS" not in p.title + p.description  # a screenshot of the preview is no invite
+    alone = share.of_invite({**INVITE, "members": 1, "by": None})  # its maker left: still an invite
+    assert alone.picture.lines == ("You're asked to call the games together", "1 in it so far")
+
+
+def test_a_teams_page_says_who_and_its_game_on_now_else_its_last_result_else_its_next():
+    p = share.of_team(TEAM)
+    assert p is not None
+    basketball = sports.of("basketball").colour
+    assert (p.title, p.path, p.image) == ("Indiana Fever · Basketball", "/team/45", "/api/teams/45/share.png")
+    assert (p.picture.ground, p.picture.ink, p.picture.tag, p.picture.word) == (basketball["sport"], basketball["on"], "Basketball", "Indiana Fever")
+    assert p.picture.lines == ("Last game: Las Vegas Aces v Indiana Fever", "Won 88–80")
+    assert p.description == f"Last game: Las Vegas Aces v Indiana Fever, Won 88–80. Live scores, results and alerts for Indiana Fever on {APP_NAME}."
+    live = share.of_team({**TEAM, "live": {"is_live": True, "event": "Indiana Fever v Chicago Sky", "competition": "WNBA", "score": "IND 54–50 CHI", "clock": "Q3 4:12"}})
+    assert live is not None and live.picture.tag == "Live · Basketball"
+    assert live.picture.lines == ("Indiana Fever v Chicago Sky · WNBA", "IND 54–50 CHI · Q3 4:12") and live.description.startswith("Live now: Indiana Fever v Chicago Sky, IND 54–50 CHI.")
+    nxt = share.of_team({**TEAM, "recent": []})
+    assert nxt is not None and nxt.picture.lines == ("Next: Indiana Fever v Chicago Sky", "WNBA") and nxt.description.startswith("Next: Indiana Fever v Chicago Sky, WNBA.")
+    new = share.of_team({**TEAM, "recent": [], "upcoming": []})  # no games read yet: what it plays in
+    assert new is not None and new.picture.lines == ("WNBA · United States",)
+    assert share.of_team({**TEAM, "name": " "}) is None
+
+
+def test_a_clip_says_its_caption_its_moment_and_its_game():
+    p = share.of_clip(CLIP)
+    lol = sports.of("lol").colour
+    assert (p.title, p.path, p.image) == ("Faker's Ryze outplay", "/clip/aB3_xY9-kQ2z", "/api/clips/aB3_xY9-kQ2z/share.png")
+    assert (p.picture.ground, p.picture.tag, p.picture.word) == (lol["sport"], "Clip · League of Legends", "Faker's Ryze outplay")
+    assert p.picture.lines == ("T1 12–9 GEN · 26:00 · Game 2", "T1 v Gen.G · Worlds 2026")
+    assert p.description == f"T1 12–9 GEN · 26:00 · Game 2, T1 v Gen.G · Worlds 2026. Watch it on {APP_NAME}."
+    assert CLIP["poster"] not in repr(p)  # drawn, as every preview is: not a frame of the clip
+    bare = share.of_clip({**CLIP, "caption": "", "sport": None, "competition": None})  # a fan's own game: no sport, no caption
+    assert (bare.title, bare.picture.word, bare.picture.ground, bare.picture.tag) == ("T1 12–9 GEN · 26:00 · Game 2", "T1 12–9 GEN · 26:00 · Game 2", share.INK, "Clip")
+    assert bare.picture.lines == ("T1 v Gen.G",)
+
+
+def test_a_games_page_says_the_game_and_where_its_at():
+    p = share.of_match(GAME)
+    assert p is not None
+    assert (p.title, p.path, p.image) == ("T1 v Gen.G · Worlds 2026", "/match/pandascore_esports/777", "/api/match/pandascore_esports/777/share.png")
+    assert (p.picture.tag, p.picture.word, p.picture.lines) == ("League of Legends", "T1 v Gen.G", ("Worlds 2026 · Final", "Sat 14 Nov, 9:00 am IST"))
+    assert p.description == f"Worlds 2026 · Final, Sat 14 Nov, 9:00 am IST. Live scores, key moments and the result on {APP_NAME}."
+    on = share.of_match({**GAME, "status": "live", "live": {"is_live": True, "score": "T1 2–1 GEN", "clock": "Game 4"}})
+    assert on is not None and on.picture.tag == "Live · League of Legends" and on.picture.lines[1] == "T1 2–1 GEN · Game 4"
+    over = share.of_match({**GAME, "status": "final", "live": {"score": "T1 3–1 GEN"}, "verdict": "T1 won 3–1"})
+    assert over is not None and over.picture.lines[1] == "T1 won 3–1"
+    unknown = share.of_match({**GAME, "sport": "other"})  # a game of no sport the app has: ink, and no tag
+    assert unknown is not None and (unknown.picture.ground, unknown.picture.tag) == (share.INK, "")
+    assert share.of_match({**GAME, "title": None}) is None
+
+
+def test_an_invites_a_teams_a_clips_and_a_games_words_are_escaped_in_the_tags():
+    evil = 'Gang "</title><script>alert(1)</script>'
+    for shown in (share.of_invite({**INVITE, "name": evil, "by": evil}), share.of_team({**TEAM, "name": evil}), share.of_clip({**CLIP, "caption": evil}),
+                  share.of_match({**GAME, "title": evil})):
+        page = share.page(INDEX, shown, "https://stann.in")
+        assert "<script>alert" not in page and page.count("<title>") == 1
+        assert evil in meta(page)["og:title"]  # as it was, once unescaped
+        assert share.png(shown.picture)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_crawler_gets_an_invites_a_teams_a_clips_and_a_games_page_with_its_preview_and_picture(built, monkeypatch):
+    asked = []
+    monkeypatch.setattr(predictions, "about", lambda db, code: asked.append(("league", code)) or (INVITE if code.upper() == "38KWAS" else None))
+    monkeypatch.setattr(teams, "page", lambda db, team_id, fan: asked.append(("team", team_id, fan)) or (TEAM if team_id == 45 else None))
+    monkeypatch.setattr(clips, "one", lambda db, slug: asked.append(("clip", slug)) or (CLIP if slug == CLIP["id"] else None))
+    monkeypatch.setattr(match, "view", lambda db, fan, system, game: asked.append(("game", fan, system, game)) or (
+        (GAME, True) if (system, game) == ("pandascore_esports", "777") else (None, False)))
+    for path, image, preview in (("/j/38kwas?s=share", "/api/leagues/38KWAS/share.png", lambda: share.of_invite(INVITE)),
+                                 ("/team/45?s=share", "/api/teams/45/share.png", lambda: share.of_team(TEAM)),
+                                 (f"/clip/{CLIP['id']}?s=share", f"/api/clips/{CLIP['id']}/share.png", lambda: share.of_clip(CLIP)),
+                                 ("/match/pandascore_esports/777?s=share", "/api/match/pandascore_esports/777/share.png", lambda: share.of_match(GAME))):
+        tags = meta(built.call("GET", path).text)
+        assert tags["og:title"] != APP_NAME and tags["og:image"].startswith(f"http://test{image}?v="), path
+        shown = preview()
+        assert shown is not None and (tags["og:title"], tags["og:url"]) == (shown.title, f"http://test{shown.path}"), path
+        got = built.call("GET", image)
+        assert got.status_code == 200 and got.headers["content-type"] == "image/png" and got.content == share.png(shown.picture), image
+    # None such, or an address that isn't one: the app's own preview, and no picture.
+    for path in ("/j/NOPE99", "/j/x", "/team/46", "/team/99999999999", "/clip/gone", "/match/pandascore_esports/778", "/match/nosuch/1"):
+        assert meta(built.call("GET", path).text)["og:title"] == APP_NAME, path
+    for image in ("/api/leagues/NOPE99/share.png", "/api/teams/46/share.png", "/api/clips/gone/share.png", "/api/match/pandascore_esports/778/share.png",
+                  "/api/match/nosuch/1/share.png"):
+        assert built.call("GET", image).status_code == 404, image
+    assert all(a[2] is None for a in asked if a[0] == "team") and all(a[1] is None for a in asked if a[0] == "game")  # never a fan's in a preview
+    assert not any(a[0] == "game" and a[2] == "nosuch" for a in asked)  # an address of no source asks nothing
 
 

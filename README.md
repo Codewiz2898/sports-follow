@@ -351,9 +351,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
   now, live, last or next; a game of theirs (`/player/<id>?g=<event id>`, the link a This week poster
   shares) says its big moment in the sport's own words, as This week does (`week.game`); a campaign page
-  (`/<slug>`, below) says its event, its next game and who to follow; every other page says what the app is.
+  (`/<slug>`, below) says its event, its next game and who to follow; a league's invite (`/j/<code>`) says join
+  it, who asked and how many are in it, never its code; a team's page says who and its game on now, last or
+  next; a clip's says its caption, moment and game; a game's (`/match/<source>/<game>`) its score, who won or
+  when it starts; every other page says what the app is. A preview is what anyone with the link may see, read
+  from what's stored: it counts no invite as opened and asks no source.
   Each has a 1200 × 630 picture drawn by the server with Pillow (`/api/players/<id>/share.png`, `?g=` for a
-  game; `/api/campaigns/<slug>/share.png`; `/api/share.png` for the app): a block of the sport's
+  game; `/api/campaigns/<slug>/share.png`; `/api/leagues/<code>/share.png`; `/api/teams/<id>/share.png`;
+  `/api/clips/<id>/share.png`; `/api/match/<source>/<game>/share.png`; `/api/share.png` for the app): a block of the sport's
   colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
